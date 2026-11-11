@@ -222,7 +222,7 @@ async def test_verification_rejects_type_distinct_options(
     )
     monkeypatch.setattr(
         config_entry_flow,
-        "update_config_entry_options",
+        "restore_config_entry_options",
         AsyncMock(return_value={"success": True}),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
@@ -251,7 +251,7 @@ async def test_lost_reply_reports_uncertainty_with_observed_readback(
         flow_id="flow",
     )
     monkeypatch.setattr(
-        config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=error)
+        config_entry_flow, "restore_config_entry_options", AsyncMock(side_effect=error)
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
         await bm._restore_flow_helper(
@@ -520,7 +520,9 @@ async def test_unavailable_readback_retains_apply_knowledge(
         flow_id="flow",
     )
     monkeypatch.setattr(
-        config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=failure)
+        config_entry_flow,
+        "restore_config_entry_options",
+        AsyncMock(side_effect=failure),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
         await bm._restore_flow_helper(

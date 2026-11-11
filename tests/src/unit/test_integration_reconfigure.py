@@ -1,6 +1,5 @@
 """Tests for generic config-entry reconfiguration."""
 
-import asyncio
 import contextlib
 import json
 from typing import Any
@@ -16,9 +15,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import config_entry_identity, integration_flow_steps
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
-from ha_mcp.tools.config_entry_flow import set_config_subentry
-from ha_mcp.tools.config_entry_flow_errors import FlowRef, ReconfigureStatus
-from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
+from ha_mcp.tools.config_entry_flow_errors import ReconfigureStatus
 from ha_mcp.tools.config_entry_identity import (
     ReconfigureIdentity,
     _classify_related_entries,
@@ -609,89 +606,6 @@ async def test_reconfigure_seeds_device_identity_without_entities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
-    """Subentry reconfigure aborts enforce the same consumed-key contract."""
-    client = reconfigure_client()
-    with pytest.raises(ToolError) as exc_info:
-        await _handle_config_subentry_flow_steps(
-            client,
-            "flow-subentry",
-            ABORT_OK,
-            {"unexpected": True},
-            is_reconfigure=True,
-            flow=FlowRef(None, "config_subentries.demo", "entry-123"),
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert payload["status"] == "applied_but_incomplete"
-
-
-def subentry_client(flow_id: str, field: str = "host", **submit: Any) -> Any:
-    """Client double for ``set_config_subentry`` with an open one-field form."""
-    client = reconfigure_client()
-    client.start_config_subentry_flow = AsyncMock(
-        return_value={
-            "flow_id": flow_id,
-            "type": "form",
-            "data_schema": [{"name": field, "required": True}],
-        }
-    )
-    client.submit_config_subentry_flow_step = AsyncMock(**submit)
-    client.abort_config_subentry_flow = AsyncMock()
-    return client
-
-
-@pytest.mark.asyncio
-async def test_subentry_reconfigure_step_budget_aborts_pending_flow() -> None:
-    """Subentry budget exhaustion aborts the pending official flow too."""
-    client = subentry_client(
-        "flow-subentry-budget",
-        return_value={
-            "flow_id": "flow-subentry-budget",
-            "type": "form",
-            "step_id": "reconfigure",
-            "data_schema": FORM_SCHEMA,
-        },
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await set_config_subentry(
-            client,
-            "entry-123",
-            "network",
-            {"host": "192.0.2.190"},
-            subentry_id="subentry-123",
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == "flow_aborted_before_apply"
-    assert payload["flow_budget_exhausted"] is True
-    client.abort_config_subentry_flow.assert_awaited_once_with("flow-subentry-budget")
-
-
-@pytest.mark.asyncio
-async def test_subentry_reconfigure_cancellation_aborts_pending_flow() -> None:
-    """Cancellation must also clean up a pending config subentry flow."""
-    client = subentry_client(
-        "flow-subentry-cancelled", side_effect=asyncio.CancelledError()
-    )
-
-    with pytest.raises(asyncio.CancelledError):
-        await set_config_subentry(
-            client,
-            "entry-123",
-            "network",
-            {"host": "192.0.2.191"},
-            subentry_id="subentry-123",
-        )
-
-    client.abort_config_subentry_flow.assert_awaited_once_with(
-        "flow-subentry-cancelled"
-    )
-
-
-@pytest.mark.asyncio
 async def test_reconfigure_reports_a_flow_that_never_returned_a_flow_id(
     reconfig_entry: dict[str, object],
 ) -> None:
@@ -824,49 +738,6 @@ async def test_expected_mac_accepts_hardware_connection_types_only(
     else:
         payload = await rejected(client, "mac-entry", expected_mac=expected_mac)
         assert "expected mac" in payload["error"]["message"].lower()
-
-
-@pytest.mark.asyncio
-async def test_subentry_reconfigure_incomplete_does_not_abort_a_committed_flow() -> (
-    None
-):
-    """Once HA reports reconfigure_successful the flow is not aborted; only unconsumed keys are reported."""
-    client = subentry_client("flow-subentry-committed", "name", return_value=ABORT_OK)
-
-    with pytest.raises(ToolError) as exc_info:
-        await set_config_subentry(
-            client,
-            "parent-entry",
-            "conversation",
-            {"name": "kept", "junk": "never consumed"},
-            subentry_id="sub-1",
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_INCOMPLETE
-    assert payload["unconsumed_config_keys"] == ["junk"]
-    client.abort_config_subentry_flow.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_subentry_reconfigure_rejects_create_entry_result() -> None:
-    """A subentry reconfigure that creates a new entry is not a success."""
-    client = MagicMock()
-    client.submit_config_subentry_flow_step = AsyncMock()
-
-    with pytest.raises(ToolError) as exc_info:
-        await _handle_config_subentry_flow_steps(
-            client,
-            "flow-subentry-create",
-            {"type": "create_entry", "result": {"subentry_id": "new"}},
-            {},
-            is_reconfigure=True,
-            flow=FlowRef(None, "config_subentries.demo", "entry-123"),
-        )
-
-    payload = json.loads(str(exc_info.value))
-    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
-    assert "instead of updating" in payload["error"]["message"]
 
 
 @pytest.mark.asyncio

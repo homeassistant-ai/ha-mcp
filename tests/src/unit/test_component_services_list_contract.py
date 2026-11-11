@@ -29,6 +29,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.tools import component_api
 from ha_mcp.tools import tools_services as ts
@@ -147,10 +148,10 @@ def _clear_caps_cache() -> Any:
 def _fake_descriptions_and_translations(monkeypatch: pytest.MonkeyPatch) -> None:
     """Feed the REAL prep fixed descriptions/translations (no real hass needed)."""
 
-    async def _fake_desc(hass: Any) -> dict[str, Any]:
+    async def _fake_desc(hass: HomeAssistant) -> dict[str, Any]:
         return _DESCRIPTIONS
 
-    async def _fake_trans(hass: Any, language: str) -> dict[str, Any]:
+    async def _fake_trans(hass: HomeAssistant, language: str) -> dict[str, Any]:
         assert language == "en"
         return _TRANSLATIONS
 

@@ -43,6 +43,7 @@ from ._component_routing_helpers import (
     patch_ws,
     patch_ws_establish_failure,
 )
+from ._search_tool import _setup_visibility_disabled
 
 _STATES = [
     {
@@ -154,11 +155,6 @@ def _build_overview_tool(client: Any) -> Any:
     mcp.add_tool = capture_add_tool
     register_search_tools(mcp, client, smart_tools=SmartSearchTools(client=client))
     return registered["ha_get_overview"]
-
-
-def _setup_visibility_disabled(tmp_path: Any, monkeypatch: Any) -> None:
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
 
 
 def _quiet_tail(monkeypatch: Any) -> None:

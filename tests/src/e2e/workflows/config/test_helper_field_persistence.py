@@ -130,7 +130,7 @@ class TestInputBooleanFieldPersistence:
                 "helper_type": helper_type,
                 "name": original_name,
                 "icon": original_icon,
-                "initial": "on",
+                "config": {"initial": "on"},
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_boolean")
@@ -190,9 +190,8 @@ class TestInputSelectFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Select",
-                "options": original_options,
-                "initial": "Beta",
                 "icon": original_icon,
+                "config": {"options": original_options, "initial": "Beta"},
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_select")
@@ -267,13 +266,15 @@ class TestInputNumberFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Number",
-                "min_value": original["min"],
-                "max_value": original["max"],
-                "step": original["step"],
-                "mode": original["mode"],
-                "unit_of_measurement": original["unit_of_measurement"],
-                "initial": original["initial"],
                 "icon": original["icon"],
+                "config": {
+                    "min": original["min"],
+                    "max": original["max"],
+                    "step": original["step"],
+                    "mode": original["mode"],
+                    "unit_of_measurement": original["unit_of_measurement"],
+                    "initial": original["initial"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_number")
@@ -337,11 +338,13 @@ class TestInputTextFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Text",
-                "min_value": original["min"],
-                "max_value": original["max"],
-                "mode": original["mode"],
                 "icon": original["icon"],
-                "initial": "secret",
+                "config": {
+                    "min": original["min"],
+                    "max": original["max"],
+                    "mode": original["mode"],
+                    "initial": "secret",
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_text")
@@ -406,9 +409,11 @@ class TestInputDatetimeFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Datetime",
-                "has_date": original["has_date"],
-                "has_time": original["has_time"],
                 "icon": original["icon"],
+                "config": {
+                    "has_date": original["has_date"],
+                    "has_time": original["has_time"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_datetime")
@@ -477,12 +482,14 @@ class TestCounterFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Counter",
-                "min_value": original["minimum"],
-                "max_value": original["maximum"],
-                "step": original["step"],
-                "initial": original["initial"],
                 "icon": original["icon"],
-                "restore": True,
+                "config": {
+                    "minimum": original["minimum"],
+                    "maximum": original["maximum"],
+                    "step": original["step"],
+                    "initial": original["initial"],
+                    "restore": True,
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create counter")
@@ -541,9 +548,8 @@ class TestTimerFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Timer",
-                "duration": original_duration,
                 "icon": original_icon,
-                "restore": True,
+                "config": {"duration": original_duration, "restore": True},
             },
         )
         create_data = assert_mcp_success(create_result, "Create timer")
@@ -637,13 +643,15 @@ class TestInputNumberPartialUpdatePreservesFields:
             {
                 "helper_type": helper_type,
                 "name": "E2E Partial Update Number",
-                "min_value": 0,
-                "max_value": preserved["max"],
-                "step": preserved["step"],
-                "mode": preserved["mode"],
-                "unit_of_measurement": preserved["unit_of_measurement"],
-                "initial": preserved["initial"],
                 "icon": preserved["icon"],
+                "config": {
+                    "min": 0,
+                    "max": preserved["max"],
+                    "step": preserved["step"],
+                    "mode": preserved["mode"],
+                    "unit_of_measurement": preserved["unit_of_measurement"],
+                    "initial": preserved["initial"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_number")
@@ -674,7 +682,7 @@ class TestInputNumberPartialUpdatePreservesFields:
             {
                 "helper_type": helper_type,
                 "helper_id": entity_id,
-                "min_value": new_min,
+                "config": {"min": new_min},
             },
         )
         assert_mcp_success(update_result, "Partial update (min_value only)")
@@ -704,8 +712,7 @@ async def icon_zone(
 ) -> AsyncIterator[tuple[str, str]]:
     """A zone storing ``mdi:school``, removed afterwards: (entity_id, id).
 
-    Created through Core's zone/create, as the Home Assistant UI does: the
-    helper tools keep a new zone's icon in the entity registry instead. Each
+    Created through Core's zone/create, as the Home Assistant UI does. Each
     zone gets its own name: Core keeps a removed zone's registry entry, icon
     included, and gives it back to a zone created again under the same id.
     """
@@ -732,7 +739,7 @@ async def icon_zone(
 
 
 async def _stored_icon(ha_client: Any, zone_id: str) -> str | None:
-    """The icon in the stored zone; ha_get_zone shows the registry's over it."""
+    """The icon in the stored zone, read from Core's zone/list."""
     listed = await ha_client.send_websocket_message({"type": "zone/list"})
     zone: dict[str, Any] = next(
         (z for z in listed.get("result") or [] if z.get("id") == zone_id), {}
@@ -743,18 +750,17 @@ async def _stored_icon(ha_client: Any, zone_id: str) -> str | None:
 @pytest.mark.asyncio
 @pytest.mark.config
 class TestZoneIconPersistence:
-    """A zone keeps an icon in its stored item and as a registry override.
+    """A zone's icon is stored in the zone, as the zone dialog stores it.
 
-    The registry override wins while it is set, and Core's zone/update merges
-    into the item, so an icon stored there cannot be removed.
+    Core's zone/update merges into the stored zone, so a stored icon can be
+    changed but not removed, in the zone dialog as through the tools.
     """
 
     async def test_zone_icon_change_reaches_the_stored_icon(
         self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
-        """Changing the icon of a zone created with one must update the stored
-        icon too, or the old icon shows again once the registry override is
-        cleared.
+        """Changing the icon of a zone must update the stored icon, the one the
+        Zones editor shows (#3001).
         """
         entity_id, zone_id = icon_zone
         async with MCPAssertions(mcp_client) as mcp:
@@ -766,19 +772,19 @@ class TestZoneIconPersistence:
             )  # fmt: skip
             assert await _stored_icon(ha_client, zone_id) == "mdi:home-city"
 
-    async def test_zone_stored_icon_clear_fails(
+    async def test_zone_stored_icon_clear_reports_the_kept_icon(
         self, mcp_client: Client, ha_client: Any, icon_zone: tuple[str, str]
     ) -> None:
-        """Clearing the icon of a zone that stores one must fail instead of
-        reporting success while the stored icon keeps showing.
+        """Clearing the icon of a zone that stores one must say Home Assistant
+        kept it, instead of a silent success while the icon keeps showing.
         """
         entity_id, zone_id = icon_zone
         async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
+            result = await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {"helper_type": "zone", "helper_id": entity_id, "icon": ""},
-                expected_error="cannot be removed",
             )
+            assert any("mdi:school" in w for w in result.get("warnings", [])), result
             assert await _stored_icon(ha_client, zone_id) == "mdi:school"
 
 

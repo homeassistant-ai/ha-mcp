@@ -1,8 +1,9 @@
 """The zone a zone tool names, its registry icon, and a removed zone on restore.
 
-The helper tools keep a zone's icon in the entity registry unless the stored
-zone already has one (#2643), so the stored item alone can miss it: the
-snapshot records the registry's icon too. Core's ``zone/update`` needs the
+A zone's entity can carry an icon override in the entity registry (set with
+ha_set_entity, or by older ha-mcp versions in place of the stored icon), so
+the stored item alone can miss it: the snapshot records the registry's icon
+too. Core's ``zone/update`` needs the
 stored zone; once it was removed, the restore creates it again, and Core takes
 the new zone's id from the slug of its name. Core keeps a removed zone's
 registry entry for 30 days, so a zone created again under its old id in that

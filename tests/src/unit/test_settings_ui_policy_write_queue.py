@@ -18,7 +18,6 @@ import html
 import pytest
 
 from .test_settings_ui_js_behavior import _probe
-from .test_settings_ui_js_behavior import settings_script as settings_script
 from .test_settings_ui_policy_and_conditions import (
     FAILED_CHANGES,
     LIGHT,

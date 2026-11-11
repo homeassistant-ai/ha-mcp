@@ -30,7 +30,6 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from .test_backup_manager import _mk_handler, _mk_manager, _StubClient
 from .test_backup_restore_consumers import response_for, run_restore
-from .test_backup_restore_consumers import settings_script as settings_script
 
 # Helper "hall" was renamed to input_boolean.porch; helper "porch" now has
 # the entity input_boolean.porch_2.

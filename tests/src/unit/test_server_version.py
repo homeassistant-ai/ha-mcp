@@ -8,39 +8,46 @@ while the old code kept serving.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import ErrorLogPage
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import server_version
-from ha_mcp.tools.tools_bug_report import register_bug_report_tools
+from ha_mcp.tools.tools_bug_report import BugReportTools
 from ha_mcp.tools.tools_dev import DevTools
 
-from .test_tools_bug_report import (  # noqa: F401
-    _no_supervisor,
-    _stub_component_caps,
-    mock_mcp,
-)
-from .test_tools_dev import _mock_client
+
+@pytest.fixture
+async def dev_tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> DevTools:
+    """DevTools on real Core, which holds no ha_mcp_tools server entry."""
+    assert await async_setup_component(hass, "config", {})
+    return DevTools(core_client)
 
 
 async def _info(
-    monkeypatch: pytest.MonkeyPatch, *, installed: str | None, embedded: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    dev_tools: DevTools,
+    *,
+    installed: str | None,
+    embedded: bool = False,
 ) -> dict[str, Any]:
     monkeypatch.setattr(server_version, "__version__", "8.7.0")
     monkeypatch.setattr(server_version, "detect_installed_version", lambda: installed)
     monkeypatch.setattr(server_version, "is_embedded", lambda: embedded)
-    return await DevTools(_mock_client()).ha_dev_manage_server(action="info")
+    return await dev_tools.ha_dev_manage_server(action="info")
 
 
 @pytest.mark.parametrize(
     ("embedded", "restart"), [(True, "Home Assistant"), (False, "the server")]
 )
 async def test_info_reports_the_running_version_after_an_unloaded_reinstall(
-    monkeypatch: pytest.MonkeyPatch, embedded: bool, restart: str
+    monkeypatch: pytest.MonkeyPatch, dev_tools: DevTools, embedded: bool, restart: str
 ) -> None:
-    result = await _info(monkeypatch, installed="8.7.0.dev3077", embedded=embedded)
+    result = await _info(
+        monkeypatch, dev_tools, installed="8.7.0.dev3077", embedded=embedded
+    )
 
     data = result["data"]
     assert data["server_version"] == "8.7.0"
@@ -53,16 +60,16 @@ async def test_info_reports_the_running_version_after_an_unloaded_reinstall(
 
 
 async def test_info_quiet_when_the_running_version_is_installed(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, dev_tools: DevTools
 ) -> None:
-    result = await _info(monkeypatch, installed="8.7.0")
+    result = await _info(monkeypatch, dev_tools, installed="8.7.0")
 
     assert result["data"]["version_mismatch"] is False
     assert "warnings" not in result
 
 
 async def test_info_says_when_it_could_not_compare(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, dev_tools: DevTools
 ) -> None:
     """A failed probe must neither fail ``info`` nor read as "versions match"."""
 
@@ -70,7 +77,7 @@ async def test_info_says_when_it_could_not_compare(
         raise RuntimeError("metadata read failed")
 
     monkeypatch.setattr(server_version, "get_version", _broken)
-    result = await DevTools(_mock_client()).ha_dev_manage_server(action="info")
+    result = await dev_tools.ha_dev_manage_server(action="info")
 
     assert result["data"]["installed_version"] is None
     assert result["data"]["version_mismatch"] is False
@@ -103,21 +110,12 @@ def test_unreadable_metadata_is_no_installed_version(
 
 
 async def test_report_flags_a_reinstall_the_process_has_not_loaded(
-    monkeypatch: pytest.MonkeyPatch,
-    mock_mcp: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
 ) -> None:
     monkeypatch.setattr(server_version, "__version__", "8.7.0")
     monkeypatch.setattr(server_version, "get_version", lambda: "8.7.0.dev3077")
-    client = MagicMock()
-    client.get_config = AsyncMock(return_value={"version": "2026.10.2"})
-    client.get_states = AsyncMock(return_value=[])
-    client.get_error_log = AsyncMock(return_value=ErrorLogPage(text="", has_more=False))
-    register_bug_report_tools(mock_mcp, client)
-    report = mock_mcp._tools["ha_report_issue"]
-    while hasattr(report, "__wrapped__"):
-        report = report.__wrapped__
 
-    result = await report()
+    result = await BugReportTools(core_client).ha_report_issue()
 
     assert result["diagnostic_info"]["installed_version"] == "8.7.0.dev3077"
     assert result["diagnostic_info"]["version_mismatch"] is True

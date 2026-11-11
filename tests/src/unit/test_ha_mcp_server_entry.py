@@ -19,6 +19,7 @@ import importlib.util
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -72,7 +73,7 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     entry.options = {} if options is None else dict(options)
     entry.data = {} if data is None else dict(data)
 
-    def _create_background_task(hass, coro, name):
+    def _create_background_task(hass: HomeAssistant, coro, name):
         # Close any real coroutine handed in rather than running it, so a
         # scheduled task cannot leave an unawaited-coroutine warning.
         if asyncio.iscoroutine(coro):

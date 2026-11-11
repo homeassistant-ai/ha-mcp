@@ -13,6 +13,13 @@ the same container it always did. The assertions below therefore go through
 rather than the helpers' own return values. No Docker daemon is involved:
 ``DockerContainer`` builds its client on construction, so the client is
 replaced and the container only records configuration.
+
+``HA_E2E_BASE_HOST`` is the third knob and a different kind of setting: it
+selects only the host in the testcontainer's ``base_url``, so a containerized
+pytest process can reach the sibling container through the Docker host address
+instead of its own ``localhost``. Its resolution is asserted directly, without
+a container, and the fixture wiring is covered in
+``test_e2e_session_fixture_cleanup.py``.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ def _unset_boot_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test starts from the stock, unconfigured lane."""
     monkeypatch.delenv(_conftest_knobs.PIP_CACHE_ENV_VAR, raising=False)
     monkeypatch.delenv(_conftest_knobs.READY_TIMEOUT_ENV_VAR, raising=False)
+    monkeypatch.delenv(_conftest_knobs.BASE_HOST_ENV_VAR, raising=False)
 
 
 def _config_dir(tmp_path: Path, requirements: list[str]) -> Path:
@@ -335,3 +343,32 @@ def test_the_plain_container_lane_gets_the_cache_without_the_wheel(
         for install in installs
     )
     assert _WHEEL not in script
+
+
+# ---------------------------------------------------------------------------
+# HA_E2E_BASE_HOST
+# ---------------------------------------------------------------------------
+
+
+def test_the_base_host_defaults_to_localhost() -> None:
+    """An unset knob keeps the URL every lane has always used."""
+    assert _conftest_knobs.resolve_base_host() == "localhost"
+
+
+@pytest.mark.parametrize("raw", ["192.0.2.10", " 192.0.2.10 "])
+def test_the_base_host_uses_the_override(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The literal documented name, not BASE_HOST_ENV_VAR: spelling the knob in
+    # the test is what fails when the constant and the docs drift apart.
+    monkeypatch.setenv("HA_E2E_BASE_HOST", raw)
+    assert _conftest_knobs.resolve_base_host() == raw.strip()
+
+
+def test_a_blank_base_host_falls_back_to_localhost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Whitespace-only covers the strip() and the ``or "localhost"`` fallback;
+    # an empty string takes the same path, so it needs no separate case.
+    monkeypatch.setenv("HA_E2E_BASE_HOST", "   ")
+    assert _conftest_knobs.resolve_base_host() == "localhost"

@@ -7,18 +7,17 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-import voluptuous as vol
+from homeassistant.core import HomeAssistant, callback
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import integration_ws_commands as module
 from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.tools_integrations import IntegrationTools
-
-from .test_component_integration_commands import _execute, _hass
 
 _NOT_EXPOSED = (
     "The installed component does not expose the listing of an "
@@ -324,31 +323,26 @@ async def test_each_bridge_names_its_own_feature_when_absent(
 
 
 async def test_server_bridge_reaches_the_component_producer(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    from custom_components.ha_mcp_tools import core_contract as producer
-    from custom_components.ha_mcp_tools import websocket_api as wsapi
-    from ha_mcp.tools import component_api, core_contract
+    """The server's bridge lists a command Core has registered, through the
+    real component over the server's own client."""
+    from homeassistant.components import websocket_api
 
-    hass = _hass(knx__delete_entity=vol.Schema({}))
-    execute = _execute()
+    from ha_mcp.tools import core_contract
 
-    async def send_command(name: str, **params: Any) -> dict[str, Any]:
-        if name == "ha_mcp_tools/info":
-            return {"success": True, "result": wsapi._do_info(hass)}
-        assert name == producer.INTEGRATION_COMMAND
-        return {"success": True, "result": execute(hass, params)}
+    @websocket_api.websocket_command({"type": "knx/delete_entity"})
+    @callback
+    def delete_entity(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        connection.send_result(msg["id"], None)
 
-    ws = Mock(send_command=AsyncMock(side_effect=send_command))
-    monkeypatch.setattr(
-        component_api, "get_websocket_client", AsyncMock(return_value=ws)
-    )
-    monkeypatch.setattr(
-        core_contract, "get_websocket_client", AsyncMock(return_value=ws)
-    )
-    client = Mock(
-        base_url="http://test-integration-commands", token="t", verify_ssl=True
-    )
-    result = await core_contract.integration_commands(client, "knx")
+    websocket_api.async_register_command(hass, delete_entity)
+
+    result = await core_contract.integration_commands(component_core_client, "knx")
+
     assert result["status"] == "available"
     assert [row["command"] for row in result["commands"]] == ["knx/delete_entity"]

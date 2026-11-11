@@ -78,12 +78,22 @@ async def test_forecast_solar_config_subentry_create_list_delete(
             f"forecast_solar options flow did not complete: {options_done}"
         )
 
+        # One form per call: the sources form (its defaults), then the plane.
+        plane = {
+            "helper_type": "config_subentry",
+            "entry_id": entry_id,
+            "subentry_type": "plane",
+        }
+        sources_raw = await mcp_client.call_tool(
+            "ha_config_set_helper", {**plane, "config": {}}
+        )
+        plane_form = assert_mcp_success(sources_raw, "Answer the sources form")
+        assert plane_form.get("step_id") == "plane", plane_form
         create_raw = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
-                "helper_type": "config_subentry",
-                "entry_id": entry_id,
-                "subentry_type": "plane",
+                **plane,
+                "flow_id": plane_form["flow_id"],
                 "config": {
                     "declination": 35,
                     "azimuth": 190,

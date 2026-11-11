@@ -175,7 +175,7 @@ class TestAssistPipeline:
             {
                 "helper_type": "input_boolean",
                 "name": friendly_name,
-                "initial": "off",
+                "config": {"initial": "off"},
             },
         )
         if not create_data.get("success"):

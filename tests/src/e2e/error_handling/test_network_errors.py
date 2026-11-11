@@ -769,10 +769,7 @@ class TestErrorHandling:
             {
                 "helper_type": "input_number",
                 "name": "Test Invalid Range",
-                "min_value": 100.0,
-                "max_value": 50.0,  # max_value < min_value - should fail validation
-                "step": 1.0,
-                "mode": "slider",
+                "config": {"min": 100.0, "max": 50.0, "step": 1.0, "mode": "slider"},
             },
         )
 
@@ -792,7 +789,7 @@ class TestErrorHandling:
             {
                 "helper_type": "input_select",
                 "name": "Test Empty Options",
-                "options": [],
+                "config": {"options": []},
             },
         )
 
@@ -812,8 +809,7 @@ class TestErrorHandling:
             {
                 "helper_type": "input_datetime",
                 "name": "Test No Date Time",
-                "has_date": False,
-                "has_time": False,
+                "config": {"has_date": False, "has_time": False},
             },
         )
 

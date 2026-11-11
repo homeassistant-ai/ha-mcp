@@ -22,7 +22,7 @@ from ..config_write_helpers import apply_entity_category
 from ..helpers import raise_tool_error, ws_failure_code
 from ..ws_waiters import wait_for_entity_registered
 from .core_payload import merged_update
-from .icon_route import collection_icon
+from .icon_route import icon_targets, note_hidden_icon
 from .listing import listed_items
 from .registry import _ws_error_msg
 from .schemas import (
@@ -67,13 +67,12 @@ async def _execute_legacy_update(
     entity_id: str,
     unique_id: str,
     name: str | None,
-    icon: str | None,
+    item_icon: str | None,
     fields: dict[str, Any],
 ) -> dict[str, Any]:
     """Update through Core's ``<type>/update`` WS command (no component)."""
     stored = await _stored_item(client, helper_type, entity_id, unique_id)
-    item_icon = await collection_icon(client, helper_type, "update", icon)
-    body = merged_update(helper_type, stored, name, item_icon, fields, entity_id)
+    body = merged_update(helper_type, stored, name, item_icon, fields)
     result = await client.send_websocket_message(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
     )
@@ -246,13 +245,15 @@ async def _execute_update_simple_helper(
         )
 
     warnings: list[str] = []
+    item_icon, registry_icon = await icon_targets(client, helper_type, "update", icon)
     native = await _update_via_component(
         client,
         helper_type,
         entity_id,
         helper_id,
         name,
-        icon,
+        item_icon,
+        registry_icon,
         area_id,
         labels,
         category,
@@ -260,6 +261,7 @@ async def _execute_update_simple_helper(
     )
     if native is not None:
         updated_data, entity, warnings = native
+        _note_kept_icon(helper_type, item_icon, updated_data, warnings)
     else:
         stored = await stored_helper_target(client, helper_type, helper_id, name)
         if stored is not None:
@@ -270,13 +272,14 @@ async def _execute_update_simple_helper(
             )
             entity, reason = entity_id, None
         updated_data = await _execute_legacy_update(
-            client, helper_type, entity or helper_id, unique_id, name, icon, fields
+            client, helper_type, entity or helper_id, unique_id, name, item_icon, fields
         )
+        _note_kept_icon(helper_type, item_icon, updated_data, warnings)
         if entity is None:
             given = [
                 field
                 for field, value in (
-                    ("icon", icon),
+                    ("icon", registry_icon),
                     ("area", area_id),
                     ("labels", labels),
                     ("category", category),
@@ -298,7 +301,7 @@ async def _execute_update_simple_helper(
             await _apply_update_registry_and_category(
                 client,
                 entity_id,
-                icon,
+                registry_icon,
                 area_id,
                 labels,
                 category,
@@ -315,6 +318,7 @@ async def _execute_update_simple_helper(
                 except Exception as e:  # noqa: BLE001
                     warnings.append(f"Update applied but verification failed: {e}")
 
+    await note_hidden_icon(client, entity, item_icon, warnings)
     update_response = _helper_response(
         "update",
         helper_type,
@@ -333,7 +337,8 @@ async def _update_via_component(
     entity_id: str,
     helper_id: str,
     name: str | None,
-    icon: str | None,
+    item_icon: str | None,
+    registry_icon: str | None,
     area_id: str | None,
     labels: list[str] | None,
     category: str | None,
@@ -353,12 +358,11 @@ async def _update_via_component(
     # The component names the item's own entity; without one the storage id
     # names the item, never the caller's guessed entity_id.
     entity_id = item.get("entity_id") or helper_id
-    item_icon = await collection_icon(client, helper_type, "update", icon)
-    body = merged_update(helper_type, item["item"], name, item_icon, fields, entity_id)
+    body = merged_update(helper_type, item["item"], name, item_icon, fields)
     registry = {
         key: value
         for key, value in (
-            ("icon", icon),
+            ("icon", registry_icon),
             ("area_id", area_id),
             ("labels", labels),
             ("category", category),
@@ -375,3 +379,22 @@ async def _update_via_component(
         error_context=_simple_helper_error_context(helper_type, entity_id=entity_id),
     )
     return None if result is None else native_result(result)
+
+
+def _note_kept_icon(
+    helper_type: str,
+    item_icon: str | None,
+    updated_data: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    """Say so when Core kept a stored icon the caller cleared.
+
+    A zone's update merges into the stored item, so leaving the icon out keeps
+    it, as it does when the zone dialog's icon is emptied and saved.
+    """
+    if item_icon == "" and updated_data.get("icon"):
+        warnings.append(
+            f"Home Assistant kept the {helper_type}'s icon "
+            f"{updated_data['icon']}: its update keeps a stored icon, as the "
+            f"{helper_type} dialog does, so it can be changed but not removed."
+        )

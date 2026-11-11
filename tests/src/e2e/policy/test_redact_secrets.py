@@ -219,9 +219,9 @@ async def _expect_sentinel_rejected(client: Client) -> None:
         "ha_config_set_helper",
         {
             "helper_type": "group",
+            "menu_choice": "light",
             "config": {
                 "name": "redact e2e group",
-                "group_type": "light",
                 "entities": [REDACTED_SET],
             },
         },

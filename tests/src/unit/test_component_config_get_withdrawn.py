@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .test_component_ws_search import wsapi
+from ._component_ws_api import wsapi
 
 
 class TestConfigGetWithdrawn:

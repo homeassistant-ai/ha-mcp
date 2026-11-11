@@ -3,6 +3,128 @@
 <!-- version list -->
 
 
+## v9.2.0 (2026-11-11)
+
+### Added
+
+- **helpers**: Answer helper flows on Core's own flow and send storage fields to Core as written
+  ([#3050](https://github.com/homeassistant-ai/ha-mcp/pull/3050))
+- Build on Python 3.14 and run the unit tests on real Home Assistant Core
+  ([#3009](https://github.com/homeassistant-ai/ha-mcp/pull/3009))
+- **services**: Take ha_list_services from Core's own descriptions (#2632)
+  ([#2988](https://github.com/homeassistant-ai/ha-mcp/pull/2988))
+- **files**: Edit stored text files with exact-match search/replace
+  ([#2976](https://github.com/homeassistant-ai/ha-mcp/pull/2976))
+
+### Changed
+
+- Fix license badge link to point to LICENSE file
+  ([#3061](https://github.com/homeassistant-ai/ha-mcp/pull/3061))
+- Say the integration mirror stays supported
+  ([#3040](https://github.com/homeassistant-ai/ha-mcp/pull/3040))
+
+### Fixed
+
+- Read ha_get_history times without an offset as Home Assistant local time
+  ([#3059](https://github.com/homeassistant-ai/ha-mcp/pull/3059))
+- Name entities in search and the overview as Home Assistant shows them
+  ([#3049](https://github.com/homeassistant-ai/ha-mcp/pull/3049))
+- Tell agents how to guard a python_transform edit
+  ([#3022](https://github.com/homeassistant-ai/ha-mcp/pull/3022))
+- Store zone and helper icons where Core keeps them
+  ([#3034](https://github.com/homeassistant-ai/ha-mcp/pull/3034))
+- **component**: Register every ha_mcp_tools service admin-only
+  ([#2997](https://github.com/homeassistant-ai/ha-mcp/pull/2997))
+- **redaction**: Redact flow fields Core marks secret
+  ([#3010](https://github.com/homeassistant-ai/ha-mcp/pull/3010))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Fixed
+
+- **addon-dev**: Type the webhook proxy against Home Assistant Core 2026.11
+  ([#3004](https://github.com/homeassistant-ai/ha-mcp/pull/3004))
+
+### Chores
+
+- Sync ratchet baselines after merge [skip ci]
+  ([`bf9d695`](https://github.com/homeassistant-ai/ha-mcp/commit/bf9d6958a717967cb459fc8006c0a3dbe23de3b0))
+- Sync tool docs after merge [skip ci]
+  ([`1af652b`](https://github.com/homeassistant-ai/ha-mcp/commit/1af652b67c42d60e683a841c8e28984aa292bec3))
+- Sync ratchet baselines after merge [skip ci]
+  ([`5306583`](https://github.com/homeassistant-ai/ha-mcp/commit/5306583c00bfcad4f3a4beb6e343639a3597071a))
+- Sync tool docs after merge [skip ci]
+  ([`11dfba5`](https://github.com/homeassistant-ai/ha-mcp/commit/11dfba52be92db2b6db010d385a17dafc6640cbe))
+- Sync ratchet baselines after merge [skip ci]
+  ([`82915f8`](https://github.com/homeassistant-ai/ha-mcp/commit/82915f8a836a756e0b002f55b58a848cd741d27e))
+- Sync ratchet baselines after merge [skip ci]
+  ([`fa3cb74`](https://github.com/homeassistant-ai/ha-mcp/commit/fa3cb7400a704ad791f6fe1b3cd0f983e6f78f6f))
+- **deps**: Update dependency websockets to v17.4
+  ([#3054](https://github.com/homeassistant-ai/ha-mcp/pull/3054))
+- **deps**: Update dependency renovatebot/renovate to v44.210.0
+  ([#3053](https://github.com/homeassistant-ai/ha-mcp/pull/3053))
+- Sync tool docs after merge [skip ci]
+  ([`cf44d8b`](https://github.com/homeassistant-ai/ha-mcp/commit/cf44d8bb2e4c9be679c98c3d7b9678dc3a9587ed))
+- Sync ratchet baselines after merge [skip ci]
+  ([`3ad43b9`](https://github.com/homeassistant-ai/ha-mcp/commit/3ad43b9114918147a94b8ebd87d3d81dd0d6996c))
+- **deps**: Update uv to v0.13.7
+  ([#3048](https://github.com/homeassistant-ai/ha-mcp/pull/3048))
+- **deps**: Update dependency fastmcp-slim to v4.1.6
+  ([#3047](https://github.com/homeassistant-ai/ha-mcp/pull/3047))
+- Machine-translate locale updates
+  ([`b3dc9f0`](https://github.com/homeassistant-ai/ha-mcp/commit/b3dc9f038dfdcfc4f2cb2c8832f70212b930d970))
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026.11.1
+  ([#3039](https://github.com/homeassistant-ai/ha-mcp/pull/3039))
+- Sync ratchet baselines after merge [skip ci]
+  ([`61e7cd3`](https://github.com/homeassistant-ai/ha-mcp/commit/61e7cd369ad94861a5d8463674c467d9d048b111))
+- Sync tool docs after merge [skip ci]
+  ([`5c5c4a8`](https://github.com/homeassistant-ai/ha-mcp/commit/5c5c4a8da79e4fb977af727e92d6f71a80d22c60))
+- Sync ratchet baselines after merge [skip ci]
+  ([`574c64d`](https://github.com/homeassistant-ai/ha-mcp/commit/574c64dd98d33fd091fcdae781a6a936f29a9ecf))
+- Sync tool docs after merge [skip ci]
+  ([`f50b864`](https://github.com/homeassistant-ai/ha-mcp/commit/f50b86485617e42524b9369cbd94593feaafc97b))
+- Machine-translate locale updates
+  ([`48d4a32`](https://github.com/homeassistant-ai/ha-mcp/commit/48d4a32b8cf8d8ee6a39a0942e658c153e6b5d49))
+- Sync ratchet baselines after merge [skip ci]
+  ([`65a3b94`](https://github.com/homeassistant-ai/ha-mcp/commit/65a3b94936e2f464b2344d8e60a9140f57ccfda5))
+- **addon**: Promote webhook-proxy dev -> stable 3.0.5
+  ([#3008](https://github.com/homeassistant-ai/ha-mcp/pull/3008))
+- Sync ratchet baselines after merge [skip ci]
+  ([`26ec7a7`](https://github.com/homeassistant-ai/ha-mcp/commit/26ec7a71efc56e31c3c499f9853f8b51a5b61f6f))
+- Sync tool docs after merge [skip ci]
+  ([`2a5a9b1`](https://github.com/homeassistant-ai/ha-mcp/commit/2a5a9b1403f7724cff30c805eb111bd27a217074))
+- **addon**: Publish version 9.1.2 [skip ci]
+  ([`b35a3d2`](https://github.com/homeassistant-ai/ha-mcp/commit/b35a3d22a97b262e5d8520cc419cf0acdba9cac1))
+
+### Continuous Integration
+
+- Stop the CodeQL gate walking vendored code and use every core
+  ([#3052](https://github.com/homeassistant-ai/ha-mcp/pull/3052))
+- **deps**: Bump the github-actions group with 2 updates
+  ([#3014](https://github.com/homeassistant-ai/ha-mcp/pull/3014))
+- **addon**: Install ha-mcp in the webhook proxy promote and reset workflows
+  ([#3006](https://github.com/homeassistant-ai/ha-mcp/pull/3006))
+
+### Testing
+
+- Run 46 more unit test files on real Core and stop listed files gaining fakes
+  ([#3060](https://github.com/homeassistant-ai/ha-mcp/pull/3060))
+- Run 50 small unit test files on real Core
+  ([#3056](https://github.com/homeassistant-ai/ha-mcp/pull/3056))
+- Refuse guessed Home Assistant in new unit tests
+  ([#3051](https://github.com/homeassistant-ai/ha-mcp/pull/3051))
+- Use real Core in webhook proxy liveness checks
+  ([#3044](https://github.com/homeassistant-ai/ha-mcp/pull/3044))
+- Match the busy-port error with the running C library's text, not a glibc literal
+  ([#3043](https://github.com/homeassistant-ai/ha-mcp/pull/3043))
+- **e2e**: Add HA_E2E_BASE_HOST for containerized test runs
+  ([#3005](https://github.com/homeassistant-ai/ha-mcp/pull/3005))
+</details>
+
+
 ## v9.1.2 (2026-11-08)
 
 ### Fixed

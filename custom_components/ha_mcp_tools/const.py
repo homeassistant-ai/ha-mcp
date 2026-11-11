@@ -23,7 +23,7 @@ DOMAIN = "ha_mcp_tools"
 # the server can display/debug the running component build. Capability
 # negotiation — not this version — gates each WS command (see
 # ``websocket_api.constants.CAPABILITIES``).
-COMPONENT_VERSION = "9.1.2"
+COMPONENT_VERSION = "9.2.0"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -540,7 +540,7 @@ ISSUE_COMPONENT_OUTDATED = "component_outdated"
 # nor unbind an HTTP view without a full Home Assistant restart, so both
 # transitions need one; see oauth_legacy.bind_legacy_views.
 ISSUE_LEGACY_OAUTH_RESTART = "legacy_oauth_restart"
-# Fixable repair issue: two store records (main repository and legacy mirror)
+# Fixable repair issue: two store records (main repository and distribution mirror)
 # are both marked installed for this integration, which the Marketplace
 # refuses to update or uninstall (#2993). Its fix forgets the duplicate.
 ISSUE_STORE_RECORDS_CONFLICT = "store_records_conflict"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ._js_harness import extract_script_body, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 _EDITOR = (
     '<textarea id="fsCustomPathsInput">pyscript</textarea>'

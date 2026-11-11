@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Pozostawić HA-MCP na jednym wpisie w sklepie?",
-            "description": "HA-MCP jest oznaczony jako zainstalowany z obu {records}. Zawierają tę samą integrację (drugi to starsze lustro dystrybucyjne). Marketplace w Home Assistant 2026.11 pozwala, aby tylko jeden wpis obsługiwał integrację, więc tam żaden z nich nie może zaktualizować HA-MCP; HACS nadal aktualizuje, ale aktualizacja do wersji 2026.11 pozostawiłaby HA-MCP w martwym punkcie.\n\nKliknięcie Zatwierdź zachowuje **{keep}**, wpis w domyślnym katalogu, który nie wymaga niestandardowego repozytorium, i oznacza drugi wpis jako niezainstalowany. Nic nie zostanie usunięte: Twoje wpisy, ustawienia i pliki HA-MCP pozostaną bez zmian, a od teraz aktualizacje będą pojawiać się pod {keep} jak zwykle."
+            "description": "HA-MCP jest zaznaczony jako zainstalowany z obu źródeł: {records}. Dotyczą one tej samej integracji (drugie to lustro dystrybucyjne, z którego pochodziły wcześniejsze instalacje). Sklep w Home Assistant 2026.11 pozwala tylko jednemu wpisowi posiadać integrację, więc tam żaden z nich nie może zaktualizować HA-MCP; HACS nadal aktualizuje, ale uaktualnienie do wersji 2026.11 pozostawiłoby HA-MCP w stanie zawieszenia.\n\nPrzycisk Wyślij zachowuje **{keep}**, wpis w domyślnym katalogu, który nie wymaga niestandardowego repozytorium, i oznacza drugi wpis jako niezainstalowany. Nic nie zostaje usunięte: Twoje wpisy, ustawienia i pliki HA-MCP pozostają dokładnie takie, jakie są, a od teraz aktualizacje będą pojawiać się pod {keep} w zwykły sposób."
           }
         },
         "abort": {

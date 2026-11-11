@@ -295,13 +295,21 @@ async def test_subentry_edit_is_backed_up_and_restored(
 ) -> None:
     entry_id, subentry_id = solar_plane
     async with MCPAssertions(mcp_client) as mcp:
+        # One form per call: the sources form as it stands, then the plane.
+        plane = {
+            "helper_type": "config_subentry",
+            "entry_id": entry_id,
+            "subentry_type": "plane",
+            "subentry_id": subentry_id,
+        }
+        plane_form = await mcp.call_tool_success(
+            "ha_config_set_helper", {**plane, "config": {}}
+        )
         await mcp.call_tool_success(
             "ha_config_set_helper",
             {
-                "helper_type": "config_subentry",
-                "entry_id": entry_id,
-                "subentry_type": "plane",
-                "subentry_id": subentry_id,
+                **plane,
+                "flow_id": plane_form["flow_id"],
                 "config": {"modules_power": 1500},
             },
         )

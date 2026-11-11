@@ -144,6 +144,7 @@ class SystemOverviewMixin(_SearchBase):
             entity_area_map = self._build_entity_area_map(
                 entity_registry, device_registry
             )
+            entity_names = self._build_entity_name_map(entity_registry)
 
             (
                 max_entities_per_domain,
@@ -169,6 +170,7 @@ class SystemOverviewMixin(_SearchBase):
                 domains_filter_set,
                 area_stats,
                 entity_area_map,
+                entity_names,
                 include_state,
                 include_entity_id,
             )
@@ -249,6 +251,21 @@ class SystemOverviewMixin(_SearchBase):
         return entity_area_map
 
     @staticmethod
+    def _build_entity_name_map(
+        entity_registry: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        """Map entity IDs to the name Core composes for them.
+
+        Only the component's registry rows carry it (``full_name``); Core's own
+        registry list does not, so the map is empty without the component.
+        """
+        return {
+            entry["entity_id"]: entry["full_name"]
+            for entry in entity_registry
+            if entry.get("entity_id") and entry.get("full_name")
+        }
+
+    @staticmethod
     def _resolve_overview_display_opts(
         detail_level: str,
         max_entities_per_domain: int | None,
@@ -314,6 +331,7 @@ class SystemOverviewMixin(_SearchBase):
         domains_filter_set: set[str] | None,
         area_stats: dict[str, dict[str, Any]],
         entity_area_map: dict[str, str | None],
+        entity_names: dict[str, str],
         include_state: bool,
         include_entity_id: bool,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
@@ -336,9 +354,13 @@ class SystemOverviewMixin(_SearchBase):
             stats["count"] += 1
             stats["states_summary"][state] = stats["states_summary"].get(state, 0) + 1
 
-            entity_data: dict[str, Any] = {
-                "friendly_name": attributes.get("friendly_name", entity_id),
-            }
+            friendly_name = attributes.get("friendly_name", entity_id)
+            entity_data: dict[str, Any] = {"friendly_name": friendly_name}
+            # Most entities carry one name; a second key on every row of a
+            # whole-house listing would repeat it.
+            name = entity_names.get(entity_id)
+            if name and name != friendly_name:
+                entity_data["name"] = name
             if include_entity_id:
                 entity_data["entity_id"] = entity_id
             if include_state:

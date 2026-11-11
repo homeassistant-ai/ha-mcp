@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from .test_card_definitions import _definitions, cc, cd, dcw, describe_mod
 from .test_card_definitions import component as component
@@ -199,7 +200,7 @@ async def test_refresh_timeout_retains_published_cache(monkeypatch):
     cached = cc.CustomCards("dom")
     cached._card_types = [{"type": "custom:existing"}]
 
-    async def refresh(hass):
+    async def refresh(hass: HomeAssistant):
         await release.wait()
         return cached
 

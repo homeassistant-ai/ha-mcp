@@ -211,36 +211,21 @@ async def test_get_integration_list_mode_warning_names_only_supplied_keys(mock_c
     assert "include_diagnostics" not in warnings[0]
 
 
-async def test_config_set_helper_creates_config_subentry(helper_tools, mock_client):
-    mock_client.start_config_subentry_flow.return_value = {
+def _form(step_id: str, *names: str) -> dict[str, Any]:
+    return {
         "flow_id": "flow-1",
         "type": "form",
-        "step_id": "set_options",
-        "data_schema": [{"name": "name"}, {"name": "model"}],
-    }
-    mock_client.submit_config_subentry_flow_step.return_value = {
-        "type": "create_entry",
-        "title": "Local Model",
+        "step_id": step_id,
+        "data_schema": [{"name": name} for name in names],
     }
 
-    result = await helper_tools["ha_config_set_helper"](
+
+async def _set_subentry(helper_tools: dict[str, Any], **kwargs: Any) -> Any:
+    return await helper_tools["ha_config_set_helper"](
         helper_type="config_subentry",
         entry_id="entry-1",
         subentry_type="conversation",
-        config={"name": "Local Model", "model": "gemma3:27b", "ignored": "drop"},
-    )
-
-    assert result["success"] is True
-    assert result["operation"] == "created"
-    # The walker's ignored-key warning must survive out to the tool boundary
-    # (asserted by membership so an unrelated skills-vendor warning, present
-    # when that submodule is not initialised, does not make this brittle).
-    assert (
-        "Ignored config keys not declared by the Home Assistant flow schema: ignored"
-        in result["warnings"]
-    )
-    mock_client.submit_config_subentry_flow_step.assert_awaited_once_with(
-        "flow-1", {"name": "Local Model", "model": "gemma3:27b"}
+        **kwargs,
     )
 
 
@@ -253,27 +238,25 @@ async def test_config_subentry_create_returns_the_new_subentry_id(
         {"success": True, "result": listed},
         {"success": True, "result": [*listed, {"subentry_id": "new"}]},
     ]
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "set_options",
-        "data_schema": [{"name": "model"}],
-    }
+    mock_client.start_config_subentry_flow.return_value = _form("set_options", "model")
     mock_client.submit_config_subentry_flow_step.return_value = {"type": "create_entry"}
-    result = await helper_tools["ha_config_set_helper"](
-        helper_type="config_subentry",
-        entry_id="entry-1",
-        subentry_type="conversation",
-        config={"model": "m"},
+
+    result = await _set_subentry(
+        helper_tools, config={"model": "m"}, show_advanced_options=True
     )
+
+    assert result["operation"] == "created"
     assert result["subentry_id"] == "new"
+    # Only a Home Assistant older than 2026.6 reads the flag.
+    mock_client.start_config_subentry_flow.assert_awaited_once_with(
+        "entry-1", "conversation", subentry_id=None, show_advanced_options=True
+    )
 
 
-async def test_concurrent_creates_each_return_their_subentry_id():
-    from ha_mcp.tools.config_entry_flow import set_config_subentry
+async def test_concurrent_creates_each_return_their_subentry_id(mock_client):
+    from ha_mcp.tools.config_helpers.flow import _handle_set_config_subentry
 
     ids: list[str] = []
-    client = MagicMock()
 
     async def listing(entry_id):
         await asyncio.sleep(0)
@@ -285,55 +268,53 @@ async def test_concurrent_creates_each_return_their_subentry_id():
         return {"type": "create_entry"}
 
     flows = iter(["a", "b"])
-    client.list_config_subentries = AsyncMock(side_effect=listing)
-    client.start_config_subentry_flow = AsyncMock(
-        side_effect=lambda *a, **k: {
-            "flow_id": next(flows), "type": "form", "step_id": "user",
-            "data_schema": [{"name": "model"}],
-        }
-    )  # fmt: skip
-    client.submit_config_subentry_flow_step = AsyncMock(side_effect=submit)
-    first, second = await asyncio.gather(
-        set_config_subentry(client, "entry-1", "conversation", {"model": "m"}),
-        set_config_subentry(client, "entry-1", "conversation", {"model": "n"}),
+    mock_client.list_config_subentries = AsyncMock(side_effect=listing)
+    mock_client.start_config_subentry_flow = AsyncMock(
+        side_effect=lambda *a, **k: {**_form("user", "model"), "flow_id": next(flows)}
     )
+    mock_client.submit_config_subentry_flow_step = AsyncMock(side_effect=submit)
+
+    first, second = await asyncio.gather(
+        *(
+            _handle_set_config_subentry(
+                mock_client,
+                None,
+                "entry-1",
+                "conversation",
+                None,
+                {"model": model},
+                False,
+            )
+            for model in ("m", "n")
+        )
+    )
+
     assert (first["subentry_id"], second["subentry_id"]) == ("sub-m", "sub-n")
 
 
-async def test_config_set_helper_walks_multistep_subentry_flow(
+async def test_a_later_subentry_form_is_answered_in_its_own_call(
     helper_tools, mock_client
 ):
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "first",
-        "data_schema": [{"name": "name"}],
-    }
+    second = {**_form("second", "model"), "flow_id": "flow-1"}
+    mock_client.start_config_subentry_flow.return_value = _form("first", "name")
     mock_client.submit_config_subentry_flow_step.side_effect = [
-        {
-            "type": "form",
-            "step_id": "second",
-            "data_schema": [{"name": "model"}],
-        },
-        {
-            "type": "create_entry",
-            "title": "Local Model",
-        },
+        second,
+        {"type": "create_entry", "title": "Local Model"},
     ]
+    mock_client._request = AsyncMock(return_value=second)
 
-    result = await helper_tools["ha_config_set_helper"](
-        helper_type="config_subentry",
-        entry_id="entry-1",
-        subentry_type="conversation",
-        config={"name": "Local Model", "model": "gemma3:27b"},
+    shown = await _set_subentry(helper_tools, config={"name": "Local Model"})
+
+    assert shown["flow_type"] == "form"
+    assert shown["step_id"] == "second"
+
+    result = await _set_subentry(
+        helper_tools, flow_id=shown["flow_id"], config={"model": "gemma3:27b"}
     )
 
-    assert result["success"] is True
     assert result["operation"] == "created"
-    # Fully consumed config must not produce an ignored-keys warning (other
-    # warnings, e.g. the skills-vendor notice, are unrelated to this path).
-    assert not any(
-        "Ignored config keys" in warning for warning in result.get("warnings", [])
+    mock_client._request.assert_awaited_once_with(
+        "GET", "/config/config_entries/subentries/flow/flow-1"
     )
     assert mock_client.submit_config_subentry_flow_step.await_args_list == [
         call("flow-1", {"name": "Local Model"}),
@@ -341,7 +322,7 @@ async def test_config_set_helper_walks_multistep_subentry_flow(
     ]
 
 
-async def test_config_set_helper_walks_menu_subentry_flow(helper_tools, mock_client):
+async def test_a_subentry_menu_is_answered_with_menu_choice(helper_tools, mock_client):
     mock_client.start_config_subentry_flow.return_value = {
         "flow_id": "flow-1",
         "type": "menu",
@@ -349,25 +330,14 @@ async def test_config_set_helper_walks_menu_subentry_flow(helper_tools, mock_cli
         "menu_options": ["conversation"],
     }
     mock_client.submit_config_subentry_flow_step.side_effect = [
-        {
-            "type": "form",
-            "step_id": "set_options",
-            "data_schema": [{"name": "model"}],
-        },
-        {
-            "type": "create_entry",
-            "title": "Local Model",
-        },
+        _form("set_options", "model"),
+        {"type": "create_entry", "title": "Local Model"},
     ]
 
-    result = await helper_tools["ha_config_set_helper"](
-        helper_type="config_subentry",
-        entry_id="entry-1",
-        subentry_type="provider",
-        config={"next_step_id": "conversation", "model": "gemma3:27b"},
+    result = await _set_subentry(
+        helper_tools, menu_choice="conversation", config={"model": "gemma3:27b"}
     )
 
-    assert result["success"] is True
     assert result["operation"] == "created"
     assert mock_client.submit_config_subentry_flow_step.await_args_list == [
         call("flow-1", {"next_step_id": "conversation"}),
@@ -375,15 +345,12 @@ async def test_config_set_helper_walks_menu_subentry_flow(helper_tools, mock_cli
     ]
 
 
-async def test_config_set_helper_subentry_preserves_flow_api_error_context(
+async def test_a_rejected_subentry_submit_shows_the_form_and_keeps_the_flow(
     helper_tools, mock_client
 ):
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "set_options",
-        "data_schema": [{"name": "name"}, {"name": "model"}],
-    }
+    mock_client.start_config_subentry_flow.return_value = _form(
+        "set_options", "name", "model"
+    )
     mock_client.submit_config_subentry_flow_step.side_effect = HomeAssistantAPIError(
         "API error: 400 - validation failed",
         status_code=400,
@@ -394,43 +361,32 @@ async def test_config_set_helper_subentry_preserves_flow_api_error_context(
     )
 
     with pytest.raises(ToolError) as exc_info:
-        await helper_tools["ha_config_set_helper"](
-            helper_type="config_subentry",
-            entry_id="entry-1",
-            subentry_type="conversation",
-            config={"name": "Local Model", "model": "missing-model"},
+        await _set_subentry(
+            helper_tools, config={"name": "Local Model", "model": "missing-model"}
         )
 
     error_data = json.loads(str(exc_info.value))
     assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "model: invalid_model" in error_data["error"]["message"]
     assert error_data["field_errors"] == {"model": "invalid_model"}
-    assert error_data["data_schema"] == [
-        {"name": "name"},
-        {"name": "model"},
-    ]
+    assert error_data["data_schema"] == [{"name": "name"}, {"name": "model"}]
     assert error_data["submitted_keys"] == ["model", "name"]
-    mock_client.abort_config_subentry_flow.assert_awaited_once_with("flow-1")
+    assert error_data["flow_id"] == "flow-1"
+    mock_client.abort_config_subentry_flow.assert_not_awaited()
 
 
-async def test_config_set_helper_reconfigures_config_subentry(
-    helper_tools, mock_client
+@pytest.mark.parametrize("reason", ["reconfigure_successful", "reauth_successful"])
+async def test_a_subentry_reconfigure_ends_in_cores_success_abort(
+    helper_tools, mock_client, reason
 ):
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "set_options",
-        "data_schema": [{"name": "model"}],
-    }
+    mock_client.start_config_subentry_flow.return_value = _form("set_options", "model")
     mock_client.submit_config_subentry_flow_step.return_value = {
         "type": "abort",
-        "reason": "reconfigure_successful",
+        "reason": reason,
     }
 
-    result = await helper_tools["ha_config_set_helper"](
-        helper_type="config_subentry",
-        entry_id="entry-1",
-        subentry_type="conversation",
+    result = await _set_subentry(
+        helper_tools,
         subentry_id="subentry-1",
         action="update",
         config={"model": "gemma3:27b"},
@@ -441,43 +397,12 @@ async def test_config_set_helper_reconfigures_config_subentry(
     assert result["subentry_id"] == "subentry-1"
 
 
-async def test_config_set_helper_treats_reauth_successful_as_reconfigured(
-    helper_tools, mock_client
-):
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "reauth_confirm",
-        "data_schema": [{"name": "api_key"}],
-    }
-    mock_client.submit_config_subentry_flow_step.return_value = {
-        "type": "abort",
-        "reason": "reauth_successful",
-    }
-
-    result = await helper_tools["ha_config_set_helper"](
-        helper_type="config_subentry",
-        entry_id="entry-1",
-        subentry_type="conversation",
-        subentry_id="subentry-1",
-        action="update",
-        config={"api_key": "new-key"},
-    )
-
-    assert result["success"] is True
-    assert result["operation"] == "reconfigured"
-
-
 async def test_config_set_helper_rejects_update_without_subentry_id(
     helper_tools, mock_client
 ):
     with pytest.raises(ToolError) as exc_info:
-        await helper_tools["ha_config_set_helper"](
-            helper_type="config_subentry",
-            entry_id="entry-1",
-            subentry_type="conversation",
-            action="update",
-            config={"model": "gemma3:27b"},
+        await _set_subentry(
+            helper_tools, action="update", config={"model": "gemma3:27b"}
         )
 
     error_data = json.loads(str(exc_info.value))
@@ -488,12 +413,7 @@ async def test_config_set_helper_rejects_update_without_subentry_id(
 
 async def test_config_set_helper_rejects_invalid_config_json(helper_tools, mock_client):
     with pytest.raises(ToolError) as exc_info:
-        await helper_tools["ha_config_set_helper"](
-            helper_type="config_subentry",
-            entry_id="entry-1",
-            subentry_type="conversation",
-            config="{not-json",
-        )
+        await _set_subentry(helper_tools, config="{not-json")
 
     error_data = json.loads(str(exc_info.value))
     assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -501,29 +421,16 @@ async def test_config_set_helper_rejects_invalid_config_json(helper_tools, mock_
     mock_client.start_config_subentry_flow.assert_not_awaited()
 
 
-async def test_config_set_helper_subentry_abort_failure_warns(
-    helper_tools, mock_client, caplog
+async def test_an_open_subentry_flow_is_ended_with_abort(
+    helper_tools, mock_client, opened_flows
 ):
-    mock_client.start_config_subentry_flow.return_value = {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "set_options",
-        "data_schema": [{"name": "model"}],
-    }
-    mock_client.submit_config_subentry_flow_step.side_effect = RuntimeError(
-        "submit failed"
-    )
-    mock_client.abort_config_subentry_flow.side_effect = TimeoutError("slow abort")
+    opened_flows["flow-1"] = ("subentry", "entry-1/conversation/")
 
-    with caplog.at_level(logging.WARNING), pytest.raises(ToolError):
-        await helper_tools["ha_config_set_helper"](
-            helper_type="config_subentry",
-            entry_id="entry-1",
-            subentry_type="conversation",
-            config={"model": "gemma3:27b"},
-        )
+    result = await _set_subentry(helper_tools, flow_id="flow-1", abort=True)
 
-    assert "Failed to abort config subentry flow flow-1 after error" in caplog.text
+    assert result["aborted"] is True
+    mock_client.abort_config_subentry_flow.assert_awaited_once_with("flow-1")
+    assert "flow-1" not in opened_flows
 
 
 async def test_remove_helpers_integrations_deletes_config_subentry(mock_client):

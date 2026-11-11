@@ -31,7 +31,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.config import OAUTH_MODE_TOKEN
 from ha_mcp.update_check import UpdateInfo
 
-MIRROR, LEGACY = hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES
+MIRROR, MAIN = hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES
 
 
 def _info(latest="1.1.0", *, update_available=True, current="1.0.0"):
@@ -202,14 +202,14 @@ class TestMaybeRefreshHacsAfterUpdate:
         # Its component update is the one the Marketplace never checks for
         # without a connected GitHub account.
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-        with _server(_ws([_repo(456, LEGACY)]), info=_info()) as mocks:
+        with _server(_ws([_repo(456, MAIN)]), info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         assert _refreshed_ids(mocks) == ["456"]
 
     async def test_off_by_default_on_a_new_install(self, data_dir, monkeypatch):
         monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
-        with _server(_ws([_repo(456, LEGACY)]), info=_info(), opted_in=False) as mocks:
+        with _server(_ws([_repo(456, MAIN)]), info=_info(), opted_in=False) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         mocks.get_websocket_client.assert_not_awaited()
@@ -220,7 +220,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         # explicit choice the setting is saved on, so nothing changes for it.
         monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
         hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
-        with _server(_ws([_repo(456, LEGACY)]), info=_info(), opted_in=False) as mocks:
+        with _server(_ws([_repo(456, MAIN)]), info=_info(), opted_in=False) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         mocks.save.assert_awaited_once_with({hacs_auto_refresh.SETTING: True})
@@ -231,7 +231,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
         hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
         with _server(
-            _ws([_repo(456, LEGACY)]),
+            _ws([_repo(456, MAIN)]),
             info=_info(),
             opted_in=False,
             overrides={hacs_auto_refresh.SETTING: False},
@@ -264,7 +264,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         mocks.get_websocket_client.assert_not_awaited()
 
     async def test_both_installed_candidates_are_refreshed(self, data_dir, caplog):
-        ws = _ws([_repo(123, MIRROR), _repo(456, LEGACY), _repo(789, "other/repo")])
+        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN), _repo(789, "other/repo")])
 
         with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
@@ -287,12 +287,12 @@ class TestMaybeRefreshHacsAfterUpdate:
             "hacs": "present",
         }
         # The one info line is the operator-visible signal for this feature.
-        assert f"{MIRROR}, {LEGACY}" in caplog.text
+        assert f"{MIRROR}, {MAIN}" in caplog.text
 
     async def test_uninstalled_candidate_is_skipped(self, data_dir):
         # Migration limbo: the mirror record is added but not downloaded, so
-        # only the legacy entry has an update entity to light up.
-        ws = _ws([_repo(123, MIRROR, installed=False), _repo(456, LEGACY)])
+        # only the main entry has an update entity to light up.
+        ws = _ws([_repo(123, MIRROR, installed=False), _repo(456, MAIN)])
 
         with _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
@@ -311,7 +311,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert _written_marker(data_dir)["hacs"] == "present"
 
     async def test_one_failing_refresh_does_not_skip_the_other(self, data_dir):
-        ws = _ws([_repo(123, MIRROR), _repo(456, LEGACY)])
+        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN)])
 
         with _server(ws, info=_info()) as mocks:
             mocks.refresh.side_effect = [
@@ -353,7 +353,7 @@ class TestMaybeRefreshHacsAfterUpdate:
             HomeAssistantCommandError(
                 "Command failed: Unknown command.", "unknown_command"
             ),
-            {"success": True, "result": [_repo(456, LEGACY)]},
+            {"success": True, "result": [_repo(456, MAIN)]},
         ]
         with _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
@@ -365,7 +365,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         # list succeeded but every installed candidate's refresh failed — an
         # undetermined pass must not write the marker, or the retry schedule
         # and the next startup's pass are both cancelled.
-        ws = _ws([_repo(123, MIRROR), _repo(456, LEGACY)])
+        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN)])
 
         with (
             _server(ws, info=_info()) as mocks,

@@ -24,8 +24,8 @@ async def test_template_options_edit_changes_output_and_preserves_unit_and_name(
             {
                 "helper_type": "template",
                 "name": name,
+                "menu_choice": "sensor",
                 "config": {
-                    "next_step_id": "sensor",
                     "state": "{{ 2 + 3 }}",
                     "unit_of_measurement": "W",
                 },
