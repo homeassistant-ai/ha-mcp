@@ -8,13 +8,12 @@ import socket
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 import custom_components.ha_mcp_tools.embedded_server as es
-
-from ._embedded_helpers import no_direct_listener_helpers  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -49,19 +48,19 @@ def _stub_ha_mcp_surface(
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
     )
-    ha_mcp_mod = ModuleType("ha_mcp")
+    ha_mcp_mod: Any = ModuleType("ha_mcp")
     ha_mcp_mod.__path__ = []  # package semantics for submodule imports
-    cfg = ModuleType("ha_mcp.config")
+    cfg: Any = ModuleType("ha_mcp.config")
     cfg.reset_global_settings = lambda: None
     cfg.set_embedded_connection = lambda u, t: None
     cfg.OAUTH_MODE_URL = "__sentinel_url__"
     cfg.OAUTH_MODE_TOKEN = "__sentinel_token__"
     cfg.get_global_settings = lambda: settings
-    server_mod = ModuleType("ha_mcp.server")
+    server_mod: Any = ModuleType("ha_mcp.server")
     server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=mcp)
-    ui_mod = ModuleType("ha_mcp.settings_ui")
+    ui_mod: Any = ModuleType("ha_mcp.settings_ui")
     ui_mod.register_settings_routes = lambda *a, **k: None
-    uvicorn_mod = ModuleType("uvicorn")
+    uvicorn_mod: Any = ModuleType("uvicorn")
     uvicorn_mod.Config = lambda *a, **k: SimpleNamespace()
     uvicorn_mod.Server = lambda config: SimpleNamespace(should_exit=False)
     ha_mcp_mod.config = cfg

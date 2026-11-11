@@ -14,10 +14,8 @@ needs them.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -30,6 +28,8 @@ from ha_mcp.client.websocket_client import websocket_manager
 from ha_mcp.tools import component_devices
 from ha_mcp.tools.component_api import ComponentCaps
 from ha_mcp.tools.radio.zigbee import _resolve_ieee
+
+from ._client_spies import routing_spies
 
 _IEEE = "00:11:22:33:44:55:66:77"
 
@@ -47,18 +47,6 @@ async def zha_device(
         identifiers={("zha", _IEEE)},
         name="Zigbee Sensor",
     )
-
-
-@contextmanager
-def _routes(client: HomeAssistantClient, socket: Any) -> Iterator[tuple[Any, Any]]:
-    """Spies on the legacy bridge and the component socket; both call through."""
-    with (
-        patch.object(
-            client, "send_websocket_message", wraps=client.send_websocket_message
-        ) as legacy,
-        patch.object(socket, "send_command", wraps=socket.send_command) as component,
-    ):
-        yield legacy, component
 
 
 async def _socket(client: HomeAssistantClient) -> Any:
@@ -85,7 +73,7 @@ async def test_resolve_ieee_served_by_component(
     component_core_client: HomeAssistantClient, zha_device: dr.DeviceEntry
 ) -> None:
     socket = await _socket(component_core_client)
-    with _routes(component_core_client, socket) as (legacy, component):
+    with routing_spies(component_core_client, socket) as (legacy, component):
         ieee = await _resolve_ieee(component_core_client, zha_device.id)
 
     assert ieee == _IEEE
@@ -100,7 +88,7 @@ async def test_resolve_ieee_capsless_uses_legacy_list(
     # Without the component, Core answers the capability probe with
     # unknown_command.
     socket = await _socket(core_client)
-    with _routes(core_client, socket) as (legacy, component):
+    with routing_spies(core_client, socket) as (legacy, component):
         ieee = await _resolve_ieee(core_client, zha_device.id)
 
     assert ieee == _IEEE
@@ -128,7 +116,7 @@ async def test_resolve_ieee_unknown_command_invalidates_and_falls_back(
     monkeypatch.setattr(component_devices, "invalidate_caps", invalidated)
 
     socket = await _socket(core_client)
-    with _routes(core_client, socket) as (legacy, component):
+    with routing_spies(core_client, socket) as (legacy, component):
         ieee = await _resolve_ieee(core_client, zha_device.id)
 
     assert ieee == _IEEE

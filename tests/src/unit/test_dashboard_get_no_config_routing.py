@@ -13,11 +13,8 @@ component, so the tool reads through Core's own ``lovelace/config``.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -26,6 +23,9 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+
+from ._client_spies import sent_messages
+from ._tool_errors import _error as _error
 
 # Core requires a hyphen in a dashboard's url_path and derives its internal
 # id by slugifying it.
@@ -48,14 +48,6 @@ async def _fresh_dashboard(hass: HomeAssistant, client: HomeAssistantClient) -> 
     assert created["result"]["id"] == _DASHBOARD_ID
 
 
-@contextmanager
-def _legacy_reads(client: HomeAssistantClient) -> Iterator[Mock]:
-    with patch.object(
-        client, "send_websocket_message", wraps=client.send_websocket_message
-    ) as spy:
-        yield spy
-
-
 def _config_reads(spy: Mock) -> list[Any]:
     return [
         call.args[0].get("url_path")
@@ -64,18 +56,13 @@ def _config_reads(spy: Mock) -> list[Any]:
     ]
 
 
-def _error(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    error: dict[str, Any] = json.loads(str(exc.value))["error"]
-    return error
-
-
 async def test_component_no_config_answers_without_a_legacy_read(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     await _fresh_dashboard(hass, component_core_client)
     get_dashboard = DashboardConfigTools(component_core_client).ha_config_get_dashboard
 
-    with _legacy_reads(component_core_client) as legacy:
+    with sent_messages(component_core_client) as legacy:
         resp = await get_dashboard(url_path=_URL_PATH)
 
     assert resp["success"] is True

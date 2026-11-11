@@ -206,7 +206,6 @@ module = [
     "tests.src.unit.test_backup_calendar_restore",
     "tests.src.unit.test_backup_capture_cancellation",
     "tests.src.unit.test_backup_diff",
-    "tests.src.unit.test_backup_diff_error_mapping",
     "tests.src.unit.test_backup_files",
     "tests.src.unit.test_backup_integrations",
     "tests.src.unit.test_backup_manager",

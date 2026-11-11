@@ -15,7 +15,7 @@ import json
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import voluptuous as vol
@@ -28,6 +28,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_code import _SandboxBridge
 from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.util_helpers import is_credential_ws_command
+
+from ._client_spies import sent_messages
 
 
 def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
@@ -69,9 +71,7 @@ async def supervisor_calls(
 @pytest.fixture
 def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
     """A spy on the client's WebSocket send; Core still answers."""
-    with patch.object(
-        core_client, "send_websocket_message", wraps=core_client.send_websocket_message
-    ) as spy:
+    with sent_messages(core_client) as spy:
         yield spy
 
 

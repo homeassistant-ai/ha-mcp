@@ -108,25 +108,6 @@ from .test_ha_remove_device_component_routing import (
 )
 from .test_ha_search_component_routing import _build_ha_search
 
-
-class ZigbeeRoutingClient:
-    """Credentialed HA client spy: tallies the legacy device-registry-list dumps."""
-
-    def __init__(self, devices: list[dict[str, Any]] | None = None) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._devices = list(devices or [])
-        self.device_list_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/device_registry/list":
-            self.device_list_calls += 1
-            return {"success": True, "result": list(self._devices)}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
-
-
 _REAL_FNS = {
     "ha_mcp_tools/overview": wsapi._do_overview,
     "ha_mcp_tools/helpers_list": wsapi._do_helpers_list,
@@ -806,7 +787,7 @@ class TestDeviceSeam:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
         )
-        client = ZigbeeRoutingClient()
+        client = GetDeviceRoutingClient()
         ws = _real_component_ws(FakeHass())
         with patch_ws(ws, component_devices):
             ieee = await _resolve_ieee(client, "dev-1")

@@ -16,8 +16,6 @@ component's commands registered where the component is installed.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,6 +34,8 @@ from ha_mcp.tools import component_config_entries
 from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.radio.base import resolve_entry_id
 
+from ._client_spies import routing_spies
+
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
@@ -45,20 +45,6 @@ async def _zwave_entry(hass: HomeAssistant) -> None:
     MockConfigEntry(
         domain="zwave_js", entry_id="cfg-zwave", title="Title zwave_js"
     ).add_to_hass(hass)
-
-
-@contextmanager
-def _routes(
-    client: HomeAssistantClient, socket: HomeAssistantWebSocketClient
-) -> Iterator[tuple[AsyncMock, AsyncMock]]:
-    """Spies on the legacy bridge and the pooled component socket; both call through."""
-    with (
-        patch.object(
-            client, "send_websocket_message", wraps=client.send_websocket_message
-        ) as legacy,
-        patch.object(socket, "send_command", wraps=socket.send_command) as component,
-    ):
-        yield legacy, component
 
 
 async def _socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
@@ -88,7 +74,7 @@ async def test_resolve_entry_id_served_by_component(
     await _zwave_entry(hass)
     socket = await _socket(component_core_client)
 
-    with _routes(component_core_client, socket) as (legacy, component):
+    with routing_spies(component_core_client, socket) as (legacy, component):
         entry_id = await resolve_entry_id(component_core_client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -105,7 +91,7 @@ async def test_resolve_entry_id_capsless_uses_legacy_dump(
     await _zwave_entry(hass)
     socket = await _socket(core_client)
 
-    with _routes(core_client, socket) as (legacy, component):
+    with routing_spies(core_client, socket) as (legacy, component):
         entry_id = await resolve_entry_id(core_client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -129,7 +115,7 @@ async def test_resolve_entry_id_unknown_command_invalidates_and_falls_back(
     monkeypatch.setattr(component_config_entries, "invalidate_caps", invalidated)
     socket = await _socket(component_core_client)
 
-    with _routes(component_core_client, socket) as (legacy, _component):
+    with routing_spies(component_core_client, socket) as (legacy, _component):
         entry_id = await resolve_entry_id(component_core_client, "zwave_js")
 
     assert entry_id == "cfg-zwave"
@@ -174,7 +160,7 @@ async def test_resolve_entry_id_not_configured_returns_none(
     assert await async_setup_component(hass, "config", {})
     socket = await _socket(component_core_client)
 
-    with _routes(component_core_client, socket) as (legacy, component):
+    with routing_spies(component_core_client, socket) as (legacy, component):
         entry_id = await resolve_entry_id(component_core_client, "zwave_js")
 
     assert entry_id is None

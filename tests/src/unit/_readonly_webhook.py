@@ -18,6 +18,7 @@ def readonly_webhook_modules():
     )
     assert source.read_bytes() == Path(embedded.__file__).read_bytes()
     spec = importlib.util.spec_from_file_location("readonly_webhook_proxy_test", source)
+    assert spec is not None and spec.loader is not None
     proxy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proxy)
     return embedded, proxy
