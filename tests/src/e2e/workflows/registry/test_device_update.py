@@ -52,11 +52,12 @@ class TestDeviceSet:
             assert updated_entry["name_by_user"] == test_name, update_data
             assert updated_entry["name"] == original_name, update_data
         finally:
-            # Put back the name the device had; '' clears a custom name.
-            await MCPAssertions(mcp_client).call_tool_success(
-                "ha_set_device",
-                {"device_id": device_id, "name": device.get("name_by_user") or ""},
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                # Put back the name the device had; '' clears a custom name.
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_set_device",
+                    {"device_id": device_id, "name": device.get("name_by_user") or ""},
+                )
 
     async def test_device_labels_replace_the_set_and_empty_list_clears(
         self, mcp_client
@@ -164,21 +165,12 @@ class TestDeviceSet:
 
         device_id = list_data["devices"][0]["id"]
 
-        # Update with no parameters
-        update_data = await safe_call_tool(
-            mcp_client,
-            "ha_set_device",
-            {"device_id": device_id},
-        )
-
-        assert not update_data.get("success"), "Update with no changes should fail"
-        error = update_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "no updates" in error_msg.lower(), (
-            f"Error should mention no updates: {update_data}"
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_set_device",
+                {"device_id": device_id},
+                expected_error="no updates",
+            )
         logger.info("No-changes update correctly rejected")
 
 

@@ -14,7 +14,6 @@ import pytest
 from ...utilities.assertions import (
     MCPAssertions,
     parse_mcp_result,
-    safe_call_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -409,20 +408,12 @@ class TestDeviceGet:
         """
         logger.info("Testing get non-existent device")
 
-        get_data = await safe_call_tool(
-            mcp_client,
-            "ha_get_device",
-            {"device_id": "definitely_not_a_real_device_id_12345"},
-        )
-
-        assert not get_data.get("success"), "Getting non-existent device should fail"
-        error = get_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "not found" in error_msg.lower(), (
-            f"Error should indicate device not found: {get_data}"
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_device",
+                {"device_id": "definitely_not_a_real_device_id_12345"},
+                expected_error="not found",
+            )
         logger.info("Non-existent device correctly rejected")
 
 
@@ -540,53 +531,30 @@ class TestDeviceRemove:
         """
         logger.info("Testing remove non-existent device")
 
-        remove_data = await safe_call_tool(
-            mcp_client,
-            "ha_remove_device",
-            {"device_id": "definitely_not_a_real_device_id_12345"},
-        )
-
-        assert not remove_data.get("success"), (
-            "Removing non-existent device should fail"
-        )
-        error = remove_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "not found" in error_msg.lower(), (
-            f"Error should indicate device not found: {remove_data}"
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_remove_device",
+                {"device_id": "definitely_not_a_real_device_id_12345"},
+                expected_error="not found",
+            )
         logger.info("Non-existent device removal correctly rejected")
 
-    async def test_remove_device_refusal_comes_from_cores_remove_command(
+    async def test_remove_device_refusal_reaches_the_caller_in_cores_words(
         self, mcp_client
     ):
         """demo refuses to remove its devices, so this removes nothing. Core's
-        refusal reaches the caller in Core's words, and Core logged no
-        deprecation warning: the tool sent ``remove``, not the deprecated
-        ``remove_config_entry``, which answers with the same refusal. The log
-        check tells the two apart only on Core 2026.9 and later, which log
-        the deprecation."""
+        refusal reaches the caller in Core's words. Which command the tool
+        sends is pinned in test_component_device_seam.py."""
         async with MCPAssertions(mcp_client) as mcp:
             found = await mcp.call_tool_success(
                 "ha_get_device", {"entity_id": "notify.notifier"}
             )
-        notifier = found["device"]
-        baseline_total_lines = await _error_log_total(mcp_client)
-
-        async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_failure(
-                "ha_remove_device", {"device_id": notifier["id"]}
+                "ha_remove_device", {"device_id": found["device"]["id"]}
             )
         assert data["error"]["message"] == (
             "Failed to remove device: Config entry does not support device removal"
         ), data
-        deprecation_lines = [
-            line
-            for line in await _error_log_lines_since(mcp_client, baseline_total_lines)
-            if "remove_config_entry is deprecated" in line
-        ]
-        assert deprecation_lines == []
 
     # A successful removal is not tested here: it would remove a device from
     # the shared test environment.
@@ -714,15 +682,10 @@ class TestDeviceGetNegativeInputs:
 
     async def test_get_device_nonexistent_device_id(self, mcp_client):
         """An unknown device_id fails with RESOURCE_NOT_FOUND and a suggestion."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_device",
-            {"device_id": "nonexistent_device_a2_e2e_xyz_404"},
-        )
-
-        assert not data.get("success"), (
-            f"Expected failure for nonexistent device_id, got success=True: {data}"
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_device", {"device_id": "nonexistent_device_a2_e2e_xyz_404"}
+            )
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
             f"Expected error code RESOURCE_NOT_FOUND, got: {data['error']}"
         )
