@@ -10,6 +10,7 @@ gives no answer at all is the one client replacement allowed
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -39,7 +40,7 @@ class TestComponentContextFallbacks:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A dropped socket is not the component's authoritative "no match", so
-        the caller must still try Core."""
+        the caller must still try Core after asking the component."""
         monkeypatch.setattr(
             component_core_client,
             "send_websocket_message",
@@ -47,6 +48,11 @@ class TestComponentContextFallbacks:
         )
 
         assert await _component_context(component_core_client, "ctx-1") is None
+
+        send = cast(AsyncMock, component_core_client.send_websocket_message)
+        assert [call.args[0] for call in send.call_args_list] == [
+            {"type": trace_lookup.TRACE_CONTEXT_COMMAND, "context_id": "ctx-1"}
+        ]
 
     async def test_an_unknown_component_command_drops_the_stale_capability(
         self,
@@ -57,23 +63,63 @@ class TestComponentContextFallbacks:
         """A downgraded component must not keep the capability that routes to a
         command Core refuses."""
         monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=core_client.send_websocket_message),
+        )
+        monkeypatch.setattr(
             trace_lookup, "component_supports", lambda _caps, _capability: True
         )
 
         assert await _component_context(core_client, "ctx-1") is None
+
+        send = cast(AsyncMock, core_client.send_websocket_message)
+        assert [call.args[0] for call in send.call_args_list] == [
+            {"type": trace_lookup.TRACE_CONTEXT_COMMAND, "context_id": "ctx-1"}
+        ]
         invalidated.assert_called_once_with(core_client)
 
     async def test_a_rejected_domain_uses_core_s_lookup(
-        self, component_core_client: HomeAssistantClient
+        self,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A domain the component does not trace must not hide Core's own run."""
+        monkeypatch.setattr(
+            component_core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=component_core_client.send_websocket_message),
+        )
+
         assert (
             await _component_context(component_core_client, "ctx-1", domain="scene")
             is None
         )
 
+        send = cast(AsyncMock, component_core_client.send_websocket_message)
+        assert [call.args[0] for call in send.call_args_list] == [
+            {
+                "type": trace_lookup.TRACE_CONTEXT_COMMAND,
+                "context_id": "ctx-1",
+                "domain": "scene",
+            }
+        ]
+
     async def test_home_assistant_without_a_trace_store_uses_core_s_lookup(
-        self, component_core_client: HomeAssistantClient
+        self,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An install with no trace store has no component answer to trust."""
+        monkeypatch.setattr(
+            component_core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=component_core_client.send_websocket_message),
+        )
+
         assert await _component_context(component_core_client, "ctx-1") is None
+
+        send = cast(AsyncMock, component_core_client.send_websocket_message)
+        assert [call.args[0] for call in send.call_args_list] == [
+            {"type": trace_lookup.TRACE_CONTEXT_COMMAND, "context_id": "ctx-1"}
+        ]

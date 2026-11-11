@@ -19,6 +19,7 @@ from ha_mcp.tools.automation_registry_details import (
     REFERENCES_NOT_LOADED,
     registry_details,
 )
+from ha_mcp.tools.component_automation import automation_lookup
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_diagnostics import _gather_diagnostics
 
@@ -330,35 +331,56 @@ class TestRegistryDetailsReferences:
     """The component's lookup answer for an item's registry row and references."""
 
     @pytest.mark.asyncio
-    async def test_an_unknown_item_is_not_reported_as_an_unloaded_one(
-        self,
+    async def test_an_unknown_entity_id_is_not_reported_as_an_unloaded_one(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
         """A typo'd entity id must not be told the automation exists but did not
         load, which would send the user looking for a disabled automation."""
+        await _setup(hass, "automation", [_automation("test", "Test")])
+        lookup = await automation_lookup(
+            component_core_client, entity_id="automation.typo"
+        )
+        assert lookup is not None
+        assert lookup["found"] is False
         warnings: list[str] = []
 
         await registry_details(
-            None,
-            {"loaded": False, "references": None, "found": False},
-            "automation.typo",
-            warnings,
+            component_core_client, lookup, "automation.typo", warnings
         )
 
         assert warnings == []
 
     @pytest.mark.asyncio
-    async def test_a_found_item_that_did_not_load_says_its_references_are_unavailable(
-        self,
+    async def test_an_automation_that_fails_to_load_says_its_references_are_unavailable(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        """A found item Core has not loaded has no references, and the user is
-        told why instead of reading an unexplained miss."""
+        """Core has no references for an automation it did not load, so the user
+        is told that instead of reading an unexplained miss."""
+        await _setup(
+            hass,
+            "automation",
+            [
+                {
+                    "id": "bad",
+                    "alias": "Bad",
+                    "trigger": [{"platform": "no_such_platform"}],
+                    "action": [],
+                }
+            ],
+        )
+        lookup = await automation_lookup(
+            component_core_client, entity_id="automation.bad"
+        )
+        assert lookup is not None
+        assert (lookup["found"], lookup["loaded"], lookup["references"]) == (
+            True,
+            False,
+            None,
+        )
         warnings: list[str] = []
 
         await registry_details(
-            None,
-            {"loaded": False, "references": None},
-            "automation.test",
-            warnings,
+            component_core_client, lookup, "automation.bad", warnings
         )
 
         assert warnings == [REFERENCES_NOT_LOADED]
