@@ -46,8 +46,12 @@ rule:
     # side_effect that raises a transport error and nothing else. An error
     # reply (HomeAssistantAPIError, HomeAssistantCommandError) is Core's answer
     # and comes from Core.
+    # A spy stays too: wraps= calls through to the real method, so the reply is
+    # still Core's and the test can count or forbid a call.
     - not:
-        regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'
+        any:
+          - regex: '\bwraps\s*=\s*\w+(\.\w+)+\s*[,)]'
+          - regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
@@ -64,7 +68,6 @@ ignores:
   - "tests/src/unit/test_action_and_collision.py"
   - "tests/src/unit/test_action_discriminator.py"
   - "tests/src/unit/test_alias_fetch_chunking.py"
-  - "tests/src/unit/test_alias_template_recovery.py"
   - "tests/src/unit/test_area_filter_search.py"
   - "tests/src/unit/test_automation_enabled.py"
   - "tests/src/unit/test_automation_errors.py"
@@ -72,7 +75,6 @@ ignores:
   - "tests/src/unit/test_backup_access.py"
   - "tests/src/unit/test_backup_auth_refusal.py"
   - "tests/src/unit/test_backup_calendar_restore.py"
-  - "tests/src/unit/test_backup_dashboard_default_alias.py"
   - "tests/src/unit/test_backup_dashboards.py"
   - "tests/src/unit/test_backup_delete.py"
   - "tests/src/unit/test_backup_manager.py"
@@ -85,7 +87,6 @@ ignores:
   - "tests/src/unit/test_bug_report_sources.py"
   - "tests/src/unit/test_bulk_device_control.py"
   - "tests/src/unit/test_bulk_selector.py"
-  - "tests/src/unit/test_call_service_read_only.py"
   - "tests/src/unit/test_call_service_return_response.py"
   - "tests/src/unit/test_call_service_snapshot_guard.py"
   - "tests/src/unit/test_call_service_ws_command.py"
@@ -101,7 +102,6 @@ ignores:
   - "tests/src/unit/test_component_entity_lookup_contract.py"
   - "tests/src/unit/test_component_helper_collections.py"
   - "tests/src/unit/test_component_info_report_contract.py"
-  - "tests/src/unit/test_component_info_timezone_contract.py"
   - "tests/src/unit/test_component_readapi_contract.py"
   - "tests/src/unit/test_component_registries_contract.py"
   - "tests/src/unit/test_component_registry_lookup_contract.py"
@@ -119,11 +119,9 @@ ignores:
   - "tests/src/unit/test_config_subentry_backup.py"
   - "tests/src/unit/test_context_injection.py"
   - "tests/src/unit/test_core_contract.py"
-  - "tests/src/unit/test_core_contract_descriptions.py"
   - "tests/src/unit/test_creation_snapshot_flow.py"
   - "tests/src/unit/test_dashboard_edit_routing.py"
   - "tests/src/unit/test_dashboard_get_no_config_routing.py"
-  - "tests/src/unit/test_dashboard_raw_write_guard.py"
   - "tests/src/unit/test_dashboard_screenshot.py"
   - "tests/src/unit/test_dashboard_screenshot_paths.py"
   - "tests/src/unit/test_dashboard_screenshot_theme_check.py"
@@ -135,7 +133,6 @@ ignores:
   - "tests/src/unit/test_deep_search_helper_rename_1794.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
   - "tests/src/unit/test_device_enrichment.py"
-  - "tests/src/unit/test_energy_statistics.py"
   - "tests/src/unit/test_entity_backup.py"
   - "tests/src/unit/test_entity_expose_changed.py"
   - "tests/src/unit/test_entity_registration.py"
@@ -183,7 +180,6 @@ ignores:
   - "tests/src/unit/test_ha_search_dashboard_leg_failure.py"
   - "tests/src/unit/test_ha_search_dashboard_split.py"
   - "tests/src/unit/test_ha_search_request_count.py"
-  - "tests/src/unit/test_ha_set_device_registry_refs.py"
   - "tests/src/unit/test_ha_system_health_component_routing.py"
   - "tests/src/unit/test_ha_timezone_component_routing.py"
   - "tests/src/unit/test_ha_write_file_edits.py"
@@ -192,7 +188,6 @@ ignores:
   - "tests/src/unit/test_hacs_marketplace.py"
   - "tests/src/unit/test_hacs_own_repository.py"
   - "tests/src/unit/test_hacs_repo_registration.py"
-  - "tests/src/unit/test_helper_blank_name_update.py"
   - "tests/src/unit/test_helper_config_fold.py"
   - "tests/src/unit/test_helper_core_payload.py"
   - "tests/src/unit/test_helper_describe.py"
@@ -209,7 +204,6 @@ ignores:
   - "tests/src/unit/test_history_pagination.py"
   - "tests/src/unit/test_history_summary.py"
   - "tests/src/unit/test_identifier_validation_family.py"
-  - "tests/src/unit/test_ignored_entries.py"
   - "tests/src/unit/test_integration_flow_steps.py"
   - "tests/src/unit/test_integration_log_level.py"
   - "tests/src/unit/test_integration_reconfigure.py"
@@ -223,7 +217,6 @@ ignores:
   - "tests/src/unit/test_mandatory_tool_warnings.py"
   - "tests/src/unit/test_oauth.py"
   - "tests/src/unit/test_operation_register_before_dispatch.py"
-  - "tests/src/unit/test_options_restore_reasons.py"
   - "tests/src/unit/test_options_restore_review.py"
   - "tests/src/unit/test_overview_repairs.py"
   - "tests/src/unit/test_overview_system_info.py"
@@ -236,7 +229,6 @@ ignores:
   - "tests/src/unit/test_radio_zigbee_component_routing.py"
   - "tests/src/unit/test_radio_zwave.py"
   - "tests/src/unit/test_radio_zwave_parameters.py"
-  - "tests/src/unit/test_read_only_flow_reads.py"
   - "tests/src/unit/test_recorder_native_contract.py"
   - "tests/src/unit/test_recorder_review_regressions.py"
   - "tests/src/unit/test_redaction.py"
@@ -246,13 +238,10 @@ ignores:
   - "tests/src/unit/test_remove_entity_error_code.py"
   - "tests/src/unit/test_remove_entity_storage_helper.py"
   - "tests/src/unit/test_remove_helper_by_entity.py"
-  - "tests/src/unit/test_remove_helper_entry_id_hint.py"
   - "tests/src/unit/test_remove_helper_storage_id.py"
   - "tests/src/unit/test_remove_helpers_wait_warnings.py"
-  - "tests/src/unit/test_report_issue_python_hint.py"
   - "tests/src/unit/test_rest_client_admin_gate.py"
   - "tests/src/unit/test_rest_client_automations.py"
-  - "tests/src/unit/test_rest_client_event_listeners.py"
   - "tests/src/unit/test_rest_client_get_config_entry.py"
   - "tests/src/unit/test_rest_client_get_error_log.py"
   - "tests/src/unit/test_rest_client_reconfigure_registry.py"
@@ -268,7 +257,6 @@ ignores:
   - "tests/src/unit/test_search_fields_projection.py"
   - "tests/src/unit/test_search_pagination.py"
   - "tests/src/unit/test_search_related_graph.py"
-  - "tests/src/unit/test_server_lifespan.py"
   - "tests/src/unit/test_server_policy_wiring.py"
   - "tests/src/unit/test_server_version.py"
   - "tests/src/unit/test_services_native_catalog.py"
@@ -279,7 +267,6 @@ ignores:
   - "tests/src/unit/test_smart_search_scene_phase25.py"
   - "tests/src/unit/test_ssl_verification.py"
   - "tests/src/unit/test_statistic_types_validation.py"
-  - "tests/src/unit/test_statistics_resets.py"
   - "tests/src/unit/test_statistics_units.py"
   - "tests/src/unit/test_stdio_settings_sidecar.py"
   - "tests/src/unit/test_supervisor_write_no_answer.py"
@@ -290,7 +277,6 @@ ignores:
   - "tests/src/unit/test_template_generic_routing.py"
   - "tests/src/unit/test_template_helper_backup.py"
   - "tests/src/unit/test_template_restore_safety.py"
-  - "tests/src/unit/test_timezone_metadata_warnings.py"
   - "tests/src/unit/test_tool_error_signaling.py"
   - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_areas.py"
@@ -347,7 +333,6 @@ ignores:
   - "tests/src/unit/visibility/test_overview_filter.py"
   - "tests/src/unit/visibility/test_search_filter.py"
   - "tests/src/unit/visibility/test_smart_search_filter.py"
-  - "tests/src/unit/visibility/test_warnings_surface.py"
 message: |
   Do not type in what Home Assistant answered. A replaced client method that
   returns a hand-written reply (or a hand-written client class) asserts against

@@ -177,6 +177,10 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="error-object-returned-not-raised",
         ),
         pytest.param(
+            "client.get_states = AsyncMock(wraps=_fake_states)\n",
+            id="spy-that-wraps-a-fake",
+        ),
+        pytest.param(
             "client.get_states.return_value = HomeAssistantPayload()\n",
             id="return-value-named-like-the-client",
         ),
@@ -208,6 +212,15 @@ def test_a_typed_in_core_reply_is_refused(source: str, tmp_path: Path) -> None:
             'with patch.object(client, "get_states", side_effect=OSError("reset")):\n'
             "    pass\n",
             id="patched-to-give-no-answer",
+        ),
+        pytest.param(
+            "client.get_states = AsyncMock(wraps=client.get_states)\n",
+            id="spy-that-calls-the-real-method",
+        ),
+        pytest.param(
+            'with patch.object(client, "get_states", wraps=client.get_states) as spy:\n'
+            "    pass\n",
+            id="patched-spy-that-calls-the-real-method",
         ),
         pytest.param(
             "async def test_it(core_client):\n"
