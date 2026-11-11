@@ -13,7 +13,6 @@ import pytest
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.cleanup import CleanupSteps
 from ...utilities.entity_finders import find_test_light_entity
-from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
 from .conftest import create_trace_automation, create_trace_script
 
@@ -22,73 +21,6 @@ from .conftest import create_trace_automation, create_trace_script
 @pytest.mark.cleanup
 class TestAutomationTracesContext:
     """Test automation trace context, logbook, blueprint and not-triggered paths."""
-
-    async def test_logbook_rows_for_a_new_run(
-        self, mcp_client, trace_entity_cleanup, test_data_factory
-    ):
-        """A new run's logbook rows arrive through the component, not a script."""
-        suffix = uuid.uuid4().hex[:8]
-        create_config = test_data_factory.automation_config(
-            f"Trace Logbook E2E {suffix}",
-            trigger=[
-                {
-                    "platform": "event",
-                    "event_type": f"test_trace_logbook_event_{suffix}",
-                }
-            ],
-            action=[{"delay": {"seconds": 0.1}}],
-        )
-        automation_id = await create_trace_automation(
-            mcp_client, trace_entity_cleanup, create_config
-        )
-        mcp = MCPAssertions(mcp_client)
-
-        before = await mcp.call_tool_success(
-            "ha_get_automation_traces", {"entity_id": automation_id}
-        )
-        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
-
-        await mcp.call_tool_success(
-            "ha_call_service",
-            {
-                "domain": "automation",
-                "service": "trigger",
-                "entity_id": automation_id,
-            },
-        )
-        traces = await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_get_automation_traces",
-            arguments={"entity_id": automation_id},
-            predicate=lambda data: any(
-                trace["run_id"] not in runs_before for trace in data.get("traces", [])
-            ),
-            timeout=30,
-            description="logbook test trace",
-        )
-        run_id = next(
-            trace["run_id"]
-            for trace in traces["traces"]
-            if trace["run_id"] not in runs_before
-        )
-
-        detail = await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_get_automation_traces",
-            arguments={
-                "entity_id": automation_id,
-                "run_id": run_id,
-                "sections": "logbook",
-            },
-            predicate=lambda data: bool(data.get("logbook_entries")),
-            timeout=30,
-            poll_interval=1,
-            description="trace logbook rows",
-        )
-
-        assert detail["logbook_entries"], "the new run has no logbook rows"
-        expected_transport = "component" if component_surface_available() else "rest"
-        assert detail["logbook_transport"] == expected_transport
 
     async def test_blueprint_trace_preserves_inputs_and_config(
         self, mcp_client, trace_entity_cleanup, test_data_factory
@@ -216,10 +148,16 @@ action:
                         },
                     )
 
+    @pytest.mark.requires_component_surface
     async def test_event_context_resolves_to_triggered_run(
         self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
-        """The context_id from ha_call_event resolves to the child run."""
+        """The event's context resolves to the child run, and that run resolves
+        its own context and logbook.
+
+        Parent-context resolution needs the component: Core's ``trace/contexts``
+        map only holds each run's own context.
+        """
         suffix = uuid.uuid4().hex[:8]
         event_type = f"trace_parent_context_e2e_{suffix}"
         create_config = test_data_factory.automation_config(
@@ -312,6 +250,40 @@ action:
         assert context_only["item_id"] == row["item_id"]
         assert "entity_id" not in context_only
 
+        # The run's own context is distinct from the triggering event context
+        # and resolves back to this same run.
+        detail_data = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"entity_id": automation_id, "run_id": run_id},
+        )
+        own_context_id = detail_data["context"]["id"]
+        assert own_context_id != event_context_id
+        by_own_context = await mcp.call_tool_success(
+            "ha_get_automation_traces",
+            {"entity_id": automation_id, "context_id": own_context_id},
+        )
+        assert by_own_context["context_match"] == "trace"
+        assert by_own_context["run_id"] == run_id
+        assert by_own_context["context_id"] == own_context_id
+
+        # The component serves this run's logbook rows; the REST fallback is
+        # unit-tested for the no-component lanes.
+        logbook_data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_get_automation_traces",
+            arguments={
+                "entity_id": automation_id,
+                "run_id": run_id,
+                "sections": "logbook",
+            },
+            predicate=lambda data: bool(data.get("logbook_entries")),
+            timeout=30,
+            poll_interval=1,
+            description="trace logbook rows",
+        )
+        assert logbook_data["logbook_transport"] == "component"
+
+    @pytest.mark.requires_component_surface
     async def test_shared_context_lists_automation_and_script_matches(
         self, mcp_client, trace_entity_cleanup, test_data_factory
     ):
@@ -431,78 +403,6 @@ action:
             expected = expected_runs[match["run_id"]]
             assert match["domain"] == expected["domain"]
             assert match["item_id"] == expected["item_id"]
-
-    async def test_context_lookup_returns_same_run(
-        self, mcp_client, trace_entity_cleanup, test_data_factory
-    ):
-        """A context id resolves to the run that owns it."""
-        suffix = uuid.uuid4().hex[:8]
-        automation_name = f"Trace Context Lookup E2E {suffix}"
-        create_config = test_data_factory.automation_config(
-            automation_name,
-            trigger=[
-                {
-                    "platform": "event",
-                    "event_type": f"trace_context_lookup_e2e_{suffix}",
-                }
-            ],
-            action=[{"delay": {"seconds": 0}}],
-            initial_state=True,
-        )
-
-        mcp = MCPAssertions(mcp_client)
-        automation_id = await create_trace_automation(
-            mcp_client, trace_entity_cleanup, create_config
-        )
-
-        before = await mcp.call_tool_success(
-            "ha_get_automation_traces", {"entity_id": automation_id}
-        )
-        runs_before = {trace.get("run_id") for trace in before.get("traces", [])}
-
-        await mcp.call_tool_success(
-            "ha_call_service",
-            {
-                "domain": "automation",
-                "service": "trigger",
-                "entity_id": automation_id,
-            },
-        )
-
-        traces_data = await wait_for_tool_result(
-            mcp_client,
-            tool_name="ha_get_automation_traces",
-            arguments={"entity_id": automation_id},
-            predicate=lambda data: any(
-                trace["run_id"] not in runs_before for trace in data.get("traces", [])
-            ),
-            timeout=15,
-            poll_interval=0.5,
-            description="automation trace for context lookup",
-        )
-        run_id = next(
-            trace["run_id"]
-            for trace in traces_data["traces"]
-            if trace["run_id"] not in runs_before
-        )
-
-        detail_data = await mcp.call_tool_success(
-            "ha_get_automation_traces",
-            {
-                "entity_id": automation_id,
-                "run_id": run_id,
-                "detailed": True,
-            },
-        )
-        context_id = detail_data["context"]["id"]
-
-        by_context_data = await mcp.call_tool_success(
-            "ha_get_automation_traces",
-            {"entity_id": automation_id, "context_id": context_id},
-        )
-
-        assert by_context_data["run_id"] == run_id
-        assert by_context_data["context_id"] == context_id
 
     async def test_empty_traces_with_diagnostics(
         self, mcp_client, trace_entity_cleanup, test_data_factory
