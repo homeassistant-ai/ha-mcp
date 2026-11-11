@@ -97,3 +97,10 @@ async def test_unrecoverable_timestamp_is_omitted_without_losing_values(
         sent.assert_not_called()
     else:
         sent.assert_awaited_once()
+        assert sent.await_args is not None
+        request = sent.await_args.args[0]
+        # The recovery asks Core for the same statistic in its stored unit.
+        assert request["type"] == "recorder/statistics_during_period"
+        assert request["statistic_ids"] == [STATISTIC_ID]
+        assert request["types"] == ["last_reset"]
+        assert request["units"] == {"energy": "MWh"}
