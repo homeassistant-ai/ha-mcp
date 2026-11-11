@@ -13,7 +13,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from _pytest.monkeypatch import MonkeyPatch
 
 from ha_mcp.settings_ui import build_settings_handlers, render_settings_html
 from ha_mcp.utils.data_paths import get_data_dir
@@ -219,7 +218,9 @@ class TestThemePrefsHandlers:
         assert await _load() == {"theme": "light", "shade": "paper"}
 
     @pytest.mark.asyncio
-    async def test_oserror_on_write_returns_500(self, monkeypatch: MonkeyPatch) -> None:
+    async def test_oserror_on_write_returns_500(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """OSError during write (e.g. read-only fs) returns 500."""
         import os
 
