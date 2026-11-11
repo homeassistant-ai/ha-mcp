@@ -112,7 +112,6 @@
   "tests/src/unit/test_wait_helpers.py": 1161,
   "tests/src/unit/test_webhook_proxy_oauth_unified.py": 1807,
   "tests/src/unit/test_websocket_client.py": 2145,
-  "tests/src/unit/test_yaml_dashboards.py": 1079,
   "tests/src/unit/test_yaml_read_tool.py": 1051,
   "tests/src/unit/visibility/test_enforcement.py": 1586,
   "tests/uat/stories/run_story.py": 1713
