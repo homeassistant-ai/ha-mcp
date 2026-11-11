@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -112,3 +113,24 @@ def restart_issue(
 ) -> ir.IssueEntry | None:
     """The proxy's click-to-restart Repairs issue, as Core's registry holds it."""
     return ir.async_get(hass).async_get_issue(variant.domain, issue_id)
+
+
+async def wait_until(
+    hass: HomeAssistant, condition: Callable[[], bool], timeout: float = 5.0
+) -> None:
+    """Wait for work the component hands to Core's executor without awaiting.
+
+    The inbound-log mirror write is fire-and-forget, so
+    ``hass.async_block_till_done()`` alone can return before it has run.
+    """
+    async with asyncio.timeout(timeout):
+        while True:
+            await hass.async_block_till_done()
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+
+
+def text_of(path: Path) -> str:
+    """The file's text, "" until it exists."""
+    return path.read_text() if path.exists() else ""

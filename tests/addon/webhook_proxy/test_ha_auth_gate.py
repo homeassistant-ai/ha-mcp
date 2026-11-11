@@ -26,7 +26,7 @@ from ._auth_modes import (
     submodule,
     token_core_cannot_validate,
 )
-from ._proxy import Upstream, start_proxy, state_path
+from ._proxy import Upstream, start_proxy, state_path, text_of, wait_until
 from ._variants import Variant
 
 WEBHOOK = f"/api/webhook/{WEBHOOK_ID}"
@@ -203,10 +203,11 @@ async def test_inbound_debug_log_says_why_a_bearer_was_rejected(
     response = await client.post(
         WEBHOOK, data=b"{}", headers={"Authorization": "Bearer sekret-tok"}
     )
-    await hass.async_block_till_done()
+    mirror = state_path(fs_root, variant.inbound_log)
+    await wait_until(hass, lambda: "401 Unauthorized" in text_of(mirror))
 
     assert response.status == 401
-    mirrored = state_path(fs_root, variant.inbound_log).read_text()
+    mirrored = mirror.read_text()
     assert "token rejected by hass.auth (returned None)" in mirrored
     assert "sekret-tok" not in mirrored
 

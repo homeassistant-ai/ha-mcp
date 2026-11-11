@@ -15,7 +15,14 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream, start_proxy, state_path, write_proxy_config
+from ._proxy import (
+    Upstream,
+    start_proxy,
+    state_path,
+    text_of,
+    wait_until,
+    write_proxy_config,
+)
 from ._relay import LEGACY_OAUTH, WEBHOOK_ID, WEBHOOK_PATH, relay_config
 from ._variants import Variant, load_start, script_function
 
@@ -304,9 +311,10 @@ async def test_inbound_lines_are_mirrored_for_the_app_log(
     )
 
     await post_once(hass_client_no_auth)
-    await hass.async_block_till_done()
+    mirror = state_path(fs_root, variant.inbound_log)
+    await wait_until(hass, lambda: "upstream responded" in text_of(mirror))
 
-    mirrored = state_path(fs_root, variant.inbound_log).read_text()
+    mirrored = mirror.read_text()
     assert "[inbound]" in mirrored
     assert "127.0.0.1" in mirrored
 
@@ -334,11 +342,12 @@ async def test_inbound_mirror_stays_capped_and_keeps_the_newest_line(
         hass, variant, fs_root, relay_config(upstream, debug_logging=True)
     )
 
+    mirror = state_path(fs_root, variant.inbound_log)
     for _ in range(6):
         await post_once(hass_client_no_auth)
         await hass.async_block_till_done()
+    await wait_until(hass, lambda: "upstream responded 201" in text_of(mirror))
 
-    mirror = state_path(fs_root, variant.inbound_log)
     lines = mirror.read_text().splitlines()
     assert mirror.stat().st_size <= cap
     assert all(line.startswith("MCP Proxy [inbound]") for line in lines)
@@ -364,10 +373,12 @@ async def test_unwritable_mirror_never_fails_the_request(
     )
 
     status = await post_once(hass_client_no_auth)
-    await hass.async_block_till_done()
+    await wait_until(
+        hass,
+        lambda: "inbound mirror write failed" in proxy_messages(caplog, proxy_logger),
+    )
 
     assert status == 200
-    assert "inbound mirror write failed" in proxy_messages(caplog, proxy_logger)
 
 
 def test_app_tail_emits_whole_new_lines_once_and_follows_rotation(
