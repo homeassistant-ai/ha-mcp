@@ -17,14 +17,15 @@ from ha_mcp.config import Settings
 
 
 def _settings(directory: Path | str = "", **values: Any) -> Settings:
-    """The server's settings, independent of the developer's env and dotenv files."""
-    return Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        ENABLE_AUTO_BACKUP=True,
-        HAMCP_BACKUP_DIR=str(directory),
-        AUTO_BACKUP_THROTTLE_MINUTES=0,
+    """The server's settings with these values; no dotenv file is read."""
+    fields: dict[str, Any] = {
+        "_env_file": None,
+        "ENABLE_AUTO_BACKUP": True,
+        "HAMCP_BACKUP_DIR": str(directory),
+        "AUTO_BACKUP_THROTTLE_MINUTES": 0,
         **values,
-    )
+    }
+    return Settings(**fields)
 
 
 async def test_uninitialized_client_cache_is_not_reused(
