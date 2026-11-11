@@ -12,6 +12,8 @@ their starts because Core stamps ``timestamp.start`` in the constructor.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import timedelta
 
 import pytest
@@ -30,6 +32,11 @@ from homeassistant.components.websocket_api.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import MockHAClientWebSocket
+
+from custom_components.ha_mcp_tools.websocket_api import trace_context
+from custom_components.ha_mcp_tools.websocket_api.trace_context import (
+    _trace_context_prep,
+)
 
 from ._component_core import ws_call, ws_result
 from ._trace_fixtures import automation_run, script_run, store_runs
@@ -275,6 +282,65 @@ async def test_saved_traces_are_restored_before_the_match(
 
     assert result["match"] == "trace"
     assert result["run_id"] == "r1"
+
+
+@pytest.mark.usefixtures("trace_store")
+async def test_the_prep_returns_the_encoded_message(
+    hass: HomeAssistant,
+) -> None:
+    """The prep returns the finished result message, so the handler only sends it."""
+    result = await _trace_context_prep(hass, {"id": 7, "context_id": "ctx-1"})
+
+    payload = result["payload"]
+    assert isinstance(payload, bytes)
+    message = json.loads(payload)
+    assert message["id"] == 7
+    assert message["success"] is True
+    assert message["result"]["match"] is None
+
+
+@pytest.mark.usefixtures("trace_store")
+async def test_a_first_request_waits_for_a_restore_in_flight(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second first request waits; Core marks traces restored before loading.
+
+    Core sets ``DATA_TRACES_RESTORED`` before it awaits the store load, so a
+    request that only checked the marker would scan the empty store the first
+    request is still filling. The lock makes it wait for that restore instead.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_restore(inner_hass: HomeAssistant) -> None:
+        # Core's own guard: the marker is set first, so a later call returns
+        # without loading, even while the first load is still running.
+        if DATA_TRACES_RESTORED in inner_hass.data:
+            return
+        inner_hass.data[DATA_TRACES_RESTORED] = True
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(trace_context, "async_restore_traces", slow_restore)
+    # The trace setup left the store empty and the marker unset, like a
+    # restart, so both requests are first requests.
+    msg = {"id": 1, "context_id": "ctx-1"}
+
+    first = asyncio.create_task(_trace_context_prep(hass, msg))
+    await started.wait()
+    second = asyncio.create_task(_trace_context_prep(hass, msg))
+    # The second request has every chance to finish; a restore is still in
+    # flight, so it must not return before that restore does. Without the lock
+    # it returns as soon as it sees the marker, well inside this window.
+    done, _pending = await asyncio.wait({second}, timeout=0.3)
+    assert done == set()
+
+    release.set()
+    first_result = await first
+    second_result = await second
+
+    assert isinstance(first_result["payload"], bytes)
+    assert isinstance(second_result["payload"], bytes)
 
 
 @pytest.mark.usefixtures("trace_store")

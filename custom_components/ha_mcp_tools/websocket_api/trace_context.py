@@ -12,6 +12,7 @@ view and Download action.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from datetime import datetime
@@ -29,15 +30,27 @@ from .seam import PreSerializedResult
 WS_TRACE_CONTEXT = "ha_mcp_tools/trace_context"
 CAPABILITIES = ("trace_context",)
 
+_TRACE_RESTORE_LOCK = "ha_mcp_tools_trace_restore_lock"
+
 
 async def _trace_context_prep(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Restore saved traces before the synchronous store read."""
+    """Restore saved traces, wait out an in-flight restore, and encode off-loop."""
     if DATA_TRACE not in hass.data or DATA_TRACE_STORE not in hass.data:
-        return {"available": False}
-    await async_restore_traces(hass)
-    return {"available": True}
+        payload = await hass.async_add_executor_job(
+            _encode_result, msg["id"], _empty_result(scanned=0, available=False)
+        )
+        return {"payload": payload}
+    # Core sets DATA_TRACES_RESTORED before awaiting the store load, so a
+    # second first-request would see the marker and scan an empty store. The
+    # lock makes it wait for the restore that is already running.
+    lock = hass.data.setdefault(_TRACE_RESTORE_LOCK, asyncio.Lock())
+    async with lock:
+        await async_restore_traces(hass)
+    result = _trace_context_payload(hass, msg, available=True)
+    payload = await hass.async_add_executor_job(_encode_result, msg["id"], result)
+    return {"payload": payload}
 
 
 def _trace_buckets(
@@ -152,18 +165,20 @@ def _do_trace_context(
     hass: HomeAssistant,
     msg: dict[str, Any],
     *,
-    available: bool,
+    payload: bytes,
 ) -> PreSerializedResult:
-    """Return the selected trace with Core's trace-view JSON encoding."""
-    payload = _trace_context_payload(hass, msg, available=available)
-    message = websocket_api.messages.result_message(msg["id"], payload)
-    return PreSerializedResult(
-        json.dumps(
-            message,
-            cls=ExtendedJSONEncoder,
-            allow_nan=False,
-        ).encode()
-    )
+    """Return the selected trace already encoded by the prep."""
+    return PreSerializedResult(payload=payload)
+
+
+def _encode_result(msg_id: Any, result: dict[str, Any]) -> bytes:
+    """Encode one result message; runs in the executor."""
+    message = websocket_api.messages.result_message(msg_id, result)
+    return json.dumps(
+        message,
+        cls=ExtendedJSONEncoder,
+        allow_nan=False,
+    ).encode()
 
 
 def _match_result(

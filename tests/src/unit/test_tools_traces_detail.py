@@ -18,7 +18,6 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import WebSocketGenerator
 
 from ha_mcp.tools.tools_traces import _format_detailed_trace
-from ha_mcp.tools.trace_logbook import TraceLogbook
 
 from ._component_core import ws_result
 
@@ -138,31 +137,6 @@ class TestFormatDetailedTrace:
         assert result["trace"] is trace["trace"]
         assert "error" not in result
         assert "error" in result["warnings"][0]
-
-    async def test_logbook_section_adds_logbook_fields(
-        self, trace: dict[str, Any]
-    ) -> None:
-        logbook = TraceLogbook(
-            [{"name": "Light"}],
-            "component",
-            [],
-            1,
-            False,
-        )
-
-        result = _format_detailed_trace(
-            "automation.test",
-            trace["run_id"],
-            trace,
-            sections="logbook",
-            logbook=logbook,
-        )
-
-        assert result["logbook_entries"] == [{"name": "Light"}]
-        assert result["logbook_transport"] == "component"
-        assert result["logbook_total"] == 1
-        assert result["logbook_truncated"] is False
-        assert "warnings" not in result
 
     @pytest.mark.parametrize("sections", ["", "   "])
     async def test_whitespace_sections_returns_the_full_dict(

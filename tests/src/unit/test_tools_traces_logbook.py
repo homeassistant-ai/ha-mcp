@@ -285,3 +285,22 @@ class TestTraceDetailLogbookCall:
         assert [row["entity_id"] for row in result["logbook_entries"]] == [
             "light.logbook_row"
         ]
+
+        named = await TraceTools(component_core_client).ha_get_automation_traces(
+            domain="automation",
+            item_id="uid_1",
+            run_id="r1",
+            sections="logbook",
+            detailed=True,
+        )
+
+        # The requested section keeps the real recorder rows and their counts,
+        # and drops the run's own extended keys.
+        assert named["logbook_transport"] == "component"
+        assert [row["entity_id"] for row in named["logbook_entries"]] == [
+            "light.logbook_row"
+        ]
+        assert named["logbook_total"] == 1
+        assert named["logbook_truncated"] is False
+        assert "warnings" not in named
+        assert {"trace", "config", "context"} & set(named) == set()
