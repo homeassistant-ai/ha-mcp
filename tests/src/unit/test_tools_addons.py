@@ -30,19 +30,8 @@ from ha_mcp.tools.tools_addons import (
     list_available_addons,
 )
 
-# Standard mock return for a running addon with Ingress support
-_RUNNING_ADDON_INFO = {
-    "success": True,
-    "addon": {
-        "name": "Test Addon",
-        "slug": "test_addon",
-        "ingress": True,
-        "state": "started",
-        "ingress_entry": "/api/hassio_ingress/abc123",
-        "ip_address": "172.30.33.99",
-        "ingress_port": 5000,
-    },
-}
+from ._addon_tool_helpers import _RUNNING_ADDON_INFO as _RUNNING_ADDON_INFO
+from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
 
 _INGRESS_SESSION_TOKEN = "test-ingress-session"
 
@@ -71,11 +60,6 @@ def _make_mock_client() -> MagicMock:
     client.token = "test-token"
     client.verify_ssl = True
     return client
-
-
-def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
-    """Parse the JSON payload from a ToolError."""
-    return json.loads(str(exc_info.value))
 
 
 @pytest.fixture(autouse=True)

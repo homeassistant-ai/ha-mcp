@@ -4,155 +4,164 @@ Core answers "No config found." (the component: ``ConfigNotFound``) and the
 frontend shows its generated default view, so the get answers with
 ``stored_config`` false instead of failing, through the same envelope as any
 other get; an identifier Core does not know is RESOURCE_NOT_FOUND.
+
+The tool runs on the server's own client against a real ``hass`` with a
+storage dashboard that has never been saved: ``component_core_client`` also
+answers ``ha_mcp_tools/*``, ``core_client`` is an install without the
+component, so the tool reads through Core's own ``lovelace/config``.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
+from unittest.mock import Mock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import tools_config_dashboards
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-from ._component_routing_helpers import make_ws, patch_ws
-from .test_ha_dashboards_component_routing import (
-    _CAPS_DASHBOARDS,
-    _CAPS_NONE,
-    _STORAGE_ROW,
-    RoutingClient,
-    _build_get_dashboard,
-)
-
-_NO_CONFIG_COMPONENT_REPLY = {
-    "mode": "get",
-    "available": True,
-    "status": "no_config",
-    "url_path": "fresh",
-    "config": None,
-}
+# Core requires a hyphen in a dashboard's url_path and derives its internal
+# id by slugifying it.
+_URL_PATH = "fresh-dash"
+_DASHBOARD_ID = "fresh_dash"
 
 
-class _FlatEnvelopeClient(RoutingClient):
-    """Answers a no-config read the way ``send_websocket_message`` flattens it."""
+async def _fresh_dashboard(hass: HomeAssistant, client: HomeAssistantClient) -> None:
+    """A storage dashboard Core knows but holds no saved config for."""
+    assert await async_setup_component(hass, "lovelace", {})
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": _URL_PATH,
+            "title": "Fresh",
+            "mode": "storage",
+        }
+    )
+    assert created["success"], created
+    assert created["result"]["id"] == _DASHBOARD_ID
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "lovelace/config":
-            return {
-                "success": False,
-                "error": "Command failed: No config found.",
-                "error_code": "config_not_found",
-            }
-        return await super().send_websocket_message(msg)
+
+@contextmanager
+def _legacy_reads(client: HomeAssistantClient) -> Iterator[Mock]:
+    with patch.object(
+        client, "send_websocket_message", wraps=client.send_websocket_message
+    ) as spy:
+        yield spy
+
+
+def _config_reads(spy: Mock) -> list[Any]:
+    return [
+        call.args[0].get("url_path")
+        for call in spy.call_args_list
+        if call.args[0].get("type") == "lovelace/config"
+    ]
 
 
 def _error(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc.value))["error"]  # type: ignore[no-any-return]
+    error: dict[str, Any] = json.loads(str(exc.value))["error"]
+    return error
 
 
-async def test_component_no_config_answers_without_a_legacy_read() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result=_NO_CONFIG_COMPONENT_REPLY,
-    )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
+async def test_component_no_config_answers_without_a_legacy_read(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    await _fresh_dashboard(hass, component_core_client)
+    get_dashboard = DashboardConfigTools(component_core_client).ha_config_get_dashboard
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="fresh")
+    with _legacy_reads(component_core_client) as legacy:
+        resp = await get_dashboard(url_path=_URL_PATH)
 
     assert resp["success"] is True
     assert resp["stored_config"] is False
     assert resp["config"] is None
-    assert client.config_calls == []
+    assert _config_reads(legacy) == []
 
 
-async def test_legacy_read_answers_no_config_the_same_way() -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    get_dashboard = _build_get_dashboard(_FlatEnvelopeClient())
+async def test_legacy_read_answers_no_config_the_same_way(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _fresh_dashboard(hass, core_client)
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="fresh")
+    resp = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+        url_path=_URL_PATH
+    )
 
     assert resp["success"] is True
     assert resp["stored_config"] is False
 
 
-async def test_lazily_resolved_id_keeps_resolved_from() -> None:
+async def test_lazily_resolved_id_keeps_resolved_from(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """An internal id resolved to a dashboard with no config still reports the
     identifier the caller passed."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(
-        dashboards_list=[{**_STORAGE_ROW, "id": "id-fresh", "url_path": "fresh"}],
-        no_config=frozenset({"fresh"}),
+    await _fresh_dashboard(hass, core_client)
+
+    resp = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+        url_path=_DASHBOARD_ID
     )
-    get_dashboard = _build_get_dashboard(client)
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="id-fresh")
-
-    assert resp["url_path"] == "fresh"
-    assert resp["resolved_from"] == "id-fresh"
+    assert resp["url_path"] == _URL_PATH
+    assert resp["resolved_from"] == _DASHBOARD_ID
     assert resp["stored_config"] is False
 
 
-async def test_view_path_on_dashboard_without_config_is_refused() -> None:
+async def test_view_path_on_dashboard_without_config_is_refused(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
     """There are no static views to scope to, so view_path is not dropped silently."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result=_NO_CONFIG_COMPONENT_REPLY,
-    )
-    get_dashboard = _build_get_dashboard(RoutingClient())
+    await _fresh_dashboard(hass, component_core_client)
+    get_dashboard = DashboardConfigTools(component_core_client).ha_config_get_dashboard
 
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
-        await get_dashboard(url_path="fresh", view_path="kitchen")
+    with pytest.raises(ToolError) as exc:
+        await get_dashboard(url_path=_URL_PATH, view_path="kitchen")
 
     assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
-async def test_screenshot_request_on_dashboard_without_config_is_answered() -> None:
+async def test_screenshot_request_on_dashboard_without_config_is_answered(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
     """A screenshot request is handled like any get's (here: the feature is
     off), not dropped without a word."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result=_NO_CONFIG_COMPONENT_REPLY,
-    )
-    get_dashboard = _build_get_dashboard(RoutingClient())
+    await _fresh_dashboard(hass, component_core_client)
+    get_dashboard = DashboardConfigTools(component_core_client).ha_config_get_dashboard
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="fresh", include_screenshot=True)
+    resp = await get_dashboard(url_path=_URL_PATH, include_screenshot=True)
 
     assert any("Screenshot" in w for w in resp.get("warnings", []))
 
 
-@pytest.mark.parametrize(
-    "client",
-    [RoutingClient(no_config=frozenset({"fresh"})), _FlatEnvelopeClient()],
-    ids=["nested-error", "flat-envelope"],
-)
 async def test_card_search_on_dashboard_without_config_says_why(
-    client: RoutingClient,
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    get_dashboard = _build_get_dashboard(client)
+    await _fresh_dashboard(hass, core_client)
 
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
-        await get_dashboard(url_path="fresh", card_type="tile")
+    with pytest.raises(ToolError) as exc:
+        await DashboardConfigTools(core_client).ha_config_get_dashboard(
+            url_path=_URL_PATH, card_type="tile"
+        )
 
     error = _error(exc)
     assert error["code"] == "VALIDATION_FAILED"
     assert "no config" in error["message"]
 
 
-async def test_card_search_on_unknown_dashboard_is_not_found() -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    get_dashboard = _build_get_dashboard(RoutingClient())
+async def test_card_search_on_unknown_dashboard_is_not_found(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _fresh_dashboard(hass, core_client)
 
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
-        await get_dashboard(url_path="ghost", card_type="tile")
+    with pytest.raises(ToolError) as exc:
+        await DashboardConfigTools(core_client).ha_config_get_dashboard(
+            url_path="ghost", card_type="tile"
+        )
 
     assert _error(exc)["code"] == "RESOURCE_NOT_FOUND"

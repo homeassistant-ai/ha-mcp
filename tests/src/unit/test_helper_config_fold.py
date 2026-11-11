@@ -24,7 +24,12 @@ from ha_mcp.tools.config_helpers import update as hc_update
 from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
-from .test_updates_repairs import _client as _ws
+
+def _ws(*replies: dict[str, Any]) -> MagicMock:
+    client = MagicMock()
+    client.send_websocket_message = AsyncMock(side_effect=list(replies))
+    return client
+
 
 pytestmark = pytest.mark.asyncio
 

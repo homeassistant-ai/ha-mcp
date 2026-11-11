@@ -7,24 +7,21 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
-from starlette.testclient import TestClient
 
 from ha_mcp import stdio_settings_sidecar as sidecar
-from ha_mcp.tools.search import overview as search_overview
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 
-from ._component_routing_helpers import make_ws, patch_ws
-from .test_ha_overview_component_routing import (
-    _CAPS_OVERVIEW,
-    OverviewRoutingClient,
-    _build_overview_tool,
-    _overview_slices,
-    _setup_visibility_disabled,
-)
+from ._search_tool import _setup_visibility_disabled
 
 URL = "http://127.0.0.1:54321/private_secret/settings"
 
@@ -60,6 +57,7 @@ def _dead_pid() -> int:
     ],
 )
 async def test_overview_settings_url_only_while_a_sidecar_serves_it(
+    core_client: HomeAssistantClient,
     data_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     disabled: str,
@@ -71,29 +69,57 @@ async def test_overview_settings_url_only_while_a_sidecar_serves_it(
     monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: None)
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", disabled)
     _publish(data_dir, os.getpid() if sidecar_alive else _dead_pid())
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    overview = _build_overview_tool(OverviewRoutingClient())
+    tools = SearchTools(core_client, SmartSearchTools(client=core_client))
 
-    with patch_ws(ws, search_overview):
-        resp = await overview(fields=["success"])
+    resp = await tools.ha_get_overview(fields=["success"])
 
     assert ("settings_url" in resp) is surfaced
 
 
-def test_sidecar_shutdown_removes_its_discovery_files(data_dir: Path) -> None:
+def _wait_until_serving(proc: subprocess.Popen[bytes], data_dir: Path) -> None:
+    """Return once the sidecar answers on the URL it published.
+
+    uvicorn installs its signal handlers before it serves, so a SIGTERM sent
+    after the first answer reaches uvicorn and not Python's default handler.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + 60
+    while True:
+        assert proc.poll() is None, "the sidecar exited before it served"
+        assert time.monotonic() < deadline, "the sidecar never served its URL"
+        url_file = data_dir / "ui.url"
+        if url_file.exists():
+            try:
+                opener.open(url_file.read_text().strip(), timeout=5).close()
+                return
+            except urllib.error.HTTPError:
+                return
+            except OSError:
+                pass
+        time.sleep(0.05)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM is a POSIX signal")
+def test_sidecar_shutdown_removes_its_discovery_files(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, socket_enabled: None
+) -> None:
     """uvicorn re-raises SIGTERM once the app has shut down, so only the app's own
     shutdown can unlink ui.url before the process dies (#2954)."""
-    _publish(data_dir, os.getpid())
-    app = sidecar._build_app(
-        host="127.0.0.1", port=54321, secret_path="/private_secret"
+    monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "ha_mcp.stdio_settings_sidecar"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-
-    with TestClient(app):
-        pass
+    try:
+        _wait_until_serving(proc, data_dir)
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
     assert not (data_dir / "ui.url").exists()
     assert not (data_dir / "ui.pid").exists()
@@ -108,7 +134,7 @@ def test_sigkilled_sidecar_url_is_hidden_while_its_parent_runs(
     monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
     real_popen = subprocess.Popen
 
-    def spawn(_cmd: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+    def spawn(_cmd: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
         proc = real_popen(
             [sys.executable, "-c", "import time; time.sleep(60)"], **kwargs
         )
@@ -116,7 +142,7 @@ def test_sigkilled_sidecar_url_is_hidden_while_its_parent_runs(
         return proc
 
     with patch("subprocess.Popen", side_effect=spawn):
-        sidecar._do_spawn()
+        sidecar.maybe_spawn()
     os.kill(int((data_dir / "ui.pid").read_text()), signal.SIGKILL)
 
     deadline = time.monotonic() + 5

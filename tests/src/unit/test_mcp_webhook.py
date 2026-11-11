@@ -33,6 +33,7 @@ from custom_components.ha_mcp_tools.oauth_legacy import (
 )
 
 from ._embedded_helpers import FakeSession, FakeUpstream, make_request, response_json
+from ._readonly_webhook import readonly_webhook_modules as readonly_webhook_modules
 
 TARGET_URL = "http://127.0.0.1:9584/private_aaaaaaaaaaaaaaaa"
 WEBHOOK_ID = "mcp_0123456789abcdef0123456789abcdef"
@@ -1562,24 +1563,6 @@ async def test_readonly_webhook_reuses_auth_gate(auth_mode, monkeypatch):
     gate.return_value = None
     assert (await view.get(request, WEBHOOK_ID)).status == 200
     assert session.calls[-1]["url"] == TARGET_URL + "/readonly"
-
-
-@pytest.fixture
-def readonly_webhook_modules():
-    import importlib.util
-    from pathlib import Path
-
-    from custom_components.ha_mcp_tools import readonly_webhook as embedded
-
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/readonly_webhook.py"
-    )
-    assert source.read_bytes() == Path(embedded.__file__).read_bytes()
-    spec = importlib.util.spec_from_file_location("readonly_webhook_proxy_test", source)
-    proxy = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(proxy)
-    return embedded, proxy
 
 
 async def test_readonly_webhook_route_shared_across_installations(
