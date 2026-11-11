@@ -17,6 +17,7 @@ from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
+    ENTITY_COMPOSED_NAME,
     component_supports,
     get_component_caps,
 )
@@ -27,7 +28,13 @@ from .helpers import (
 )
 from .response_helpers import project_fields
 from .search.component import ComponentSearchMixin, _component_serves_search_types
-from .search.entities import _requested_membership, _validate_result_field_names
+from .search.entities import (
+    _COMPOSED_NAME_FIELD,
+    ComponentNaming,
+    _composed_name_notes,
+    _requested_membership,
+    _validate_result_field_names,
+)
 from .search.overview import (
     _OVERVIEW_AVAILABLE_FIELDS,
     _OVERVIEW_ENTITY_FIELDS,
@@ -203,7 +210,11 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
                     "Project each entity-registry record to only the specified "
                     'keys (e.g. ["entity_id", "state"]). None = full records. '
                     "Base keys: entity_id, friendly_name, domain, state, score, "
-                    "match_type. Opt-in enrichment/membership keys (computed on request): "
+                    "match_type, name. name is the name Home Assistant shows, "
+                    "composed from the parent device, device and entity names "
+                    "(served by a current ha_mcp_tools component); friendly_name "
+                    "is the legacy state attribute and can differ from it. "
+                    "Opt-in enrichment/membership keys (computed on request): "
                     "area, floor, labels, aliases, is_group, member_entity_ids. "
                     "Membership is recognized only when HA explicitly exposes a "
                     "valid group_entities or legacy entity_id collection; "
@@ -395,32 +406,60 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         # components serve queryless listings, locations, and complete windows.
         # Visibility and membership gates still apply before any entity data is
         # returned; schema hiding never changes old-client invocation support.
-        if _component_serves_search_types(req):
-            caps = await get_component_caps(self._client)
-            mode_supported = component_supports(caps, "search_unified") or (
-                bool(req.query_text) and not (req.area_filter or "").strip()
-            )
-            if (
-                mode_supported
-                and component_supports(caps, "search")
-                and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
-                and (
-                    not _requested_membership(parsed_result_fields)
-                    or component_supports(caps, "search_entity_membership")
-                )
-            ):
-                (
-                    route_component,
-                    visibility,
-                ) = await self._resolve_component_search_visibility(caps)
-                if route_component:
-                    component_response = await self._ha_search_via_component(
-                        req, ctx, visibility=visibility, caps=caps
-                    )
-                    if component_response is not None:
-                        return _omit_empty_warnings(component_response)
+        if not _component_serves_search_types(req):
+            return _omit_empty_warnings(await self._legacy_ha_search(req, ctx))
 
-        return _omit_empty_warnings(await self._legacy_ha_search(req, ctx))
+        caps = await get_component_caps(self._client)
+        naming: ComponentNaming = "absent"
+        if caps is not None:
+            naming = (
+                "current"
+                if component_supports(caps, ENTITY_COMPOSED_NAME)
+                else "outdated"
+            )
+        component_response: dict[str, Any] | None = None
+        component_answered = False
+        mode_supported = component_supports(caps, "search_unified") or (
+            bool(req.query_text) and not (req.area_filter or "").strip()
+        )
+        if (
+            mode_supported
+            and component_supports(caps, "search")
+            and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+            and (
+                not _requested_membership(parsed_result_fields)
+                or component_supports(caps, "search_entity_membership")
+            )
+        ):
+            (
+                route_component,
+                visibility,
+            ) = await self._resolve_component_search_visibility(caps)
+            if route_component:
+                (
+                    component_response,
+                    component_answered,
+                ) = await self._ha_search_via_component(
+                    req, ctx, visibility=visibility, caps=caps
+                )
+
+        response = (
+            component_response
+            if component_response is not None
+            else await self._legacy_ha_search(req, ctx)
+        )
+        notes = _composed_name_notes(
+            name_served=component_answered and naming == "current",
+            component=naming,
+            name_requested=_COMPOSED_NAME_FIELD in (parsed_result_fields or ()),
+            nothing_found=bool(req.query_text)
+            and not response.get("count")
+            and not response.get("entity_total_matches")
+            and not response.get("config_total_matches"),
+        )
+        if notes:
+            response.setdefault("warnings", []).extend(notes)
+        return _omit_empty_warnings(response)
 
     @tool(
         name="ha_get_overview",
@@ -540,6 +579,11 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         and active persistent notifications (if any).
         Use 'minimal' (default) for most queries. Domain counts and states_summary
         are always complete regardless of entity pagination.
+
+        Entities are listed by friendly_name, the legacy state attribute. A row
+        also carries name where Home Assistant shows a different one, composed
+        from the parent device, device and entity names (served by a current
+        ha_mcp_tools component).
 
         Requests whose fields= are composed only of system_info, notification,
         repair, or server metadata fields skip the unrelated state, service, and

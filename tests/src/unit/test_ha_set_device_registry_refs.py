@@ -7,160 +7,229 @@ preflights both against their registries, and fails closed when a registry
 cannot be read — a degraded lookup must not let a dangling reference through.
 """
 
+from __future__ import annotations
+
 import json
-from unittest.mock import AsyncMock, MagicMock
+from typing import cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_registry import RegistryTools
 
 
-def _ws_handler(*, area_ids=(), label_ids=()):
-    """Answer the registry-list preflights, then ack the device update."""
-
-    async def handler(msg):
-        msg_type = msg.get("type")
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": [{"area_id": a} for a in area_ids]}
-        if msg_type == "config/label_registry/list":
-            return {"success": True, "result": [{"label_id": lbl} for lbl in label_ids]}
-        return {"success": True, "result": {"name_by_user": "Hub"}}
-
-    return handler
+@pytest.fixture
+async def device(
+    hass: HomeAssistant, device_registry: dr.DeviceRegistry
+) -> dr.DeviceEntry:
+    """A device in Core's registry, with the config WebSocket API loaded."""
+    assert await async_setup_component(hass, "config", {})
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    return device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "dev1")}
+    )
 
 
 @pytest.fixture
-def tools():
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock()
-    return RegistryTools(client)
-
-
-def _sent_types(tools):
-    return [
-        call.args[0]["type"]
-        for call in tools._client.send_websocket_message.call_args_list
-    ]
+def tools(core_client: HomeAssistantClient) -> RegistryTools:
+    return RegistryTools(core_client)
 
 
 class TestSetDeviceRegistryReferences:
     """Unknown area/label IDs must be rejected before the registry write."""
 
-    async def test_unknown_area_rejected(self, tools):
-        tools._client.send_websocket_message.side_effect = _ws_handler(
-            area_ids=("living_room",)
-        )
+    async def test_unknown_area_rejected(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        area_registry: ar.AreaRegistry,
+    ) -> None:
+        area_registry.async_create("Living Room")
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_device(device_id="dev1", area_id="ghost_area")
+            await tools.ha_set_device(device_id=device.id, area_id="ghost_area")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert error_data["area_id"] == "ghost_area"
-        assert "config/device_registry/update" not in _sent_types(tools)
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.area_id is None
 
-    async def test_unknown_label_rejected(self, tools):
-        tools._client.send_websocket_message.side_effect = _ws_handler(
-            label_ids=("important",)
-        )
+    async def test_unknown_label_rejected(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        label_registry: lr.LabelRegistry,
+    ) -> None:
+        label_registry.async_create("Important")
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_device(device_id="dev1", labels=["ghost_label"])
+            await tools.ha_set_device(device_id=device.id, labels=["ghost_label"])
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert error_data["unknown_labels"] == ["ghost_label"]
-        assert "config/device_registry/update" not in _sent_types(tools)
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.labels == set()
 
-    async def test_registry_lookup_failure_fails_closed(self, tools):
-        tools._client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "registry unavailable"},
-        }
+    async def test_registry_lookup_failure_fails_closed(
+        self,
+        tools: RegistryTools,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        area_registry: ar.AreaRegistry,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        area_registry.async_create("Living Room")
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
+        )
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_device(device_id="dev1", area_id="living_room")
+            await tools.ha_set_device(device_id=device.id, area_id="living_room")
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "CONNECTION_FAILED"
-        assert _sent_types(tools) == ["config/area_registry/list"]
+        send = cast(AsyncMock, core_client.send_websocket_message)
+        assert [c.args[0]["type"] for c in send.call_args_list] == [
+            "config/area_registry/list"
+        ]
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.area_id is None
 
-    async def test_existing_area_and_labels_pass_through(self, tools):
-        tools._client.send_websocket_message.side_effect = _ws_handler(
-            area_ids=("living_room",), label_ids=("important",)
-        )
+    async def test_existing_area_and_labels_pass_through(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        area_registry: ar.AreaRegistry,
+        label_registry: lr.LabelRegistry,
+    ) -> None:
+        area = area_registry.async_create("Living Room")
+        label = label_registry.async_create("Important")
 
         result = await tools.ha_set_device(
-            device_id="dev1", area_id="living_room", labels=["important"]
+            device_id=device.id, area_id=area.id, labels=[label.label_id]
         )
 
         assert result["success"] is True
-        update_call = tools._client.send_websocket_message.call_args.args[0]
-        assert update_call["type"] == "config/device_registry/update"
-        assert update_call["area_id"] == "living_room"
-        assert update_call["labels"] == ["important"]
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.area_id == "living_room"
+        assert stored.labels == {"important"}
 
-    async def test_empty_label_list_clears_without_lookup(self, tools):
+    async def test_empty_label_list_clears_without_lookup(
+        self,
+        tools: RegistryTools,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        label_registry: lr.LabelRegistry,
+    ) -> None:
         """An empty list is the documented clear sentinel — nothing to validate."""
-        tools._client.send_websocket_message.side_effect = _ws_handler()
+        label = label_registry.async_create("Important")
+        device_registry.async_update_device(device.id, labels={label.label_id})
 
-        result = await tools.ha_set_device(device_id="dev1", labels=[])
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as sent:
+            result = await tools.ha_set_device(device_id=device.id, labels=[])
+
+        sent_types = [call.args[0]["type"] for call in sent.call_args_list]
+        assert "config/label_registry/list" not in sent_types
+        assert "config/device_registry/update" in sent_types
 
         assert result["success"] is True
-        assert _sent_types(tools) == ["config/device_registry/update"]
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.labels == set()
 
 
 class TestSetDeviceCoreAnswers:
     """Core's answer to the update passes through: its row, or its refusal code."""
 
-    async def test_core_row_passes_through(self, tools):
-        row = {
-            "id": "dev1",
-            "name": "Hub",
-            "name_by_user": "Den",
-            "config_entry_id": "e1",
-            "parent_device_id": "p1",
-        }
-        tools._client.send_websocket_message.return_value = {
-            "success": True,
-            "result": row,
-        }
+    async def test_core_row_passes_through(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+    ) -> None:
+        result = await tools.ha_set_device(device_id=device.id, name="Den")
 
-        result = await tools.ha_set_device(device_id="dev1", name="Den")
-
-        assert result["device_entry"] == row
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert result["device_entry"] == json.loads(json.dumps(stored.dict_repr))
 
     @pytest.mark.parametrize(
-        ("code", "message", "expected"),
+        ("change", "code", "expected"),
         [
-            ("not_found", "Device not found", "RESOURCE_NOT_FOUND"),
-            ("not_allowed", "Cannot update a composite device", "SERVICE_CALL_FAILED"),
-            # Core before 2026.9 answers an unknown id this way.
-            ("unknown_error", "Unknown error", "SERVICE_CALL_FAILED"),
+            ({"device_id": "ghost", "name": "Den"}, "not_found", "RESOURCE_NOT_FOUND"),
             (
+                {"disabled_by": "integration"},
                 "invalid_format",
-                "expected str for dictionary value",
                 "VALIDATION_INVALID_PARAMETER",
             ),
         ],
     )
-    async def test_core_refusal_keeps_its_code(self, tools, code, message, expected):
-        tools._client.send_websocket_message.return_value = {
-            "success": False,
-            "error": f"Command failed: {message}",
-            "error_code": code,
-        }
-
+    async def test_core_refusal_keeps_its_code(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        change: dict[str, str],
+        code: str,
+        expected: str,
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_device(device_id="dev1", name="Den")
+            await tools.ha_set_device(**{"device_id": device.id, **change})
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == expected
-        assert message in error_data["error"]["message"]
+        assert "Command failed" not in error_data["error"]["message"]
         assert error_data["ha_error_code"] == code
-        # Only an unknown device, or Core's answer to one before 2026.9, gets
-        # pointed at ha_get_device; for any other refusal Core's message says
-        # what is wrong.
+        # Only an unknown device gets pointed at ha_get_device; for any other
+        # refusal Core's message says what is wrong.
         suggests_lookup = "ha_get_device" in json.dumps(error_data["error"])
-        assert suggests_lookup == (code in ("not_found", "unknown_error"))
+        assert suggests_lookup == (code == "not_found")
+
+    async def test_unknown_id_before_core_2026_9_suggests_the_lookup(
+        self,
+        tools: RegistryTools,
+        device: dr.DeviceEntry,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Core before 2026.9 had no not_found check: its registry raised
+        KeyError for an unknown id, which Core answers as unknown_error."""
+
+        def raise_key_error(
+            self: dr.DeviceRegistry, device_id: str, **_: object
+        ) -> None:
+            raise KeyError(device_id)
+
+        monkeypatch.setattr(dr.DeviceRegistry, "async_update_device", raise_key_error)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_device(device_id=device.id, name="Den")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error_data["ha_error_code"] == "unknown_error"
+        assert "ha_get_device" in json.dumps(error_data["error"])

@@ -47,6 +47,7 @@ _CAPS_SPLIT = {
         "dashboards",
         "dashboards_doc_search",
         "device_registry_child_semantics",
+        "entity_composed_name",
     ],
     "limits": {"max_results": 500},
 }

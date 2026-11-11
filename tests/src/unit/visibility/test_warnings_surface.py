@@ -9,10 +9,18 @@ forwarding is covered separately by
 cheapest trigger: ``load_hidden_set`` fails open with a warning.
 """
 
-import asyncio
+from __future__ import annotations
 
-from ha_mcp.tools.search import entities as search_entities
-from ha_mcp.tools.smart_search._overview import SystemOverviewMixin
+from pathlib import Path
+
+import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.tools.util_helpers import merge_visibility_warnings
 from ha_mcp.visibility import resolver
 
@@ -45,61 +53,38 @@ def test_merge_visibility_warnings_empty_is_noop():
 # --- response-level: a corrupt config surfaces a warning at each seam --------
 
 
-class _SearchClient:
-    def __init__(self, states, registry):
-        self._states = states
-        self._registry = registry
-
-    async def get_states(self):
-        return self._states
-
-    async def send_websocket_message(self, msg):
-        assert msg == {"type": "config/entity_registry/list"}
-        return self._registry
+@pytest.fixture
+async def light_a(hass: HomeAssistant) -> None:
+    """One registered light with a state, and the registry commands served."""
+    assert await async_setup_component(hass, "config", {})
+    er.async_get(hass).async_get_or_create(
+        "light", "test", "a", suggested_object_id="a"
+    )
+    hass.states.async_set("light.a", "on")
 
 
-class _OverviewClient:
-    def __init__(self, states, entity_registry):
-        self._states = states
-        self._entity_registry = entity_registry
-
-    async def get_states(self):
-        return self._states
-
-    async def get_services(self):
-        return []
-
-    async def send_websocket_message(self, msg):
-        if msg["type"] == "config/entity_registry/list":
-            return self._entity_registry
-        return {"success": True, "result": []}
-
-
-_STATES = [{"entity_id": "light.a", "state": "on", "attributes": {}}]
-_REGISTRY = {
-    "success": True,
-    "result": [{"entity_id": "light.a", "entity_category": None}],
-}
-
-
-def test_exact_match_search_surfaces_visibility_load_warning(tmp_path, monkeypatch):
+async def test_exact_match_search_surfaces_visibility_load_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    light_a: None,
+) -> None:
     (tmp_path / "entity_visibility.json").write_text(_CORRUPT)
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    res = asyncio.run(
-        search_entities._exact_match_search(
-            _SearchClient(_STATES, _REGISTRY),
-            query="a",
-            domain_filter=None,
-            limit=10,
-        )
-    )
+    tools = SearchTools(core_client, SmartSearchTools(client=core_client))
+    res = await tools.ha_search(query="a", exact_match=True)
     assert any(_LOAD_FAIL in w for w in res.get("warnings", []))
 
 
-def test_system_overview_surfaces_visibility_load_warning(tmp_path, monkeypatch):
+async def test_system_overview_surfaces_visibility_load_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    light_a: None,
+) -> None:
     (tmp_path / "entity_visibility.json").write_text(_CORRUPT)
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    mixin.client = _OverviewClient(_STATES, _REGISTRY)
-    res = asyncio.run(mixin.get_system_overview(detail_level="full"))
+    res = await SmartSearchTools(client=core_client).get_system_overview(
+        detail_level="full"
+    )
     assert any(_LOAD_FAIL in w for w in res.get("warnings", []))

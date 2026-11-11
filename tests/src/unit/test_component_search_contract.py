@@ -93,6 +93,8 @@ ENTITY_KEYS = {
     "score",
     "match_type",
 }
+# The component path adds the name Core composes, which only it can ask for.
+COMPONENT_ENTITY_KEYS = ENTITY_KEYS | {"name"}
 
 
 class _Entity:
@@ -258,7 +260,7 @@ def test_all_surfaces_match_and_shape_to_legacy_keys(monkeypatch) -> None:
     assert shaped["success"] is True
 
     for rec in _records(shaped, "entities"):
-        assert set(rec) == ENTITY_KEYS, f"entity record keys drifted: {rec}"
+        assert set(rec) == COMPONENT_ENTITY_KEYS, f"entity record keys drifted: {rec}"
 
     autos = _records(shaped, "automations")
     assert {r["entity_id"] for r in autos} == {
@@ -439,12 +441,13 @@ def test_membership_normalizers_share_malformed_modern_fallback_semantics() -> N
     assert wsapi._normalize_member_entity_ids(attributes) == expected
 
 
-def test_result_fields_default_shape_unchanged(monkeypatch) -> None:
-    """No result_fields → the shaped entity record is exactly the six base keys,
-    even though the real component record already carries the enrichment join."""
+def test_result_fields_default_shape_is_base_keys_plus_name(monkeypatch) -> None:
+    """No result_fields → the shaped entity record is the six base keys plus the
+    composed name, even though the real component record already carries the
+    enrichment join."""
     result = _enrichment_component_result(monkeypatch)
     shaped = _shape_component_search_response(_resolved_result_fields(None), result)
-    assert set(shaped["entities"][0]) == ENTITY_KEYS
+    assert set(shaped["entities"][0]) == COMPONENT_ENTITY_KEYS
 
 
 def test_result_fields_enrichment_additive(monkeypatch) -> None:
@@ -818,6 +821,7 @@ def test_component_search_redacts_denied_members_through_public_projection(
     assert result["entities"] == [
         {
             "entity_id": "light.membership_group",
+            "name": "Membership marker",
             "friendly_name": "Membership marker",
             "domain": "light",
             "state": "on",

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import codecs
 import math
+import os
 from collections.abc import AsyncIterator
 from typing import Any, Callable, Literal, overload
 
 import trio
 
-from ..exceptions import ConcurrencyError
+from ..exceptions import ConcurrencyError, TooManyFragments
 from ..frames import BINARY, CONT, TEXT, Frame
 from ..typing import Data
 
@@ -15,6 +16,8 @@ from ..typing import Data
 __all__ = ["Assembler"]
 
 UTF8Decoder = codecs.getincrementaldecoder("utf-8")
+
+MAX_FRAGMENTS = int(os.environ.get("WEBSOCKETS_MAX_FRAGMENTS", "4096"))
 
 
 class Assembler:
@@ -123,19 +126,25 @@ class Assembler:
                 try:
                     frame = await self.recv_frames.receive()
                 except trio.Cancelled:
-                    # Put frames already received back into the queue
-                    # so that future calls to get() can return them.
-                    # Bypass the statistics() method for performance.
+                    # Put frames already received back into the queue so that
+                    # future calls to get() can return them. The queue may be
+                    # non-empty if put() added at least two frames before get()
+                    # was canceled: the first one goes to the waiting receive()
+                    # and the second one is buffered.
                     state = self.send_frames._state
                     assert not state.receive_tasks, "no task should receive"
-                    assert not state.data, "queue should be empty"
-                    for frame in frames:
-                        self.send_frames.send_nowait(frame)
+                    # Since the queue is unbounded, we don't need to assert that
+                    # state.send_tasks is empty. It's always empty.
+                    # Now, since no tasks are sending or receiving, it should be
+                    # safe to mutate the underlying deque directly.
+                    state.data.extendleft(reversed(frames))
                     raise
                 except trio.EndOfChannel:
                     raise EOFError("stream of frames ended")
                 self.maybe_resume()
                 assert frame.opcode is CONT
+                if len(frames) >= MAX_FRAGMENTS:
+                    raise TooManyFragments(MAX_FRAGMENTS)
                 frames.append(frame)
 
         finally:

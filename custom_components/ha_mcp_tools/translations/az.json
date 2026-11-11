@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "HA-MCP-ni bir mağaza siyahısında saxlamaq?",
-            "description": "HA-MCP həmçinin {records} vasitəsilə quraşdırılmış kimi qeyd olunub. Onlar eyni inteqrasiyanı daşıyır (ikincisi köhnə paylama güzgüsüdür). Home Assistant 2026.11-dəki Marketplace yalnız bir siyahıya inteqrasiyaya sahib olmağa icazə verir, ona görə də orada onların heç biri HA-MCP-ni yeniləyə bilməz; HACS hələ də yeniləyir, lakin 2026.11 versiyasına keçid HA-MCP-nin kilidlənməsinə səbəb olacaq.\n\nTəsdiq etmək **{keep}**-i, yəni xüsusi repozitoriya tələb etməyən defolt kataloqdakı siyahını saxlayır və digər siyahını quraşdırılmamış kimi qeyd edir. Heç nə silinmir: HA-MCP qeydləriniz, parametrləriniz və fayllarınız olduğu kimi qalır və bundan sonra yeniləmələr həmişəki kimi {keep} altında görünəcək."
+            "description": "HA-MCP hər iki {records} üzərindən quraşdırılmış kimi işarələnib. Onlar eyni inteqrasiyanı daşıyır (ikincisi əvvəlki quraşdırmaların gəldiyi paylama güzgüsüdür). Home Assistant 2026.11-dəki Marketplace yalnız bir siyahıya inteqrasiyaya sahib olmağa imkan verir, ona görə də orada onların heç biri HA-MCP-ni yeniləyə bilməz; HACS hələ də yeniləyir, lakin 2026.11 versiyasına yüksəltmə HA-MCP-ni dayandırmış vəziyyətdə qoyacaq.\n\nTəsdiq et düyməsini sıxmaq heç bir xüsusi repozitoriya tələb etməyən defolt kataloqdakı siyahını — **{keep}** saxlayır və digər siyahını quraşdırılmamış kimi işarələyir. Heç nə silinmir: HA-MCP qeydləriniz, parametrləriniz və fayllarınız olduğu kimi qalır və bundan sonra yeniləmələr həmişəki kimi {keep} altında görünəcək."
           }
         },
         "abort": {

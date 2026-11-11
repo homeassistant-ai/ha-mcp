@@ -7,6 +7,19 @@ rule:
     - pattern: hass = SimpleNamespace($$$)
     - pattern: MagicMock($$$, name="hass", $$$)
     - pattern: Mock($$$, name="hass", $$$)
+    # The same stand-in under another name (mock_hass, hass_mock, self.hass).
+    - kind: assignment
+      regex: '^(self\.)?(\w+_hass|hass_(mock|fake|stub|double))\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
+    - kind: assignment
+      regex: '^self\.hass\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|SimpleNamespace)\('
+    # A test file's own `hass` fixture, whatever it builds the stand-in from.
+    - kind: function_definition
+      regex: '^(async\s+)?def\s+hass\s*\('
+    # A placeholder where a Core object lives in hass.data.
+    - kind: assignment
+      regex: '^(self\.)?\w*hass\w*\.data(\[[^\]]+\])+\s*=\s*(object\(\)|(Async|Magic|NonCallable|NonCallableMagic)?Mock\(|SimpleNamespace\()'
+    - kind: call
+      regex: '^(self\.)?\w*hass\w*\.data\.setdefault\([^,]+,\s*(object\(\)|(Async|Magic|NonCallable|NonCallableMagic)?Mock\(|SimpleNamespace\()'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
@@ -22,6 +35,7 @@ ignores:
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_card_review_round6.py"
   - "tests/src/unit/test_component_repairs.py"
+  - "tests/src/unit/test_component_store_records.py"
   - "tests/src/unit/test_component_ws_logbook.py"
   - "tests/src/unit/test_config_flow.py"
   - "tests/src/unit/test_custom_card_lifecycle.py"
@@ -31,18 +45,15 @@ ignores:
   - "tests/src/unit/test_custom_component_volume_writes.py"
   - "tests/src/unit/test_embedded_server.py"
   - "tests/src/unit/test_embedded_setup.py"
-  - "tests/src/unit/test_entry_migration.py"
   - "tests/src/unit/test_ha_mcp_server_entry.py"
-  - "tests/src/unit/test_loopback_url.py"
   - "tests/src/unit/test_mcp_webhook.py"
-  - "tests/src/unit/test_mcp_webhook_relay_pool.py"
   - "tests/src/unit/test_oauth_autoapprove.py"
   - "tests/src/unit/test_oauth_dcr.py"
   - "tests/src/unit/test_oauth_legacy_component.py"
   - "tests/src/unit/test_server_credentials.py"
   - "tests/src/unit/test_tools_entry_lifecycle.py"
   - "tests/src/unit/test_ui_panel.py"
-  - "tests/src/unit/test_webhook_proxy_liveness.py"
+  - "tests/src/unit/test_webhook_proxy_oauth_unified.py"
 message: |
   Use the real `hass` fixture from Core's test plugin (with `MockConfigEntry`,
   the registry fixtures and `hass_ws_client`) instead of a hand-made Home

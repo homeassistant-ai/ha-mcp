@@ -1,39 +1,43 @@
 """An update cannot blank a helper's name, as a create cannot (#2632)."""
 
 import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.zone.const import DATA_ZONE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-from .test_helper_update_persistence import (  # noqa: F401 - fixtures
-    mock_client,
-    register_tools,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
+from ha_mcp.tools.tools_zones import ZoneTools
 
 
 async def test_blank_name_update_is_refused_before_any_write(
-    register_tools: dict[str, Any],  # noqa: F811
-    mock_client: MagicMock,  # noqa: F811
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Core's zone schema would store a blank name, which the zone dialog
     refuses, so the tool refuses it without writing."""
-    mock_client.send_websocket_message = AsyncMock(
-        side_effect=mock_client._make_ws_responses("zone")
+    # ``config`` serves the registry commands.
+    for domain in ("config", "zone"):
+        assert await async_setup_component(hass, domain, {})
+    created = await ZoneTools(core_client).ha_set_zone(
+        name="Home Office", latitude=52.5, longitude=13.4, wait=False
     )
+    entity_id = created["entity_id"]
+    entry = er.async_get(hass).async_get(entity_id)
+    assert entry is not None
 
     with pytest.raises(ToolError) as exc_info:
-        await register_tools["ha_config_set_helper"](
+        await HelperConfigTools(core_client).ha_config_set_helper(
             helper_type="zone",
-            helper_id="zone.home_office",
+            helper_id=entity_id,
             config={"name": "  "},
         )
 
     error = json.loads(str(exc_info.value))["error"]
     assert "name cannot be blank" in error["message"]
-    assert not any(
-        c[0][0].get("type", "").endswith("/update")
-        for c in mock_client.send_websocket_message.call_args_list
-    )
+    zones = hass.data[DATA_ZONE].storage_collection.async_items()
+    stored = next(z for z in zones if z["id"] == entry.unique_id)
+    assert stored["name"] == "Home Office"

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .test_component_ws_search import (
@@ -66,7 +67,7 @@ class _Validator:
         self.calls: list[tuple[Any, ...]] = []
 
     async def __call__(
-        self, hass: Any, config: dict[str, Any], *args: Any, **kwargs: Any
+        self, hass: HomeAssistant, config: dict[str, Any], *args: Any, **kwargs: Any
     ) -> Any:
         self.calls.append((*args, *kwargs.items()))
         # Core's backward-compat schema renames keys in the dict it is given.
@@ -215,7 +216,9 @@ async def test_config_core_cannot_even_name_is_a_schema_failure(
 async def test_public_validator_stands_in_for_a_missing_private_one(
     core: SimpleNamespace,
 ) -> None:
-    async def public(hass: Any, config_key: str, config: dict[str, Any]) -> Any:
+    async def public(
+        hass: HomeAssistant, config_key: str, config: dict[str, Any]
+    ) -> Any:
         # Core's public validator raises on every failure.
         raise _Invalid("required key not provided @ data['triggers']")
 
@@ -261,7 +264,7 @@ async def test_descriptions_are_cores_own(core: SimpleNamespace, kind: str) -> N
         "mqtt": None,
     }
 
-    async def describe(hass: Any) -> dict[str, Any]:
+    async def describe(hass: HomeAssistant) -> dict[str, Any]:
         return descriptions
 
     core.descriptions[kind] = describe

@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "HA-MCP auf einem Store-Eintrag belassen?",
-            "description": "HA-MCP ist laut {records} von beiden installiert. Sie führen dieselbe Integration (der zweite ist der ältere Distributionsspiegel). Der Marketplace in Home Assistant 2026.11 lässt nur zu, dass ein Eintrag eine Integration besitzt, sodass dort keiner von beiden HA-MCP aktualisieren kann; HACS aktualisiert zwar weiterhin, aber das Upgrade auf 2026.11 würde HA-MCP festhängen lassen.\n\nDurch Absenden wird **{keep}** beibehalten – der Eintrag im Standardkatalog, der kein benutzerdefiniertes Repository benötigt –, und der andere Eintrag wird als nicht installiert markiert. Es wird nichts gelöscht: Deine HA-MCP-Einträge, Einstellungen und Dateien bleiben exakt so, wie sie sind, und ab jetzt erscheinen Updates wie gewohnt unter {keep}."
+            "description": "HA-MCP ist als von beiden {records} installiert markiert. Sie enthalten dieselbe Integration (der zweite Eintrag ist der Distributions-Mirror, von dem frühere Installationen stammten). Der Marketplace in Home Assistant 2026.11 erlaubt nur einem Eintrag, Besitzer einer Integration zu sein, sodass dort keiner von beiden HA-MCP aktualisieren kann; HACS aktualisiert zwar weiterhin, aber das Upgrade auf 2026.11 würde dazu führen, dass HA-MCP stecken bleibt.\n\nDurch Absenden wird **{keep}** beibehalten (der Eintrag im Standardkatalog, der kein benutzerdefiniertes Repository benötigt) und der andere Eintrag als nicht installiert markiert. Es wird nichts gelöscht: Deine HA-MCP-Einträge, Einstellungen und Dateien bleiben exakt so, wie sie sind, und ab jetzt werden Updates wie gewohnt unter {keep} angezeigt."
           }
         },
         "abort": {

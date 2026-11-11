@@ -7,23 +7,43 @@ dashboard missing.
 
 from __future__ import annotations
 
+import json
+
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.dashboard_screenshot.paths import resolve_dashboard_render_target
 
-from .test_dashboard_screenshot_paths import _FakeAsyncClient, _tool_error
 
-_NO_CONFIG = {
-    "success": False,
-    "error_code": "config_not_found",
-    "error": "Command failed: No config found.",
-}
+@pytest.fixture
+async def dashboard_without_config(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """A storage dashboard "wall-panel" that Core holds no config for."""
+    assert await async_setup_component(hass, "lovelace", {})
+    created = await core_client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": "wall-panel",
+            "title": "Wall panel",
+        }
+    )
+    assert created["success"] is True
+    no_config = await core_client.send_websocket_message(
+        {"type": "lovelace/config", "force": True, "url_path": "wall-panel"}
+    )
+    assert no_config["success"] is False
+    assert no_config["error_code"] == "config_not_found"
 
 
-async def test_dashboard_without_config_renders_its_default_view() -> None:
+async def test_dashboard_without_config_renders_its_default_view(
+    core_client: HomeAssistantClient, dashboard_without_config: None
+) -> None:
     target = await resolve_dashboard_render_target(
-        _FakeAsyncClient(_NO_CONFIG),
+        core_client,
         dashboard_path=None,
         url_path="wall-panel",
         view_path=None,
@@ -34,22 +54,29 @@ async def test_dashboard_without_config_renders_its_default_view() -> None:
     assert target.warnings
 
 
-async def test_view_path_on_dashboard_without_config_is_refused() -> None:
+async def test_view_path_on_dashboard_without_config_is_refused(
+    core_client: HomeAssistantClient, dashboard_without_config: None
+) -> None:
     """There are no static views to resolve, so view_path is the caller's error."""
     with pytest.raises(ToolError) as exc_info:
         await resolve_dashboard_render_target(
-            _FakeAsyncClient(_NO_CONFIG),
+            core_client,
             dashboard_path=None,
             url_path="wall-panel",
             view_path="home",
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert (
+        json.loads(str(exc_info.value))["error"]["code"]
+        == "VALIDATION_INVALID_PARAMETER"
+    )
 
 
-async def test_raw_route_of_dashboard_without_config_keeps_its_root() -> None:
+async def test_raw_route_of_dashboard_without_config_keeps_its_root(
+    core_client: HomeAssistantClient, dashboard_without_config: None
+) -> None:
     target = await resolve_dashboard_render_target(
-        _FakeAsyncClient(_NO_CONFIG),
+        core_client,
         dashboard_path="wall-panel/0",
         url_path=None,
         view_path=None,

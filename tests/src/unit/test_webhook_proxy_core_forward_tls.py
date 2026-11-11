@@ -2,24 +2,73 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
+import types
+from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
+from aiohttp import web
+from aiohttp.base_protocol import BaseProtocol
+from aiohttp.streams import StreamReader
+from aiohttp.test_utils import make_mocked_request
+from homeassistant.components.http import ApiConfig
+from homeassistant.core import HomeAssistant
 
-from .test_oauth_core_forward_tls import tls_core
-from .test_webhook_proxy_oauth_unified import oauth_stack  # noqa: F401
+from ._core_forward_relay import _RelaySession
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
+PACKAGE = "webhook_proxy_dev_forward_tls_test"
+
+
+@pytest.fixture
+def proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[SimpleNamespace]:
+    """The dev proxy's OAuth modules, loaded from its add-on directory, with
+    the add-on's heartbeat file fresh."""
+    package = types.ModuleType(PACKAGE)
+    package.__path__ = [str(COMPONENT_DIR)]
+    monkeypatch.setitem(sys.modules, PACKAGE, package)
+    oauth = importlib.import_module(f"{PACKAGE}.oauth")
+    heartbeat = tmp_path / "heartbeat"
+    heartbeat.touch()
+    monkeypatch.setattr(oauth, "HEARTBEAT_FILE", heartbeat)
+    yield SimpleNamespace(
+        oauth=oauth,
+        autoapprove=importlib.import_module(f"{PACKAGE}.oauth_autoapprove"),
+        indirect=importlib.import_module(f"{PACKAGE}.oauth_indirect"),
+    )
+    for name in [n for n in sys.modules if n.startswith(f"{PACKAGE}.")]:
+        del sys.modules[name]
+
+
+def token_request(hass: HomeAssistant, form: dict[str, str]) -> web.Request:
+    """A POST to the scoped token endpoint carrying ``form``."""
+    body = urlencode(form).encode()
+    payload = StreamReader(BaseProtocol(hass.loop), 2**16, loop=hass.loop)
+    payload.feed_data(body)
+    payload.feed_eof()
+    return make_mocked_request(
+        "POST",
+        "/api/mcp_proxy_dev/oauth/token",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": str(len(body)),
+        },
+        payload=payload,
+    )
 
 
 @pytest.mark.parametrize(
-    ("api", "target"),
+    ("use_ssl", "host", "target"),
     [
-        (SimpleNamespace(use_ssl=False, port=9443), "http://127.0.0.1:9443"),
-        (SimpleNamespace(use_ssl=True, port=9443), "https://127.0.0.1:9443"),
-        (
-            SimpleNamespace(use_ssl=True, port=9443, host="10.0.2.15"),
-            "https://10.0.2.15:9443",
-        ),
-        (SimpleNamespace(use_ssl=True, port=9443, host="::"), "https://[::1]:9443"),
+        (False, "0.0.0.0", "http://127.0.0.1:9443"),
+        (True, "0.0.0.0", "https://127.0.0.1:9443"),
+        (True, "10.0.2.15", "https://10.0.2.15:9443"),
+        (True, "::", "https://[::1]:9443"),
     ],
     ids=[
         "plain-http",
@@ -29,21 +78,41 @@ from .test_webhook_proxy_oauth_unified import oauth_stack  # noqa: F401
     ],
 )
 async def test_sign_in_reaches_core_listener(
-    oauth_stack,  # noqa: F811
-    monkeypatch,
-    api,
-    target,
+    hass: HomeAssistant,
+    proxy: SimpleNamespace,
+    use_ssl: bool,
+    host: str,
+    target: str,
 ):
     """With http.ssl_certificate, every ha_auth sign-in answered 503: the
     forward verified a certificate issued for a name it could not trust. A
     listener bound to a LAN address only is reached there, not on loopback."""
-    hass, session = tls_core(monkeypatch, api=api)
-
-    result = await oauth_stack.autoapprove._forward_to_core(
-        hass, {"session": session}, "/auth/token", {"grant_type": "authorization_code"}
+    hass.config.api = ApiConfig("192.168.1.2", host, 9443, use_ssl)
+    session = _RelaySession()
+    key = b"k" * 32
+    hass.data[proxy.oauth.DOMAIN] = {
+        "oauth_mode": proxy.oauth.MODE_HA_AUTH,
+        "dcr_signing_key": key,
+        "session": session,
+    }
+    client_id = "https://client.example/metadata.json"
+    # A signed refresh envelope is always proxied to core rather than 307'd.
+    envelope = proxy.indirect.wrap_refresh_token(
+        key, "core-refresh", client_id, client_id
     )
 
-    assert isinstance(result, tuple)  # a web.Response here is the user's 503
+    response = await proxy.autoapprove.AutoApproveTokenView(hass).post(
+        token_request(
+            hass,
+            {
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "refresh_token": envelope,
+            },
+        )
+    )
+
+    assert response.status == 200  # 503 is the sign-in failing
     url, kwargs = session.calls[-1]
     assert url == f"{target}/auth/token"
     assert (kwargs.get("ssl") is False) == target.startswith("https://")

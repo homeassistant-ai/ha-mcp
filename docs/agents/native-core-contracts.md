@@ -311,7 +311,11 @@ fields that previously disappeared. Include component, server-entry-only and
 absent-component behavior. Compare normalized save results with readback.
 
 Unit tests should prove that future fields/types reach Core and native response
-fields survive. Fake validators may prove delegation; do not reproduce the
-energy schema in fixtures and then use those fixtures to claim Core parity.
+fields survive. Their replies come from Core, through the `core_client`
+fixture, never from a dict typed into the test; the
+[unit-test rules](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
+own the detail. One function replaced on a real Core module may prove
+delegation; do not reproduce the energy schema in fixtures and then use those
+fixtures to claim Core parity.
 When touching a wrapper, audit its whole request, validation, response and
 metadata path. Correct related duplicated contracts in the same change.

@@ -6,7 +6,6 @@ import json
 
 import pytest
 
-from . import test_settings_ui_js_behavior as _settings_ui
 from ._js_harness import run_script
 from .test_settings_ui_js_behavior import (
     DEFAULT_FETCHES,
@@ -14,8 +13,6 @@ from .test_settings_ui_js_behavior import (
     _assert_clean_init,
     _probe,
 )
-
-settings_script = _settings_ui.settings_script  # the module-scoped fixture
 
 
 class TestBackupActionErrorToast:

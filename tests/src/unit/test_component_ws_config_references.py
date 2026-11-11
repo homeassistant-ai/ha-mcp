@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.tools.reference_validator import _warnings
 
@@ -138,7 +139,9 @@ def _extract(attr: str) -> Any:
 
 
 def _lookup(kind: str) -> Any:
-    async def lookup(hass: Any, target: dict[str, Any], expand_group: bool) -> set:
+    async def lookup(
+        hass: HomeAssistant, target: dict[str, Any], expand_group: bool
+    ) -> set:
         (entity_id,) = target["entity_id"]
         return _OFFERED[kind].get(entity_id, set())
 

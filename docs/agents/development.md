@@ -109,8 +109,14 @@ URL dynamically. The shared token is in `tests/test_constants.py`.
 uv run ruff format src/ tests/
 uv run ruff check src/ tests/ --fix
 uv run mypy src/
+uv run python scripts/mypy_tests_exact.py
 uv run ast-grep scan
 ```
+
+The unit and app test trees carry extra checks that keep a test on real Home
+Assistant Core: eight ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
+and the mypy script above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
+owns the rules and the lists of files written before them.
 
 C901 complexity is capped at 10 repository-wide with no per-file exemptions;
 issue #925 removed the grandfathered list, so extract helpers instead of
