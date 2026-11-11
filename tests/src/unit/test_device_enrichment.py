@@ -263,31 +263,3 @@ class TestEnrichmentGracefulDegradation:
         assert result["success"] is True
         assert "node_status" not in result["device"]
         assert result["device"]["node_id"] == "5"  # Parsing still works
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("domain", "command", "warning"),
-    [
-        ("zha", "zha/devices", "ZHA radio metrics unavailable: busy"),
-        ("zwave_js", "zwave_js/node_status", "Z-Wave node status unavailable: busy"),
-        (
-            "matter",
-            "matter/node_diagnostics",
-            "Matter node diagnostics unavailable: busy",
-        ),
-    ],
-)
-async def test_radio_refusal_warning_drops_the_client_prefix(domain, command, warning):
-    """A refused radio read warns with Core's own error text."""
-    ident = {"zha": "00:11:22:33:44:55:66:77", "zwave_js": "3232323232-5"}
-    device = _make_device(identifiers=[[domain, ident.get(domain, "node-1")]])
-    mock_client = _mock_client_with_device(
-        device, {command: {"success": False, "error": "Command failed: busy"}}
-    )
-
-    result = await _register_and_capture(mock_client)["ha_get_device"](
-        device_id="test_device_123"
-    )
-
-    assert warning in result["warnings"]

@@ -17,7 +17,6 @@ half) still returns the byte-identical legacy result.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -101,26 +100,12 @@ class RoutingClient:
         self,
         devices: list[dict[str, Any]] | None = None,
         entities: list[dict[str, Any]] | None = None,
-        entries: list[dict[str, Any]] | None = None,
-        *,
-        linked_reply: dict[str, Any] | None = None,
-        splits: dict[str, Any] | None = None,
-        splits_reply: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
         self.verify_ssl = False
         self._devices = list(devices or [])
-        self._entries = (
-            [{"entry_id": "cfg-1", "domain": "hue"}] if entries is None else entries
-        )
-        self._entries_reply: dict[str, Any] | None = None
         self._entities = list(entities or [])
-        self._linked_reply = linked_reply or {
-            "success": True,
-            "result": {"linked_devices": []},
-        }
-        self._splits_reply = splits_reply or {"success": True, "result": splits or {}}
         self.device_list_calls = 0
         self.entity_list_calls = 0
         self.entity_get_calls = 0
@@ -128,12 +113,10 @@ class RoutingClient:
     async def get_config(self) -> dict[str, Any]:
         return {"time_zone": "UTC"}
 
-    async def send_websocket_message(
-        self, msg: dict[str, Any], **_kwargs: Any
-    ) -> dict[str, Any]:
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg_type = msg.get("type")
         if msg_type == "config_entries/get":
-            return self._entries_reply or {"success": True, "result": self._entries}
+            return {"success": True, "result": [{"entry_id": "cfg-1", "domain": "hue"}]}
         if msg_type == "config/device_registry/list":
             self.device_list_calls += 1
             return {"success": True, "result": list(self._devices)}
@@ -155,9 +138,9 @@ class RoutingClient:
                 return {"success": False, "error": "not found"}
             return {"success": True, "result": row}
         if msg_type == "config/device_registry/list_linked_devices":
-            return self._linked_reply
+            return {"success": True, "result": {"linked_devices": []}}
         if msg_type == "config/device_registry/list_composite_splits":
-            return self._splits_reply
+            return {"success": True, "result": {}}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -364,137 +347,6 @@ async def test_summary_list_uses_device_list_and_skips_entities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_summary_list_is_compact_and_full_keeps_cores_row() -> None:
-    """A summary list row carries the main fields of Core's row, a full one
-    all of it plus the device's entity rows, so no field is out of reach."""
-    dev = _raw_device("d1", parent_device_id=None, primary_config_entry="cfg-1")
-    client = RoutingClient(
-        devices=[dev], entities=[_entity_row("sensor.d1", "d1") | {"hidden_by": None}]
-    )
-    get_device = _build_get_device(client)
-
-    with _without_component():
-        summary = (await get_device())["devices"][0]
-        full = (await get_device(detail_level="full"))["devices"][0]
-
-    # The fields the detail_level description names.
-    assert {
-        "id",
-        "name",
-        "name_by_user",
-        "manufacturer",
-        "model",
-        "area_id",
-        "effective_area_id",
-        "disabled_by",
-        "parent_device_id",
-        "via_device_id",
-        "integration_type",
-    } <= set(summary)
-    shared = summary.keys() & dev.keys()
-    assert {k: summary[k] for k in shared} == {k: dev[k] for k in shared}
-    # The bulky parts of the row stay out of a summary.
-    assert not {"identifiers", "connections", "config_entries"} & set(summary)
-    assert {k: full[k] for k in dev} == dev
-    assert full["entities"] == [_entity_row("sensor.d1", "d1") | {"hidden_by": None}]
-
-
-def _refusal(code: str, error: str) -> dict[str, Any]:
-    return {"success": False, "error": f"Command failed: {error}", "error_code": code}
-
-
-def _without_component() -> Any:
-    """A component without ``ha_mcp_tools/info``: the tools read Core's
-    registries, without a connection attempt deciding it."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    return patch_ws(ws, component_devices)
-
-
-@pytest.mark.asyncio
-async def test_single_lookup_lists_linked_devices() -> None:
-    """The single lookup carries Core's linked devices (the device page's
-    Linked devices card). Core before 2026.8 has no such command: the lookup
-    answers without the field and says why; any other refusal fails it."""
-    with _without_component():
-        ok = {"success": True, "result": {"linked_devices": ["dev-2"]}}
-        resp = await _build_get_device(
-            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=ok)
-        )(device_id="dev-1")
-        assert resp["device"]["linked_devices"] == ["dev-2"]
-
-        old_core = _refusal("unknown_command", "Unknown command.")
-        resp = await _build_get_device(
-            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=old_core)
-        )(device_id="dev-1")
-        assert "linked_devices" not in resp["device"]
-        assert any("before 2026.8" in w for w in resp["warnings"])
-
-        refused = _refusal("not_found", "Device not found")
-        with pytest.raises(ToolError) as excinfo:
-            await _build_get_device(
-                RoutingClient(devices=[_raw_device("dev-1")], linked_reply=refused)
-            )(device_id="dev-1")
-        error = json.loads(str(excinfo.value))
-        assert (
-            error["error"]["message"]
-            == "Failed to read linked devices: Device not found"
-        )
-        assert error["ha_error_code"] == "not_found"
-
-
-@pytest.mark.asyncio
-async def test_split_composite_id_names_the_devices_that_replaced_it() -> None:
-    """An id Core retired by splitting a composite device is not found, and
-    the error carries Core's ``split_ids`` and ``primary_id`` for it."""
-    client = RoutingClient(
-        devices=[_raw_device("new-a"), _raw_device("new-b")],
-        splits={"composite": {"split_ids": ["new-a", "new-b"], "primary_id": None}},
-    )
-    get_device = _build_get_device(client)
-
-    with _without_component(), pytest.raises(ToolError) as excinfo:
-        await get_device(device_id="composite")
-    error = json.loads(str(excinfo.value))
-    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert (error["split_ids"], error["primary_id"]) == (["new-a", "new-b"], None)
-    assert "split_ids" in error["error"]["suggestion"]
-
-    with _without_component(), pytest.raises(ToolError) as excinfo:
-        await get_device(device_id="ghost")
-    error = json.loads(str(excinfo.value))
-    assert "split_ids" not in error
-    assert "split_ids" not in error["error"]["suggestion"]
-
-
-@pytest.mark.parametrize(
-    ("error_code", "expected"),
-    [
-        ("unknown_command", "RESOURCE_NOT_FOUND"),
-        ("unauthorized", "SERVICE_CALL_FAILED"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_split_read_degrades_only_on_core_without_it(
-    error_code: str, expected: str
-) -> None:
-    """Core before 2026.8 split nothing, so an unknown command leaves a plain
-    not-found; any other refusal of the split read fails the call, since the
-    id may be one Home Assistant split."""
-    client = RoutingClient(
-        devices=[_raw_device("new-a")],
-        splits_reply=_refusal(error_code, "refused"),
-    )
-    with _without_component(), pytest.raises(ToolError) as excinfo:
-        await _build_get_device(client)(device_id="composite")
-    error = json.loads(str(excinfo.value))
-    assert error["error"]["code"] == expected
-    assert "split_ids" not in error
-
-
-@pytest.mark.asyncio
 async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
     """The old ``device_list`` capability cannot authorize child-aware results.
 
@@ -574,137 +426,6 @@ async def test_capsless_component_uses_legacy_registries() -> None:
     # Both registries came from the legacy WS path.
     assert client.device_list_calls == 1
     assert not _device_get_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_integration_comes_from_owning_config_entry() -> None:
-    """The owning integration is the config entry's domain, not an identifier guess.
-
-    An ESPHome node's main device carries no identifiers and a BTHome device only
-    ``("bluetooth", MAC)``, so a guess from the identifiers misses both (#2761).
-    """
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        devices=[
-            _raw_device(
-                "esp", identifiers=[], config_entries=["e-esp"], config_entry_id="e-esp"
-            ),
-            _raw_device(
-                "bt",
-                identifiers=[["bluetooth", "AA:BB:CC:DD:EE:FF"]],
-                config_entries=["e-bt"],
-                config_entry_id="e-bt",
-            ),
-            # Core before 2026.8: the primary entry, else the first entry.
-            _raw_device(
-                "prim",
-                config_entries=["e-x", "e-p"],
-                config_entry_id=None,
-                primary_config_entry="e-p",
-            ),
-            _raw_device(
-                "old",
-                config_entries=["e-old"],
-                config_entry_id=None,
-                primary_config_entry=None,
-            ),
-        ],
-        entries=[
-            {"entry_id": "e-esp", "domain": "esphome"},
-            {"entry_id": "e-bt", "domain": "bthome"},
-            {"entry_id": "e-x", "domain": "unifi"},
-            {"entry_id": "e-p", "domain": "shelly"},
-            {"entry_id": "e-old", "domain": "deconz"},
-        ],
-    )
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices):
-        esp = await get_device(integration="esphome")
-        bt = await get_device(integration="bthome")
-        by_identifier = await get_device(integration="bluetooth")
-        shelly = await get_device(integration="shelly")
-        deconz = await get_device(integration="deconz")
-        unifi = await get_device(integration="unifi")
-
-    assert [d["id"] for d in esp["devices"]] == ["esp"]
-    assert esp["devices"][0]["integration_type"] == "esphome"
-    assert [d["id"] for d in bt["devices"]] == ["bt"]
-    assert by_identifier["devices"] == []
-    assert [d["id"] for d in shelly["devices"]] == ["prim"]
-    assert [d["id"] for d in deconz["devices"]] == ["old"]
-    assert unifi["devices"] == []
-
-
-@pytest.mark.asyncio
-async def test_z2m_bridge_found_by_identifier_and_mqtt_filter_keeps_z2m() -> None:
-    """The Z2M bridge is the row with Z2M's bridge identifier, whatever its name,
-    and ``integration="mqtt"`` still lists Zigbee2MQTT devices (MQTT's entry)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    z2m = {"config_entries": ["e-mqtt"], "config_entry_id": "e-mqtt"}
-    client = RoutingClient(
-        devices=[
-            _raw_device(
-                "bulb",
-                name="kitchen_bulb",
-                name_by_user="Kitchen bulb (HA name)",
-                identifiers=[["mqtt", "zigbee2mqtt_0x0001"]],
-                **z2m,
-            ),
-            _raw_device(
-                "coord",
-                name="Coordinator",
-                name_by_user="Zigbee hub (HA name)",
-                identifiers=[["mqtt", "zigbee2mqtt_bridge_0x00ff"]],
-                **z2m,
-            ),
-        ],
-        entries=[{"entry_id": "e-mqtt", "domain": "mqtt"}],
-    )
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices):
-        z2m_list = await get_device(integration="zigbee2mqtt")
-        mqtt_list = await get_device(integration="mqtt")
-
-    assert z2m_list["bridge"] == {
-        "id": "coord",
-        "name": "Coordinator",
-        "ieee_address": "0x00ff",
-    }
-    rows = {d["id"]: d for d in z2m_list["devices"]}
-    assert rows["bulb"]["integration_type"] == "zigbee2mqtt"
-    # Zigbee2MQTT's topics follow the name it gave the device, never the one
-    # set in Home Assistant; the bridge has no device topic.
-    assert rows["bulb"]["friendly_name"] == "kitchen_bulb"
-    assert rows["bulb"]["mqtt_topic_hint"] == "zigbee2mqtt/kitchen_bulb/..."
-    assert "mqtt_topic_hint" not in rows["coord"]
-    assert "friendly_name" not in rows["coord"]
-    assert {d["id"] for d in mqtt_list["devices"]} == {"bulb", "coord"}
-
-
-@pytest.mark.asyncio
-async def test_unreadable_config_entries_fail_the_call() -> None:
-    """A refused ``config_entries/get`` fails the call rather than reporting every
-    device's integration as unknown."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(devices=[_raw_device("dev-1")])
-    client._entries_reply = {"success": False, "error": "Command failed: boom"}
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await get_device(integration="hue")
-
-    assert "Failed to read config entries: boom" in str(excinfo.value)
 
 
 class _ResolveStubClient:

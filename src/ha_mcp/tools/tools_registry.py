@@ -124,18 +124,6 @@ def _is_z2m_bridge(device: dict[str, Any]) -> bool:
     )
 
 
-def _entry_domain(device: dict[str, Any], domains: dict[str, str]) -> str | None:
-    """Domain of the config entry that owns the device: ``config_entry_id`` on
-    Core 2026.8+, before that ``primary_config_entry``, or the first entry when
-    no entry supplied primary device info, as the frontend picks it."""
-    entry_id = (
-        device.get("config_entry_id")
-        or device.get("primary_config_entry")
-        or next(iter(device.get("config_entries") or []), None)
-    )
-    return domains.get(entry_id or "")
-
-
 async def _entry_domains(client: Any) -> dict[str, str]:
     """Config-entry id → integration domain, the frontend's device-page lookup."""
     result = await client.send_websocket_message({"type": "config_entries/get"})
@@ -181,7 +169,9 @@ def _get_device_info(
     ieee_address = _first_ieee_from_connections(
         device.get("connections") or [], ieee_address
     )
-    integration_type = "zigbee2mqtt" if is_z2m else _entry_domain(device, domains)
+    integration_type = (
+        "zigbee2mqtt" if is_z2m else domains.get(device["config_entry_id"])
+    )
     if summary:
         row = {k: v for k, v in device.items() if k in _SUMMARY_FIELDS}
     else:
@@ -409,17 +399,16 @@ async def _raise_device_not_found(
     """Report an unknown device id. A composite id Home Assistant 2026.8 split
     into one device per config entry gets Core's ``split_ids`` and
     ``primary_id``, the map the frontend's device pickers re-point such an id
-    with; Core before 2026.8 has no such command and split nothing."""
+    with."""
     context: dict[str, Any] = {
         "device_id": device_id,
         "available_device_ids": [d.get("id") for d in all_rows[:10] if d.get("id")],
     }
     suggestions = ["Use ha_get_device() to find valid device IDs"]
     splits = await client.send_websocket_message(
-        {"type": "config/device_registry/list_composite_splits"},
-        expected_error_codes=_UNKNOWN_COMMAND,
+        {"type": "config/device_registry/list_composite_splits"}
     )
-    if not splits.get("success") and splits.get("error_code") != UNKNOWN_COMMAND_CODE:
+    if not splits.get("success"):
         raise_core_refusal("Failed to read composite device splits", splits, context)
     if split := (splits.get("result") or {}).get(device_id):
         context.update(split)
@@ -475,22 +464,15 @@ async def _get_single_device_result(
     warnings: list[str] = []
 
     # The device page's Linked devices card: devices of other config entries
-    # sharing an identifier or connection (none for a child). Core 2026.8+.
+    # sharing an identifier or connection (none for a child).
     linked = await client.send_websocket_message(
-        {"type": "config/device_registry/list_linked_devices", "device_id": device_id},
-        expected_error_codes=_UNKNOWN_COMMAND,
+        {"type": "config/device_registry/list_linked_devices", "device_id": device_id}
     )
-    if linked.get("success"):
-        device_info["linked_devices"] = linked["result"]["linked_devices"]
-    elif linked.get("error_code") == UNKNOWN_COMMAND_CODE:
-        warnings.append(
-            "Linked devices not listed: Home Assistant before 2026.8 has no "
-            "config/device_registry/list_linked_devices"
-        )
-    else:
+    if not linked.get("success"):
         raise_core_refusal(
             "Failed to read linked devices", linked, {"device_id": device_id}
         )
+    device_info["linked_devices"] = linked["result"]["linked_devices"]
 
     if device_info.get("integration_type") == "zha" and device_info.get("ieee_address"):
         await enrich_zha_metrics(client, device_info, warnings)
@@ -535,7 +517,7 @@ def _filter_devices(
         # "mqtt" also matches Zigbee2MQTT devices, whose entry is MQTT's.
         if integration_lower and integration_lower not in (
             device_info["integration_type"],
-            _entry_domain(device, domains),
+            domains.get(device["config_entry_id"]),
         ):
             continue
         if detail_level == "full":
@@ -829,7 +811,7 @@ class RegistryTools:
         - By integration: ha_get_device(integration="zigbee2mqtt")
         - Full details in list: ha_get_device(detail_level="full", limit=10)
 
-        **Single device lookup (Core's whole row, its entity rows and, on Core 2026.8+, linked_devices):**
+        **Single device lookup (Core's whole row, its entity rows and linked_devices):**
         - By device_id: ha_get_device(device_id="abc123")
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
@@ -1035,30 +1017,21 @@ class RegistryTools:
                 {"type": "config/device_registry/remove", "device_id": device_id},
                 expected_error_codes=_UNKNOWN_COMMAND,
             )
-            detached: list[str] = []
             if result.get("error_code") == UNKNOWN_COMMAND_CODE:
                 # Core before 2026.9 has no ``remove``; its predecessor detaches
-                # one entry at a time, and before 2026.8 a device can have several.
-                # A refusal stops the loop; entries detached before it stay so.
-                for entry_id in device.get("config_entries") or []:
-                    result = await self._client.send_websocket_message(
-                        {
-                            "type": "config/device_registry/remove_config_entry",
-                            "device_id": device_id,
-                            "config_entry_id": entry_id,
-                        }
-                    )
-                    if not result.get("success"):
-                        break
-                    detached.append(entry_id)
+                # the device's one config entry, which removes the device.
+                result = await self._client.send_websocket_message(
+                    {
+                        "type": "config/device_registry/remove_config_entry",
+                        "device_id": device_id,
+                        "config_entry_id": device["config_entry_id"],
+                    }
+                )
             if not result.get("success"):
-                context: dict[str, Any] = {"device_id": device_id}
-                if detached:
-                    context["detached_config_entries"] = detached
                 raise_core_refusal(
                     "Failed to remove device",
                     result,
-                    context,
+                    {"device_id": device_id},
                     [
                         "If the integration does not support removing devices, "
                         "disable the device instead: "

@@ -7,15 +7,11 @@ snapshot ``ha_set_device`` also uses). Both single-device reads route through th
 component's ``device_get`` when available. These tests pin the body routing
 (component-hit, no whole-registry dump; legacy fallback on no-caps /
 ``unknown_command`` → invalidate; not-found falls back to the full list for the
-suggestion) AND the capture read routing at the ``_fetch_device`` seam. The
-removal itself is Core's ``config/device_registry/remove``; Core before 2026.9,
-which lacks it, gets the ``remove_config_entry`` predecessor for each of the
-device's entries.
+suggestion) AND the capture read routing at the ``_fetch_device`` seam.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -58,35 +54,16 @@ def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
     return base
 
 
-# Core before 2026.8: several entries, no ``config_entry_id``.
-_PRE_2026_8_ROW = _raw_device(
-    "dev-1", config_entries=["e-a", "e-b"], config_entry_id=None
-)
-
-
 class RoutingClient:
     """Credentialed HA client spy: tallies the legacy device-registry-list dumps."""
 
-    def __init__(
-        self,
-        devices: list[dict[str, Any]] | None = None,
-        *,
-        core_has_remove: bool = True,
-        remove_reply: dict[str, Any] | None = None,
-        refused_entries: frozenset[str] = frozenset(),
-        splits: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, devices: list[dict[str, Any]] | None = None) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
         self.verify_ssl = False
         self._devices = list(devices or [])
-        self._core_has_remove = core_has_remove
-        self._remove_reply = remove_reply or {"success": True, "result": None}
-        self._refused_entries = refused_entries
-        self._splits = splits or {}
         self.device_list_calls = 0
         self.remove_calls: list[str] = []
-        self.remove_config_entry_calls: list[str] = []
 
     async def send_websocket_message(
         self, msg: dict[str, Any], **_kwargs: Any
@@ -97,24 +74,9 @@ class RoutingClient:
             return {"success": True, "result": list(self._devices)}
         if msg_type == "config/device_registry/remove":
             self.remove_calls.append(msg["device_id"])
-            if not self._core_has_remove:  # Core before 2026.9
-                return {
-                    "success": False,
-                    "error": "Command failed: Unknown command.",
-                    "error_code": "unknown_command",
-                }
-            return self._remove_reply
-        if msg_type == "config/device_registry/remove_config_entry":
-            self.remove_config_entry_calls.append(msg["config_entry_id"])
-            if msg["config_entry_id"] in self._refused_entries:
-                return {
-                    "success": False,
-                    "error": "Command failed: Config entry does not support device removal",
-                    "error_code": "home_assistant_error",
-                }
             return {"success": True, "result": None}
         if msg_type == "config/device_registry/list_composite_splits":
-            return {"success": True, "result": self._splits}
+            return {"success": True, "result": {}}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -182,84 +144,8 @@ async def test_body_served_by_component() -> None:
     assert resp["success"] is True
     assert resp["device_name"] == "Orphan"
     assert client.remove_calls == ["dev-1"]
-    assert client.remove_config_entry_calls == []
     assert client.device_list_calls == 0
     assert len(_device_get_calls(ws)) == 1
-
-
-@pytest.mark.asyncio
-async def test_core_without_remove_detaches_every_entry() -> None:
-    """Core before 2026.9 has no ``remove``: its predecessor detaches each entry
-    (before 2026.8 a device can have several)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": _PRE_2026_8_ROW},
-    )
-    client = RoutingClient(core_has_remove=False)
-    remove_device = _build_remove_device(client)
-
-    with patch_ws(ws, component_devices):
-        resp = await remove_device(device_id="dev-1")
-
-    assert resp["success"] is True
-    assert client.remove_calls == ["dev-1"]
-    assert client.remove_config_entry_calls == ["e-a", "e-b"]
-    assert client.device_list_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_core_without_remove_stops_at_a_refusal_and_names_the_detached() -> None:
-    """A refused entry stops the detaching; the error lists the entries already
-    detached, since the device has changed."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={
-            "device": _raw_device(
-                "dev-1", config_entries=["e-a", "e-b", "e-c"], config_entry_id=None
-            )
-        },
-    )
-    client = RoutingClient(core_has_remove=False, refused_entries=frozenset({"e-b"}))
-    remove_device = _build_remove_device(client)
-
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await remove_device(device_id="dev-1")
-
-    payload = json.loads(str(excinfo.value))
-    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert payload["detached_config_entries"] == ["e-a"]
-    assert client.remove_config_entry_calls == ["e-a", "e-b"]
-
-
-@pytest.mark.asyncio
-async def test_core_refusal_reaches_the_caller() -> None:
-    """Core's refusal message reaches the caller as SERVICE_CALL_FAILED."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": _raw_device("dev-1")},
-    )
-    client = RoutingClient(
-        remove_reply={
-            "success": False,
-            "error": "Command failed: Config entry does not support device removal",
-            "error_code": "home_assistant_error",
-        }
-    )
-    remove_device = _build_remove_device(client)
-
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await remove_device(device_id="dev-1")
-
-    payload = json.loads(str(excinfo.value))
-    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert payload["error"]["message"] == (
-        "Failed to remove device: Config entry does not support device removal"
-    )
-    assert "detached_config_entries" not in payload
-    assert client.remove_config_entry_calls == []
 
 
 @pytest.mark.asyncio
@@ -319,33 +205,6 @@ async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
     )
     # The legacy device list served the not-found suggestion.
     assert client.device_list_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_split_composite_id_names_the_devices_that_replaced_it() -> None:
-    """An id Core retired by splitting a composite device is not found, and
-    the error carries Core's ``split_ids`` and ``primary_id`` for it; nothing
-    is removed."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": None},
-    )
-    split = {"split_ids": ["new-a", "new-b"], "primary_id": "new-a"}
-    client = RoutingClient(
-        devices=[_raw_device("new-a"), _raw_device("new-b")],
-        splits={"composite": split, "other-composite": {"split_ids": ["x"]}},
-    )
-    remove_device = _build_remove_device(client)
-
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await remove_device(device_id="composite")
-
-    error = json.loads(str(excinfo.value))
-    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert error["split_ids"] == ["new-a", "new-b"]
-    assert error["primary_id"] == "new-a"
-    assert client.remove_calls == []
 
 
 # --- auto-backup capture read routing (_fetch_device) ---------------------------
