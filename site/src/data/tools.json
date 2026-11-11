@@ -2483,32 +2483,16 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed, any errors, and variable values during\nexecution. Home Assistant keeps only the most recent runs of each\nautomation or script (its stored_traces setting), so older runs are\nnot available.\n\nDo not use this tool for general log history or recorder statistics;\nuse `ha_get_logs` for logs and `ha_get_history` for history/statistics.\n\nUSAGE MODES:\n1. List recent traces (omit run_id and context_id).\n   ha_get_automation_traces(\"automation.motion_light\")\n   ha_get_automation_traces(domain=\"automation\")\n2. Get a detailed trace (provide run_id): returns Core's extended trace\n   dict unchanged, including config, raw step trace, context, errors\n   and variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   ha_get_automation_traces(domain=\"automation\", item_id=\"uid\", run_id=\"...\")\n3. Resolve a trace by context (provide context_id): the response\n   selects Core's run for that context and reports `context_match` as\n   `trace` or `parent`. Additional runs that share the same context\n   id are listed in `context_other_matches`. The ha_mcp_tools component\n   resolves both a run's own context and a triggering parent context\n   across all stored traces; without it only Core's `trace/contexts`\n   map is available, which holds each run's own context. A context\n   Core does not hold is reported as not found with a hint that the\n   component resolves triggering (parent) contexts.\n   ha_get_automation_traces(context_id=\"01J...\")\n\nRESPONSE FIELDS:\n- A detail response is Core's extended `trace/get` dict: `config`,\n  `trace`, `context`, `timestamp`, `state`, `error`,\n  `script_execution`, `blueprint_inputs` and any run-specific fields.\n- `success`, `run_id`, `domain` and `item_id` identify the run.\n  `entity_id` is present when the caller supplied it; a context-only\n  lookup returns Core's `domain`/`item_id` instead of inventing one.\n- `context_match` is `trace` or `parent`; `context_scanned` reports\n  how many stored runs the ha_mcp_tools component inspected while\n  resolving the context id, and is 0 when Core's own-context map\n  answered.\n- `logbook_entries`, `logbook_transport`, `logbook_total` and\n  `logbook_truncated` describe the run's logbook rows.",
+    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed (for 'choose', which branch was taken), any\nerrors, and variable values during execution. Home Assistant keeps\nonly the most recent runs of each automation or script (its\nstored_traces setting), so older runs are not available. The 'state'\nfield shows 'stopped' (completed), 'running', or an error state.\n\nUSAGE MODES:\n1. List recent traces (omit run_id): returns a summary of recent runs\n   with timestamps, triggers, and status. Use `offset` to page deeper\n   when `has_more` is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n2. Get a detailed trace (provide run_id): full execution details\n   including trigger info, condition results, action trace with timing,\n   and context variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Add logbook entries and context metadata: detailed=True. Script-style\n   action paths (sequence/, numeric) are always matched regardless of\n   this flag.\n4. Variables at every step (trigger sets and null entries are still\n   omitted): deduplicate=False.",
     "inputSchema": {
       "properties": {
-        "entity_id": {
-          "type": "str | None",
-          "description": "Automation or script entity_id. Omit when resolving a context-only lookup.",
-          "default": null
-        },
-        "domain": {
-          "type": "Literal['automation', 'script'] | None",
-          "description": "List recent traces across every automation or script when entity_id is omitted. Required with item_id.",
-          "default": null
-        },
-        "item_id": {
-          "type": "str | None",
-          "description": "Core's trace item id from a list row or context resolution. Use with domain and run_id when no entity_id is available.",
-          "default": null
+        "automation_id": {
+          "type": "str",
+          "description": "Automation or script entity_id (e.g., 'automation.motion_light' or 'script.morning_routine')"
         },
         "run_id": {
           "type": "str | None",
           "description": "Specific trace run_id to retrieve detailed trace.",
-          "default": null
-        },
-        "context_id": {
-          "type": "str | None",
-          "description": "Context id to resolve to its trace. Accepts the trace run's own `context.id` or, with the ha_mcp_tools component, the context id of the event or service call that triggered it. Mutually exclusive with run_id.",
           "default": null
         },
         "limit": {
@@ -2520,14 +2504,19 @@
             "le": 50
           }
         },
+        "deduplicate": {
+          "type": "bool",
+          "description": "Deduplicate variables across action steps. Set to False to record the variables at every step; steps whose variables carry 'trigger', and null-valued entries, are omitted either way.",
+          "default": true
+        },
         "detailed": {
           "type": "bool",
-          "description": "Include the run's logbook entries in the detail response.",
+          "description": "Include extra diagnostic data: logbook entries and context metadata.",
           "default": false
         },
         "sections": {
           "type": "str | None",
-          "description": "Comma-separated top-level keys from Core's extended trace dict to return, plus 'logbook' for the run's logbook. Valid keys depend on the run; examples: 'trace', 'config', 'context', 'error', 'logbook'. Unknown names are rejected. Omit to return Core's full extended dict.",
+          "description": "Comma-separated list of trace sections to return. Valid values: trigger, conditions, actions, config, error, logbook, context. Omit to return all sections. Example: 'actions' or 'trigger,conditions'.",
           "default": null
         },
         "offset": {
@@ -2543,7 +2532,10 @@
           "description": "Order traces are returned in. 'newest' returns most-recent first; 'oldest' returns chronological-first.",
           "default": "newest"
         }
-      }
+      },
+      "required": [
+        "automation_id"
+      ]
     },
     "annotations": {
       "readOnlyHint": true,

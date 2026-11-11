@@ -18,14 +18,19 @@ TRACE_CONTEXT_CAPABILITY = "trace_context"
 
 @dataclass(frozen=True)
 class ContextTraceMatch:
-    """A trace selected by a context id."""
+    """A trace selected by a context id.
+
+    ``domain`` and ``item_id`` are Core's trace key for the selected run; both
+    resolvers (the component and Core's ``trace/contexts``) report them with
+    every match.
+    """
 
     run_id: str
     match: Literal["trace", "parent"]
     scanned: int
+    domain: str
+    item_id: str
     trace_data: dict[str, Any] | None = None
-    domain: str | None = None
-    item_id: str | None = None
     other_matches: tuple[dict[str, str], ...] = ()
 
 
@@ -251,17 +256,21 @@ async def resolve_global_context(
         )
     contexts = result.get("result")
     entry = contexts.get(context_id) if isinstance(contexts, dict) else None
-    if not isinstance(entry, dict) or not entry.get("run_id"):
+    if (
+        not isinstance(entry, dict)
+        or not entry.get("run_id")
+        or not isinstance(entry.get("domain"), str)
+        or not isinstance(entry.get("item_id"), str)
+    ):
         _raise_global_context_not_found(context_id, 0, domain)
     run_id = str(entry["run_id"])
-    entry_domain = entry.get("domain")
-    entry_item_id = entry.get("item_id")
+    entry_domain = entry["domain"]
+    entry_item_id = entry["item_id"]
     if domain is not None and entry_domain != domain:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"The context belongs to a {entry_domain or 'different'} run, "
-                f"not a {domain} run",
+                f"The context belongs to a {entry_domain} run, not a {domain} run",
                 context={"context_id": context_id, "domain": domain},
                 suggestions=[
                     "Omit domain to resolve the context across both domains",
@@ -273,8 +282,8 @@ async def resolve_global_context(
         run_id=str(run_id),
         match="trace",
         scanned=0,
-        domain=str(entry_domain) if entry_domain else None,
-        item_id=str(entry_item_id) if entry_item_id else None,
+        domain=entry_domain,
+        item_id=entry_item_id,
     )
 
 

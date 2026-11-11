@@ -185,14 +185,6 @@ async def _resolve_trace_target(
         resolved_run_id = context_match.run_id
     elif context_id is not None:
         context_match = await resolve_global_context(client, context_id, domain)
-        if not context_match.domain or not context_match.item_id:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    "The context resolved without a domain/item",
-                    context={"context_id": context_id},
-                )
-            )
         domain_name = context_match.domain
         resolved_item_id = context_match.item_id
         resolved_run_id = context_match.run_id
@@ -336,13 +328,11 @@ class TraceTools:
            ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
            selects Core's run for that context and reports `context_match` as
-           `trace` or `parent`. Additional runs that share the same context
-           id are listed in `context_other_matches`. The ha_mcp_tools component
-           resolves both a run's own context and a triggering parent context
-           across all stored traces; without it only Core's `trace/contexts`
-           map is available, which holds each run's own context. A context
-           Core does not hold is reported as not found with a hint that the
-           component resolves triggering (parent) contexts.
+           `trace` or `parent`. With the ha_mcp_tools component,
+           `context_other_matches` lists the other runs that shared the
+           context id; Core's own `trace/contexts` keeps one run per context
+           id. A context Core does not hold is reported as not found with a
+           hint that the component resolves triggering (parent) contexts.
            ha_get_automation_traces(context_id="01J...")
 
         RESPONSE FIELDS:
@@ -480,8 +470,9 @@ class TraceTools:
     ) -> dict[str, Any]:
         """Retrieve and format a single trace by run_id.
 
-        ``fallback_trace`` is the exact ``trace/get`` result the context
-        resolution already read. Use it instead of issuing a second read.
+        ``fallback_trace`` is the component's extended trace dict for the
+        matched run, already in hand from the context resolution. Use it
+        instead of issuing a separate ``trace/get`` read.
         """
         if fallback_trace is not None:
             trace_data = fallback_trace
@@ -776,7 +767,12 @@ def _format_detailed_trace(
     sections: str | None = None,
     logbook: TraceLogbook | None = None,
 ) -> dict[str, Any]:
-    """Return Core's extended trace dict unchanged, with tool metadata."""
+    """Return Core's extended trace dict with the tool's metadata.
+
+    ``trace`` passes through unchanged unless ``sections`` keeps only the
+    named top-level keys; a requested name this run lacks adds a ``warnings``
+    line that lists the run's own keys.
+    """
     result = dict(trace)
     result["success"] = True
     result["run_id"] = run_id

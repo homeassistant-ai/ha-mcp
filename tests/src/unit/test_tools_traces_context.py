@@ -21,7 +21,7 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import TraceTools
-from ha_mcp.tools.trace_lookup import ContextTraceMatch, resolve_global_context
+from ha_mcp.tools.trace_lookup import resolve_global_context
 
 from ._trace_fixtures import automation_run, store_runs
 
@@ -180,31 +180,6 @@ class TestTraceSelectorValidation:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-
-class TestGlobalMatchWithoutTraceKey:
-    """A resolver hit Core never serves still has to fail as a tool error."""
-
-    async def test_a_match_without_domain_or_item_is_not_found(
-        self,
-        core_client: HomeAssistantClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A context that addresses no run cannot be fetched, so it is reported
-        as not found instead of asking Core for an empty item id."""
-        monkeypatch.setattr(
-            "ha_mcp.tools.tools_traces.resolve_global_context",
-            AsyncMock(
-                return_value=ContextTraceMatch(run_id="r1", match="trace", scanned=0)
-            ),
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(core_client).ha_get_automation_traces(context_id="ctx-1")
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error["context_id"] == "ctx-1"
 
 
 class TestDetailLogbook:

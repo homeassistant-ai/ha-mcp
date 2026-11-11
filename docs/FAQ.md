@@ -1020,10 +1020,16 @@ if the entity registry (or the config file itself) cannot be loaded, the server
 falls back to the last good read from this session — and with none available,
 tool calls are refused rather than risk leaking a restricted entity. If no
 config can be read, `ha_report_issue` follows its safe unrestricted default;
-if a last-good config opted it in, it fails closed too. The hidden set is cached
-for ~30s, so an area/label membership change in Home Assistant can take up to
-that long to take effect for the area/label dimensions (a config edit in the
-settings UI applies on the next call).
+if a last-good config opted it in, it fails closed too.
+
+For ordinary tool calls the resolved hidden set is cached for ~30s, so an
+area/label membership change in Home Assistant can take up to that long to take
+effect for the area/label dimensions (a config edit in the settings UI applies
+on the next call). Trace queries are the exception: `ha_get_automation_traces`
+and a `trace/*` `ws_command` through `ha_call_service` re-read the entity
+registry on every call, so an automation or script registered since the last
+read still has its trace key concealed. That forced read has no last-good
+fallback: when it fails, the trace call is refused.
 
 Because refuse-on-contact applies to the *whole* hidden set, broad hide
 dimensions make refusals frequent: with the default `diagnostic`/`config`

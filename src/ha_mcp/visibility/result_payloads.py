@@ -2,8 +2,9 @@
 
 The scan needs both the flattened text (exact hidden-id and embedded-term
 matching) and the structured values (trace ``domain`` + ``item_id`` records that
-name no entity_id). Kept apart from the middleware so the enforcement module
-stays under the module-size ratchet.
+name no entity_id). ``serialize_result`` builds the text the regexes match, and
+``result_payloads`` hands each structured value and JSON-parsed text block to
+the shape-aware checks.
 """
 
 from __future__ import annotations
