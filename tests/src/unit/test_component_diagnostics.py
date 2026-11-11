@@ -170,15 +170,32 @@ async def test_unscrubbed_detail_stays_out_of_cores_issues_field(
     assert not any(issue.is_persistent for issue in issue_registry.issues.values())
 
 
+@pytest.mark.parametrize(
+    ("options", "data", "secrets"),
+    [
+        (None, SECRET_DATA, SECRET_DATA),
+        (SECRET_OPTIONS, None, SECRET_OPTIONS),
+    ],
+    ids=["stored-data", "stored-options"],
+)
 @pytest.mark.asyncio
-async def test_no_secret_value_appears_in_the_file(hass: HomeAssistant) -> None:
+async def test_no_secret_value_appears_in_the_file(
+    hass: HomeAssistant,
+    options: dict[str, Any] | None,
+    data: dict[str, Any] | None,
+    secrets: dict[str, Any],
+) -> None:
     """Every stored secret is set and echoed in the startup error; none of the
-    values may reach the serialized download."""
-    entry = await _setup_server_entry(hass, SECRET_OPTIONS, SECRET_DATA)
+    values may reach the serialized download.
+
+    Stored data keys and option overrides are verified separately so overrides
+    do not mask unscrubbed data keys.
+    """
+    entry = await _setup_server_entry(hass, options=options, data=data)
     every_secret = [
         value
         for key, value in (*entry.data.items(), *entry.options.items())
-        if key in (*SECRET_DATA, *SECRET_OPTIONS) and isinstance(value, str) and value
+        if key in secrets and isinstance(value, str) and value
     ]
     _fail_bring_up(hass, entry, "start", "start failed: " + " | ".join(every_secret))
 
