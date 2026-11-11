@@ -26,48 +26,14 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_todo import TodoListNotLoaded
-from ha_mcp.config import Settings
 from ha_mcp.errors import ErrorCode
+
+from ._backup_restore_helpers import _backup_settings as _backup_settings
+from ._backup_restore_helpers import _dispatcher as _dispatcher
 
 # A well-formed auto-backup name so the pre-dispatch ``_require`` guard passes
 # and control reaches the ``diff_snapshot`` call under test.
 _BNAME = "automation.kitchen_lights.20260521_153000.yaml"
-
-
-def _backup_settings() -> Settings:
-    """Keep tool access independent of the developer's env and dotenv files."""
-    return Settings(
-        _env_file=None,
-        ENABLE_SNAPSHOT_ACTIONS=True,
-        BACKUP_READ_ONLY=False,
-        READ_ONLY_MODE=False,
-    )
-
-
-def _dispatcher() -> Any:
-    """Resolve the raw ``ha_manage_backup`` closure from the ``@tool`` stack.
-
-    Mirrors the addon-tool tests: a fake ``mcp`` captures the decorated
-    function, then ``__wrapped__`` is unwound past ``@log_tool_usage`` so the
-    dispatcher is called directly, bypassing the FastMCP transport.
-    """
-    from ha_mcp.tools.backup import register_backup_tools
-
-    captured: dict[str, Any] = {}
-
-    class _MockMCP:
-        def tool(self, *args: Any, **kwargs: Any) -> Any:
-            def deco(fn: Any) -> Any:
-                captured.setdefault(fn.__name__, fn)
-                return fn
-
-            return deco
-
-    register_backup_tools(_MockMCP(), MagicMock())
-    fn = captured["ha_manage_backup"]
-    while hasattr(fn, "__wrapped__"):
-        fn = fn.__wrapped__
-    return fn
 
 
 def _patched(diff_exc: BaseException) -> tuple[Any, Any]:

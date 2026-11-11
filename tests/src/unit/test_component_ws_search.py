@@ -34,13 +34,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import orjson
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
-
-from custom_components.ha_mcp_tools.websocket_api import (
-    config_entries as _ws_config_entries,
-)
 
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.search.entities import _match_exact_search_entity
@@ -48,13 +45,11 @@ from ha_mcp.utils.fuzzy_search import calculate_ratio
 
 from ._component_ws_api import COMPONENT_VERSION, wsapi
 from ._component_ws_fakes import (
-    FakeFragment,
     FakeRegEntry,
     FakeServices,
     _FakeConnection,
     _FakeWSApi,
     _Unauthorized,
-    fake_json_bytes,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -666,12 +661,7 @@ class FakeConfigEntry:
             "num_subentries": len(self.subentries or {}),
             **self.extra_fragment_fields,
         }
-        return FakeFragment(json.dumps(row).encode())
-
-
-# ``homeassistant.helpers.json`` is a MagicMock stub in unit tests; give the
-# config_entries command a json_bytes that serializes the fake fragment.
-_ws_config_entries.json_bytes = fake_json_bytes
+        return orjson.Fragment(json.dumps(row).encode())
 
 
 class FakeSubentry:

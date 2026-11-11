@@ -10,20 +10,36 @@ covered through both write paths in test_helper_config_fold.py.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_helpers import update
 from ha_mcp.tools.config_helpers.core_payload import (
     merged_update,
     storage_fields,
     with_create_defaults,
 )
+from ha_mcp.tools.config_helpers.update import _execute_legacy_update, _stored_item
+
+from ._tool_errors import _error
 
 
-def _error(te: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(te.value))  # type: ignore[no-any-return]
+async def _stored_counter(hass: HomeAssistant, client: HomeAssistantClient) -> str:
+    """Create a storage counter in Core and return its id."""
+    name = f"Count {uuid.uuid4().hex[:8]}"
+    assert await async_setup_component(hass, "counter", {})
+    created = await client.send_websocket_message(
+        {"type": "counter/create", "name": name, "minimum": 0, "maximum": 10}
+    )
+    assert created["success"], created
+    return str(created["result"]["id"])
 
 
 # --- merged_update: Core's update writes the whole item ---------------------
@@ -62,7 +78,7 @@ def test_a_list_is_not_a_storage_helpers_config() -> None:
     """A list answers a flow's forms; a storage helper has no flow."""
     with pytest.raises(ToolError) as exc_info:
         storage_fields("input_number", [{"min": 0}], "T", None)
-    assert "written in one call" in _error(exc_info)["error"]["message"]
+    assert "written in one call" in _error(exc_info)["message"]
 
 
 def test_update_does_not_send_the_items_id() -> None:
@@ -98,43 +114,61 @@ def test_a_given_tag_id_is_kept() -> None:
     assert with_create_defaults("tag", {"tag_id": "abc"})["tag_id"] == "abc"
 
 
-async def test_update_path_sends_a_step_core_accepts() -> None:
+async def test_update_path_sends_a_step_core_accepts(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """A counter step of 0 is Core's to judge (its schema allows it), so the
     update reaches counter/update instead of being refused by the tool."""
-    from unittest.mock import AsyncMock
+    counter_id = await _stored_counter(hass, core_client)
 
-    from ha_mcp.tools.config_helpers.update import _execute_legacy_update
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        wraps=core_client.send_websocket_message,
+    ) as sent:
+        result = await _execute_legacy_update(
+            core_client,
+            "counter",
+            f"counter.{counter_id}",
+            counter_id,
+            None,
+            None,
+            {"step": 0},
+        )
+    assert sent.await_args is not None
+    update_message = sent.await_args.args[0]
+    assert update_message["type"] == "counter/update" and update_message["step"] == 0
+    assert result["step"] == 0
 
-    stored = {"id": "c1", "name": "Count", "minimum": 0, "maximum": 10, "step": 1}
-    client = AsyncMock()
-    client.send_websocket_message.return_value = {"success": True, "result": [stored]}
 
-    await _execute_legacy_update(
-        client, "counter", "counter.count", "c1", None, None, {"step": 0}
-    )
-    update = client.send_websocket_message.await_args.args[0]
-    assert update["type"] == "counter/update" and update["step"] == 0
-
-
-async def test_item_vanishing_before_the_update_reports_like_the_read() -> None:
+async def test_item_vanishing_before_the_update_reports_like_the_read(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """Core's not_found on <type>/update is the same missing item the stored
     read reports as CONFIG_NOT_FOUND, so the caller sees one code for it."""
-    from unittest.mock import AsyncMock
+    counter_id = await _stored_counter(hass, core_client)
 
-    from ha_mcp.tools.config_helpers.update import _execute_legacy_update
+    async def read_then_delete(
+        client: Any, helper_type: str, entity_id: str, unique_id: str
+    ) -> dict[str, Any]:
+        stored = await _stored_item(client, helper_type, entity_id, unique_id)
+        deleted = await core_client.send_websocket_message(
+            {"type": "counter/delete", "counter_id": unique_id}
+        )
+        assert deleted["success"], deleted
+        return stored
 
-    stored = {"id": "c1", "name": "Count", "minimum": 0, "maximum": 10, "step": 1}
-    client = AsyncMock()
-    client.send_websocket_message.side_effect = [
-        {"success": True, "result": [stored]},
-        {
-            "success": False,
-            "error": "Unable to find counter_id c1",
-            "error_code": "not_found",
-        },
-    ]
-    with pytest.raises(ToolError) as exc_info:
+    with (
+        patch.object(update, "_stored_item", read_then_delete),
+        pytest.raises(ToolError) as exc_info,
+    ):
         await _execute_legacy_update(
-            client, "counter", "counter.count", "c1", "Renamed", None, {}
+            core_client,
+            "counter",
+            f"counter.{counter_id}",
+            counter_id,
+            "Renamed",
+            None,
+            {},
         )
     assert json.loads(str(exc_info.value))["error"]["code"] == "CONFIG_NOT_FOUND"
