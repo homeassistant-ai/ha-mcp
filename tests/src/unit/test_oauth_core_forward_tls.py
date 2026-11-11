@@ -4,39 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import aiohttp
 import pytest
 from homeassistant.helpers import network
 
 import custom_components.ha_mcp_tools.oauth_autoapprove as aa
 
-
-class _CoreAnswer:
-    status = 200
-    content_type = "application/json"
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return False
-
-    async def read(self):
-        return b'{"access_token":"core"}'
-
-
-class _RelaySession:
-    """Rejects a verified https hop: core's certificate names neither
-    127.0.0.1 nor a private-CA host the container trusts."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict]] = []
-
-    def post(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        if url.startswith("https://") and kwargs.get("ssl") is not False:
-            raise aiohttp.ClientError("certificate verify failed")
-        return _CoreAnswer()
+from ._core_forward_relay import _RelaySession
 
 
 def tls_core(monkeypatch, *, api=None, configured_url=None):

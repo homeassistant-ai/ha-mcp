@@ -23,72 +23,56 @@ from __future__ import annotations
 
 from typing import Any
 
-from .test_component_ws_phase2_async import (
-    _call_hass,
-    _FakeBus,
-    _FakeCallServices,
-    wsapi,
-)
-from .test_component_ws_search import (
-    FakeHass,
-    _FakeConnection,
-    _FakeWSApi,
+from homeassistant.const import EVENT_CALL_SERVICE
+from homeassistant.core import HomeAssistant, ServiceCall
+from pytest_homeassistant.common import MockUser, async_capture_events
+
+from custom_components.ha_mcp_tools.websocket_api.constants import (
+    WS_BULK_CALL_SERVICE,
+    WS_CALL_SERVICE,
 )
 
-_USER_ID = "7c2f1e9a4b5d4c8e9f0a1b2c3d4e5f60"
-_KNOWN = {("input_boolean", "turn_on")}
+from ._component_core import ws_result
+
+_DOMAIN = "ctx_test"
+_SERVICE = "ping"
 
 
-def _registered(monkeypatch: Any, command: str) -> Any:
-    """Register the real commands through the functional WS fake; return one handler."""
-    fake = _FakeWSApi()
-    monkeypatch.setattr(wsapi, "websocket_api", fake)
-    wsapi.async_register_commands(FakeHass())
-    return fake.registered[command]
+def _register_service(hass: HomeAssistant) -> None:
+    async def _ping(call: ServiceCall) -> None:
+        return None
 
-
-def _write_hass(services: _FakeCallServices) -> Any:
-    return _call_hass({}, services, _FakeBus())
+    hass.services.async_register(_DOMAIN, _SERVICE, _ping)
 
 
 class TestSingleCallContext:
-    def test_dispatch_carries_connection_user(self, monkeypatch: Any) -> None:
-        handler = _registered(monkeypatch, wsapi.WS_CALL_SERVICE)
-        services = _FakeCallServices(known=_KNOWN)
-        handler(
-            _write_hass(services),
-            _FakeConnection(user_id=_USER_ID),
-            {
-                "id": 1,
-                "type": wsapi.WS_CALL_SERVICE,
-                "domain": "input_boolean",
-                "service": "turn_on",
-                "entity_ids": [],
-                "wait": False,
-            },
+    async def test_dispatch_carries_connection_user(
+        self, hass: HomeAssistant, component_ws: Any, hass_admin_user: MockUser
+    ) -> None:
+        _register_service(hass)
+        events = async_capture_events(hass, EVENT_CALL_SERVICE)
+        await ws_result(
+            component_ws,
+            WS_CALL_SERVICE,
+            domain=_DOMAIN,
+            service=_SERVICE,
+            entity_ids=[],
+            wait=False,
         )
-        assert len(services.calls) == 1
-        context = services.calls[0]["context"]
-        assert context is not None
-        assert context.user_id == _USER_ID
+        ours = [e for e in events if e.data["domain"] == _DOMAIN]
+        assert len(ours) == 1
+        assert ours[0].context.user_id == hass_admin_user.id
 
 
 class TestBulkCallContext:
-    def test_every_op_carries_connection_user(self, monkeypatch: Any) -> None:
-        handler = _registered(monkeypatch, wsapi.WS_BULK_CALL_SERVICE)
-        services = _FakeCallServices(known=_KNOWN)
-        handler(
-            _write_hass(services),
-            _FakeConnection(user_id=_USER_ID),
-            {
-                "id": 2,
-                "type": wsapi.WS_BULK_CALL_SERVICE,
-                "operations": [
-                    {"domain": "input_boolean", "service": "turn_on", "entity_ids": []},
-                    {"domain": "input_boolean", "service": "turn_on", "entity_ids": []},
-                ],
-                "wait": False,
-            },
+    async def test_every_op_carries_connection_user(
+        self, hass: HomeAssistant, component_ws: Any, hass_admin_user: MockUser
+    ) -> None:
+        _register_service(hass)
+        events = async_capture_events(hass, EVENT_CALL_SERVICE)
+        op = {"domain": _DOMAIN, "service": _SERVICE, "entity_ids": []}
+        await ws_result(
+            component_ws, WS_BULK_CALL_SERVICE, operations=[op, op], wait=False
         )
-        assert len(services.calls) == 2
-        assert [c["context"].user_id for c in services.calls] == [_USER_ID, _USER_ID]
+        ours = [e for e in events if e.data["domain"] == _DOMAIN]
+        assert [e.context.user_id for e in ours] == [hass_admin_user.id] * 2

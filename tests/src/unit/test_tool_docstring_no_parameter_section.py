@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from .test_container_param_coercion_complete import _all_registered_tools
+from ._registered_tools import all_registered_tools
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def all_tools() -> dict[str, Any]:
     previous = os.environ.get("HAMCP_ENABLE_DEV_MODE")
     os.environ["HAMCP_ENABLE_DEV_MODE"] = "true"
     try:
-        return _all_registered_tools()
+        return all_registered_tools()
     finally:
         if previous is None:
             os.environ.pop("HAMCP_ENABLE_DEV_MODE", None)

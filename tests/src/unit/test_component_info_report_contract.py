@@ -20,9 +20,17 @@ from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import component_api
 from ha_mcp.tools.tools_bug_report import BugReportTools
 
-# Autouse: importing the fixture applies it to this module's tests too.
-from .test_component_info_timezone_contract import _clear_caps_cache  # noqa: F401
 from .test_component_ws_search import FakeConfigEntry, FakeHass, wsapi
+
+
+@pytest.fixture(autouse=True)
+def _clear_caps_cache() -> Any:
+    component_api._CAPS_CACHE.clear()
+    component_api._CAPS_LOCKS.clear()
+    yield
+    component_api._CAPS_CACHE.clear()
+    component_api._CAPS_LOCKS.clear()
+
 
 DOMAIN = "ha_mcp_tools"
 SERVER_ROW = {"entry_id": "a1", "title": "HA-MCP Server", "state": "loaded"}

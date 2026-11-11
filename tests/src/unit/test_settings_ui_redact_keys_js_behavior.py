@@ -11,9 +11,9 @@ import re
 
 import pytest
 
+from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import HarnessResult, run_script
-from .test_backup_restore_consumers import settings_script as settings_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 READ_INPUT = """
   const input = document.querySelector('[name="adv:redact_app_option_keys"]');

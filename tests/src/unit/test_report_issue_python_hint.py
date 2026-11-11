@@ -4,11 +4,11 @@ the next release drops it (pip and uv would keep them on the old release)."""
 from __future__ import annotations
 
 import sys
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp import update_check
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_bug_report import BugReportTools
 
 
@@ -51,11 +51,10 @@ def test_installs_that_bring_their_python_get_none(
     assert update_check.python_upgrade_hint() is None
 
 
-async def test_report_carries_the_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_report_carries_the_hint(
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+) -> None:
     _on_python(monkeypatch, *sys.version_info[:2])
-    client = MagicMock()
-    client.get_config = AsyncMock(side_effect=Exception("down"))
-    client.call_service = AsyncMock(side_effect=Exception("down"))
-    result = await BugReportTools(client).ha_report_issue(tool_call_count=1)
+    result = await BugReportTools(core_client).ha_report_issue(tool_call_count=1)
     assert result["python_upgrade_hint"] == update_check.python_upgrade_hint()
     assert "python_upgrade_hint" in result["instructions"]

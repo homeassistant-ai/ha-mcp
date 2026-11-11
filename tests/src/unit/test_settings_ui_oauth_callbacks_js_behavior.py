@@ -9,12 +9,10 @@ from __future__ import annotations
 import json
 import re
 
-from . import test_settings_ui_js_behavior as js
 from ._js_harness import HarnessResult, run_script
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM
 
 # The rendered settings script, shared with the page's behaviour suite.
-settings_script = js.settings_script
 
 _OAUTH_DOM = MIN_DOM.replace(
     "</body>",

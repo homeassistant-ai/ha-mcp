@@ -7,8 +7,9 @@ import pytest
 
 from ha_mcp.settings_ui import _SETTINGS_HTML
 
+from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import extract_script_body, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 
 @pytest.mark.parametrize("env_disabled", [False, True])
