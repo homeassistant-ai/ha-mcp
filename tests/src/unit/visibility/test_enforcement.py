@@ -9,7 +9,6 @@ needed.
 """
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -26,17 +25,16 @@ from ha_mcp.visibility.enforcement import (
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.resolver import VisibilityDataUnavailable
 
-from ._chained_enforcement import _ChainedEnforcement, _returns
+from ._chained_enforcement import (
+    _ChainedEnforcement,
+    _returns,
+    make_context,
+    text_result,
+)
 
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
-
-
-def make_context(name, arguments=None):
-    return SimpleNamespace(
-        message=SimpleNamespace(name=name, arguments=arguments or {})
-    )
 
 
 def report_context(*, proxied=False):
@@ -46,14 +44,6 @@ def report_context(*, proxied=False):
             "ha_call_read_tool", {"name": "ha_report_issue", "arguments": arguments}
         )
     return make_context("ha_report_issue", arguments)
-
-
-def text_result(text="ok", structured=None):
-    """A ToolResult stand-in with a text content block + structured content."""
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=text)],
-        structured_content=structured,
-    )
 
 
 async def _unreached_call_next(context):

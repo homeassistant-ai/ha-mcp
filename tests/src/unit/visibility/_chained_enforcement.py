@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ha_mcp.visibility.enforcement import (
     VisibilityInboundEnforcement,
     VisibilityOutboundEnforcement,
@@ -33,3 +35,17 @@ class _ChainedEnforcement:
             return await self.outbound.on_call_tool(ctx, call_next)
 
         return await self.inbound.on_call_tool(context, _inner)
+
+
+def make_context(name, arguments=None):
+    return SimpleNamespace(
+        message=SimpleNamespace(name=name, arguments=arguments or {})
+    )
+
+
+def text_result(text="ok", structured=None):
+    """A ToolResult stand-in with a text content block + structured content."""
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        structured_content=structured,
+    )

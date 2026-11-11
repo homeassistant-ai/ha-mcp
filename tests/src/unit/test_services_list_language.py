@@ -37,17 +37,6 @@ async def german_hass(hass: HomeAssistant) -> HomeAssistant:
     return hass
 
 
-async def test_schema_leaves_an_omitted_language_unset(
-    german_hass: HomeAssistant, component_ws: Any
-) -> None:
-    """A default here would beat ``hass.config.language`` for every request."""
-    result = await ws_result(
-        component_ws, "ha_mcp_tools/services_list", domain="homeassistant"
-    )
-
-    assert result["translations"][NAME_KEY] != ENGLISH
-
-
 async def test_omitted_language_requests_the_configured_language(
     german_hass: HomeAssistant, component_ws: Any
 ) -> None:

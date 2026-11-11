@@ -11,6 +11,7 @@ component's entity search raises Core's own error.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,22 +20,18 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.visibility import resolver
-from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import save_visibility_config
 
-from ._search_tool import _build_ha_search
+from ._search_tool import _build_ha_search, _setup_visibility_disabled
 
 
 @pytest.mark.asyncio
 async def test_a_requested_name_is_explained_when_a_current_component_fails(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    tmp_path: Any,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    _setup_visibility_disabled(tmp_path, monkeypatch)
     # ``config`` serves the registry reads of the legacy path.
     assert await async_setup_component(hass, "config", {})
     hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen"})

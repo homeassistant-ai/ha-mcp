@@ -8,7 +8,7 @@ entity_ids that collide with a user's hidden set.
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,23 +21,15 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 
-from ._chained_enforcement import _ChainedEnforcement, _returns
+from ._chained_enforcement import (
+    _ChainedEnforcement,
+    _returns,
+    make_context,
+    text_result,
+)
 
 _TEXT = "action: light.turn_on\ntarget:\n  entity_id: light.kitchen"
 _GUIDE_ARGS = {"file": "references/automation-actions.md"}
-
-
-def make_context(name: str, arguments: dict[str, Any] | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        message=SimpleNamespace(name=name, arguments=arguments or {})
-    )
-
-
-def text_result(text: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=text)],
-        structured_content=None,
-    )
 
 
 @pytest.mark.parametrize(

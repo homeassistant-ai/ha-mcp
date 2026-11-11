@@ -5,7 +5,8 @@ from __future__ import annotations
 # Element ids the script binds top-level handlers on. Drift between
 # this set and what the production script reaches via
 # ``document.getElementById(...).addEventListener(...)`` is checked at
-# import time by ``_assert_min_dom_covers_handlers`` below, so a future
+# import time of ``test_settings_ui_js_behavior.py`` by its
+# ``_assert_min_dom_covers_handlers``, so a future
 # handler that lands without a matching DOM stub fails the suite
 # immediately with a clear message instead of letting tests silently
 # fail at init.

@@ -32,18 +32,6 @@ from ._settings_ui_dom import (
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def settings_script() -> str:
-    """The rendered ``<script>`` body from ``_SETTINGS_HTML``.
-
-    Module-scoped because the body is pure and large; re-extracting on
-    every test would be wasted work.
-    """
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
-
-
 def _assert_min_dom_covers_handlers() -> None:
     """Fail at collection time if the production script's top-level
     ``document.getElementById(...)`` calls drift past

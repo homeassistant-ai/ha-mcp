@@ -95,3 +95,5 @@ async def test_unrecoverable_timestamp_is_omitted_without_losing_values(
     assert "last_reset omitted" in warnings[0]
     if failure == "not_asked":
         sent.assert_not_called()
+    else:
+        sent.assert_awaited_once()
