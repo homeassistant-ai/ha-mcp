@@ -12,7 +12,6 @@ import json
 from typing import Any
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant.common import MockConfigEntry
@@ -21,7 +20,6 @@ import custom_components.ha_mcp_tools.diagnostics as diag
 import custom_components.ha_mcp_tools.embedded_server as eserver
 import custom_components.ha_mcp_tools.embedded_setup as esetup
 from custom_components.ha_mcp_tools.const import (
-    CONF_ENTRY_TYPE,
     DATA_ACCESS_ENABLED,
     DATA_ACCESS_TOKEN,
     DATA_BRINGUP_TASK,
@@ -39,7 +37,6 @@ from custom_components.ha_mcp_tools.const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
-    ENTRY_TYPE_SERVER,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_ENABLE_WEBHOOK,
@@ -53,6 +50,8 @@ from custom_components.ha_mcp_tools.const import (
     OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_NONE,
 )
+
+from ._server_entry import add_server_entry, replace_server, set_up
 
 # One distinct value per secret key, so a leak names the key that leaked.
 SECRET_DATA = {
@@ -84,7 +83,12 @@ SECRET_OPTIONS = {
 }
 
 
-def _add_entry(
+@pytest.fixture(autouse=True)
+def server(monkeypatch: pytest.MonkeyPatch) -> Any:
+    return replace_server(monkeypatch)
+
+
+async def _setup_entry(
     hass: HomeAssistant,
     data: dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
@@ -94,28 +98,25 @@ def _add_entry(
     entry = MockConfigEntry(
         domain=DOMAIN,
         entry_id=entry_id,
-        state=ConfigEntryState.LOADED,
         data=dict(data or {}),
         options=dict(options or {}),
         disabled_by=None,
     )
     entry.add_to_hass(hass)
+    assert await set_up(hass, entry)
     return entry
 
 
-def _add_server_entry(
+async def _setup_server_entry(
     hass: HomeAssistant,
     options: dict[str, Any] | None = None,
     data: dict[str, Any] | None = None,
     *,
     entry_id: str = "server-entry",
 ) -> MockConfigEntry:
-    return _add_entry(
-        hass,
-        data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, **(data or {})},
-        options=options,
-        entry_id=entry_id,
-    )
+    entry = add_server_entry(hass, data=data, options=options, entry_id=entry_id)
+    assert await set_up(hass, entry)
+    return entry
 
 
 @pytest.fixture(autouse=True)
@@ -155,13 +156,14 @@ def test_reads_every_issue_bring_up_files() -> None:
     assert set(diag._STARTUP_ISSUE_IDS) == set(esetup._ISSUE_BY_KIND.values())
 
 
-def test_unscrubbed_detail_stays_out_of_cores_issues_field(
+@pytest.mark.asyncio
+async def test_unscrubbed_detail_stays_out_of_cores_issues_field(
     hass: HomeAssistant, issue_registry: ir.IssueRegistry
 ) -> None:
     """Core's ``issues`` field carries the data and placeholders of a
     persistent issue, which would put the unscrubbed detail beside the
     scrubbed copy."""
-    entry = _add_server_entry(hass)
+    entry = await _setup_server_entry(hass)
     for kind in ("package", "start"):
         _fail_bring_up(hass, entry, kind, "detail")
 
@@ -172,8 +174,12 @@ def test_unscrubbed_detail_stays_out_of_cores_issues_field(
 async def test_no_secret_value_appears_in_the_file(hass: HomeAssistant) -> None:
     """Every stored secret is set and echoed in the startup error; none of the
     values may reach the serialized download."""
-    every_secret = [*SECRET_DATA.values(), *SECRET_OPTIONS.values()]
-    entry = _add_server_entry(hass, SECRET_OPTIONS, SECRET_DATA)
+    entry = await _setup_server_entry(hass, SECRET_OPTIONS, SECRET_DATA)
+    every_secret = [
+        value
+        for key, value in (*entry.data.items(), *entry.options.items())
+        if key in (*SECRET_DATA, *SECRET_OPTIONS) and isinstance(value, str) and value
+    ]
     _fail_bring_up(hass, entry, "start", "start failed: " + " | ".join(every_secret))
 
     result = await diag.async_get_config_entry_diagnostics(hass, entry)
@@ -192,7 +198,7 @@ async def test_padded_override_is_scrubbed_in_its_stripped_form(
 ) -> None:
     """The options keep the override as typed, but the server strips it before
     it reaches the error message."""
-    entry = _add_server_entry(hass, {OPT_PIP_SPEC: " tok-abc.tgz "})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: " tok-abc.tgz "})
     _fail_bring_up(
         hass, entry, "package", "Could not install the server ('tok-abc.tgz')"
     )
@@ -219,7 +225,7 @@ async def test_url_credentials_are_scrubbed_even_when_not_stored(
 ) -> None:
     """pip echoes index URLs from its own configuration, which never reach the
     entry. A raw ``@`` or ``?`` in the password must not leave part of it."""
-    entry = _add_server_entry(hass)
+    entry = await _setup_server_entry(hass)
     _fail_bring_up(hass, entry, "package", f"index {url} failed")
 
     result = await diag.async_get_config_entry_diagnostics(hass, entry)
@@ -234,7 +240,7 @@ async def test_secret_containing_another_is_replaced_whole(hass: HomeAssistant) 
 
     Four nested values: replacing in any order but longest first fails here.
     """
-    entry = _add_server_entry(
+    entry = await _setup_server_entry(
         hass,
         {OPT_PIP_SPEC: "x-tarball-tok-abc.tgz", OPT_SERVER_URL: "tarball-tok-abc"},
         {DATA_ACCESS_TOKEN: "tok-abc", DATA_REFRESH_TOKEN_ID: "tok"},
@@ -254,7 +260,7 @@ async def test_secret_containing_another_is_replaced_whole(hass: HomeAssistant) 
 async def test_plain_server_pin_is_not_scrubbed(hass: HomeAssistant, spec: str) -> None:
     """``last_pip_spec`` holds a plain server pin (bare or ``==``-pinned) when
     no override is set; it is not a secret, so the error keeps it."""
-    entry = _add_server_entry(hass, data={DATA_LAST_PIP_SPEC: spec})
+    entry = await _setup_server_entry(hass, data={DATA_LAST_PIP_SPEC: spec})
     _fail_bring_up(hass, entry, "package", f"Could not install {spec}")
 
     result = await diag.async_get_config_entry_diagnostics(hass, entry)
@@ -262,7 +268,6 @@ async def test_plain_server_pin_is_not_scrubbed(hass: HomeAssistant, spec: str) 
     assert result["server"]["startup_error"]["detail"] == f"Could not install {spec}"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "override",
     [
@@ -271,6 +276,7 @@ async def test_plain_server_pin_is_not_scrubbed(hass: HomeAssistant, spec: str) 
     ],
     ids=["trailing-option", "local-version-label"],
 )
+@pytest.mark.asyncio
 async def test_override_that_starts_like_a_server_pin_is_scrubbed(
     hass: HomeAssistant,
     override: str,
@@ -279,7 +285,7 @@ async def test_override_that_starts_like_a_server_pin_is_scrubbed(
     that merely starts with one carries whatever was typed after it (a local
     version label takes any text), and the install error quotes the spec
     whole."""
-    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
     _fail_bring_up(
         hass, entry, "package", f"Could not install the server ({override!r}): ..."
     )
@@ -296,7 +302,7 @@ async def test_version_too_long_to_parse_does_not_break_the_download(
     """A digit run past int()'s limit makes ``Version`` raise ValueError rather
     than InvalidVersion; the override is then scrubbed like any other."""
     override = "ha-mcp==1" + "0" * 5000
-    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
     _fail_bring_up(
         hass, entry, "package", f"Could not install the server ({override!r}): x"
     )
@@ -313,7 +319,7 @@ async def test_override_is_scrubbed_in_its_quoted_form(hass: HomeAssistant) -> N
     """The install error quotes the spec with ``repr()``, which doubles a
     backslash, so the stored value no longer appears in the text as typed."""
     override = "https://host/pkg.tgz?sig=tok\\abc"
-    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
     _fail_bring_up(
         hass, entry, "package", f"Could not install the server ({override!r}): x"
     )
@@ -331,7 +337,7 @@ async def test_issue_restored_after_restart_is_not_reported(
 ) -> None:
     """Core restores a non-persistent issue inactive and without data or
     placeholders; it describes no current attempt."""
-    entry = _add_server_entry(hass)
+    entry = await _setup_server_entry(hass)
     _fail_bring_up(hass, entry, "start", "start failed: something")
     issue = issue_registry.async_get_issue(DOMAIN, ISSUE_START_FAILED)
     assert issue is not None
@@ -356,7 +362,7 @@ async def test_server_summary_reports_configured_options(
         OPT_EXTERNAL_URL: "https://ha.example.com",
     }
 
-    entry = _add_server_entry(hass, options, {DATA_ACCESS_ENABLED: False})
+    entry = await _setup_server_entry(hass, options, {DATA_ACCESS_ENABLED: False})
 
     result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
@@ -397,7 +403,7 @@ async def test_installed_version_reads_the_installing_distribution_first(
     The default spec is no override; without a manifest pin ``ha-mcp`` is read
     first."""
     paired_spec[0] = pin
-    entry = _add_server_entry(hass, {OPT_PIP_SPEC: pip_spec})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: pip_spec})
 
     await diag.async_get_config_entry_diagnostics(hass, entry)
 
@@ -412,7 +418,7 @@ async def test_server_summary_defaults_for_unset_options(
     """Unset options read as the defaults bring-up applies; an empty pip spec
     or the default spec in the field is not an override."""
     options = {} if pip_spec is None else {OPT_PIP_SPEC: pip_spec}
-    entry = _add_server_entry(hass, options)
+    entry = await _setup_server_entry(hass, options)
 
     server = (await diag.async_get_config_entry_diagnostics(hass, entry))["server"]
     assert server is not None
@@ -445,9 +451,9 @@ async def test_running_and_bring_up_follow_the_live_objects(
         task = asyncio.create_task(asyncio.sleep(3600))
 
     try:
+        entry = await _setup_server_entry(hass)
         hass.data.setdefault(DOMAIN, {})[DATA_MANAGER] = manager
         hass.data[DOMAIN][DATA_BRINGUP_TASK] = task
-        entry = _add_server_entry(hass)
 
         server = (await diag.async_get_config_entry_diagnostics(hass, entry))["server"]
         assert server is not None
@@ -467,7 +473,7 @@ async def test_tools_only_install_lists_entries_without_server(
 ) -> None:
     """A tools entry predating the marker has no ``entry_type``; it reads as
     the tools entry, and the summary carries no server section."""
-    entry = _add_entry(hass, {})
+    entry = await _setup_entry(hass, {})
 
     result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
@@ -482,8 +488,8 @@ async def test_server_entry_listed_after_the_tools_entry_is_found(
     hass: HomeAssistant,
 ) -> None:
     """The tools entry's download describes a server entry listed after it."""
-    tools_entry = _add_entry(hass, {}, entry_id="tools-entry")
-    _add_server_entry(hass, entry_id="server-entry")
+    tools_entry = await _setup_entry(hass, {}, entry_id="tools-entry")
+    await _setup_server_entry(hass, entry_id="server-entry")
 
     result = await diag.async_get_config_entry_diagnostics(hass, tools_entry)
 

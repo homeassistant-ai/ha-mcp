@@ -48,21 +48,25 @@ def add_server_entry(
     *,
     data: dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
+    entry_id: str | None = None,
 ) -> MockConfigEntry:
     """Add a server entry that already has its webhook id and secret path."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=SERVER_ENTRY_TITLE,
-        version=HaMcpToolsConfigFlow.VERSION,
-        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
-        data={
+    kwargs: dict[str, Any] = {
+        "domain": DOMAIN,
+        "title": SERVER_ENTRY_TITLE,
+        "version": HaMcpToolsConfigFlow.VERSION,
+        "minor_version": HaMcpToolsConfigFlow.MINOR_VERSION,
+        "data": {
             CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER,
             DATA_SECRET_PATH: "/private_x",
             DATA_WEBHOOK_ID: "mcp_x",
             **(data or {}),
         },
-        options=options,
-    )
+        "options": options,
+    }
+    if entry_id is not None:
+        kwargs["entry_id"] = entry_id
+    entry = MockConfigEntry(**kwargs)
     entry.add_to_hass(hass)
     return entry
 
