@@ -660,7 +660,8 @@ class TestTraceQueryRefreshesTheHiddenSet:
             with pytest.raises(ToolError) as exc_info:
                 await mw.on_call_tool(make_context(tool, args), call_next)
 
-            assert _registry_reads(send) == 2
+            # The pre-call refresh, then the outbound scan's post-call refresh.
+            assert _registry_reads(send) == 3
 
         assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
@@ -694,3 +695,90 @@ class TestTraceQueryRefreshesTheHiddenSet:
             )
 
         assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+
+_LATE_AUTOMATION = "automation.late"
+_LATE_AUTOMATION_KEY = "1700000000001"
+
+
+async def _register_late_run(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
+    """Register the automation and store its run, as Core does mid-query."""
+    _register(hass, entity_registry, _LATE_AUTOMATION, _LATE_AUTOMATION_KEY)
+    await store_runs(
+        hass,
+        automation_run("late-run", context_id="own-late", item_id=_LATE_AUTOMATION_KEY),
+    )
+
+
+class TestItemRegisteredDuringTheQuery:
+    """The outbound scan never trusts the set it read before the tool ran."""
+
+    async def test_a_run_stored_during_the_query_is_refused(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """The tool registers the hidden key and stores its run, then the scan refuses."""
+        _enforce(set_config, _LATE_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+        ran: list[str] = []
+
+        async def _call(_context: Any) -> Any:
+            ran.append("ran")
+            await _register_late_run(hass, entity_registry)
+            return _tool_result(
+                await TraceTools(core_client).ha_get_automation_traces(
+                    domain="automation"
+                )
+            )
+
+        with pytest.raises(ToolError) as exc_info:
+            await mw.on_call_tool(
+                make_context("ha_get_automation_traces", {"domain": "automation"}),
+                _call,
+            )
+
+        assert ran == ["ran"]
+        body = _error_body(exc_info)
+        assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert "result of 'ha_get_automation_traces'" in body["error"]["message"]
+
+    async def test_a_failed_post_call_refresh_fails_closed(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A refresh that cannot be read after the call refuses the result."""
+        _enforce(set_config, _LATE_AUTOMATION)
+        mw = _ChainedEnforcement(lambda: core_client)
+
+        async def _call(_context: Any) -> Any:
+            await _register_late_run(hass, entity_registry)
+            result = _tool_result(
+                await TraceTools(core_client).ha_get_automation_traces(
+                    domain="automation"
+                )
+            )
+            monkeypatch.setattr(
+                core_client,
+                "get_states",
+                AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
+            )
+            return result
+
+        with pytest.raises(ToolError) as exc_info:
+            await mw.on_call_tool(
+                make_context("ha_get_automation_traces", {"domain": "automation"}),
+                _call,
+            )
+
+        body = _error_body(exc_info)
+        assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert "fails closed" in body["error"]["message"]
