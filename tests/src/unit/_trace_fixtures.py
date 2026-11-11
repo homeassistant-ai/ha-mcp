@@ -10,6 +10,8 @@ Core").
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.script.trace import ScriptTrace
 from homeassistant.components.trace import async_store_trace
@@ -19,40 +21,55 @@ from homeassistant.helpers.trace import TraceElement
 STORED_TRACES = 10
 
 
-def _finish(trace: AutomationTrace | ScriptTrace) -> None:
+def _finish(
+    trace: AutomationTrace | ScriptTrace,
+    changed_variables: dict[str, Any] | None = None,
+) -> None:
     """Give the run one action step, then Core's own stopped state."""
-    trace.set_trace({"action/0": [TraceElement({}, "action/0")]})
+    trace.set_trace({"action/0": [TraceElement(changed_variables or {}, "action/0")]})
     trace.finished()
 
 
 def automation_run(
-    run_id: str, *, context_id: str, parent_id: str | None = None
+    run_id: str,
+    *,
+    context_id: str,
+    parent_id: str | None = None,
+    item_id: str = "uid_1",
+    not_triggered: bool = False,
+    changed_variables: dict[str, Any] | None = None,
 ) -> AutomationTrace:
-    """One automation run Core stores for ``automation.uid_1``."""
+    """One automation run Core stores for ``automation.<item_id>``."""
     trace = AutomationTrace(
-        "uid_1",
+        item_id,
         {"alias": "Trace capture"},
         None,
         Context(id=context_id, parent_id=parent_id),
+        not_triggered=not_triggered,
     )
     trace.run_id = run_id
     trace.set_trigger_description("state change")
-    _finish(trace)
+    _finish(trace, changed_variables)
     return trace
 
 
 def script_run(
-    run_id: str, *, context_id: str, parent_id: str | None = None
+    run_id: str,
+    *,
+    context_id: str,
+    parent_id: str | None = None,
+    item_id: str = "uid_2",
+    changed_variables: dict[str, Any] | None = None,
 ) -> ScriptTrace:
-    """One script run Core stores for ``script.uid_2``."""
+    """One script run Core stores for ``script.<item_id>``."""
     trace = ScriptTrace(
-        "uid_2",
+        item_id,
         {"alias": "Trace capture"},
         None,
         Context(id=context_id, parent_id=parent_id),
     )
     trace.run_id = run_id
-    _finish(trace)
+    _finish(trace, changed_variables)
     return trace
 
 

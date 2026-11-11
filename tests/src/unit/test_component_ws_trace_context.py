@@ -5,21 +5,19 @@ context or a triggering parent context, and returns Core's extended trace dict.
 Every call goes through ``component_ws``, the WebSocket client of a real
 ``hass`` with the ``ha_mcp_tools/*`` commands registered, so the registration,
 the request schema, the admin gate and the restore step are the ones a caller
-reaches. Core's own trace objects are stored through ``async_store_trace``; a
-frozen clock orders their starts because Core stamps ``timestamp.start`` in the
-trace's constructor.
+reaches. The runs come from ``_trace_fixtures``, which builds Core's own trace
+objects and stores them through ``async_store_trace``; a frozen clock orders
+their starts because Core stamps ``timestamp.start`` in the constructor.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
 
 import pytest
 from freezegun import freeze_time
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.script.trace import ScriptTrace
-from homeassistant.components.trace import async_store_trace
 from homeassistant.components.trace.const import (
     DATA_TRACE,
     DATA_TRACE_STORE,
@@ -29,67 +27,17 @@ from homeassistant.components.websocket_api.const import (
     ERR_INVALID_FORMAT,
     ERR_UNAUTHORIZED,
 )
-from homeassistant.core import Context, HomeAssistant
-from homeassistant.helpers.trace import TraceElement
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from ._component_core import ws_call, ws_result
+from ._trace_fixtures import automation_run, script_run, store_runs
 
 _COMMAND = "ha_mcp_tools/trace_context"
 _FROZEN_START = "2026-11-08T16:00:00+00:00"
 
 type Trace = AutomationTrace | ScriptTrace
-
-
-def _finish(trace: Trace, changed_variables: dict[str, Any] | None) -> None:
-    """Give the run one trigger step, then Core's own stopped state."""
-    trace.set_trace({"trigger/0": [TraceElement(changed_variables, "trigger/0")]})
-    trace.finished()
-
-
-def _automation(
-    run_id: str,
-    *,
-    item_id: str = "uid_1",
-    context_id: str,
-    parent_id: str | None = None,
-    not_triggered: bool = False,
-    changed_variables: dict[str, Any] | None = None,
-) -> AutomationTrace:
-    """One automation run, built as Core's own trace object."""
-    trace = AutomationTrace(
-        item_id,
-        {},
-        None,
-        Context(id=context_id, parent_id=parent_id),
-        not_triggered=not_triggered,
-    )
-    trace.run_id = run_id
-    _finish(trace, changed_variables)
-    return trace
-
-
-def _script(
-    run_id: str,
-    *,
-    item_id: str = "uid_2",
-    context_id: str,
-    parent_id: str | None = None,
-    changed_variables: dict[str, Any] | None = None,
-) -> ScriptTrace:
-    """One script run, built as Core's own trace object."""
-    trace = ScriptTrace(item_id, {}, None, Context(id=context_id, parent_id=parent_id))
-    trace.run_id = run_id
-    _finish(trace, changed_variables)
-    return trace
-
-
-def _store(hass: HomeAssistant, key: str, *traces: Trace) -> None:
-    """Store traces through Core's real trace helper keyed by ``key``."""
-    for trace in traces:
-        trace.key = key
-        async_store_trace(hass, trace, stored_traces=5)
 
 
 @pytest.fixture
@@ -131,7 +79,7 @@ async def test_a_non_admin_caller_is_refused(
     component_ws_read_only: MockHAClientWebSocket,
 ) -> None:
     """The lookup is admin-only; the same message answers for an admin."""
-    _store(hass, "automation.uid_1", _automation("r1", context_id="ctx-1"))
+    await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
     refused = await ws_call(component_ws_read_only, _COMMAND, context_id="ctx-1")
 
@@ -146,7 +94,7 @@ async def test_own_context_resolves_to_the_run(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """A run's own context is a ``trace`` match; a lone match lists no others."""
-    _store(hass, "automation.uid_1", _automation("r1", context_id="ctx-1"))
+    await store_runs(hass, automation_run("r1", context_id="ctx-1"))
 
     result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
@@ -167,19 +115,18 @@ async def test_real_run_beats_a_newer_not_triggered_diagnostic(
 ) -> None:
     """A trigger that did not fire never displaces the run that did."""
     with freeze_time(_FROZEN_START) as clock:
-        older = _automation("older", context_id="own-older", parent_id="parent-1")
+        older = automation_run("older", context_id="own-older", parent_id="parent-1")
         clock.tick(timedelta(minutes=1))
-        newer = _automation("newer", context_id="own-newer", parent_id="parent-1")
+        newer = automation_run("newer", context_id="own-newer", parent_id="parent-1")
         clock.tick(timedelta(minutes=1))
-        diagnostic = _automation(
+        diagnostic = automation_run(
             "diag",
             item_id="uid_2",
             context_id="own-diag",
             parent_id="parent-1",
             not_triggered=True,
         )
-    _store(hass, "automation.uid_1", older, newer)
-    _store(hass, "automation.uid_2", diagnostic)
+    await store_runs(hass, older, newer, diagnostic)
 
     result = await ws_result(component_ws, _COMMAND, context_id="parent-1")
 
@@ -217,24 +164,15 @@ async def test_each_selector_narrows_the_scan(
     expected_item_id: str,
 ) -> None:
     """Either selector alone leaves only the buckets it names in the scan."""
-    _store(
+    await store_runs(
         hass,
-        "automation.uid_a",
-        _automation(
+        automation_run(
             "auto-a", item_id="uid_a", context_id="own-auto-a", parent_id="parent-1"
         ),
-    )
-    _store(
-        hass,
-        "automation.uid_b",
-        _automation(
+        automation_run(
             "auto-b", item_id="uid_b", context_id="own-auto-b", parent_id="parent-1"
         ),
-    )
-    _store(
-        hass,
-        "script.uid_2",
-        _script("script", context_id="own-script", parent_id="parent-1"),
+        script_run("script", context_id="own-script", parent_id="parent-1"),
     )
 
     result = await ws_result(component_ws, _COMMAND, context_id="parent-1", **selector)
@@ -250,10 +188,9 @@ async def test_a_missed_context_reports_the_scan_and_no_match(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """A context no stored run carries is a miss that still counts the scan."""
-    _store(
+    await store_runs(
         hass,
-        "automation.uid_1",
-        _automation("r1", context_id="own-1", parent_id="parent-x"),
+        automation_run("r1", context_id="own-1", parent_id="parent-x"),
     )
 
     result = await ws_result(component_ws, _COMMAND, context_id="missing")
@@ -278,11 +215,10 @@ async def test_command_reports_unavailable_without_the_trace_store(
 async def test_extended_trace_keeps_cores_json_types(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """A timedelta in a trigger's ``for`` survives, as Core's trace view sends it."""
-    _store(
+    """A timedelta in a step's variables survives, as Core's trace view sends it."""
+    await store_runs(
         hass,
-        "automation.uid_1",
-        _automation(
+        automation_run(
             "r1",
             context_id="ctx-1",
             changed_variables={"trigger": {"for": timedelta(minutes=5)}},
@@ -291,8 +227,8 @@ async def test_extended_trace_keeps_cores_json_types(
 
     result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
-    trigger = result["trace"]["trace"]["trigger/0"][0]
-    assert trigger["changed_variables"]["trigger"]["for"]["total_seconds"] == 300.0
+    step = result["trace"]["trace"]["action/0"][0]
+    assert step["changed_variables"]["trigger"]["for"]["total_seconds"] == 300.0
 
 
 @pytest.mark.usefixtures("trace_store")
@@ -300,8 +236,8 @@ async def test_saved_traces_are_restored_before_the_match(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """A restart leaves traces on disk only; the command restores them first."""
-    saved = _automation("r1", context_id="ctx-1")
-    _store(hass, "automation.uid_1", saved)
+    saved = automation_run("r1", context_id="ctx-1")
+    await store_runs(hass, saved)
     store = hass.data[DATA_TRACE_STORE]
     await store.async_save(
         {saved.key: list(hass.data[DATA_TRACE][saved.key].all_traces())}
@@ -324,24 +260,22 @@ async def test_the_newest_run_wins_and_the_rest_are_listed(
     """Selection is by start: an older own context loses to a newer parent run."""
     shared = "shared-context"
     with freeze_time(_FROZEN_START) as clock:
-        own = _automation("own-match", item_id="uid_a", context_id=shared)
+        own = automation_run("own-match", item_id="uid_a", context_id=shared)
         clock.tick(timedelta(minutes=1))
-        older_parent = _automation(
+        older_parent = automation_run(
             "older-parent",
             item_id="uid_b",
             context_id="own-older-parent",
             parent_id=shared,
         )
         clock.tick(timedelta(minutes=1))
-        newest = _script(
+        newest = script_run(
             "newest-script",
             item_id="uid_c",
             context_id="own-newest-script",
             parent_id=shared,
         )
-    _store(hass, "automation.uid_a", own)
-    _store(hass, "automation.uid_b", older_parent)
-    _store(hass, "script.uid_c", newest)
+    await store_runs(hass, own, older_parent, newest)
 
     result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
@@ -412,20 +346,20 @@ async def test_ties_break_own_then_automation_then_item_id(
             parent_id = shared if is_parent else None
             trace: Trace
             if domain == "automation":
-                trace = _automation(
+                trace = automation_run(
                     run_id,
                     item_id=item_id,
                     context_id=context_id,
                     parent_id=parent_id,
                 )
             else:
-                trace = _script(
+                trace = script_run(
                     run_id,
                     item_id=item_id,
                     context_id=context_id,
                     parent_id=parent_id,
                 )
-            _store(hass, trace.key, trace)
+            await store_runs(hass, trace)
 
     result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
