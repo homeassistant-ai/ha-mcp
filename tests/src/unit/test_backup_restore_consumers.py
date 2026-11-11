@@ -21,7 +21,7 @@ from ha_mcp.backup_manager import BackupRestoreError, MandatoryBackupError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.settings_ui import _handlers_backups as ui
 
-from ._js_harness import extract_script_body, run_script
+from ._js_harness import run_script
 from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_backup_manager import _mk_handler, _mk_manager
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
@@ -251,13 +251,6 @@ async def test_settings_diff_uses_stable_snapshot_comparison(monkeypatch):
     assert "replacement live" not in payload["diff"]
     manager.snapshot_comparison.assert_awaited_once_with(NAME)
     manager.read_snapshot.assert_not_called()
-
-
-@pytest.fixture(scope="module")
-def settings_script():
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
 
 
 def run_restore(settings_script, reply, name=NAME):

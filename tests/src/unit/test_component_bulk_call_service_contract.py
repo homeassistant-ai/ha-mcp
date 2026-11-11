@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.tools import component_api, device_control
 from ha_mcp.tools.device_control import DeviceControlTools
@@ -34,7 +35,7 @@ from .test_component_ws_phase2_async import (
 from .test_component_ws_search import FakeState
 
 
-def _real_bulk_ws(hass: Any) -> AsyncMock:
+def _real_bulk_ws(hass: HomeAssistant) -> AsyncMock:
     """A WS mock whose ``bulk_call_service`` frame is served by the REAL batch prep.
 
     ``info`` returns the real ``_do_info()`` (so the caps probe sees

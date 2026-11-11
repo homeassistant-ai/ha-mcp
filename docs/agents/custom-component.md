@@ -75,6 +75,11 @@ older component. The capability handshake covers it: the server asks the
 component only for what it advertises, and says so in its answer when a
 capability is missing.
 
+Running an outdated component is not supported. When a capability is missing
+the server tells the user to update the component (or to install it when none
+answered) and returns what it has without it. Do not rebuild the missing
+behaviour on the server side to keep an older component working.
+
 A component newer than the external server that calls it is unlikely and does
 not shape a design. Do not keep a server-side fallback, a second code path or a
 frozen schema for it. An old command may stay registered while it costs

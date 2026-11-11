@@ -306,7 +306,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       if: success() || failure()
@@ -410,6 +410,9 @@ jobs:
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
+        # The unit and app tests, against Core's real types (tests/AGENTS.md).
+        # The script runs mypy and keeps the list of exempt modules exact.
+        uv run python scripts/mypy_tests_exact.py || status=1
         exit "$status"
 
     # The ratchet scripts only lower their baselines, but the baselines are
@@ -441,6 +444,8 @@ jobs:
         status=0
         uv run python scripts/module_size_ratchet.py --base "$base_sha" || status=1
         uv run python scripts/duplicate_code_ratchet.py --base "$base_sha" || status=1
+        # No test is exempted from the real-Core checks (tests/AGENTS.md).
+        uv run python scripts/stand_in_lists_ratchet.py --base "$base_sha" || status=1
         exit "$status"
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
@@ -490,7 +495,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.6-python3.14-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
@@ -619,7 +624,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -710,7 +715,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -818,7 +823,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -910,7 +915,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1025,7 +1030,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1105,7 +1110,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.4"
+        version: "0.13.7"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}

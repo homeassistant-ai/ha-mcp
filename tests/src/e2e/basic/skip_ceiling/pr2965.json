@@ -1,0 +1,7 @@
+{
+  "reason": "#2965 adds one requires_component_surface test in tests/src/e2e/tools/test_search_composed_name.py: ha_search finds an entity by the name Core composes for it. Only the component can ask Core for that name, so the test skips at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

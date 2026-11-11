@@ -1,0 +1,10 @@
+# Vendored and fixture trees the CodeQL extractors do not walk. PATHS_IGNORE in
+# scripts/codeql_quality_gate.py lists the same trees;
+# tests/src/unit/test_codeql_workflow_shape.py keeps the two equal.
+paths-ignore:
+  - tests/initial_test_state
+  - src/ha_mcp/_vendor/websockets
+  - src/ha_mcp/_vendor/fastmcp
+  - src/ha_mcp/_vendor/mcp
+  - src/ha_mcp/_vendor/mcp_types
+  - src/ha_mcp/resources/skills-vendor

@@ -33,8 +33,7 @@
   ],
   "0cd154771557": [
     "tests/src/unit/visibility/test_search_filter.py::_DomainClient.__init__",
-    "tests/src/unit/visibility/test_search_filter.py::_FakeClient.__init__",
-    "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient.__init__"
+    "tests/src/unit/visibility/test_search_filter.py::_FakeClient.__init__"
   ],
   "0de4d0fa03a6": [
     "tests/src/unit/test_usage_logger.py::TestLogToolUsageDecorator.reset_global_logger",
@@ -145,12 +144,6 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::normalized_origin",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::normalized_origin"
   ],
-  "30487fa10c15": [
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigDashboards.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPackagesGate.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPathTraversal.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigSingleKey.hass"
-  ],
   "308b86361f5c": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetScriptAcceptsEntityIdForm.tools",
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetScriptMissingSurfacesAvailableIds.tools",
@@ -162,7 +155,7 @@
     "tests/src/unit/test_wait_parameter.py::TestScriptWaitParameter.tools"
   ],
   "30c7029e25a3": [
-    "tests/src/unit/test_ha_overview_component_routing.py::_setup_visibility_disabled",
+    "tests/src/unit/_search_tool.py::_setup_visibility_disabled",
     "tests/src/unit/test_ha_search_component_routing.py::_setup_visibility_disabled",
     "tests/src/unit/test_ha_search_visibility_component_routing.py::_write_disabled"
   ],
@@ -219,7 +212,6 @@
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::PKCECodeStore.consume_code"
   ],
   "3b976235bd59": [
-    "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient.get_config",
     "tests/src/unit/test_ha_search_request_count.py::CountingClient.get_config",
     "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient.get_config"
   ],
@@ -293,7 +285,7 @@
     "tests/src/unit/test_component_bulk_call_service_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_call_service_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_entity_lookup_contract.py::_clear_caps_cache",
-    "tests/src/unit/test_component_info_timezone_contract.py::_clear_caps_cache",
+    "tests/src/unit/test_component_info_report_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_server_entry_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_services_list_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_system_snapshot_contract.py::_clear_caps_cache",
@@ -498,10 +490,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::rewrite_token_response_body",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::rewrite_token_response_body"
   ],
-  "88101e3b8f51": [
-    "tests/src/unit/test_backup_restore_consumers.py::settings_script",
-    "tests/src/unit/test_settings_ui_js_behavior.py::settings_script"
-  ],
   "8878c3561656": [
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersIdempotent.teardown_method",
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersReplacesStaleGeneration.teardown_method"
@@ -537,17 +525,6 @@
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateSingleEntity.mock_client",
     "tests/src/unit/test_tools_get_states.py::TestHaGetStates.mock_client"
   ],
-  "9061fe948c8f": [
-    "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient.send_websocket_message",
-    "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient.send_websocket_message"
-  ],
-  "90d0c53c21fb": [
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigDashboards.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPackagesGate.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPathTraversal.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigSingleKey.call_factory",
-    "tests/src/unit/test_yaml_whole_file_replace.py::TestReplaceFileAction.call_factory"
-  ],
   "914a91fa6556": [
     "tests/src/unit/test_component_call_service_contract.py::_build_call_service",
     "tests/src/unit/test_ha_call_service_component_routing.py::_build_call_service"
@@ -560,17 +537,9 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::mint_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::mint_client_id"
   ],
-  "942bfd4c1bbe": [
-    "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient.__init__",
-    "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient.__init__"
-  ],
   "96cf93b4d3bc": [
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateSingleEntity.get_state_tool",
     "tests/src/unit/test_tools_get_states.py::TestHaGetStates.get_states_tool"
-  ],
-  "97fd055ca278": [
-    "tests/src/unit/test_tool_docstring_no_parameter_section.py::all_tools",
-    "tests/src/unit/test_tool_schema_exclusive_bounds.py::all_tools"
   ],
   "98ab1e1c8977": [
     "tests/addon/test_webhook_proxy.py::TestHaAuthMode.hass",
@@ -614,8 +583,7 @@
   ],
   "a02c76f74c31": [
     "tests/src/unit/visibility/test_search_filter.py::_DomainClient.send_websocket_message",
-    "tests/src/unit/visibility/test_search_filter.py::_FakeClient.send_websocket_message",
-    "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient.send_websocket_message"
+    "tests/src/unit/visibility/test_search_filter.py::_FakeClient.send_websocket_message"
   ],
   "a0a761eca63b": [
     "tests/src/unit/test_tools_calendar_rrule.py::_make_mock_client",
@@ -722,10 +690,6 @@
     "tests/src/unit/test_tools_areas.py::TestSetAreaLabels.tools",
     "tests/src/unit/test_tools_areas.py::TestSetAreaOrFloorCrossKindRejection.tools"
   ],
-  "bad30826d471": [
-    "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient.__init__",
-    "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient.__init__"
-  ],
   "bcd3703b7111": [
     "tests/src/unit/test_deep_search_error_handling.py::TestDeepSearchErrorHandling.ha_search_tool",
     "tests/src/unit/test_search_fields_projection.py::TestHaSearchEntitiesFieldsProjection.search_tool",
@@ -827,8 +791,7 @@
   ],
   "d2b361879c4a": [
     "tests/src/unit/visibility/test_search_filter.py::_DomainClient",
-    "tests/src/unit/visibility/test_search_filter.py::_FakeClient",
-    "tests/src/unit/visibility/test_warnings_surface.py::_SearchClient"
+    "tests/src/unit/visibility/test_search_filter.py::_FakeClient"
   ],
   "d41845b97bca": [
     "custom_components/ha_mcp_tools/websocket_api/search.py::_normalize_member_entity_ids",
@@ -849,10 +812,6 @@
   "d6a0cca64986": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::LegacyOAuthProvider.authenticate_client",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::OAuthProvider.authenticate_client"
-  ],
-  "d8d77a6c1ecf": [
-    "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient",
-    "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient"
   ],
   "d93ceddc57f3": [
     "src/ha_mcp/transforms/lite_docstrings.py::LiteDocstringsTransform.get_tool",
@@ -940,6 +899,10 @@
     "tests/src/unit/test_component_server_entry_update_contract.py::_RecordingConfigEntries.__init__",
     "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_RecordingConfigEntries.__init__"
   ],
+  "e674a89fecb2": [
+    "tests/src/unit/test_tool_docstring_no_parameter_section.py::all_tools",
+    "tests/src/unit/test_tool_schema_exclusive_bounds.py::all_tools"
+  ],
   "e70fef34572b": [
     "tests/src/unit/test_action_and_collision.py::TestBug11RenameOnUpdateIsAllowed.test_only_helper_id_works_update_path",
     "tests/src/unit/test_action_discriminator.py::TestImplicitDiscriminatorBackCompat.test_only_helper_id_updates"
@@ -971,10 +934,6 @@
     "tests/src/unit/test_ha_dev_manage_server_component_routing.py::UpdateClient.abort_options_flow",
     "tests/src/unit/test_ha_dev_server_entry_component_routing.py::RoutingClient.abort_options_flow"
   ],
-  "f938061f65f7": [
-    "tests/src/unit/test_component_info_timezone_contract.py::RoutingClient",
-    "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient"
-  ],
   "fb4c92e7dc7f": [
     "tests/src/unit/test_ws_connect_auth_classification.py::manager",
     "tests/src/unit/test_ws_pool_loop_change_1994.py::manager",
@@ -983,9 +942,5 @@
   "fbca60b1fbf8": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::EnvelopeState",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::EnvelopeState"
-  ],
-  "fea66c876345": [
-    "tests/src/unit/test_rest_client_reconfigure_registry.py::client",
-    "tests/src/unit/test_rest_client_ws_transport_failure.py::client"
   ]
 }

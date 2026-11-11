@@ -1,0 +1,348 @@
+# A unit test that replaces the Home Assistant client and types in what Core
+# "answered" asserts against a guess of Core (#2752). The stand-in rules from
+# #3009 see a faked Core object; this one sees the faked reply. Use the
+# `core_client` fixture (tests/src/unit/_core_client.py): the server's own
+# client connected to the real `hass`.
+id: no-hand-made-core-replies
+language: python
+rule:
+  all:
+    - any:
+        # client.send_websocket_message = AsyncMock(...), and the
+        # .return_value / .side_effect forms.
+        - kind: assignment
+          regex: '^[^=]*\.(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)(\.(return_value|side_effect))?\s*(:[^=]+)?=[^=]'
+        # A fake client written as class attributes: get_states = AsyncMock(...)
+        - kind: assignment
+          regex: '^(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\s*(:[^=]+)?=\s*((Async|Magic|NonCallable|NonCallableMagic)?Mock|PropertyMock|staticmethod|lambda\b)'
+        # MagicMock(get_states=AsyncMock(...))
+        - kind: keyword_argument
+          regex: '^(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\s*='
+        # A hand-written client: async def send_websocket_message(self, ...)
+        - kind: function_definition
+          regex: '^(async\s+)?def\s+(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\s*\(\s*self\b'
+        # patch.object(client, "get_states", ...), monkeypatch.setattr(client,
+        # "get_states", ...), setattr(...), patch("pkg.Client.get_states"),
+        # configure_mock(...): the method, or where the client comes from, is
+        # named in a string.
+        - kind: call
+          regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr|configure_mock)\('
+          has:
+            kind: string
+            regex: '^\w*["'']([\w.]*\.)?((abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)|get_websocket_client|websocket_manager(\.\w+)?|httpx_client|HomeAssistantClient(\.\w+)?|HomeAssistantWebSocketClient(\.\w+)?)(\.(return_value|side_effect))?["'']$'
+            stopBy: end
+        # MagicMock(**{"get_states.return_value": [...]})
+        - kind: string
+          regex: '^\w*["'']([\w.]*\.)?(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\.(return_value|side_effect)["'']$'
+        # patch.object(websocket_manager, "get_client", ...): the place every
+        # tool gets its WebSocket client from.
+        - kind: call
+          regex: '^(\w+\.)*(patch\.object|setattr)\(\s*[\w.]*websocket_manager\s*,\s*["'']get_client["'']'
+        # The transport under the client: client.httpx_client = ...
+        - kind: assignment
+          regex: '^[^=]*\.httpx_client(\.\w+)*\s*(:[^=]+)?=[^=]'
+    # One replacement stays: making the client give no answer at all, which
+    # Core cannot be made to do in a unit test. The statement sets a
+    # side_effect that raises a transport error and nothing else. An error
+    # reply (HomeAssistantAPIError, HomeAssistantCommandError) is Core's answer
+    # and comes from Core.
+    # A spy stays too: wraps= on a client method calls through to it, so the reply is
+    # still Core's and the test can count or forbid a call. A return_value or
+    # side_effect beside it would answer instead of the real method.
+    - not:
+        any:
+          - all:
+              - regex: '\bwraps\s*=\s*\w+(\.\w+)*\.(abort_config_flow|abort_config_subentry_flow|abort_options_flow|call_service|check_config|delete_automation_config|delete_config_entry|delete_config_subentry|delete_scene_config|delete_script_config|fire_event|get_addon_logs|get_automation_config|get_config|get_config_entry|get_entity_state|get_error_log|get_logbook|get_scene_config|get_script_config|get_services|get_states|guarded_request|list_config_entries|list_config_subentries|list_device_registry|list_entity_registry|render_template|resolve_scene_id|send_websocket_message|start_config_flow|start_config_subentry_flow|start_options_flow|start_reconfigure_flow|submit_config_flow_step|submit_config_subentry_flow_step|submit_options_flow_step|test_connection|token_is_admin|upsert_automation_config|upsert_scene_config|upsert_script_config|_request|_raw_request|send_command|send_command_with_event|send_json_message|subscribe_command|subscribe_events|unsubscribe_events|unsubscribe_command|release_subscription)\s*[,)]'
+              - not:
+                  regex: '\b(return_value|side_effect)\b'
+          - regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+ignores:
+  - "tests/src/unit/_backup_snapshot_fakes.py"
+  - "tests/src/unit/_component_routing_helpers.py"
+  - "tests/src/unit/_error_log_test_helpers.py"
+  - "tests/src/unit/_logbook_fallback.py"
+  - "tests/src/unit/conftest.py"
+  - "tests/src/unit/policy/test_decisions.py"
+  - "tests/src/unit/policy/test_events.py"
+  - "tests/src/unit/policy/test_middleware.py"
+  - "tests/src/unit/policy/test_schema_handlers.py"
+  - "tests/src/unit/test_action_and_collision.py"
+  - "tests/src/unit/test_action_discriminator.py"
+  - "tests/src/unit/test_alias_fetch_chunking.py"
+  - "tests/src/unit/test_area_filter_search.py"
+  - "tests/src/unit/test_automation_enabled.py"
+  - "tests/src/unit/test_automation_errors.py"
+  - "tests/src/unit/test_automation_write_target.py"
+  - "tests/src/unit/test_backup_access.py"
+  - "tests/src/unit/test_backup_auth_refusal.py"
+  - "tests/src/unit/test_backup_calendar_restore.py"
+  - "tests/src/unit/test_backup_dashboards.py"
+  - "tests/src/unit/test_backup_delete.py"
+  - "tests/src/unit/test_backup_manager.py"
+  - "tests/src/unit/test_backup_restore_consumers.py"
+  - "tests/src/unit/test_backup_snapshot.py"
+  - "tests/src/unit/test_backup_snapshot_restore.py"
+  - "tests/src/unit/test_backup_target_identity.py"
+  - "tests/src/unit/test_blueprint_sources.py"
+  - "tests/src/unit/test_bm25_search.py"
+  - "tests/src/unit/test_bug_report_sources.py"
+  - "tests/src/unit/test_bulk_device_control.py"
+  - "tests/src/unit/test_bulk_selector.py"
+  - "tests/src/unit/test_call_service_return_response.py"
+  - "tests/src/unit/test_call_service_snapshot_guard.py"
+  - "tests/src/unit/test_call_service_ws_command.py"
+  - "tests/src/unit/test_caller_token_auth.py"
+  - "tests/src/unit/test_card_definitions.py"
+  - "tests/src/unit/test_card_review_regressions.py"
+  - "tests/src/unit/test_component_api.py"
+  - "tests/src/unit/test_component_bulk_call_service_contract.py"
+  - "tests/src/unit/test_component_call_service_contract.py"
+  - "tests/src/unit/test_component_config_entries.py"
+  - "tests/src/unit/test_component_config_entries_contract.py"
+  - "tests/src/unit/test_component_dashboards_contract.py"
+  - "tests/src/unit/test_component_entity_lookup_contract.py"
+  - "tests/src/unit/test_component_helper_collections.py"
+  - "tests/src/unit/test_component_info_report_contract.py"
+  - "tests/src/unit/test_component_readapi_contract.py"
+  - "tests/src/unit/test_component_registries_contract.py"
+  - "tests/src/unit/test_component_registry_lookup_contract.py"
+  - "tests/src/unit/test_component_search_schema.py"
+  - "tests/src/unit/test_component_search_visibility_contract.py"
+  - "tests/src/unit/test_component_server_entry_contract.py"
+  - "tests/src/unit/test_component_services_list_contract.py"
+  - "tests/src/unit/test_component_system_snapshot_contract.py"
+  - "tests/src/unit/test_component_todo_items.py"
+  - "tests/src/unit/test_component_ws_config_references.py"
+  - "tests/src/unit/test_config_entry_reload_watch.py"
+  - "tests/src/unit/test_config_get_component_routing.py"
+  - "tests/src/unit/test_config_get_dashboard_search_error.py"
+  - "tests/src/unit/test_config_subentries_folded.py"
+  - "tests/src/unit/test_config_subentry_backup.py"
+  - "tests/src/unit/test_context_injection.py"
+  - "tests/src/unit/test_core_contract.py"
+  - "tests/src/unit/test_creation_snapshot_flow.py"
+  - "tests/src/unit/test_dashboard_edit_routing.py"
+  - "tests/src/unit/test_dashboard_get_no_config_routing.py"
+  - "tests/src/unit/test_dashboard_screenshot.py"
+  - "tests/src/unit/test_dashboard_screenshot_paths.py"
+  - "tests/src/unit/test_dashboard_screenshot_theme_check.py"
+  - "tests/src/unit/test_dashboard_screenshot_theme_guard.py"
+  - "tests/src/unit/test_dashboard_write_not_sent.py"
+  - "tests/src/unit/test_deep_search_error_handling.py"
+  - "tests/src/unit/test_deep_search_helper_dashboard_partial.py"
+  - "tests/src/unit/test_deep_search_helper_rename_1794.py"
+  - "tests/src/unit/test_deep_search_tier3_parallel.py"
+  - "tests/src/unit/test_device_enrichment.py"
+  - "tests/src/unit/test_entity_backup.py"
+  - "tests/src/unit/test_entity_expose_changed.py"
+  - "tests/src/unit/test_entity_registration.py"
+  - "tests/src/unit/test_entity_use_device_name.py"
+  - "tests/src/unit/test_error_code_consistency_1297.py"
+  - "tests/src/unit/test_fetch_helper_flow_info.py"
+  - "tests/src/unit/test_fetch_themes.py"
+  - "tests/src/unit/test_flow_error_parsing.py"
+  - "tests/src/unit/test_flow_helper_backup.py"
+  - "tests/src/unit/test_flow_helper_lookup.py"
+  - "tests/src/unit/test_flow_multistep.py"
+  - "tests/src/unit/test_flow_name_injection.py"
+  - "tests/src/unit/test_flow_options_preserve.py"
+  - "tests/src/unit/test_flow_progress.py"
+  - "tests/src/unit/test_flow_snapshot_restore.py"
+  - "tests/src/unit/test_flow_translations.py"
+  - "tests/src/unit/test_get_dashboard_view_scoping.py"
+  - "tests/src/unit/test_graceful_shutdown.py"
+  - "tests/src/unit/test_ha_bulk_control_component_routing.py"
+  - "tests/src/unit/test_ha_bulk_control_selector.py"
+  - "tests/src/unit/test_ha_call_event.py"
+  - "tests/src/unit/test_ha_call_service_component_routing.py"
+  - "tests/src/unit/test_ha_config_automation_component_routing.py"
+  - "tests/src/unit/test_ha_config_list_helpers_component_routing.py"
+  - "tests/src/unit/test_ha_config_resolvers_component_routing.py"
+  - "tests/src/unit/test_ha_dashboards_component_routing.py"
+  - "tests/src/unit/test_ha_dev_manage_server_component_contract.py"
+  - "tests/src/unit/test_ha_dev_manage_server_component_routing.py"
+  - "tests/src/unit/test_ha_dev_server_entry_component_routing.py"
+  - "tests/src/unit/test_ha_floors_areas_component_routing.py"
+  - "tests/src/unit/test_ha_get_device_component_routing.py"
+  - "tests/src/unit/test_ha_get_entity_component_routing.py"
+  - "tests/src/unit/test_ha_get_entity_exposure_component_routing.py"
+  - "tests/src/unit/test_ha_get_integration_component_routing.py"
+  - "tests/src/unit/test_ha_get_state_component_routing.py"
+  - "tests/src/unit/test_ha_get_zone_component_routing.py"
+  - "tests/src/unit/test_ha_list_services_component_routing.py"
+  - "tests/src/unit/test_ha_manage_blueprints_actions.py"
+  - "tests/src/unit/test_ha_manage_blueprints_component_routing.py"
+  - "tests/src/unit/test_ha_overview_component_routing.py"
+  - "tests/src/unit/test_ha_remove_device_component_routing.py"
+  - "tests/src/unit/test_ha_remove_helpers_component_routing.py"
+  - "tests/src/unit/test_ha_restart_embedded.py"
+  - "tests/src/unit/test_ha_search_component_routing.py"
+  - "tests/src/unit/test_ha_search_dashboard_leg_failure.py"
+  - "tests/src/unit/test_ha_search_dashboard_split.py"
+  - "tests/src/unit/test_ha_search_request_count.py"
+  - "tests/src/unit/test_ha_system_health_component_routing.py"
+  - "tests/src/unit/test_ha_timezone_component_routing.py"
+  - "tests/src/unit/test_ha_write_file_edits.py"
+  - "tests/src/unit/test_hacs_actions.py"
+  - "tests/src/unit/test_hacs_auto_refresh.py"
+  - "tests/src/unit/test_hacs_marketplace.py"
+  - "tests/src/unit/test_hacs_own_repository.py"
+  - "tests/src/unit/test_hacs_repo_registration.py"
+  - "tests/src/unit/test_helper_config_fold.py"
+  - "tests/src/unit/test_helper_core_payload.py"
+  - "tests/src/unit/test_helper_describe.py"
+  - "tests/src/unit/test_helper_field_persistence.py"
+  - "tests/src/unit/test_helper_flows.py"
+  - "tests/src/unit/test_helper_input_validation.py"
+  - "tests/src/unit/test_helper_kwarg_aliases.py"
+  - "tests/src/unit/test_helper_list_registry_join.py"
+  - "tests/src/unit/test_helper_param_rejection.py"
+  - "tests/src/unit/test_helper_registry_id_validation.py"
+  - "tests/src/unit/test_helper_response_shape.py"
+  - "tests/src/unit/test_helper_schema_inline.py"
+  - "tests/src/unit/test_helper_update_persistence.py"
+  - "tests/src/unit/test_history_pagination.py"
+  - "tests/src/unit/test_history_summary.py"
+  - "tests/src/unit/test_identifier_validation_family.py"
+  - "tests/src/unit/test_integration_flow_steps.py"
+  - "tests/src/unit/test_integration_log_level.py"
+  - "tests/src/unit/test_integration_reconfigure.py"
+  - "tests/src/unit/test_integration_schema.py"
+  - "tests/src/unit/test_integration_ws_commands.py"
+  - "tests/src/unit/test_label_area_assignment.py"
+  - "tests/src/unit/test_label_set_discriminator_1860.py"
+  - "tests/src/unit/test_list_services_fields_projection.py"
+  - "tests/src/unit/test_list_tools_pagination.py"
+  - "tests/src/unit/test_manage_theme.py"
+  - "tests/src/unit/test_mandatory_tool_warnings.py"
+  - "tests/src/unit/test_oauth.py"
+  - "tests/src/unit/test_operation_register_before_dispatch.py"
+  - "tests/src/unit/test_options_restore_review.py"
+  - "tests/src/unit/test_overview_repairs.py"
+  - "tests/src/unit/test_overview_system_info.py"
+  - "tests/src/unit/test_performance_parallelization.py"
+  - "tests/src/unit/test_radio_management.py"
+  - "tests/src/unit/test_radio_resolve_entry_id_component_routing.py"
+  - "tests/src/unit/test_radio_thread.py"
+  - "tests/src/unit/test_radio_update_entity_component_routing.py"
+  - "tests/src/unit/test_radio_zigbee.py"
+  - "tests/src/unit/test_radio_zigbee_component_routing.py"
+  - "tests/src/unit/test_radio_zwave.py"
+  - "tests/src/unit/test_radio_zwave_parameters.py"
+  - "tests/src/unit/test_recorder_native_contract.py"
+  - "tests/src/unit/test_recorder_review_regressions.py"
+  - "tests/src/unit/test_redaction.py"
+  - "tests/src/unit/test_refuse_component_entries.py"
+  - "tests/src/unit/test_registry_label_concurrency.py"
+  - "tests/src/unit/test_registry_name_clearing.py"
+  - "tests/src/unit/test_remove_entity_error_code.py"
+  - "tests/src/unit/test_remove_entity_storage_helper.py"
+  - "tests/src/unit/test_remove_helper_by_entity.py"
+  - "tests/src/unit/test_remove_helper_storage_id.py"
+  - "tests/src/unit/test_remove_helpers_wait_warnings.py"
+  - "tests/src/unit/test_rest_client_admin_gate.py"
+  - "tests/src/unit/test_rest_client_automations.py"
+  - "tests/src/unit/test_rest_client_get_config_entry.py"
+  - "tests/src/unit/test_rest_client_get_error_log.py"
+  - "tests/src/unit/test_rest_client_retry.py"
+  - "tests/src/unit/test_rest_client_scenes.py"
+  - "tests/src/unit/test_rest_client_scripts.py"
+  - "tests/src/unit/test_rest_client_states.py"
+  - "tests/src/unit/test_rest_client_ws_transport_failure.py"
+  - "tests/src/unit/test_scene_activate.py"
+  - "tests/src/unit/test_scene_discovery.py"
+  - "tests/src/unit/test_script_run.py"
+  - "tests/src/unit/test_search_fallback.py"
+  - "tests/src/unit/test_search_fields_projection.py"
+  - "tests/src/unit/test_search_pagination.py"
+  - "tests/src/unit/test_search_related_graph.py"
+  - "tests/src/unit/test_server_policy_wiring.py"
+  - "tests/src/unit/test_server_version.py"
+  - "tests/src/unit/test_services_native_catalog.py"
+  - "tests/src/unit/test_set_dashboard_metadata.py"
+  - "tests/src/unit/test_set_integration_forms.py"
+  - "tests/src/unit/test_settings_ui.py"
+  - "tests/src/unit/test_smart_search_flow_helpers.py"
+  - "tests/src/unit/test_smart_search_scene_phase25.py"
+  - "tests/src/unit/test_ssl_verification.py"
+  - "tests/src/unit/test_statistic_types_validation.py"
+  - "tests/src/unit/test_statistics_units.py"
+  - "tests/src/unit/test_stdio_settings_sidecar.py"
+  - "tests/src/unit/test_supervisor_write_no_answer.py"
+  - "tests/src/unit/test_take_control_of_blueprint.py"
+  - "tests/src/unit/test_take_control_of_blueprint_script.py"
+  - "tests/src/unit/test_template_backup_review.py"
+  - "tests/src/unit/test_template_deleted_recovery.py"
+  - "tests/src/unit/test_template_generic_routing.py"
+  - "tests/src/unit/test_template_helper_backup.py"
+  - "tests/src/unit/test_template_restore_safety.py"
+  - "tests/src/unit/test_tool_error_signaling.py"
+  - "tests/src/unit/test_tools_addons.py"
+  - "tests/src/unit/test_tools_areas.py"
+  - "tests/src/unit/test_tools_assist_pipeline.py"
+  - "tests/src/unit/test_tools_bug_report.py"
+  - "tests/src/unit/test_tools_calendar_delete.py"
+  - "tests/src/unit/test_tools_calendar_rrule.py"
+  - "tests/src/unit/test_tools_calendar_update.py"
+  - "tests/src/unit/test_tools_camera.py"
+  - "tests/src/unit/test_tools_config_automations.py"
+  - "tests/src/unit/test_tools_config_dashboards.py"
+  - "tests/src/unit/test_tools_config_scenes.py"
+  - "tests/src/unit/test_tools_config_scripts.py"
+  - "tests/src/unit/test_tools_dev.py"
+  - "tests/src/unit/test_tools_energy.py"
+  - "tests/src/unit/test_tools_entities.py"
+  - "tests/src/unit/test_tools_entities_p2.py"
+  - "tests/src/unit/test_tools_filesystem.py"
+  - "tests/src/unit/test_tools_get_states.py"
+  - "tests/src/unit/test_tools_groups.py"
+  - "tests/src/unit/test_tools_history.py"
+  - "tests/src/unit/test_tools_integrations.py"
+  - "tests/src/unit/test_tools_resources.py"
+  - "tests/src/unit/test_tools_resources_core_errors.py"
+  - "tests/src/unit/test_tools_resources_patch.py"
+  - "tests/src/unit/test_tools_system.py"
+  - "tests/src/unit/test_tools_todo.py"
+  - "tests/src/unit/test_tools_traces.py"
+  - "tests/src/unit/test_tools_updates.py"
+  - "tests/src/unit/test_tools_utility_error_log_records.py"
+  - "tests/src/unit/test_tools_utility_error_log_structured.py"
+  - "tests/src/unit/test_tools_utility_eval_template.py"
+  - "tests/src/unit/test_tools_utility_log_order.py"
+  - "tests/src/unit/test_tools_utility_logbook_transports.py"
+  - "tests/src/unit/test_tools_utility_supervisor_logs.py"
+  - "tests/src/unit/test_tools_voice_assistant.py"
+  - "tests/src/unit/test_update_helper_storage_id.py"
+  - "tests/src/unit/test_updates_repairs.py"
+  - "tests/src/unit/test_util_helpers.py"
+  - "tests/src/unit/test_wait_helpers.py"
+  - "tests/src/unit/test_wait_parameter.py"
+  - "tests/src/unit/test_websocket_client.py"
+  - "tests/src/unit/test_websocket_late_release.py"
+  - "tests/src/unit/test_ws_connect_error_detail.py"
+  - "tests/src/unit/test_ws_degraders_warn.py"
+  - "tests/src/unit/test_yaml_config_tool.py"
+  - "tests/src/unit/test_yaml_read_tool.py"
+  - "tests/src/unit/test_zone_icons_real_core.py"
+  - "tests/src/unit/test_zone_tools_core_contract.py"
+  - "tests/src/unit/visibility/test_bare_identifier_concealment.py"
+  - "tests/src/unit/visibility/test_enforcement.py"
+  - "tests/src/unit/visibility/test_hidden_config_file_reads.py"
+  - "tests/src/unit/visibility/test_load_hidden_set.py"
+  - "tests/src/unit/visibility/test_overview_filter.py"
+  - "tests/src/unit/visibility/test_search_filter.py"
+  - "tests/src/unit/visibility/test_smart_search_filter.py"
+message: |
+  Do not type in what Home Assistant answered. A replaced client method that
+  returns a hand-written reply (or a hand-written client class) asserts against
+  a guess of what Core does. Take the `core_client` fixture (or
+  `component_core_client`) and pass it where the tool takes its client: every
+  REST and WebSocket reply is then Core's own, error replies included. The one
+  replacement left is the client getting no answer at all (a dropped
+  connection, a timeout), raised as a `side_effect`:
+  `client.send_websocket_message = AsyncMock(side_effect=HomeAssistantConnectionError(...))`.
+  See tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
+severity: error

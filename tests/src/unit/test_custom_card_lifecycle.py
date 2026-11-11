@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from .test_card_definitions import cc
 
@@ -93,7 +94,7 @@ async def test_timed_out_callers_share_one_background_refresh(monkeypatch) -> No
     release = asyncio.Event()
     result = object()
 
-    async def refresh(hass):
+    async def refresh(hass: HomeAssistant):
         await release.wait()
         return result
 

@@ -25,7 +25,6 @@ from .test_settings_ui_js_behavior import (
     MIN_DOM,
     _assert_clean_init,
 )
-from .test_settings_ui_js_behavior import settings_script as settings_script
 
 
 def test_advanced_row_states_range_and_restart_and_reaches_its_off_value(

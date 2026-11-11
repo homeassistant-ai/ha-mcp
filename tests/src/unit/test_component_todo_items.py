@@ -1,267 +1,354 @@
 """ha_mcp_tools/todo_item, and the server client that sends it.
 
-The component runs against a fake Core todo: a list entity whose rows Core's
-services change, and the first-match lookup Core's services resolve an item
-value with.
+The component runs on a real ``hass`` with Core's todo integration. The list
+is a ``TodoListEntity`` of a test platform that keeps its rows in memory, so
+Core's services, schema, feature checks and item lookup act on it; the
+service calls Core receives are read from its ``call_service`` events.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import importlib
 import json
-import sys
-from datetime import date, datetime
-from types import SimpleNamespace
+from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import voluptuous as vol
+from homeassistant.components.todo import DOMAIN as TODO_DOMAIN
+from homeassistant.components.todo import (
+    TodoItem,
+    TodoItemStatus,
+    TodoListEntity,
+    TodoListEntityFeature,
+)
+from homeassistant.components.todo import const as todo_const
+from homeassistant.components.todo import entity as todo_entity
+from homeassistant.components.websocket_api.const import (
+    ERR_HOME_ASSISTANT_ERROR,
+    ERR_UNAUTHORIZED,
+    ERR_UNKNOWN_ERROR,
+)
+from homeassistant.const import EVENT_CALL_SERVICE
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import (
+    MockUser,
+    async_capture_events,
+    setup_test_component_platform,
+)
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
+from custom_components.ha_mcp_tools import todo_items
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
-    HomeAssistantError,
 )
+from ha_mcp.client.rest_client import HomeAssistantError as ClientError
 from ha_mcp.tools import component_todo
 from ha_mcp.tools.component_api import ComponentCaps
 
-from .test_component_ws_search import (
-    FakeHass,
-    _FakeConnection,
-    _Unauthorized,
-    functional_ws,  # noqa: F401 - pytest fixture
-    wsapi,
-)
-
-todo_items = importlib.import_module("custom_components.ha_mcp_tools.todo_items")
+from ._component_core import ws_call, ws_result
 
 LIST = "todo.tasks"
 
-
-class _CoreError(Exception):
-    pass
-
-
-class _ServiceValidationError(_CoreError):
-    pass
-
-
-class _Invalid(Exception):
-    pass
+_NO_MOVE = (
+    TodoListEntityFeature.CREATE_TODO_ITEM
+    | TodoListEntityFeature.DELETE_TODO_ITEM
+    | TodoListEntityFeature.UPDATE_TODO_ITEM
+    | TodoListEntityFeature.SET_DUE_DATE_ON_ITEM
+    | TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM
+)
 
 
-@dataclasses.dataclass
-class _Item:
-    uid: str
-    summary: str
-    status: str = "needs_action"
-    due: date | datetime | None = None
-    description: str | None = None
+def _item(uid: str | None, summary: str, **fields: Any) -> TodoItem:
+    return TodoItem(
+        uid=uid, summary=summary, status=TodoItemStatus.NEEDS_ACTION, **fields
+    )
 
 
-def _find(ref: str, items: list[_Item]) -> _Item | None:
-    # Core's _find_by_uid_or_summary: the first row whose uid or summary is ref.
-    return next((i for i in items if ref in (i.uid, i.summary)), None)
+class _TaskList(TodoListEntity):
+    """A todo integration's list, its rows kept in memory as ``rows``."""
 
+    _attr_should_poll = False
 
-_MOVE = 8
-
-
-class _ListEntity:
-    def __init__(self, items: list[_Item]) -> None:
+    def __init__(self, rows: list[TodoItem]) -> None:
         self.entity_id = LIST
-        self.todo_items = items
-        self.available = True
-        self.supported_features = _MOVE
-        self.move_error: Exception | None = None
-        # (uid, previous_uid, rows as they were when the move came)
-        self.moves: list[tuple[str, str | None, list[str]]] = []
+        self.rows = rows
+        self._attr_todo_items = rows
+        self._attr_supported_features = _NO_MOVE | TodoListEntityFeature.MOVE_TODO_ITEM
+        # What the backend raises on a write, and whether it changed a row first.
+        self.failure: Exception | None = None
+        self.changed_before_failing = False
+        self.move_failure: Exception | None = None
+        # (uid, previous_uid, summaries as they were when the move came)
+        self.moves: list[tuple[str, str | None, list[str | None]]] = []
 
-    async def async_move_todo_item(self, uid: str, previous_uid: str | None) -> None:
-        self.moves.append((uid, previous_uid, [i.summary for i in self.todo_items]))
-        if self.move_error is not None:
-            raise self.move_error
-        row = next(i for i in self.todo_items if i.uid == uid)
-        self.todo_items.remove(row)
+    def set_available(self, available: bool) -> None:
+        self._attr_available = available
+        self.async_write_ha_state()
+
+    def set_features(self, features: int | None) -> None:
+        self._attr_supported_features = features
+        self.async_write_ha_state()
+
+    def _backend(self) -> None:
+        if self.changed_before_failing:
+            self.rows.append(_item("listener", "added by a listener"))
+        if self.failure is not None:
+            raise self.failure
+
+    async def async_create_todo_item(self, item: TodoItem) -> None:
+        self._backend()
+        self.rows.append(dataclasses.replace(item, uid=f"n{len(self.rows)}"))
+        self.async_write_ha_state()
+
+    async def async_update_todo_item(self, item: TodoItem) -> None:
+        self._backend()
+        at = next(i for i, row in enumerate(self.rows) if row.uid == item.uid)
+        self.rows[at] = item
+        self.async_write_ha_state()
+
+    async def async_delete_todo_items(self, uids: list[str]) -> None:
+        self._backend()
+        self.rows[:] = [row for row in self.rows if row.uid not in uids]
+        self.async_write_ha_state()
+
+    async def async_move_todo_item(
+        self, uid: str, previous_uid: str | None = None
+    ) -> None:
+        self.moves.append((uid, previous_uid, [row.summary for row in self.rows]))
+        if self.move_failure is not None:
+            raise self.move_failure
+        row = next(r for r in self.rows if r.uid == uid)
+        self.rows.remove(row)
         at = 0
         if previous_uid is not None:
-            at = [i.uid for i in self.todo_items].index(previous_uid) + 1
-        self.todo_items.insert(at, row)
-
-
-class _Services:
-    def __init__(self, entity: _ListEntity) -> None:
-        self.entity = entity
-        self.calls: list[tuple[str, dict[str, Any], Any]] = []
-        self.raise_: Exception | None = None
-        self.change_then_raise = False
-
-    async def async_call(
-        self, domain, service, data, *, target, blocking, context
-    ) -> None:
-        assert (domain, target, blocking) == ("todo", {"entity_id": LIST}, True)
-        self.calls.append((service, data, context))
-        items = self.entity.todo_items
-        if self.change_then_raise:
-            items.append(_Item("listener", "added by a listener"))
-        if self.raise_ is not None:
-            raise self.raise_
-        if service == "add_item":
-            items.append(_Item(f"n{len(items)}", data["item"].strip()))
-        elif service == "update_item":
-            row = _find(data["item"], items)
-            assert row is not None
-            row.summary = data.get("rename", row.summary)
-            row.status = data.get("status", row.status)
-        elif service == "remove_item":
-            gone = {row.uid for ref in data["item"] if (row := _find(ref, items))}
-            self.entity.todo_items = [i for i in items if i.uid not in gone]
-
-
-def _items_factory(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    return {
-        k: v.isoformat() if hasattr(v, "isoformat") else v
-        for k, v in pairs
-        if v is not None
-    }
+            at = [r.uid for r in self.rows].index(previous_uid) + 1
+        self.rows.insert(at, row)
+        self.async_write_ha_state()
 
 
 @pytest.fixture
-def entity() -> _ListEntity:
-    return _ListEntity(
+async def tasks(hass: HomeAssistant) -> _TaskList:
+    """Core's todo integration with ``LIST`` loaded from a test platform."""
+    entity = _TaskList(
         [
-            _Item("1", "Milk"),
-            _Item("2", "Pay", due=datetime(2026, 11, 1, 10, 0)),
-            _Item("3", "Milk"),
+            _item("1", "Milk"),
+            _item("2", "Pay", due=datetime(2026, 11, 1, 10, 0, tzinfo=UTC)),
+            _item("3", "Milk"),
         ]
     )
+    setup_test_component_platform(hass, TODO_DOMAIN, [entity])
+    assert await async_setup_component(
+        hass, TODO_DOMAIN, {TODO_DOMAIN: {"platform": "test"}}
+    )
+    await hass.async_block_till_done()
+    return entity
 
 
 @pytest.fixture
-def hass(entity: _ListEntity, monkeypatch: pytest.MonkeyPatch) -> Any:
-    component = SimpleNamespace(
-        get_entity=lambda entity_id: entity if entity_id == LIST else None
-    )
-    core = SimpleNamespace(
-        component_key="todo_component",
-        domain="todo",
-        list_entity=_ListEntity,
-        can_move=_MOVE,
-        items_factory=_items_factory,
-        find=_find,
-        refused=(_Invalid, _ServiceValidationError),
-        error=_CoreError,
-        date=date.fromisoformat,
-    )
-    monkeypatch.setattr(todo_items, "_core", lambda: core)
-    return SimpleNamespace(
-        data={"todo_component": component}, services=_Services(entity)
+async def calls(hass: HomeAssistant) -> list[Event[dict[str, Any]]]:
+    """Core's ``call_service`` events: fired once a call passed the schema."""
+    return async_capture_events(hass, EVENT_CALL_SERVICE)
+
+
+def _sent(calls: list[Event[dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
+    """The todo services Core was called with, and the data each got."""
+    return [
+        (call.data["service"], call.data["service_data"])
+        for call in calls
+        if call.data["domain"] == TODO_DOMAIN
+    ]
+
+
+async def _reply(
+    ws: MockHAClientWebSocket, action: str, entity_id: str = LIST, **fields: Any
+) -> dict[str, Any]:
+    """Core's WebSocket reply to one ``ha_mcp_tools/todo_item`` action."""
+    return await ws_call(
+        ws, todo_items.WS_TODO_ITEM, entity_id=entity_id, action=action, **fields
     )
 
 
-async def _run(hass: Any, action: str, **fields: Any) -> dict[str, Any]:
-    msg = {"entity_id": LIST, "action": action, "ha_mcp_context": "ctx", **fields}
-    result: dict[str, Any] = await todo_items.async_todo_item(hass, msg)
+async def _run(ws: MockHAClientWebSocket, action: str, **fields: Any) -> dict[str, Any]:
+    """The component's answer to one action that Core did not fail."""
+    reply = await _reply(ws, action, **fields)
+    assert reply["success"], reply
+    result: dict[str, Any] = reply["result"]
     return result
 
 
+@pytest.mark.usefixtures("tasks")
 class TestComponent:
-    async def test_resolve_takes_cores_first_match(self, hass: Any) -> None:
-        got = await _run(hass, "resolve", refs=["Milk", "2", "Nope"])
+    async def test_resolve_takes_cores_first_match(
+        self,
+        component_ws: MockHAClientWebSocket,
+        calls: list[Event[dict[str, Any]]],
+    ) -> None:
+        got = await _run(component_ws, "resolve", refs=["Milk", "2", "Nope"])
         assert [row and row["uid"] for row in got["items"]] == ["1", "2", None]
-        assert hass.services.calls == []
+        assert _sent(calls) == []
 
-    async def test_add_returns_the_row_core_stored(self, hass: Any) -> None:
-        got = await _run(hass, "add", data={"item": "  Eggs "})
-        assert got["item"] == {"uid": "n3", "summary": "Eggs", "status": "needs_action"}
-        assert hass.services.calls == [("add_item", {"item": "  Eggs "}, "ctx")]
+    async def test_add_returns_the_row_core_stored(
+        self,
+        component_ws: MockHAClientWebSocket,
+        calls: list[Event[dict[str, Any]]],
+        hass_admin_user: MockUser,
+    ) -> None:
+        got = await _run(component_ws, "add", data={"item": "  Eggs "})
+        stored = await ws_result(component_ws, "todo/item/list", entity_id=LIST)
+        assert got["item"] == stored["items"][-1]
+        assert got["item"]["summary"] == "Eggs"
+        assert _sent(calls) == [("add_item", {"item": "  Eggs ", "entity_id": LIST})]
+        assert [call.context.user_id for call in calls] == [hass_admin_user.id]
 
-    async def test_update_goes_to_the_row_with_that_uid(self, hass: Any) -> None:
-        got = await _run(hass, "update", uid="3", data={"status": "completed"})
+    async def test_update_goes_to_the_row_with_that_uid(
+        self,
+        component_ws: MockHAClientWebSocket,
+        calls: list[Event[dict[str, Any]]],
+        hass_admin_user: MockUser,
+    ) -> None:
+        got = await _run(component_ws, "update", uid="3", data={"status": "completed"})
         assert got["item"]["uid"] == "3"
         assert got["item"]["status"] == "completed"
-        assert hass.services.calls == [
-            ("update_item", {"status": "completed", "item": "3"}, "ctx")
+        assert _sent(calls) == [
+            ("update_item", {"status": "completed", "item": "3", "entity_id": LIST})
         ]
+        assert [call.context.user_id for call in calls] == [hass_admin_user.id]
 
     async def test_uid_another_item_is_named_after_is_refused(
-        self, hass: Any, entity: _ListEntity
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
     ) -> None:
-        entity.todo_items.insert(0, _Item("x", "3"))
-        got = await _run(hass, "update", uid="3", data={"status": "completed"})
+        tasks.rows.insert(0, _item("x", "3"))
+        got = await _run(component_ws, "update", uid="3", data={"status": "completed"})
         assert got["error"]["code"] == "namesake"
-        assert hass.services.calls == []
+        assert _sent(calls) == []
 
-    async def test_unknown_uid_is_not_found(self, hass: Any) -> None:
-        got = await _run(hass, "update", uid="Milk", data={"status": "completed"})
+    async def test_unknown_uid_is_not_found(
+        self, component_ws: MockHAClientWebSocket
+    ) -> None:
+        got = await _run(
+            component_ws, "update", uid="Milk", data={"status": "completed"}
+        )
         assert got["error"]["code"] == "item_not_found"
 
-    async def test_remove_reports_the_rows_it_removed(self, hass: Any) -> None:
-        got = await _run(hass, "remove", refs=["Milk"])
+    async def test_remove_reports_the_rows_it_removed(
+        self, component_ws: MockHAClientWebSocket
+    ) -> None:
+        got = await _run(component_ws, "remove", refs=["Milk"])
         assert [row["uid"] for row in got["removed"]] == ["1"]
 
     async def test_unavailable_list_is_refused_before_the_call(
-        self, hass: Any, entity: _ListEntity
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
     ) -> None:
         # Core's services skip an unavailable list and still answer success.
-        entity.available = False
-        got = await _run(hass, "remove", refs=["Milk"])
+        tasks.set_available(False)
+        got = await _run(component_ws, "remove", refs=["Milk"])
         assert got["error"]["code"] == "list_unavailable"
-        assert hass.services.calls == []
+        assert _sent(calls) == []
+        assert [row.uid for row in tasks.rows] == ["1", "2", "3"]
 
-    async def test_list_not_loaded(self, hass: Any) -> None:
-        msg = {"entity_id": "todo.gone", "action": "resolve", "refs": ["Milk"]}
-        got = await todo_items.async_todo_item(hass, msg)
+    async def test_list_not_loaded(self, component_ws: MockHAClientWebSocket) -> None:
+        got = await _run(component_ws, "resolve", entity_id="todo.gone", refs=["Milk"])
         assert got["error"]["code"] == "not_loaded"
 
     @pytest.mark.parametrize(
-        "error", [_ServiceValidationError("no due date"), _Invalid("bad status")]
+        ("action", "fields"),
+        [
+            pytest.param(
+                "update",
+                {"uid": "2", "data": {"status": "bad status"}},
+                id="schema-invalid",
+            ),
+            pytest.param(
+                "remove", {"refs": ["Milk", "Nope"]}, id="service-validation-error"
+            ),
+        ],
     )
     async def test_core_refusal_that_changed_nothing(
-        self, hass: Any, error: Exception
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        action: str,
+        fields: dict[str, Any],
     ) -> None:
-        hass.services.raise_ = error
-        got = await _run(hass, "update", uid="2", data={"status": "completed"})
-        assert got["error"] == {"code": "invalid", "message": str(error)}
+        before = list(tasks.rows)
+        got = await _run(component_ws, action, **fields)
+        assert got["error"]["code"] == "invalid"
+        assert got["error"]["message"]
+        assert tasks.rows == before
 
-    @pytest.mark.parametrize("error", [_CoreError("timeout"), ValueError("bad json")])
+    @pytest.mark.parametrize(
+        ("error", "code"),
+        [
+            (HomeAssistantError("timeout"), ERR_HOME_ASSISTANT_ERROR),
+            (ValueError("bad json"), ERR_UNKNOWN_ERROR),
+        ],
+    )
     async def test_integration_error_is_raised_though_the_rows_are_unchanged(
-        self, hass: Any, error: Exception
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        error: Exception,
+        code: str,
     ) -> None:
         # The integration may have reached its backend before it failed.
-        hass.services.raise_ = error
-        with pytest.raises(type(error)):
-            await _run(hass, "update", uid="2", data={"status": "completed"})
+        tasks.failure = error
+        reply = await _reply(
+            component_ws, "update", uid="2", data={"status": "completed"}
+        )
+        assert reply["success"] is False
+        assert reply["error"]["code"] == code
 
     async def test_a_row_without_uid_does_not_break_the_reply(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        entity.todo_items.append(_Item(None, "No uid"))  # type: ignore[arg-type]
-        got = await _run(hass, "remove", refs=["Milk"])
+        tasks.rows.append(_item(None, "No uid"))
+        got = await _run(component_ws, "remove", refs=["Milk"])
         assert [row["uid"] for row in got["removed"]] == ["1"]
 
     async def test_add_and_update_read_back_past_a_row_without_uid(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        entity.todo_items.insert(0, _Item(None, "No uid"))  # type: ignore[arg-type]
-        added = await _run(hass, "add", data={"item": "Eggs"})
+        tasks.rows.insert(0, _item(None, "No uid"))
+        added = await _run(component_ws, "add", data={"item": "Eggs"})
         assert added["item"]["summary"] == "Eggs"
-        updated = await _run(hass, "update", uid="2", data={"status": "completed"})
+        updated = await _run(
+            component_ws, "update", uid="2", data={"status": "completed"}
+        )
         assert updated["item"]["uid"] == "2"
 
-    async def test_data_shaped_like_a_refusal_goes_to_core(self, hass: Any) -> None:
-        await _run(hass, "add", data={"item": "Eggs", "success": False})
-        assert hass.services.calls[0][1] == {"item": "Eggs", "success": False}
+    async def test_data_shaped_like_a_refusal_goes_to_core(
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
+    ) -> None:
+        # Core's schema, not the component, names the key it refuses.
+        got = await _run(component_ws, "add", data={"item": "Eggs", "success": False})
+        assert got["error"]["code"] == "invalid"
+        assert "success" in got["error"]["message"]
+        assert len(tasks.rows) == 3
 
-    async def test_error_after_the_list_changed_is_raised(self, hass: Any) -> None:
-        hass.services.raise_ = _ServiceValidationError("listener failed")
-        hass.services.change_then_raise = True
-        with pytest.raises(_ServiceValidationError):
-            await _run(hass, "update", uid="2", data={"status": "completed"})
+    async def test_error_after_the_list_changed_is_raised(
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
+    ) -> None:
+        tasks.failure = ServiceValidationError("listener failed")
+        tasks.changed_before_failing = True
+        reply = await _reply(
+            component_ws, "update", uid="2", data={"status": "completed"}
+        )
+        assert reply["success"] is False
+        assert reply["error"]["code"] == ERR_HOME_ASSISTANT_ERROR
+        assert reply["error"]["message"] == "listener failed"
 
     @pytest.mark.parametrize(
         ("due", "sent"),
@@ -276,187 +363,244 @@ class TestComponent:
         ],
     )
     async def test_due_takes_the_field_core_validates_it_as(
-        self, hass: Any, due: str | None, sent: dict[str, Any]
+        self,
+        component_ws: MockHAClientWebSocket,
+        calls: list[Event[dict[str, Any]]],
+        due: str | None,
+        sent: dict[str, Any],
     ) -> None:
-        await _run(hass, "update", uid="2", data={}, due=due)
-        assert hass.services.calls[0][1] == {"item": "2", **sent}
+        got = await _run(component_ws, "update", uid="2", data={}, due=due)
+        assert got["success"] is True
+        assert _sent(calls) == [
+            ("update_item", {"item": "2", "entity_id": LIST, **sent})
+        ]
 
     async def test_clear_of_a_due_date_names_due_date(
-        self, hass: Any, entity: _ListEntity
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
     ) -> None:
-        entity.todo_items.append(_Item("4", "D", due=date(2026, 11, 1)))
-        await _run(hass, "update", uid="4", data={}, due=None)
-        assert hass.services.calls[0][1] == {"item": "4", "due_date": None}
+        tasks.rows.append(_item("4", "D", due=date(2026, 11, 1)))
+        got = await _run(component_ws, "update", uid="4", data={}, due=None)
+        assert got["success"] is True
+        assert _sent(calls) == [
+            ("update_item", {"item": "4", "due_date": None, "entity_id": LIST})
+        ]
 
-    async def test_clear_of_an_item_without_due_sends_no_field(self, hass: Any) -> None:
-        await _run(hass, "update", uid="1", data={"status": "completed"}, due=None)
-        assert hass.services.calls[0][1] == {"status": "completed", "item": "1"}
+    async def test_clear_of_an_item_without_due_sends_no_field(
+        self,
+        component_ws: MockHAClientWebSocket,
+        calls: list[Event[dict[str, Any]]],
+    ) -> None:
+        await _run(
+            component_ws, "update", uid="1", data={"status": "completed"}, due=None
+        )
+        assert _sent(calls) == [
+            ("update_item", {"status": "completed", "item": "1", "entity_id": LIST})
+        ]
 
-    async def test_missing_field_for_the_action_is_invalid(self, hass: Any) -> None:
-        got = await _run(hass, "update", data={})
+    async def test_missing_field_for_the_action_is_invalid(
+        self, component_ws: MockHAClientWebSocket
+    ) -> None:
+        got = await _run(component_ws, "update", data={})
         assert got["error"]["code"] == "invalid"
 
     async def test_update_then_move_by_uid(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
         # Below x, the row named "2" comes first; the update goes before the
         # move, on the order Core resolves "2" in, so it changes Pay.
-        entity.todo_items.append(_Item("x", "2"))
+        tasks.rows.append(_item("x", "2"))
         got = await _run(
-            hass, "update", uid="2", data={"status": "completed"}, previous_uid="x"
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid="x",
         )
         assert got["item"]["status"] == "completed"
-        assert entity.moves == [("2", "x", ["Milk", "Pay", "Milk", "2"])]
-        assert [i.uid for i in entity.todo_items] == ["1", "3", "x", "2"]
-        assert entity.todo_items[2].status == "needs_action"
+        assert tasks.moves == [("2", "x", ["Milk", "Pay", "Milk", "2"])]
+        assert [i.uid for i in tasks.rows] == ["1", "3", "x", "2"]
+        assert tasks.rows[2].status == TodoItemStatus.NEEDS_ACTION
 
-    async def test_move_to_the_top(self, hass: Any, entity: _ListEntity) -> None:
-        await _run(hass, "update", uid="3", data={}, previous_uid=None)
-        assert entity.moves[0][:2] == ("3", None)
-        assert [i.uid for i in entity.todo_items] == ["3", "1", "2"]
+    async def test_move_to_the_top(
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
+    ) -> None:
+        # Core's update_item refuses an update that changes nothing.
+        await _run(
+            component_ws,
+            "update",
+            uid="3",
+            data={"status": "completed"},
+            previous_uid=None,
+        )
+        assert tasks.moves[0][:2] == ("3", None)
+        assert [i.uid for i in tasks.rows] == ["3", "1", "2"]
+
+    async def test_update_that_only_reorders(
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
+    ) -> None:
+        """Core's update_item refuses an update with no field, so a move
+        alone goes straight to the move."""
+        got = await _run(component_ws, "update", uid="3", previous_uid=None)
+
+        assert got["success"] is True
+        assert got["item"]["uid"] == "3"
+        assert [i.uid for i in tasks.rows] == ["3", "1", "2"]
+        assert _sent(calls) == []
 
     async def test_list_without_reordering_refuses_before_the_update(
-        self, hass: Any, entity: _ListEntity
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
     ) -> None:
-        entity.supported_features = 0
-        got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
+        tasks.set_features(_NO_MOVE)
+        got = await _run(
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid=None,
+        )
         assert got["error"]["code"] == "not_supported"
-        assert hass.services.calls == []
-        assert entity.moves == []
+        assert _sent(calls) == []
+        assert tasks.moves == []
+        assert tasks.rows[1].status == TodoItemStatus.NEEDS_ACTION
 
     async def test_failed_move_after_the_update_says_it_was_applied(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        entity.move_error = _CoreError("backend gone")
+        tasks.move_failure = HomeAssistantError("backend gone")
         got = await _run(
-            hass, "update", uid="2", data={"status": "completed"}, previous_uid="1"
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid="1",
         )
         assert got["error"] == {
             "code": "move_failed",
             "message": "The update was applied, but the move failed: backend gone",
         }
-        assert entity.todo_items[1].status == "completed"
+        assert tasks.rows[1].status == TodoItemStatus.COMPLETED
 
     async def test_unexpected_move_error_is_raised(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        entity.move_error = RuntimeError("bug")
-        with pytest.raises(RuntimeError):
-            await _run(hass, "update", uid="2", data={}, previous_uid="1")
+        tasks.move_failure = RuntimeError("bug")
+        reply = await _reply(
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid="1",
+        )
+        assert reply["success"] is False
+        assert reply["error"]["code"] == ERR_UNKNOWN_ERROR
 
-    @pytest.mark.parametrize("features", [0, None])
     async def test_list_without_reordering_still_takes_an_update(
-        self, hass: Any, entity: _ListEntity, features: Any
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        entity.supported_features = features
-        got = await _run(hass, "update", uid="2", data={"status": "completed"})
+        tasks.set_features(_NO_MOVE)
+        got = await _run(component_ws, "update", uid="2", data={"status": "completed"})
         assert got["item"]["status"] == "completed"
-        assert entity.moves == []
+        assert tasks.moves == []
+
+    async def test_list_without_features_leaves_an_update_to_core(
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
+    ) -> None:
+        # Without a move the component has nothing to check; Core refuses the
+        # update itself, since the list does not support updating items.
+        tasks.set_features(None)
+        got = await _run(component_ws, "update", uid="2", data={"status": "completed"})
+        assert got["error"]["code"] == "invalid"
+        assert [service for service, _ in _sent(calls)] == ["update_item"]
 
     async def test_list_without_features_refuses_a_move(
-        self, hass: Any, entity: _ListEntity
+        self,
+        component_ws: MockHAClientWebSocket,
+        tasks: _TaskList,
+        calls: list[Event[dict[str, Any]]],
     ) -> None:
-        entity.supported_features = None
-        got = await _run(hass, "update", uid="2", data={}, previous_uid=None)
+        tasks.set_features(None)
+        got = await _run(
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid=None,
+        )
         assert got["error"]["code"] == "not_supported"
-        assert hass.services.calls == []
+        assert _sent(calls) == []
 
     async def test_previous_uid_moves_only_on_update(
-        self, hass: Any, entity: _ListEntity
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
     ) -> None:
-        await _run(hass, "remove", refs=["Pay"], previous_uid="1")
-        assert entity.moves == []
+        await _run(component_ws, "remove", refs=["Pay"], previous_uid="1")
+        assert tasks.moves == []
 
     async def test_core_without_its_todo_parts_is_unsupported(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, component_ws: MockHAClientWebSocket, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(todo_items, "_core", lambda: None)
-        got = await todo_items.async_todo_item(
-            SimpleNamespace(data={}), {"entity_id": LIST, "action": "resolve"}
-        )
+        # A Core without one of the todo parts the bridge reads.
+        monkeypatch.delattr(todo_entity, "api_items_factory")
+        got = await _run(component_ws, "resolve", refs=["Milk"])
         assert got["error"]["code"] == "unsupported"
 
+    async def test_core_parts_refuse_only_validation_errors(
+        self, component_ws: MockHAClientWebSocket, tasks: _TaskList
+    ) -> None:
+        """A ServiceValidationError that changed no row is a refusal, also
+        when the integration raised it; its base HomeAssistantError is not
+        (test_integration_error_is_raised_though_the_rows_are_unchanged)."""
+        tasks.failure = ServiceValidationError("no due date")
+        got = await _run(component_ws, "update", uid="2", data={"status": "completed"})
+        assert got["error"] == {"code": "invalid", "message": "no due date"}
 
-class _HAError(Exception):
-    pass
+    async def test_core_without_the_move_feature_has_no_bridge(
+        self, component_ws: MockHAClientWebSocket, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delattr(todo_const, "TodoListEntityFeature")
+        got = await _run(component_ws, "resolve", refs=["Milk"])
+        assert got["error"]["code"] == "unsupported"
 
+    @pytest.mark.parametrize("previous_uid", [None, "1"])
+    async def test_command_schema_takes_previous_uid(
+        self, component_ws: MockHAClientWebSocket, previous_uid: str | None
+    ) -> None:
+        reply = await _reply(
+            component_ws,
+            "update",
+            uid="2",
+            data={"status": "completed"},
+            previous_uid=previous_uid,
+        )
+        assert reply["success"], reply
 
-class _SVError(_HAError):
-    pass
+    async def test_command_registered_and_advertised(
+        self, component_ws: MockHAClientWebSocket
+    ) -> None:
+        info = await ws_result(component_ws, "ha_mcp_tools/info")
+        assert todo_items.CAPABILITY in info["capabilities"]
+        assert (await _run(component_ws, "resolve", refs=["Milk"]))["success"]
 
-
-def _core_over_stand_ins(monkeypatch: pytest.MonkeyPatch, **const: Any) -> Any:
-    """The real _core() over stand-ins for Core's modules."""
-    const = {"DATA_COMPONENT": "todo", "DOMAIN": "todo"} | const
-    todo = SimpleNamespace(
-        const=SimpleNamespace(**const),
-        entity=SimpleNamespace(TodoListEntity=_ListEntity, api_items_factory=dict),
-        services=SimpleNamespace(_find_by_uid_or_summary=_find),
-    )
-    cv = SimpleNamespace(date=date.fromisoformat)
-    modules = {
-        "homeassistant.components.todo": todo,
-        "homeassistant.exceptions": SimpleNamespace(
-            HomeAssistantError=_HAError, ServiceValidationError=_SVError
-        ),
-        "homeassistant.helpers": SimpleNamespace(config_validation=cv),
-    }
-    for name, module in modules.items():
-        monkeypatch.setitem(sys.modules, name, module)
-    return todo_items._core()
-
-
-def test_core_parts_refuse_only_validation_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # An integration's HomeAssistantError or ValueError must not count as a
-    # refusal.
-    core = _core_over_stand_ins(
-        monkeypatch,
-        TodoListEntityFeature=SimpleNamespace(MOVE_TODO_ITEM=_MOVE),
-    )
-    assert core is not None
-    assert _SVError in core.refused
-    assert not [e for e in core.refused if issubclass(_HAError, e)]
-    assert not [e for e in core.refused if issubclass(ValueError, e)]
-    assert core.error is _HAError
-
-
-def test_core_without_the_move_feature_has_no_bridge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    assert _core_over_stand_ins(monkeypatch) is None
-
-
-@pytest.mark.parametrize("previous_uid", [None, "1"])
-def test_command_schema_takes_previous_uid(previous_uid: str | None) -> None:
-    schema = vol.Schema(todo_items.command_specs(vol)[0][0])
-    msg = {
-        "type": todo_items.WS_TODO_ITEM,
-        "entity_id": LIST,
-        "action": "update",
-        "uid": "2",
-        "data": {},
-        "previous_uid": previous_uid,
-    }
-    assert schema(msg) == msg
-
-
-def test_command_registered_and_advertised(functional_ws) -> None:  # noqa: F811
-    assert todo_items.WS_TODO_ITEM in functional_ws.registered
-    assert todo_items.CAPABILITY in wsapi.CAPABILITIES
-
-
-def test_command_is_admin_gated(functional_ws) -> None:  # noqa: F811
-    handler = functional_ws.registered[todo_items.WS_TODO_ITEM]
-    msg = {"id": 1, "type": todo_items.WS_TODO_ITEM, "entity_id": LIST}
-    msg["action"] = "resolve"
-    msg["refs"] = ["Milk"]
-    with pytest.raises(_Unauthorized):
-        handler(FakeHass(), _FakeConnection(is_admin=False), msg)
-    connection = _FakeConnection()
-    handler(FakeHass(), connection, msg)
-    assert 1 in connection.results
+    async def test_command_is_admin_gated(
+        self,
+        component_ws: MockHAClientWebSocket,
+        component_ws_read_only: MockHAClientWebSocket,
+    ) -> None:
+        refused = await _reply(component_ws_read_only, "resolve", refs=["Milk"])
+        assert refused["success"] is False
+        assert refused["error"]["code"] == ERR_UNAUTHORIZED
+        assert (await _run(component_ws, "resolve", refs=["Milk"]))["success"]
 
 
 # --- server client --------------------------------------------------------------
@@ -486,60 +630,91 @@ def caps(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return invalidate
 
 
+@pytest.mark.usefixtures("tasks")
 class TestClient:
-    async def test_reply_comes_back(self, caps: MagicMock) -> None:
-        reply = {"success": True, "items": [None]}
-        client = _Client({"success": True, "result": reply})
-        got = await component_todo.todo_item(client, LIST, "resolve", refs=["x"])
-        assert got == reply
-        assert client.sent == [
-            {
-                "type": component_todo.WS_TODO_ITEM,
-                "entity_id": LIST,
-                "action": "resolve",
-                "refs": ["x"],
-            }
-        ]
+    async def test_reply_comes_back(
+        self, component_core_client: HomeAssistantClient
+    ) -> None:
+        got = await component_todo.todo_item(
+            component_core_client, LIST, "resolve", refs=["Milk", "x"]
+        )
+        assert got is not None
+        assert got["success"] is True
+        assert [row and row["uid"] for row in got["items"]] == ["1", None]
 
-    async def test_refusal_comes_back(self, caps: MagicMock) -> None:
-        reply = {"success": False, "error": {"code": "namesake", "message": "m"}}
-        client = _Client({"success": True, "result": reply})
-        assert await component_todo.todo_item(client, LIST, "update") == reply
+    async def test_refusal_comes_back(
+        self, component_core_client: HomeAssistantClient, tasks: _TaskList
+    ) -> None:
+        tasks.rows.insert(0, _item("x", "3"))
+        got = await component_todo.todo_item(
+            component_core_client, LIST, "update", uid="3", data={"status": "completed"}
+        )
+        assert got is not None
+        assert got["success"] is False
+        assert got["error"]["code"] == "namesake"
 
     async def test_capability_absent_sends_nothing(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The capability probe gets Core's own unknown_command; a command sent
+        # after it would raise here.
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("must not be sent")),
+        )
+        assert await component_todo.todo_item(core_client, LIST, "resolve") is None
+
+    async def test_not_sent_falls_back(
+        self,
+        component_core_client: HomeAssistantClient,
+        tasks: _TaskList,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            component_todo, "get_component_caps", AsyncMock(return_value=None)
+            component_core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantCommandNotSent("down")),
         )
-        client = _Client()
-        assert await component_todo.todo_item(client, LIST, "resolve") is None
-        assert client.sent == []
+        got = await component_todo.todo_item(
+            component_core_client, LIST, "add", data={"item": "Eggs"}
+        )
+        assert got is None
+        assert len(tasks.rows) == 3
 
-    async def test_not_sent_falls_back(self, caps: MagicMock) -> None:
-        # The shape send_websocket_message raises when Core refused the
-        # connection (test_rest_client_ws_transport_failure).
-        unsent = HomeAssistantCommandNotSent("down")
-        unsent.__cause__ = HomeAssistantConnectionError("down")
-        client = _Client(raise_=unsent)
-        assert await component_todo.todo_item(client, LIST, "add") is None
-
-    async def test_rejected_token_does_not_fall_back(self, caps: MagicMock) -> None:
-        # The shape send_websocket_message raises when a rejected token
-        # stopped it from obtaining a client (test_rest_client_ws_transport_failure).
-        unsent = HomeAssistantCommandNotSent("rejected")
-        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
-        with pytest.raises(HomeAssistantCommandNotSent) as exc_info:
-            await component_todo.todo_item(_Client(raise_=unsent), LIST, "add")
-        assert exc_info.value is unsent
-
-    async def test_rejected_token_is_an_auth_error_not_an_unknown_outcome(
-        self, caps: MagicMock
+    # Core closes a socket whose token it refused; the client's close reply
+    # then re-arms aiohttp's heartbeat timer on that closed server socket
+    # (web_ws.py _on_data_received -> _reset_heartbeat), which nothing cancels.
+    @pytest.mark.parametrize("expected_lingering_timers", [True])
+    async def test_rejected_token_does_not_fall_back(
+        self, component_core_client: HomeAssistantClient, tasks: _TaskList
     ) -> None:
-        unsent = HomeAssistantCommandNotSent("rejected")
-        unsent.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
+        # The capabilities were read while the token worked; Core then refuses
+        # the token when the command needs a new connection.
+        assert await component_todo.todo_item(
+            component_core_client, LIST, "resolve", refs=["Milk"]
+        )
+        component_core_client.token = "revoked"
+        with pytest.raises(HomeAssistantCommandNotSent) as exc_info:
+            await component_todo.todo_item(
+                component_core_client, LIST, "add", data={"item": "Eggs"}
+            )
+        assert isinstance(exc_info.value.__cause__, HomeAssistantAuthError)
+        assert len(tasks.rows) == 3
+
+    # The same closed server socket as test_rejected_token_does_not_fall_back.
+    @pytest.mark.parametrize("expected_lingering_timers", [True])
+    async def test_rejected_token_is_an_auth_error_not_an_unknown_outcome(
+        self, component_core_client: HomeAssistantClient
+    ) -> None:
+        assert await component_todo.todo_item(
+            component_core_client, LIST, "resolve", refs=["Milk"]
+        )
+        component_core_client.token = "revoked"
         with pytest.raises(ToolError) as exc_info:
-            await component_todo.todo_call(_Client(raise_=unsent), LIST, "add")
+            await component_todo.todo_call(
+                component_core_client, LIST, "add", data={"item": "Eggs"}
+            )
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "AUTH_INVALID_TOKEN"
         assert "write_outcome_unknown" not in json.dumps(body)
@@ -556,22 +731,30 @@ class TestClient:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["write_outcome_unknown"] is True
 
-    async def test_unknown_command_falls_back(self, caps: MagicMock) -> None:
-        result = {"success": False, "error": "x", "error_code": "unknown_command"}
-        client = _Client(result)
-        assert await component_todo.todo_item(client, LIST, "add") is None
-        caps.assert_called_once_with(client)
+    async def test_unknown_command_falls_back(
+        self, core_client: HomeAssistantClient, caps: MagicMock
+    ) -> None:
+        # The capabilities say todo_item; Core, without the component, answers
+        # unknown_command.
+        assert await component_todo.todo_item(core_client, LIST, "add") is None
+        caps.assert_called_once_with(core_client)
 
-    async def test_core_without_todo_parts_falls_back(self, caps: MagicMock) -> None:
-        reply = {"success": False, "error": {"code": "unsupported", "message": "m"}}
-        client = _Client({"success": True, "result": reply})
-        assert await component_todo.todo_item(client, LIST, "add") is None
+    async def test_core_without_todo_parts_falls_back(
+        self,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delattr(todo_entity, "api_items_factory")
+        got = await component_todo.todo_item(
+            component_core_client, LIST, "add", data={"item": "Eggs"}
+        )
+        assert got is None
 
-    async def test_failed_command_is_an_error(self, caps: MagicMock) -> None:
-        result = {
-            "success": False,
-            "error": "boom",
-            "error_code": "home_assistant_error",
-        }
-        with pytest.raises(HomeAssistantError, match="boom"):
-            await component_todo.todo_item(_Client(result), LIST, "add")
+    async def test_failed_command_is_an_error(
+        self, component_core_client: HomeAssistantClient, tasks: _TaskList
+    ) -> None:
+        tasks.failure = HomeAssistantError("boom")
+        with pytest.raises(ClientError, match="boom"):
+            await component_todo.todo_item(
+                component_core_client, LIST, "add", data={"item": "Eggs"}
+            )

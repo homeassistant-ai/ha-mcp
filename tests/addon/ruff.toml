@@ -1,0 +1,20 @@
+# Extends the repository's ruff settings for this test tree with SLF001
+# (private member access). A unit test that reaches into a private attribute
+# of a Home Assistant object can force a state Core never produces and then
+# pin a fallback for it; one that calls a private function skips the public
+# entry point the user reaches. Files written before the check are listed
+# below. Converting one removes it from the list; no file is ever added.
+extend = "../../pyproject.toml"
+# Import sorting resolves first-party modules from the repository root, as the
+# root settings do.
+src = ["../..", "../../src"]
+
+[lint]
+extend-select = ["SLF001"]
+
+[lint.extend-per-file-ignores]
+"test_addon_startup.py" = ["SLF001"]
+"test_webhook_proxy.py" = ["SLF001"]
+"test_webhook_proxy_catalog.py" = ["SLF001"]
+"test_webhook_proxy_cloudhook.py" = ["SLF001"]
+"test_webhook_proxy_metadata.py" = ["SLF001"]

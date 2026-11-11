@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import WebSocketGenerator
 
 if TYPE_CHECKING:
     from ha_mcp.tools.component_api import ComponentCaps
@@ -29,7 +31,14 @@ if TYPE_CHECKING:
 # socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
 # tree never loads it. Nothing above imports Home Assistant: the plugin patches
 # Core's JSON and time helpers before Core is first imported.
-pytest_plugins = ["pytest_homeassistant.plugins", "tests.core_stand_in_guard"]
+# ``_core_client`` holds the ``core_client`` fixtures, in a module of its own
+# so the private-access check this file is listed for applies to them.
+pytest_plugins = [
+    "pytest_homeassistant.plugins",
+    "tests.core_stand_in_guard",
+    "tests.src.unit._core_client",
+    "tests.src.unit._settings_script",
+]
 
 # quickjs starts its shared worker thread on import; importing it here starts
 # that thread before any test, so Core's leftover-thread check never sees it.
@@ -371,7 +380,7 @@ def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
+async def component_ws(hass: HomeAssistant, hass_ws_client: WebSocketGenerator) -> Any:
     """A WebSocket client of a real ``hass`` with the ``ha_mcp_tools/*`` commands.
 
     The caller is an admin; ``component_ws_read_only`` is the same for a
@@ -386,7 +395,9 @@ async def component_ws(hass: Any, hass_ws_client: Any) -> Any:
 
 @pytest.fixture
 async def component_ws_read_only(
-    hass: Any, hass_ws_client: Any, hass_read_only_access_token: str
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    hass_read_only_access_token: str,
 ) -> Any:
     """``component_ws`` for a user who is not an admin."""
     from custom_components.ha_mcp_tools import websocket_api

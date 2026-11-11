@@ -8,7 +8,7 @@ error" from Supervisor.
 
 from __future__ import annotations
 
-import sys
+import importlib
 import types
 from pathlib import Path
 
@@ -17,9 +17,6 @@ import pytest
 from tests.src import haos_runtime
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO_ROOT / "tests" / "haos_image_build"))
-
-import dev_addon_tree  # noqa: E402
 
 # Copied as a tree by its own step.
 _STAGED_SEPARATELY = {"src"}
@@ -37,16 +34,23 @@ def _repo_files_the_dockerfile_copies() -> set[str]:
 
 
 @pytest.mark.parametrize(
-    "module", [dev_addon_tree, haos_runtime], ids=["image bake", "per-PR refresh"]
+    "module_name",
+    ["dev_addon_tree", "haos_runtime"],
+    ids=["image bake", "per-PR refresh"],
 )
 def test_the_staged_dev_app_context_holds_every_file_the_dockerfile_copies(
-    module: object,
+    module_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.syspath_prepend(str(_REPO_ROOT / "tests" / "haos_image_build"))
+    module: types.ModuleType = (
+        haos_runtime
+        if module_name == "haos_runtime"
+        else importlib.import_module(module_name)
+    )
     expected = _repo_files_the_dockerfile_copies()
     assert expected, "found no COPY sources in the dev Dockerfile"
-    staged = set(module.DEV_ADDON_REPO_FILES) | {  # type: ignore[attr-defined]
-        f"homeassistant-addon/{name}"
-        for name in module.STABLE_ADDON_FILES  # type: ignore[attr-defined]
+    staged = set(module.DEV_ADDON_REPO_FILES) | {
+        f"homeassistant-addon/{name}" for name in module.STABLE_ADDON_FILES
     }
 
     assert sorted(expected - staged) == []
@@ -59,11 +63,10 @@ def _load_dev_env_holder(monkeypatch: pytest.MonkeyPatch) -> object:
     repo root from that location and uses that package's relative imports;
     compiling it under that path reproduces both without copying.
     """
-    from tests.src.e2e import _conftest_embedded
+    from tests.src.e2e._conftest_embedded import _EMBEDDED_FEATURE_FLAGS as flags
 
     source_path = _REPO_ROOT / ".github" / "dev-ha-env" / "hold.py"
     run_path = _REPO_ROOT / "tests" / "src" / "e2e" / "hold.py"
-    flags = _conftest_embedded._EMBEDDED_FEATURE_FLAGS
     # The holder edits the shared flags at import; restore them afterwards.
     monkeypatch.setitem(
         flags, "enable_strict_mandatory_bps", flags["enable_strict_mandatory_bps"]
@@ -85,8 +88,8 @@ def test_the_dev_env_runs_its_embedded_server_in_developer_mode(
 ) -> None:
     """docs/dev-ha-env.md updates the embedded server with ha_dev_manage_server,
     which only a server in developer mode exposes."""
-    from tests.src.e2e import _conftest_embedded
+    from tests.src.e2e._conftest_embedded import _EMBEDDED_FEATURE_FLAGS as flags
 
     _load_dev_env_holder(monkeypatch)
 
-    assert _conftest_embedded._EMBEDDED_FEATURE_FLAGS["enable_dev_mode"] is True
+    assert flags["enable_dev_mode"] is True

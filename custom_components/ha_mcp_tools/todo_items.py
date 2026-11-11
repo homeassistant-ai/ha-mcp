@@ -165,19 +165,23 @@ async def _write(
             "not_supported", f"{entity.entity_id} does not support reordering items"
         )
     rows_before = [_row(core, i) for i in before]
-    try:
-        await hass.services.async_call(
-            core.domain,
-            _SERVICES[msg["action"]],
-            data,
-            target={"entity_id": entity.entity_id},
-            blocking=True,
-            context=msg.get("ha_mcp_context"),
-        )
-    except core.refused as err:
-        if [_row(core, i) for i in entity.todo_items or ()] != rows_before:
-            raise  # the list changed, so this is no refusal
-        return _failure("invalid", str(err))
+    # Core's update_item refuses an update that names no field, so an update
+    # that only reorders goes straight to the move.
+    only_moves = moves and set(data) == {"item"}
+    if not only_moves:
+        try:
+            await hass.services.async_call(
+                core.domain,
+                _SERVICES[msg["action"]],
+                data,
+                target={"entity_id": entity.entity_id},
+                blocking=True,
+                context=msg.get("ha_mcp_context"),
+            )
+        except core.refused as err:
+            if [_row(core, i) for i in entity.todo_items or ()] != rows_before:
+                raise  # the list changed, so this is no refusal
+            return _failure("invalid", str(err))
     if moves:
         # After the update, which Core resolved on the order as it was; the
         # move goes by uid, as Core's todo/item/move does.
@@ -186,9 +190,10 @@ async def _write(
                 uid=msg["uid"], previous_uid=msg["previous_uid"]
             )
         except core.error as err:
-            return _failure(
-                "move_failed", f"The update was applied, but the move failed: {err}"
+            applied = (
+                "" if only_moves else "The update was applied, but the move failed: "
             )
+            return _failure("move_failed", f"{applied}{err}")
     after = [_row(core, i) for i in entity.todo_items or ()]
     return _outcome(core, msg, before, current, after)
 

@@ -1,0 +1,47 @@
+# mypy checks the unit and app tests against Core's real types, but only what
+# it knows the type of. A fixture a test or another fixture takes with no
+# annotation, or typed `Any`, is unchecked: `hass.data = None` passes. Tests
+# are otherwise exempt from the type-hint rule; the Core fixtures are the
+# exception.
+id: no-untyped-core-fixtures
+language: python
+rule:
+  all:
+    - any:
+        # def test_x(hass): ...
+        - kind: identifier
+          regex: '^(hass|hass_ws_client|core_client|component_core_client|entity_registry|device_registry|area_registry)$'
+        # def test_x(hass=None): ...
+        - kind: default_parameter
+          regex: '^(hass|hass_ws_client|core_client|component_core_client|entity_registry|device_registry|area_registry)\s*='
+        # def test_x(hass: Any): ...
+        - kind: typed_parameter
+          regex: '^(hass|hass_ws_client|core_client|component_core_client|entity_registry|device_registry|area_registry)\s*:\s*(typing\.)?(Any|object)$'
+        - kind: typed_default_parameter
+          regex: '^(hass|hass_ws_client|core_client|component_core_client|entity_registry|device_registry|area_registry)\s*:\s*(typing\.)?(Any|object)\s*='
+    # pytest hands a fixture to a test function or to another fixture. A
+    # helper is given whatever its caller passes, which mypy checks there.
+    - inside:
+        kind: parameters
+        inside:
+          kind: function_definition
+          any:
+            - regex: '^(async\s+)?def\s+test_'
+            - inside:
+                kind: decorated_definition
+                has:
+                  kind: decorator
+                  regex: 'fixture'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+ignores:
+  - "tests/addon/test_webhook_proxy.py"
+message: |
+  Annotate the Core fixtures a test or fixture takes with their real types
+  (`hass: HomeAssistant`, `core_client: HomeAssistantClient`,
+  `entity_registry: er.EntityRegistry`, `hass_ws_client: WebSocketGenerator`),
+  not `Any`. mypy checks nothing done to an unannotated parameter, so a value
+  Core's types do not allow would pass. See tests/AGENTS.md, "Unit Tests Run on
+  Real Home Assistant Core".
+severity: error
