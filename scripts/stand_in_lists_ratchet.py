@@ -19,6 +19,11 @@ Two rules decide every added entry:
   rule's definition changed. A wider rule matches older files it did not
   match before; nothing else justifies a longer list.
 
+A listed file is exempt as a whole, so a pull request could also add a new
+faked test to one. For every file on an ast-grep rule's list that the pull
+request changes, the script counts what the rule refuses in the file at the
+base and in the checkout: the count may fall or stay, never rise.
+
 The script also refuses the ways around a list: narrowing a rule's ``files``,
 removing or renaming a rule, loosening the ``tests.*`` mypy settings, and
 turning ``SLF001`` off in a test ``ruff.toml``.
@@ -28,9 +33,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -87,6 +95,13 @@ class Base:
             raise RuntimeError(f"cannot look up {path} at the base: {listed.stderr}")
         # "<mode> <type> <object>\t<path>"
         return any(line.split()[1] == "blob" for line in listed.stdout.splitlines())
+
+    def changed(self) -> set[str]:
+        """The tracked files whose text in the checkout differs from the base."""
+        diff = self._git("diff", "--name-only", self.commit, "--")
+        if diff.returncode != 0:
+            raise RuntimeError(f"cannot compare with the base: {diff.stderr}")
+        return set(diff.stdout.split("\n")) - {""}
 
     def text(self, path: str) -> str | None:
         """``path`` at the base, or None when it did not exist there."""
@@ -271,6 +286,69 @@ def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:
                 problems.append(f"rules: {rule_id} lists the new file {entry}")
             elif not widened:
                 problems.append(f"rules: {entry} was added to {rule_id}'s list")
+    _check_listed_files(base, repo, head, problems)
+
+
+def _ast_grep() -> str:
+    found = shutil.which(
+        "ast-grep", path=str(Path(sys.executable).parent)
+    ) or shutil.which("ast-grep")
+    if not found:
+        raise RuntimeError("ast-grep-cli (dev group) is not installed")
+    return found
+
+
+def _match_counts(rule: dict[str, Any], root: Path, files: list[str]) -> dict[str, int]:
+    """How often ``rule`` matches each of ``files`` under ``root``, with the
+    rule's own ``files`` and ``ignores`` set aside."""
+    scanned = {k: v for k, v in rule.items() if k not in ("files", "ignores")}
+    with tempfile.TemporaryDirectory() as directory:
+        rule_file = Path(directory) / "rule.yml"
+        rule_file.write_text(yaml.safe_dump(scanned), encoding="utf-8")
+        proc = subprocess.run(
+            [_ast_grep(), "scan", "--rule", str(rule_file), "--json=compact", *files],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    try:
+        rows = json.loads(proc.stdout)
+    except ValueError as err:
+        raise RuntimeError(f"ast-grep failed on {rule['id']}: {proc.stderr}") from err
+    counts = dict.fromkeys(files, 0)
+    for row in rows:
+        counts[Path(row["file"]).as_posix()] += 1
+    return counts
+
+
+def _check_listed_files(
+    base: Base, repo: Path, rules: dict[str, dict[str, Any]], problems: list[str]
+) -> None:
+    """A listed file may change, but not gain what its list excuses."""
+    changed = base.changed()
+    for rule_id, rule in sorted(rules.items()):
+        files = sorted(
+            entry
+            for entry in map(str, rule.get("ignores") or [])
+            if entry in changed and (repo / entry).is_file() and base.has(entry)
+        )
+        if not files:
+            continue
+        now = _match_counts(rule, repo, files)
+        with tempfile.TemporaryDirectory() as directory:
+            for entry in files:
+                target = Path(directory) / entry
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(base.text(entry) or "", encoding="utf-8")
+            before = _match_counts(rule, Path(directory), files)
+        problems.extend(
+            f"rules: {entry} has {now[entry]} of what {rule_id} refuses, "
+            f"{before[entry]} at the base; a listed file may not gain any"
+            for entry in files
+            if now[entry] > before[entry]
+        )
 
 
 def _check_file_list(
@@ -331,7 +409,8 @@ def main(argv: list[str] | None = None) -> int:
             "'Unit Tests Run on Real Home Assistant Core'). Write the new test "
             "against real Core instead: take the core_client fixture, do not reach "
             "into private members, and fix its type errors. A renamed file counts "
-            "as new."
+            "as new. A listed file is exempt for what it already holds: a test added "
+            "to it goes in a new file, or the file is converted."
         )
         return 1
     print("No test was exempted from the real-Core checks.")
