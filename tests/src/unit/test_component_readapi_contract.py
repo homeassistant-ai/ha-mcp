@@ -58,9 +58,6 @@ from .test_component_ws_search import (
     wsapi,
 )
 from .test_config_get_component_routing import RoutingClient as GetRoutingClient
-from .test_entity_exposure_component_routing import (
-    RoutingClient as ExposureRoutingClient,
-)
 from .test_ha_config_list_helpers_component_routing import (
     RoutingClient as HelpersRoutingClient,
 )
@@ -79,6 +76,9 @@ from .test_ha_get_entity_component_routing import (
 from .test_ha_get_entity_component_routing import (
     _build_get_entity,
     _raw_entry,
+)
+from .test_ha_get_entity_exposure_component_routing import (
+    RoutingClient as ExposureRoutingClient,
 )
 from .test_ha_get_state_component_routing import (
     RoutingClient as StateRoutingClient,

@@ -27,11 +27,25 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 
-from .test_zone_icons_real_core import core_client  # noqa: F401 - fixture
+
+@pytest.fixture(params=["component", "core"])
+async def core_client(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> HomeAssistantClient:
+    """The shared ``core_client``, with and without the component's commands."""
+    # ``config`` serves the registry commands the tools send.
+    assert await async_setup_component(hass, "config", {})
+    if request.param == "component":
+        from custom_components.ha_mcp_tools import websocket_api
+
+        websocket_api.async_register_commands(hass)
+    return core_client
 
 
 @pytest.fixture
-async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:  # noqa: F811
+async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:
     """A registry entry whose entity_id the user changed."""
     assert await async_setup_component(hass, "homeassistant", {})
     registry = er.async_get(hass)
@@ -58,7 +72,7 @@ def _device_entity(hass: HomeAssistant, original_name: str | None) -> er.Registr
 
 async def test_auto_takes_the_id_core_generates(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     registry = er.async_get(hass)
@@ -77,7 +91,7 @@ async def test_auto_takes_the_id_core_generates(
 
 async def test_auto_on_a_mixed_case_id_takes_the_id_core_generates(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     registry = er.async_get(hass)
@@ -96,7 +110,7 @@ async def test_auto_on_a_mixed_case_id_takes_the_id_core_generates(
 @pytest.mark.parametrize("spelling", [str.lower, str.title])
 async def test_auto_on_an_automatic_id_renames_nothing(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     spelling: Callable[[str], str],
 ) -> None:
     registry = er.async_get(hass)
@@ -113,7 +127,7 @@ async def test_auto_on_an_automatic_id_renames_nothing(
 
 
 async def test_auto_on_an_unknown_entity_is_not_found(
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
         await EntityTools(core_client).ha_set_entity(
@@ -128,7 +142,7 @@ async def test_auto_on_an_unknown_entity_is_not_found(
 )
 async def test_main_entity_writes_what_the_dialog_writes(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     original_name: str | None,
     expected_name: str | None,
 ) -> None:
@@ -148,7 +162,7 @@ async def test_main_entity_writes_what_the_dialog_writes(
 
 async def test_main_entity_is_returned_unchanged(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
 ) -> None:
     registry = er.async_get(hass)
     entry = _device_entity(hass, "Dawn")
@@ -166,7 +180,7 @@ async def test_main_entity_is_returned_unchanged(
 
 async def test_main_entity_with_own_area_is_cores_refusal(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
 ) -> None:
     areas = ar.async_get(hass)
     kitchen = areas.async_create("Kitchen")
@@ -189,7 +203,7 @@ async def test_main_entity_with_own_area_is_cores_refusal(
 
 async def test_get_entity_serves_cores_full_entry(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     er.async_get(hass).async_update_entity(lamp, aliases=["Desk"])
@@ -205,7 +219,7 @@ async def test_get_entity_serves_cores_full_entry(
 
 
 async def test_a_rename_into_another_domain_is_cores_refusal(
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
@@ -220,7 +234,7 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
 
 async def test_enabling_returns_cores_restart_answer(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     er.async_get(hass).async_update_entity(
@@ -235,7 +249,7 @@ async def test_enabling_returns_cores_restart_answer(
 
 async def test_an_unknown_assistant_is_refused_before_any_write(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
@@ -251,7 +265,7 @@ async def test_an_unknown_assistant_is_refused_before_any_write(
 
 async def test_exposure_is_cores_map(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     tools = EntityTools(core_client)
@@ -275,7 +289,7 @@ async def test_exposure_is_cores_map(
 
 async def test_an_entity_without_registry_entry_reads_cores_store(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     hass.states.async_set("light.loose", "on")
@@ -303,7 +317,7 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
 
 async def test_a_mixed_case_list_read_finds_the_entry(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     result = await EntityTools(core_client).ha_get_entity(entity_id=["Light.My_Lamp"])
@@ -314,7 +328,7 @@ async def test_a_mixed_case_list_read_finds_the_entry(
 
 async def test_expose_new_entities_writes_cores_flag(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     store = hass.data[DATA_EXPOSED_ENTITIES]
@@ -331,7 +345,7 @@ async def test_expose_new_entities_writes_cores_flag(
 
 async def test_entity_id_parts_are_cores_settings(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     tools = EntityTools(core_client)
@@ -353,7 +367,7 @@ async def test_entity_id_parts_are_cores_settings(
 
 async def test_expose_to_on_an_entity_without_registry_entry(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     hass.states.async_set("light.loose", "on")
@@ -372,7 +386,7 @@ async def test_expose_to_on_an_entity_without_registry_entry(
 
 async def test_expose_to_hides_a_stored_entity_without_a_state(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     async_expose_entity(hass, "conversation", "light.gone", True)
@@ -388,7 +402,7 @@ async def test_expose_to_hides_a_stored_entity_without_a_state(
 
 async def test_expose_to_on_a_mixed_case_id_exposes_the_entry(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     # Core exposes a light to Assist by default, so hiding it is a change.
@@ -404,7 +418,7 @@ async def test_expose_to_on_a_mixed_case_id_exposes_the_entry(
 
 async def test_an_empty_expose_to_changes_nothing(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     written = await EntityTools(core_client).ha_set_entity(entity_id=lamp, expose_to={})
@@ -417,7 +431,7 @@ async def test_an_empty_expose_to_changes_nothing(
 
 async def test_expose_to_after_a_registry_update_exposes_the_entry(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     """The registry update's reply is the entry the exposure is sent for."""
@@ -433,7 +447,7 @@ async def test_expose_to_after_a_registry_update_exposes_the_entry(
 
 async def test_expose_to_on_an_unknown_entity_writes_nothing(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
@@ -447,7 +461,7 @@ async def test_expose_to_on_an_unknown_entity_writes_nothing(
 
 async def test_bulk_expose_to_writes_under_the_ids_core_reads(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,  # noqa: F811
+    core_client: HomeAssistantClient,
     lamp: str,
 ) -> None:
     hass.states.async_set("light.loose", "on")

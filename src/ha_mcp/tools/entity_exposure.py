@@ -13,7 +13,6 @@ from collections import Counter
 from typing import Any
 
 from ..client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
     HomeAssistantError,
@@ -227,7 +226,5 @@ async def _state_entity_id(client: Any, entity_id: str) -> str | None:
     state = await get_entity_state_or_none(client, entity_id)
     if state is None:
         return None
-    state_id = state.get("entity_id")
-    if not isinstance(state_id, str):
-        raise HomeAssistantAPIError(f"the state reply for {entity_id} has no entity_id")
+    state_id: str = state["entity_id"]
     return state_id
