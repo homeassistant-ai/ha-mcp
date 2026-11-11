@@ -12,7 +12,6 @@ component's entity search raises Core's own error.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -20,28 +19,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-
-def _build_ha_search(client: HomeAssistantClient) -> Any:
-    mcp = MagicMock()
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp.add_tool = capture_add_tool
-    register_search_tools(mcp, client, smart_tools=SmartSearchTools(client=client))
-    return registered["ha_search"]
+from ._search_tool import _build_ha_search
 
 
 @pytest.mark.asyncio

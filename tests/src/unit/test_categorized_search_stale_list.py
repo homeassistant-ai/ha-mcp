@@ -6,7 +6,6 @@ does not let grow.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,15 +13,9 @@ import pytest
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.fastmcp.tools.base import ToolResult
 from ha_mcp._vendor.mcp.types import ToolAnnotations
-from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-
-@pytest.fixture(autouse=True)
-def search_connection() -> Iterator[None]:
-    """These tests exercise the transform on a search-mode connection."""
-    with catalog_endpoint("search"):
-        yield
+from ._search_mode_connection import search_connection  # noqa: F401
 
 
 def _make_tool(

@@ -7,7 +7,8 @@ import pytest
 
 from ha_mcp.settings_ui import _SETTINGS_HTML
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._astro_setup_wizard import _assert_clean_init
+from ._js_harness import extract_script_body, run_script
 
 DEFAULT_FETCHES: dict[str, dict] = {
     "/api/settings/features": {
@@ -31,16 +32,6 @@ DEFAULT_FETCHES: dict[str, dict] = {
         "json": {"set": False},
     },
 }
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    """Surface script-init errors before the side-effect assertions."""
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 @pytest.mark.parametrize("env_disabled", [False, True])

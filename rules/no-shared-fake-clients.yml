@@ -152,7 +152,6 @@ ignores:
   - "tests/src/unit/test_helper_update_persistence.py"
   - "tests/src/unit/test_history_pagination.py"
   - "tests/src/unit/test_identifier_validation_family.py"
-  - "tests/src/unit/test_integration_ws_commands.py"
   - "tests/src/unit/test_json_string_param_coercion.py"
   - "tests/src/unit/test_label_area_assignment.py"
   - "tests/src/unit/test_label_set_discriminator_1860.py"

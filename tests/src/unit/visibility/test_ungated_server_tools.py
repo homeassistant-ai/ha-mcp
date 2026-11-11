@@ -5,7 +5,7 @@ bundled docs, tool schemas and server controls, whose examples can name
 entity_ids that collide with a user's hidden set.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -19,11 +19,9 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.visibility import resolver
-from ha_mcp.visibility.enforcement import (
-    VisibilityInboundEnforcement,
-    VisibilityOutboundEnforcement,
-)
 from ha_mcp.visibility.model import VisibilityConfig
+
+from ._chained_enforcement import _ChainedEnforcement, _returns
 
 _TEXT = "action: light.turn_on\ntarget:\n  entity_id: light.kitchen"
 _GUIDE_ARGS = {"file": "references/automation-actions.md"}
@@ -40,27 +38,6 @@ def text_result(text: str) -> SimpleNamespace:
         content=[SimpleNamespace(type="text", text=text)],
         structured_content=None,
     )
-
-
-def _returns(result: SimpleNamespace) -> Callable[[Any], Awaitable[SimpleNamespace]]:
-    async def _call_next(context: Any) -> SimpleNamespace:
-        return result
-
-    return _call_next
-
-
-class _ChainedEnforcement:
-    """Inbound wrapping outbound, as the server registers the pair."""
-
-    def __init__(self, client: HomeAssistantClient) -> None:
-        self.inbound = VisibilityInboundEnforcement(get_client=lambda: client)
-        self.outbound = VisibilityOutboundEnforcement(get_client=lambda: client)
-
-    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
-        async def _inner(ctx: Any) -> Any:
-            return await self.outbound.on_call_tool(ctx, call_next)
-
-        return await self.inbound.on_call_tool(context, _inner)
 
 
 @pytest.mark.parametrize(

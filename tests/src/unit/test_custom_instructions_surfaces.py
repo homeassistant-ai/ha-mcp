@@ -1,8 +1,5 @@
 """Where custom_instructions may be written and where it shows up besides the agents."""
 
-from collections.abc import Iterator
-from pathlib import Path
-
 import pytest
 from homeassistant.core import HomeAssistant
 
@@ -10,32 +7,13 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.bug_report_config import collect_config_toggles
-from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
-from ha_mcp.utils.data_paths import get_data_dir
+from ha_mcp.tools.tools_dev import DevTools
 
-POLICY_ACCESS_FLAG = "HAMCP_DEV_SECURITY_POLICY_ACCESS"
-
-
-@pytest.fixture(autouse=True)
-def _isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Isolate the data dir and the Settings singleton per test."""
-    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv(FEATURE_FLAG, raising=False)
-    monkeypatch.delenv(POLICY_ACCESS_FLAG, raising=False)
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    get_data_dir.cache_clear()
-    reset_global_settings()
-    yield
-    get_data_dir.cache_clear()
-    reset_global_settings()
-
-
-@pytest.fixture
-def _policy_access_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Grant the dev tools security-policy access (#2141)."""
-    monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
-    reset_global_settings()
+from ._dev_tool_env import (  # noqa: F401
+    POLICY_ACCESS_FLAG,
+    _isolated_env,
+    _policy_access_on,
+)
 
 
 @pytest.mark.usefixtures("_policy_access_on")

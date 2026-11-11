@@ -11,7 +11,8 @@ import re
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._astro_setup_wizard import _assert_clean_init
+from ._js_harness import HarnessResult, run_script
 
 MODAL_SCAFFOLD = (
     '<div id="modalBackdrop"><div class="modal" role="dialog" tabindex="-1">'
@@ -41,13 +42,6 @@ DEFAULT_FETCHES: dict[str, dict] = {
 }
 
 
-@pytest.fixture(scope="module")
-def settings_script() -> str:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
-
-
 def _element(el_id: str) -> str:
     if el_id == "modalBackdrop":
         return MODAL_SCAFFOLD
@@ -74,15 +68,6 @@ def min_dom(settings_script: str) -> str:
     ids = dict.fromkeys(re.findall(r"getElementById\('([^']+)'\)", settings_script))
     body = "\n".join(_element(i) for i in ids)
     return f"<!DOCTYPE html>\n<html><body>\n{body}\n</body></html>"
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 READ_INPUT = """

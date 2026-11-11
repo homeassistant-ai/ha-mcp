@@ -8,10 +8,8 @@ import types
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from urllib.parse import urlencode
 
-import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.base_protocol import BaseProtocol
@@ -20,37 +18,11 @@ from aiohttp.test_utils import make_mocked_request
 from homeassistant.components.http import ApiConfig
 from homeassistant.core import HomeAssistant
 
+from ._core_forward_relay import _RelaySession
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
 PACKAGE = "webhook_proxy_dev_forward_tls_test"
-
-
-class _CoreAnswer:
-    status = 200
-    content_type = "application/json"
-
-    async def __aenter__(self) -> _CoreAnswer:
-        return self
-
-    async def __aexit__(self, *_args: object) -> bool:
-        return False
-
-    async def read(self) -> bytes:
-        return b'{"access_token":"core"}'
-
-
-class _RelaySession:
-    """Rejects a verified https hop: core's certificate names neither
-    127.0.0.1 nor a private-CA host the container trusts."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    def post(self, url: str, **kwargs: Any) -> _CoreAnswer:
-        self.calls.append((url, kwargs))
-        if url.startswith("https://") and kwargs.get("ssl") is not False:
-            raise aiohttp.ClientError("certificate verify failed")
-        return _CoreAnswer()
 
 
 @pytest.fixture
