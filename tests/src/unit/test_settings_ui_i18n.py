@@ -27,7 +27,7 @@ from ha_mcp.settings_ui._i18n import (
     select_locale,
     serialize_payload,
 )
-from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
+from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
 
 def _shipped_locales() -> list[str]:

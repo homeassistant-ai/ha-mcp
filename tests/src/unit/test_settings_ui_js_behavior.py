@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import ClassVar, get_args
 
 import pytest
 
 from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._locale_catalogs import catalog_messages
 from ._settings_ui_dom import (
     _TOP_LEVEL_ELEMENT_IDS,
     DEFAULT_FETCHES,
@@ -2075,23 +2075,6 @@ def _localized_policy_dom(locale: str) -> str:
     return _policy_panel_dom().replace("</body>", element + "</body>")
 
 
-# Klingon is the hand-maintained best-effort catalog (see the settings UI's
-# locales/README.md): it may fall back to English, which these cases refuse.
-_BEST_EFFORT_LOCALES = frozenset({"tlh"})
-
-
-def _catalog_messages(locale: str) -> dict[str, str]:
-    """``locale``'s own messages as shipped, without the English fallback.
-
-    The served code is lower case (``zh-hans``); the file keeps its own case.
-    """
-    import ha_mcp.settings_ui
-
-    locales = Path(ha_mcp.settings_ui.__file__).parent / "locales"
-    [catalog] = [path for path in locales.glob("*.json") if path.stem.lower() == locale]
-    return json.loads(catalog.read_text(encoding="utf-8"))["messages"]
-
-
 def _already_decided_cases() -> list[tuple[str, str]]:
     """Every (non-English locale, decided outcome) pair the 409 can produce.
 
@@ -2100,10 +2083,11 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     """
     from ha_mcp.policy.approval_queue import Decision
     from ha_mcp.settings_ui import build_payload, select_locale
+    from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
     default = select_locale()
     served = {language["code"] for language in build_payload(default)["languages"]}
-    locales = sorted(served - {default} - _BEST_EFFORT_LOCALES)
+    locales = sorted(served - {default} - BEST_EFFORT_LOCALES)
     outcomes = sorted(set(get_args(Decision)) - {"pending"})
     # Both sides are discovered, so either emptying out collects zero cases
     # and the class below passes without driving the handler once.
@@ -2436,7 +2420,7 @@ class TestAlreadyDecidedCopy:
             f"expected the single 409 alert; got {result.alerts}"
         )
         alert = result.alerts[0]
-        messages = _catalog_messages(locale)
+        messages = catalog_messages(locale)
         word = messages[f"policies.pending.decision.{outcome}"]
         # Whole sentence, not containment: the host a containment check
         # searches is that same catalog value with the word already
@@ -2512,7 +2496,7 @@ class TestDecideUnavailableCopy:
         result = self._decide_under_503(settings_script, enabled=False)
         _assert_clean_init(result)
 
-        expected = _catalog_messages("it")["policies.pending.disabled"]
+        expected = catalog_messages("it")["policies.pending.disabled"]
         assert result.alerts == [expected], (
             f"expected the Italian off-message {expected!r}; got {result.alerts}. "
             "A user who simply turned the feature off is being told to read the "
@@ -2553,7 +2537,7 @@ class TestDecideUnavailableCopy:
         )
         _assert_clean_init(result)
 
-        expected = _catalog_messages("it")["policies.pending.unavailable"]
+        expected = catalog_messages("it")["policies.pending.unavailable"]
         assert result.alerts == [expected], (
             f"expected the Italian unavailable line {expected!r}; got "
             f"{result.alerts}. Anything else here is untranslated text — or the "
