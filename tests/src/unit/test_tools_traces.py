@@ -8,10 +8,12 @@ stored through Core's ``async_store_trace``, read back over Core's WebSocket
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.trace import async_store_trace
 from homeassistant.core import Context, HomeAssistant
@@ -26,7 +28,7 @@ from ha_mcp.tools.tools_traces import (
     _format_trace_list,
     _resolve_trace_item_id,
 )
-from ha_mcp.tools.trace_lookup import _raise_trace_ws_failure
+from ha_mcp.tools.trace_lookup import _raise_trace_ws_failure, resolve_context_trace
 
 from ._component_core import ws_result
 
@@ -148,6 +150,7 @@ class TestFormatTraceList:
         self,
         hass: HomeAssistant,
         hass_ws_client: WebSocketGenerator,
+        freezer: FrozenDateTimeFactory,
         limit: int,
         offset: int,
         order: Literal["newest", "oldest"],
@@ -156,10 +159,15 @@ class TestFormatTraceList:
     ) -> None:
         """limit/offset/order select one window of Core's sorted rows.
 
-        The runs are stored oldest first, so Core's start timestamps order them
-        ``run_0``..``run_4`` regardless of the order ``trace/list`` returns.
+        The clock moves a minute between runs, so Core's own start timestamps
+        order them ``run_0``..``run_4`` regardless of the order ``trace/list``
+        returns.
         """
-        await _store(hass, *[_run(f"run_{i}") for i in range(5)])
+        traces = []
+        for i in range(5):
+            traces.append(_run(f"run_{i}"))
+            freezer.tick(timedelta(minutes=1))
+        await _store(hass, *traces)
         rows = await _core_rows(hass, hass_ws_client)
 
         result = _format_trace_list(
@@ -185,15 +193,21 @@ class TestFormatTraceList:
         assert result["traces"] == core_rows
 
     async def test_list_orders_mixed_not_triggered_by_core_start_time(
-        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        freezer: FrozenDateTimeFactory,
     ) -> None:
         """Run and not-triggered traces page in Core's timestamp order."""
-        await _store(
-            hass,
-            _run("run_oldest"),
-            _run("not_triggered_middle", not_triggered=True),
-            _run("run_newest"),
-        )
+        traces = []
+        for run_id, not_triggered in (
+            ("run_oldest", False),
+            ("not_triggered_middle", True),
+            ("run_newest", False),
+        ):
+            traces.append(_run(run_id, not_triggered=not_triggered))
+            freezer.tick(timedelta(minutes=1))
+        await _store(hass, *traces)
         rows = await _core_rows(hass, hass_ws_client)
 
         newest = _format_trace_list("automation.test", rows, 2)
@@ -282,6 +296,44 @@ class TestResolveTraceItemId:
         )
 
         assert item_id == "fallback_obj"
+
+    async def test_a_dead_transport_falls_back_to_the_object_id(
+        self,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A client that gets no answer also leaves the object_id."""
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+        )
+
+        item_id = await _resolve_trace_item_id(
+            core_client, "automation.test", "fallback_obj"
+        )
+
+        assert item_id == "fallback_obj"
+
+
+class TestResolveContextTrace:
+    """A run's own context is resolved from Core's ``trace/contexts`` map."""
+
+    async def test_own_context_resolves_to_the_run(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core's own-context map holds the stored run, and answers it."""
+        await _store(hass, _run("r1"))
+
+        match = await resolve_context_trace(
+            core_client, "automation", "uid_1", "ctx-r1"
+        )
+
+        assert match.run_id == "r1"
+        assert match.match == "trace"
+        assert match.domain == "automation"
+        assert match.item_id == "uid_1"
+        assert match.scanned == 0
 
 
 class TestTraceFetchFailures:
