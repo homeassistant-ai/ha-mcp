@@ -562,3 +562,150 @@ def test_the_private_access_list_is_exactly_the_files_that_still_violate(
         "listed but clean": sorted(listed - violating),
         "violating but unlisted": sorted(violating - listed),
     }
+
+
+# SLF001 sees `module._name` but not `from module import _name`, which skips
+# the public entry point the same way. Ruff's PLC2701 would see it, but it also
+# refuses every private segment of a module path, so the `ha_mcp._vendor`
+# imports the style guide requires would trip it, and it takes no allowlist.
+# The vendored packages' `ha_mcp._vendor` path, the test trees' own helper
+# modules (relative or `tests.`) and dunder names stay out of it.
+_PRIVATE_IMPORTS = {
+    "id": "no-private-imports",
+    "language": "python",
+    "rule": {
+        "all": [
+            {"kind": "import_from_statement"},
+            {"not": {"has": {"field": "module_name", "kind": "relative_import"}}},
+            {"not": {"regex": r"^from\s+(tests|__future__)\b"}},
+            {
+                "any": [
+                    # from ha_mcp.x import _name (vendored packages included:
+                    # a test reaches them the way the code uses them)
+                    {
+                        "has": {
+                            "kind": "dotted_name",
+                            "regex": "^_[A-Za-z0-9]",
+                            "stopBy": "end",
+                        }
+                    },
+                    # from ha_mcp._internal_module import name; `ha_mcp._vendor`
+                    # is the vendored packages' import path, not a private module
+                    {
+                        "all": [
+                            {
+                                "has": {
+                                    "field": "module_name",
+                                    "regex": r"(^|\.)_[A-Za-z0-9]",
+                                }
+                            },
+                            {
+                                "not": {
+                                    "has": {
+                                        "field": "module_name",
+                                        "regex": r"^ha_mcp\._vendor(\.[a-z][\w.]*)?$",
+                                    }
+                                }
+                            },
+                        ]
+                    },
+                ]
+            },
+        ]
+    },
+    "files": ["tests/src/unit/**", "tests/addon/**"],
+    "message": "private name imported from the code under test",
+    "severity": "error",
+}
+
+
+def _private_imports_rule(tmp_path: Path) -> Path:
+    rule = tmp_path / "no-private-imports.yml"
+    rule.write_text(yaml.safe_dump(_PRIVATE_IMPORTS), encoding="utf-8")
+    return rule
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged"),
+    [
+        pytest.param("from ha_mcp.tools.x import _helper\n", True, id="private-name"),
+        pytest.param(
+            "from ha_mcp.tools.x import (\n    public,\n    _helper,\n)\n",
+            True,
+            id="parenthesized",
+        ),
+        pytest.param(
+            "from ha_mcp.settings_ui import _handlers as h\n", True, id="private-module"
+        ),
+        pytest.param(
+            "from ha_mcp._rich_compat import ensure\n", True, id="private-module-path"
+        ),
+        pytest.param(
+            "from ha_mcp._vendor.fastmcp.exceptions import ToolError\n",
+            False,
+            id="vendored-path",
+        ),
+        pytest.param(
+            "from ha_mcp._vendor.fastmcp.tools.base import _default\n",
+            True,
+            id="vendored-private-name",
+        ),
+        pytest.param("from ._helpers import _local\n", False, id="relative-helper"),
+        pytest.param(
+            "from tests.src.unit._helpers import _local\n", False, id="test-helper"
+        ),
+        pytest.param("from ha_mcp import __version__\n", False, id="dunder"),
+        pytest.param("from ha_mcp.config import get\n", False, id="public-name"),
+    ],
+)
+def test_private_import_rule_matches_only_private_names_of_the_code(
+    source: str, flagged: bool, tmp_path: Path
+) -> None:
+    sample = tmp_path / "tests" / "src" / "unit" / "test_sample.py"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_text(source, encoding="utf-8")
+
+    rows = _scan(
+        _private_imports_rule(tmp_path), tmp_path, "tests/src/unit/test_sample.py"
+    )
+
+    assert bool(rows) is flagged
+
+
+def _grandfathered_tests() -> set[str]:
+    """Every test file still on one of the real-Core lists."""
+    listed: set[str] = set()
+    for rule_file in _RULES.glob("*.yml"):
+        rule = yaml.safe_load(rule_file.read_text(encoding="utf-8"))
+        listed.update(rule.get("ignores") or [])
+    for tree in ("tests/src/unit", "tests/addon"):
+        lint = tomllib.loads((_REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
+        listed.update(
+            f"{tree}/{pattern}"
+            for pattern in lint["lint"].get("extend-per-file-ignores", {})
+        )
+    mypy = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    for override in mypy["tool"]["mypy"].get("overrides", []):
+        modules = override.get("module", [])
+        if override.get("ignore_errors"):
+            listed.update(
+                module.replace(".", "/") + ".py"
+                for module in ([modules] if isinstance(modules, str) else modules)
+                if module.startswith("tests.")
+            )
+    guard = (_REPO / "tests" / "core_stand_in_guard.py").read_text(encoding="utf-8")
+    listed.update(re.findall(r'"(tests/[^"]+\.py)"', guard))
+    return listed
+
+
+def test_a_converted_test_imports_no_private_name(tmp_path: Path) -> None:
+    """A file leaving the real-Core lists reaches the code through its public
+    entry points: importing ``_name`` would skip them as ``module._name`` does."""
+    violating = {
+        row["file"].replace("\\", "/")
+        for row in _scan(_private_imports_rule(tmp_path), _REPO, "tests")
+    }
+
+    assert violating <= _grandfathered_tests(), sorted(
+        violating - _grandfathered_tests()
+    )
