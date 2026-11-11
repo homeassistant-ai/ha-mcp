@@ -1,5 +1,5 @@
-"""ha_get_entity / ha_set_entity without an entity, and exposure of an entity
-without a registry entry, on a real ``hass``.
+"""ha_get_entity / ha_set_entity without an entity, exposure of an entity
+without a registry entry, and failed entity writes, on a real ``hass``.
 
 Core's own answers for these commands are pinned in
 test_entity_registry_real_core.py; these tests pin what the tools send, the
@@ -65,6 +65,25 @@ def state_read_drops(
     )
 
 
+@pytest.fixture
+def refetch_drops(
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+) -> None:
+    """Core applies the exposure, then the connection drops: the read after it
+    gets no answer."""
+    expose = core_exposed.async_expose_entity
+
+    def expose_then_drop(*args: Any) -> None:
+        expose(*args)
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+        )
+
+    monkeypatch.setattr(core_exposed, "async_expose_entity", expose_then_drop)
+
+
 def _messages(sent: AsyncMock) -> list[dict[str, Any]]:
     return [call.args[0] for call in sent.call_args_list]
 
@@ -86,6 +105,22 @@ def _list_raises(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
     monkeypatch.setattr(
         core_exposed, "async_get_entity_settings", MagicMock(side_effect=error)
     )
+
+
+def _expose_raises(
+    monkeypatch: pytest.MonkeyPatch, only_for: bool | None = None
+) -> None:
+    """Core's exposure write raises; ``only_for`` limits it to that value."""
+    expose = core_exposed.async_expose_entity
+
+    def expose_or_raise(
+        hass: HomeAssistant, assistant: str, entity_id: str, value: bool
+    ) -> None:
+        if only_for in (None, value):
+            raise HomeAssistantError("boom")
+        expose(hass, assistant, entity_id, value)
+
+    monkeypatch.setattr(core_exposed, "async_expose_entity", expose_or_raise)
 
 
 def _after_settings_write(
@@ -301,11 +336,7 @@ class TestExposeToWithoutRegistryEntry:
     async def test_a_failed_bulk_write_keeps_the_rows_failed_before_it(
         self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
     ) -> None:
-        monkeypatch.setattr(
-            core_exposed,
-            "async_expose_entity",
-            MagicMock(side_effect=HomeAssistantError("boom")),
-        )
+        _expose_raises(monkeypatch)
         result = await tools.ha_set_entity(
             entity_id=["light.kitchen", "light.porch"],
             expose_to={"conversation": True},
@@ -375,28 +406,14 @@ class TestBulkRead:
         assert list(body["errors"]) == ["light.kitchen"]
         assert "registry busy" in body["errors"]["light.kitchen"]
 
+    @pytest.mark.usefixtures("refetch_drops")
     async def test_a_dropped_refetch_keeps_the_exposed_rows_and_warns(
-        self,
-        hass: HomeAssistant,
-        monkeypatch: pytest.MonkeyPatch,
-        core_client: HomeAssistantClient,
-        tools: EntityTools,
+        self, hass: HomeAssistant, tools: EntityTools
     ) -> None:
         er.async_get(hass).async_get_or_create(
             "light", "demo", "desk", suggested_object_id="desk"
         )
         ids = ["light.kitchen", "light.desk"]
-        expose = core_exposed.async_expose_entity
-
-        def expose_then_drop(*args: Any) -> None:
-            expose(*args)
-            monkeypatch.setattr(
-                core_client,
-                "send_websocket_message",
-                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
-            )
-
-        monkeypatch.setattr(core_exposed, "async_expose_entity", expose_then_drop)
         result = await tools.ha_set_entity(
             entity_id=ids, expose_to={"conversation": True}
         )
@@ -590,3 +607,124 @@ class TestRegistryWideWrite:
 
         assert _error(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
         sent.assert_not_called()
+
+
+class TestEntityWriteFailure:
+    async def test_a_failed_exposure_after_a_registry_write_is_partial(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+    ) -> None:
+        _expose_raises(monkeypatch)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.kitchen",
+                name="Updated",
+                expose_to={"conversation": True},
+            )
+
+        body = _body(exc_info)
+        assert "boom" in body["error"]["message"]
+        assert body["partial"] is True
+        assert body["entity_entry"]["name"] == "Updated"
+        assert body["exposure_succeeded"] == {}
+        assert body["exposure_failed"] == {"conversation": True}
+        entry = er.async_get(hass).async_get("light.kitchen")
+        assert entry is not None
+        assert entry.name == "Updated"
+
+    async def test_a_failed_exposure_alone_is_not_partial(
+        self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+    ) -> None:
+        _expose_raises(monkeypatch)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.kitchen", expose_to={"conversation": True}
+            )
+
+        body = _body(exc_info)
+        assert body["success"] is False
+        assert "partial" not in body
+        assert body["exposure_succeeded"] == {}
+        assert body["exposure_failed"] == {"conversation": True}
+
+    async def test_a_failed_second_exposure_names_the_first_as_applied(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+    ) -> None:
+        _expose_raises(monkeypatch, only_for=False)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.kitchen",
+                expose_to={"cloud.alexa": True, "conversation": False},
+            )
+
+        body = _body(exc_info)
+        assert body["partial"] is True
+        assert body["exposure_succeeded"] == {"cloud.alexa": True}
+        assert body["exposure_failed"] == {"conversation": False}
+        store = hass.data[core_exposed.DATA_EXPOSED_ENTITIES]
+        assert store.async_get_assistant_settings("cloud.alexa")["light.kitchen"] == {
+            "should_expose": True
+        }
+
+    @pytest.mark.usefixtures("refetch_drops")
+    async def test_a_dropped_refetch_keeps_the_written_entry_and_warns(
+        self, tools: EntityTools
+    ) -> None:
+        result = await tools.ha_set_entity(
+            entity_id="light.kitchen", name="Porch", expose_to={"conversation": True}
+        )
+
+        assert result["success"] is True
+        assert result["exposure"] == {"conversation": True}
+        assert result["entity_entry"]["name"] == "Porch"
+        [warning] = result["warnings"]
+        assert "connection lost" in warning
+
+    async def test_a_failed_bulk_exposure_fails_every_id_and_reads_nothing_after(
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        tools: EntityTools,
+        sent: AsyncMock,
+    ) -> None:
+        er.async_get(hass).async_get_or_create(
+            "light", "demo", "desk", suggested_object_id="desk"
+        )
+        _expose_raises(monkeypatch)
+        result = await tools.ha_set_entity(
+            entity_id=["light.kitchen", "light.desk"],
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is False
+        assert result["succeeded_count"] == 0
+        # One row per id, though every id was in the failed write.
+        assert [f["entity_id"] for f in result["failed"]] == [
+            "light.kitchen",
+            "light.desk",
+        ]
+        assert all("boom" in f["error"] for f in result["failed"])
+        assert _types(sent).count(_EXPOSE) == 1
+        assert _types(sent)[-1] == _EXPOSE
+
+    async def test_a_refused_first_options_write_is_not_partial(
+        self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+    ) -> None:
+        # Core answers a ValueError here with its invalid_info error.
+        monkeypatch.setattr(
+            er.EntityRegistry,
+            "async_update_entity_options",
+            MagicMock(side_effect=ValueError("Options refused")),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.kitchen", options={"light": {"x": 1}}
+            )
+
+        body = _body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "Options refused" in body["error"]["message"]
+        assert body["partial"] is False
+        assert body["options_succeeded"] == {}
+        assert "Partially" not in body["error"]["message"]
+        # No write applied: an entry here would read as the entity's settings.
+        assert "entity_entry" not in body

@@ -7,20 +7,24 @@ fields ha_set_entity takes from the entity dialog land in a real registry.
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.components.homeassistant import exposed_entities as core_exposed
 from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
 from homeassistant.components.homeassistant.exposed_entities import (
     async_expose_entity,
 )
+from homeassistant.components.websocket_api import ActiveConnection
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
@@ -56,8 +60,22 @@ async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:
     return "light.my_lamp"
 
 
+@pytest.fixture
+def desk(hass: HomeAssistant) -> str:
+    """A second light entry, for the bulk writes."""
+    return er.async_get(hass).async_get_or_create("light", "demo", "desk").entity_id
+
+
 def _types(sent: AsyncMock) -> list[str]:
     return [call.args[0]["type"] for call in sent.call_args_list]
+
+
+def _expose_writes(sent: AsyncMock) -> list[dict[str, Any]]:
+    return [
+        call.args[0]
+        for call in sent.call_args_list
+        if call.args[0]["type"] == "homeassistant/expose_entity"
+    ]
 
 
 def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
@@ -669,3 +687,298 @@ async def test_bulk_expose_to_writes_under_the_ids_core_reads(
     [typo_row] = result["failed"]
     assert typo_row == {"entity_id": "light.typo", "error": "Entity not found"}
     assert "warnings" not in result
+
+
+@pytest.mark.parametrize(
+    ("expose_to", "writes"),
+    [
+        ({"conversation": True}, [(["conversation"], True)]),
+        # Read again after the write, also when the write only hides.
+        ({"conversation": False}, [(["conversation"], False)]),
+        (
+            {
+                "conversation": True,
+                "cloud.alexa": True,
+                "cloud.google_assistant": False,
+            },
+            [
+                (["conversation", "cloud.alexa"], True),
+                (["cloud.google_assistant"], False),
+            ],
+        ),
+    ],
+)
+async def test_expose_to_writes_once_per_value_and_returns_the_entry_after_it(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    lamp: str,
+    expose_to: dict[str, bool],
+    writes: list[tuple[list[str], bool]],
+) -> None:
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, expose_to=expose_to
+    )
+
+    assert result["exposure"] == expose_to
+    entry = er.async_get(hass).async_get(lamp)
+    assert entry is not None
+    for assistant, should_expose in expose_to.items():
+        assert entry.options[assistant]["should_expose"] is should_expose
+        returned = result["entity_entry"]["options"][assistant]
+        assert returned["should_expose"] is should_expose
+    sent_writes = _expose_writes(sent)
+    assert [(w["assistants"], w["should_expose"]) for w in sent_writes] == writes
+    assert all(w["entity_ids"] == [lamp] for w in sent_writes)
+    assert _types(sent)[-1] == "config/entity_registry/get"
+
+
+@pytest.mark.parametrize(
+    ("other_write", "applied"),
+    [
+        ({"name": "Porch"}, lambda entry, device: entry.name == "Porch"),
+        (
+            {"name": "Porch", "labels": ["outdoor"]},
+            lambda entry, device: (entry.name, entry.labels) == ("Porch", {"outdoor"}),
+        ),
+        (
+            {"options": {"sensor": {"display_precision": 2}}},
+            lambda entry, device: entry.options["sensor"] == {"display_precision": 2},
+        ),
+        (
+            {"new_device_name": "Living Room"},
+            lambda entry, device: device.name_by_user == "Living Room",
+        ),
+    ],
+)
+async def test_expose_to_after_another_write_returns_the_entry_after_both(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    other_write: dict[str, Any],
+    applied: Callable[[er.RegistryEntry, dr.DeviceEntry | dr.ChildDeviceEntry], bool],
+) -> None:
+    assert await async_setup_component(hass, "homeassistant", {})
+    lr.async_get(hass).async_create("outdoor")
+    entry = _device_entity(hass, "Dawn")
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, expose_to={"conversation": True}, **other_write
+    )
+
+    types = _types(sent)
+    written = er.async_get(hass).async_get(entry.entity_id)
+    assert written is not None
+    device = dr.async_get(hass).async_get(str(entry.device_id))
+    assert device is not None
+    assert applied(written, device)
+    assert written.options["conversation"]["should_expose"] is True
+    assert types[-2:] == ["homeassistant/expose_entity", "config/entity_registry/get"]
+    core = await core_client.send_websocket_message(
+        {"type": "config/entity_registry/get", "entity_id": entry.entity_id}
+    )
+    assert result["entity_entry"] == core["result"]
+
+
+async def test_bulk_expose_to_writes_once_per_value_for_all_ids(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    lamp: str,
+    desk: str,
+) -> None:
+    ids = [lamp, desk]
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=ids, expose_to={"conversation": True, "cloud.alexa": False}
+    )
+
+    assert result["succeeded_count"] == 2
+    writes = _expose_writes(sent)
+    assert [(w["entity_ids"], w["should_expose"]) for w in writes] == [
+        (ids, True),
+        (ids, False),
+    ]
+    # One read of the ids to send, one read of the entries after the writes.
+    reads = [t for t in _types(sent) if t == "config/entity_registry/get_entries"]
+    assert len(reads) == 2
+    assert _types(sent)[-1] == "config/entity_registry/get_entries"
+    for row in result["succeeded"]:
+        options = row["entity_entry"]["options"]
+        assert options["conversation"]["should_expose"] is True
+        assert options["cloud.alexa"]["should_expose"] is False
+
+
+async def test_bulk_labels_and_expose_to_write_each_entry_then_expose_once(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    lamp: str,
+    desk: str,
+) -> None:
+    lr.async_get(hass).async_create("outdoor")
+    ids = [lamp, desk]
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=ids, labels=["outdoor"], expose_to={"conversation": True}
+    )
+
+    assert result["succeeded_count"] == 2
+    writes_and_reads = [
+        t
+        for t in _types(sent)
+        if t.startswith(("config/entity_registry/", "homeassistant/expose_entity"))
+    ]
+    assert writes_and_reads == [
+        "config/entity_registry/update",
+        "config/entity_registry/update",
+        "homeassistant/expose_entity",
+        "config/entity_registry/get_entries",
+    ]
+    assert _expose_writes(sent)[0]["entity_ids"] == ids
+    registry = er.async_get(hass)
+    for row in result["succeeded"]:
+        entry = registry.async_get(row["entity_id"])
+        assert entry is not None
+        assert entry.labels == {"outdoor"}
+        updates = " ".join(row["updates"])
+        assert "labels=['outdoor']" in updates
+        assert "expose_to=" in updates
+        # Read again after the exposure, not the entry the label write returned.
+        options = row["entity_entry"]["options"]
+        assert options["conversation"]["should_expose"] is True
+
+
+async def test_a_bulk_read_reports_an_unknown_id_as_not_found(
+    core_client: HomeAssistantClient, lamp: str
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(
+        entity_id=[lamp, "light.missing"]
+    )
+
+    assert result["success"] is True
+    assert result["count"] == 1
+    assert [e["entity_id"] for e in result["entity_entries"]] == [lamp]
+    assert result["errors"] == [
+        {"entity_id": "light.missing", "error": "Entity not found"}
+    ]
+    assert "suggestions" in result
+
+
+@pytest.mark.parametrize(
+    ("expose_to", "already_set"),
+    [
+        # Core's default for Alexa is False: nothing to change.
+        ({"cloud.alexa": False}, True),
+        ({"cloud.alexa": True}, False),
+        # The change in the first write counts though the second changes nothing.
+        ({"cloud.alexa": True, "cloud.google_assistant": False}, False),
+    ],
+)
+async def test_expose_to_says_when_core_changed_nothing(
+    core_client: HomeAssistantClient,
+    lamp: str,
+    expose_to: dict[str, bool],
+    already_set: bool,
+) -> None:
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, expose_to=expose_to
+    )
+
+    assert ("already set" in " ".join(result["updates"])) is already_set
+
+
+async def test_bulk_expose_to_marks_only_the_unchanged_entities(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    lamp: str,
+    desk: str,
+) -> None:
+    async_expose_entity(hass, "cloud.alexa", desk, True)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=[lamp, desk], expose_to={"cloud.alexa": True}
+    )
+
+    updates = {r["entity_id"]: " ".join(r["updates"]) for r in result["succeeded"]}
+    assert "already set" not in updates[lamp]
+    assert "already set" in updates[desk]
+
+
+async def test_expose_to_on_a_core_without_a_change_report_assumes_a_change(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core before 2026.11 answers ``homeassistant/expose_entity`` with no result."""
+
+    # wraps copies the command, schema and callback mark Core registers it by.
+    @functools.wraps(core_exposed.ws_expose_entity)
+    def without_change_report(
+        hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]
+    ) -> None:
+        for entity_id in msg["entity_ids"]:
+            for assistant in msg["assistants"]:
+                async_expose_entity(hass, assistant, entity_id, msg["should_expose"])
+        connection.send_result(msg["id"])
+
+    # Registered when the component sets up, so replaced before that.
+    monkeypatch.setattr(core_exposed, "ws_expose_entity", without_change_report)
+    assert await async_setup_component(hass, "homeassistant", {})
+    lamp = er.async_get(hass).async_get_or_create("light", "demo", "lamp").entity_id
+
+    # Nothing changes, but this Core does not say so.
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, expose_to={"cloud.alexa": False}
+    )
+
+    assert result["updates"] == ["expose_to={'cloud.alexa': False}"]
+
+
+@pytest.mark.parametrize("new_entity_id", [None, "sensor.renamed"])
+async def test_every_write_of_a_set_holds_the_entity_lock(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    new_entity_id: str | None,
+) -> None:
+    """A restore takes the lock of the entity's id, either id on a rename, so
+    it waits for the options, device-rename and expose writes too."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    entry = _device_entity(hass, "Dawn")
+    locks = [
+        registry_update_lock("entity", entity_id)
+        for entity_id in (entry.entity_id, new_entity_id)
+        if entity_id is not None
+    ]
+    held: list[tuple[str, bool]] = []
+
+    def record(owner: Any, name: str) -> None:
+        write = getattr(owner, name)
+
+        def under_lock(*args: Any, **kwargs: Any) -> Any:
+            held.append((name, all(lock.locked() for lock in locks)))
+            return write(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, under_lock)
+
+    # The Core functions behind each command the set sends.
+    writes: list[tuple[Any, str]] = [
+        (er.EntityRegistry, "async_update_entity"),
+        (er.EntityRegistry, "async_update_entity_options"),
+        (dr.DeviceRegistry, "async_update_device"),
+        (core_exposed, "async_expose_entity"),
+    ]
+    for owner, name in writes:
+        record(owner, name)
+    await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id,
+        name="N",
+        new_entity_id=new_entity_id,
+        options={"sensor": {"display_precision": 2}},
+        new_device_name="Dev X",
+        expose_to={"conversation": True},
+    )
+
+    assert {name for name, _ in held} == {name for _, name in writes}
+    assert all(locked for _, locked in held), held

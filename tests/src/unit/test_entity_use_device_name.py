@@ -17,10 +17,9 @@ from ha_mcp.tools.tools_entities import register_entity_tools
 
 ENTRY = {
     "entity_id": "sensor.sun_next_dawn",
-    "name": None,
+    "name": "",
     "original_name": "Next dawn",
     "device_id": "dev1",
-    "area_id": None,
 }
 
 
