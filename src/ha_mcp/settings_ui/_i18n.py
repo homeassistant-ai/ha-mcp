@@ -51,8 +51,7 @@ def _validate_string_map(value: Any, *, context: str) -> dict[str, str]:
         if not text.strip():
             raise ValueError(
                 f"{context}.{key} is blank — English renders only for an "
-                "absent key, so translate it, or leave the key out where the "
-                "section allows a missing one"
+                "absent key, so translate it or leave the key out"
             )
         result[key] = text
     return result

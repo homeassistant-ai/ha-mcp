@@ -80,21 +80,22 @@ or constructed — needs no pipeline change.
   rejected when the catalog loads.
 - `messages`: interface labels, help text, notices, and runtime messages. Keys
   may be omitted — English is the per-key fallback at runtime — but see the
-  share limit below before leaving a catalog half-finished. Omitting is the
-  only way to say "not translated yet": a key that is present but blank is
-  rejected when the catalog loads, because the runtime resolves by key
-  presence, so an empty value would win over English and render as nothing.
-- `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
-  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
-  here too, but dropping the key is not the escape hatch it is for `messages` —
-  the exact key set forbids that. A heading you have not translated yet keeps
-  the English tag as its value.
+  share limit below before leaving a catalog half-finished. A key that is
+  present but blank is rejected when the catalog loads, because the runtime
+  resolves by key presence, so an empty value would win over English and
+  render as nothing.
+- `tool_groups`: section headings, keyed by the English MCP tool tag; a
+  missing heading renders the English tag until the sync fills it. Blank is
+  rejected here too.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
-  name. The key set is not optional and exact in the same way; either field on
-  its own may be left out, but a missing one counts as untranslated against the
-  share limit below. Blank is rejected here too, for the same reason.
+  name. A tool entry, or either of its fields, may be left out, but a missing
+  field counts as untranslated against the share limit below. Blank is
+  rejected here too.
 
-Keep the keys and `{placeholders}` unchanged in every section.
+Never rename or translate a key, and keep `{placeholders}` unchanged in every
+section. Omitting a key is the only way to say "not translated yet": the sync
+fills missing keys, while a value copied from English is usually left as it
+is and can stay English for good.
 
 `messages` values carry two further rules, both enforced when the catalog
 loads rather than by a named test — breaking one raises a `ValueError` at
@@ -114,10 +115,6 @@ In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
 is named):
 
 - Every surface carries the same set of language codes.
-- Settings UI `messages` may omit keys because English is the per-key
-  fallback, but a locale may not carry a key absent from `en.json`: nothing
-  can render it. `tool_groups` and `tools` must instead match the renderable
-  keys exactly.
 - Every decided `Decision` outcome (all but `pending`) and every
   `PredicateOp` operator has a word in every catalog, non-blank — and in every
   catalog but `en.json` not still spelled the way the backend does
@@ -160,6 +157,8 @@ these, and the daily sync owes them afterwards):
   The check parses the registered tool set from source rather than trusting
   generated `tools.json`, so a broken generator cannot validate its own stale
   output.
+- Settings UI `messages` carries no key absent from `en.json`: nothing can
+  render it.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
   byte-identical to English or missing outright. The 5% ceiling also applies
   independently to each generated app projection computed from the canonical

@@ -1134,13 +1134,10 @@ def test_generated_addon_projections_are_translated(locale: str) -> None:
 def test_settings_catalog_tools_are_translated(locale: str) -> None:
     """Exactness says every tool is present, not that any was translated.
 
-    88 titles and 88 descriptions is the largest translated surface in the
-    repo, and nothing looked at the values. The exactness rule above also
-    obliges every tool-adding PR to touch six languages before it can go
-    green, which is pressure toward pasting the English in — this is what
-    notices. nl, pl and sv carry all 176 today; the values #2180 dropped for
-    the sync to rewrite leave de, fr and ru at 169 and es, it and zh-Hans
-    at 175.
+    Tool titles and descriptions are a translated surface of their own, and
+    nothing looked at the values. The exactness rule above also obliges
+    every locale to carry every tool, which is pressure toward pasting the
+    English in — this is what notices.
     """
     english = _english_tool_texts()
     catalog = _settings_catalog(locale).get("tools", {})
@@ -1152,10 +1149,11 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     }
 
     # The share alone does not cover the case this check exists for: adding one
-    # tool and pasting its English title and description into all six locales
-    # scores 2 of 176 and passes. One wholly-English tool is the signature, and
-    # naming it beats a percentage. A single matching title stays legal — some
-    # tool names genuinely read the same in another language.
+    # tool and pasting its English title and description into every locale
+    # adds two strings to the share and passes. One wholly-English tool is the
+    # signature, and naming it beats a percentage. A single matching title
+    # stays legal — some tool names genuinely read the same in another
+    # language.
     #
     # Both English renderings count: a feature-gated tool shows the stub text
     # with its flag off and the parsed docstring with it on, and a translator
@@ -1182,8 +1180,8 @@ def test_settings_catalog_tools_are_translated(locale: str) -> None:
     assert not pasted, (
         f"src/ha_mcp/settings_ui/locales/{locale}.json carries {len(pasted)} "
         f"tool(s) whose title and description are both still English: "
-        f"{pasted[:20]}. Adding a tool obliges every locale, and an "
-        "untranslated paste is what that pressure produces."
+        f"{pasted[:20]}. Leave an untranslated tool out instead: the sync "
+        "fills missing fields, not pasted ones."
     )
 
     _assert_not_a_copy(
