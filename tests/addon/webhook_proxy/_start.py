@@ -39,7 +39,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import ClientSessionGenerator, WebSocketGenerator
 
 from ._proxy import state_path
-from ._variants import REPO_ROOT, Variant, load_start, script_function
+from ._variants import REPO_ROOT, Variant, load_start
 
 START_ROOTS = ("/config", "/data", "/opt")
 CORE_API = "http://supervisor/core/api"
@@ -118,27 +118,35 @@ class Clock:
     """``start.py``'s ``time`` module. A sleep returns at once and is recorded.
 
     Once ``main()`` has installed its shutdown handlers, a sleep is the
-    keep-alive loop's: it first runs ``while_running`` (the test's look at the
-    running app), then delivers the SIGTERM a Supervisor stop sends. Before
-    that, ``during_wait`` stands in for what happens while a retry waits.
+    keep-alive loop's. Each of the first ``len(polls)`` such sleeps runs the
+    next of ``polls`` (what happens between two keep-alive iterations) and
+    lets the loop go round again. The one after runs ``while_running`` (the
+    test's look at the running app), then delivers ``stop_signal``: SIGTERM is
+    what a Supervisor stop sends. Before the handlers are installed,
+    ``during_wait`` stands in for what happens while a retry waits.
     """
 
     signals: Signals
     sleeps: list[float] = field(default_factory=list)
+    polls: list[Callable[[], None]] = field(default_factory=list)
     while_running: Callable[[], None] | None = None
     during_wait: Callable[[float], None] | None = None
+    stop_signal: signal.Signals = signal.SIGTERM
 
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
-        handler = self.signals.handlers.get(signal.SIGTERM)
+        handler = self.signals.handlers.get(self.stop_signal)
         if not callable(handler):
             if self.during_wait is not None:
                 self.during_wait(seconds)
             return
+        if self.polls:
+            self.polls.pop(0)()
+            return
         look, self.while_running = self.while_running, None
         if look is not None:
             look()
-        handler(signal.SIGTERM, None)
+        handler(self.stop_signal, None)
 
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(sleep=self.sleep, monotonic=time.monotonic)
@@ -159,9 +167,6 @@ class App:
 
     def path(self, absolute: str) -> Path:
         return redirect(self.fs_root, absolute)
-
-    def step(self, name: str) -> Callable[..., Any]:
-        return script_function(self.start, name)
 
     def set_options(self, **options: Any) -> None:
         """The add-on options the Supervisor writes to /data/options.json."""
@@ -201,11 +206,14 @@ def make_app(
     monkeypatch: pytest.MonkeyPatch,
     *,
     ships_component: bool = True,
+    installed: bool = False,
 ) -> App:
     """Load the flavor's ``start.py`` into the test's world.
 
     ``ships_component`` puts the image's ``/opt/<component>`` source in place
-    (the Dockerfile copies it there).
+    (the Dockerfile copies it there). ``installed`` puts the current component
+    in ``/config`` as an earlier start left it, so ``main()`` takes the
+    ordinary restart path rather than the first install's.
     """
     start = load_start(variant)
     signals = Signals()
@@ -232,14 +240,24 @@ def make_app(
         source = app.path(f"/opt/{variant.component}")
         source.parent.mkdir(parents=True, exist_ok=True)
         source.symlink_to(variant.component_dir, target_is_directory=True)
+    if installed:
+        app.deploy_component()
     return app
 
 
 @dataclass
 class CoreLink:
-    """The real ``hass`` HTTP server ``start.py`` talks to."""
+    """The real ``hass`` HTTP server ``start.py`` talks to.
+
+    ``requests`` records each Core API request ``start.py`` makes, as
+    ``(method, path)`` with the path below ``/api``. ``on_request`` runs in
+    ``main()``'s thread just before Core receives one: what else happens at
+    that moment.
+    """
 
     base_url: str
+    requests: list[tuple[str, str]] = field(default_factory=list)
+    on_request: Callable[[str, str], None] | None = None
 
     def send(self, request: urllib.request.Request, timeout: float) -> Any:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -256,6 +274,16 @@ class CoreLink:
     def get(self, path: str) -> int:
         """GET from Core as an anonymous remote client."""
         return self.status(urllib.request.Request(f"{self.base_url}{path}"))
+
+    def get_json(self, path: str) -> tuple[int, Any]:
+        """GET a JSON document from Core as an anonymous remote client."""
+        try:
+            with self.send(
+                urllib.request.Request(f"{self.base_url}{path}"), timeout=30
+            ) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as err:
+            return err.code, None
 
     def post(self, path: str, body: bytes) -> int:
         """POST to Core as a remote client would (no Home Assistant login)."""
@@ -295,8 +323,12 @@ async def connect_core(
     def urlopen(request: urllib.request.Request, timeout: float) -> Any:
         url = request.full_url
         assert url.startswith(CORE_API), f"unexpected Supervisor request {url}"
+        path = url.removeprefix(CORE_API)
+        link.requests.append((request.get_method(), path))
+        if link.on_request is not None:
+            link.on_request(request.get_method(), path)
         routed = urllib.request.Request(
-            f"{link.base_url}/api{url.removeprefix(CORE_API)}",
+            f"{link.base_url}/api{path}",
             data=request.data,
             headers=dict(request.header_items()),
             method=request.get_method(),
@@ -350,6 +382,13 @@ async def notifications(hass_ws_client: WebSocketGenerator) -> dict[str, Any]:
 def entry_states(hass: HomeAssistant, variant: Variant) -> list[str]:
     return [
         entry.state.value for entry in hass.config_entries.async_entries(variant.domain)
+    ]
+
+
+def info_lines(out: str) -> list[str]:
+    """The messages ``start.py`` logged at INFO, from its captured stdout."""
+    return [
+        line.split(" [INFO] ", 1)[1] for line in out.splitlines() if " [INFO] " in line
     ]
 
 

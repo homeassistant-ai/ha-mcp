@@ -1,5 +1,10 @@
 """The secrets the app keeps across restarts: OAuth client credentials, the
-webhook id, the signing key and the proxy config handed to the component."""
+webhook id, the signing key and the proxy config handed to the component.
+
+Each start is the app's ``main()`` against the real Core. What it keeps is
+read where the user and the component meet it: ``/data`` and the config file
+the app hands the component.
+"""
 
 from __future__ import annotations
 
@@ -8,23 +13,65 @@ import json
 import logging
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._start import App, file_mode, make_app, no_restricted_create_under
+from ._proxy import Upstream
+from ._start import (
+    App,
+    CoreLink,
+    connect_core,
+    file_mode,
+    make_app,
+    no_restricted_create_under,
+    run_main,
+)
 from ._variants import Variant
 
 
 @pytest.fixture
 def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App:
-    return make_app(variant, fs_root, monkeypatch)
+    return make_app(variant, fs_root, monkeypatch, installed=True)
 
 
-def _resolve(app: App, client_id: str = "", secret: str = "") -> tuple[str, str]:
-    creds: tuple[str, str] = app.step("_resolve_oauth_creds")(
-        app.path("/data"), client_id, secret
+@pytest.fixture
+async def core(
+    app: App,
+    component: ModuleType,
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    hass_access_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    socket_enabled: None,
+) -> CoreLink:
+    return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
+
+
+async def _legacy_start(
+    hass: HomeAssistant, app: App, upstream: Upstream, **options: Any
+) -> tuple[str, str]:
+    """Start the app with legacy OAuth on; the client credentials it handed
+    the component (the ones it prints for the user's connector)."""
+    app.set_options(
+        mcp_server_url=upstream.target_url(),
+        enable_oauth=True,
+        oauth_mode="legacy",
+        **options,
     )
-    return creds
+    assert await run_main(hass, app) == 0
+    oauth = app.proxy_config()["oauth"]
+    return oauth["client_id"], oauth["client_secret"]
+
+
+async def _plain_start(hass: HomeAssistant, app: App, upstream: Upstream) -> str:
+    """Start the app with OAuth off; the webhook id it handed the component."""
+    app.set_options(mcp_server_url=upstream.target_url())
+    assert await run_main(hass, app) == 0
+    webhook_id: str = app.proxy_config()["webhook_id"]
+    return webhook_id
 
 
 def _store_creds(app: App, client_id: str, secret: str) -> None:
@@ -33,160 +80,220 @@ def _store_creds(app: App, client_id: str, secret: str) -> None:
     )
 
 
-def test_configured_credentials_are_used_trimmed(app: App) -> None:
-    assert _resolve(app, "  user-supplied-id-1234567890  ", "  pw  ") == (
-        "user-supplied-id-1234567890",
-        "pw",
+async def test_configured_credentials_are_used_trimmed(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    creds = await _legacy_start(
+        hass,
+        app,
+        upstream,
+        oauth_client_id="  user-supplied-id-1234567890  ",
+        oauth_client_secret="  pw  ",
     )
 
+    assert creds == ("user-supplied-id-1234567890", "pw")
 
-def test_blank_credentials_are_generated_strong_enough_to_start(app: App) -> None:
-    """A generated client id passes main()'s 16-character floor and the secret
-    carries 256 bits (43 base64url characters)."""
-    client_id, secret = _resolve(app)
+
+async def test_blank_credentials_are_generated_strong_enough_to_start(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    """A generated client id passes the app's 16-character floor (the start
+    succeeds) and the secret carries 256 bits (43 base64url characters)."""
+    client_id, secret = await _legacy_start(hass, app, upstream)
 
     assert len(client_id) >= 16
     assert len(secret) >= 43
 
 
-def test_generated_credentials_survive_a_restart(app: App) -> None:
+async def test_generated_credentials_survive_a_restart(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     """A connector set up with generated credentials keeps working after the
     app restarts."""
-    assert _resolve(app) == _resolve(app)
+    first = await _legacy_start(hass, app, upstream)
+
+    assert await _legacy_start(hass, app, upstream) == first
 
 
-def test_configured_credentials_replace_the_stored_ones(app: App) -> None:
-    _resolve(app)
+async def test_configured_credentials_replace_the_stored_ones(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    await _legacy_start(hass, app, upstream)
+    user_creds = ("user-id-1234567890123", "user-secret")
 
-    assert _resolve(app, "user-id-1234567890123", "user-secret") == (
-        "user-id-1234567890123",
-        "user-secret",
+    configured = await _legacy_start(
+        hass,
+        app,
+        upstream,
+        oauth_client_id=user_creds[0],
+        oauth_client_secret=user_creds[1],
     )
+
+    assert configured == user_creds
     # A later start with the fields cleared keeps what the user last set.
-    assert _resolve(app) == ("user-id-1234567890123", "user-secret")
+    assert await _legacy_start(hass, app, upstream) == user_creds
 
 
-def test_rotating_only_the_secret_keeps_the_stored_client_id(app: App) -> None:
-    client_id, _secret = _resolve(app)
+async def test_rotating_only_the_secret_keeps_the_stored_client_id(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    client_id, _secret = await _legacy_start(hass, app, upstream)
 
-    assert _resolve(app, "", "rotated-secret") == (client_id, "rotated-secret")
+    rotated = await _legacy_start(
+        hass, app, upstream, oauth_client_secret="rotated-secret"
+    )
+
+    assert rotated == (client_id, "rotated-secret")
 
 
-def test_unreadable_stored_credentials_are_replaced_with_a_warning(
-    app: App, capsys: pytest.CaptureFixture[str]
+async def test_unreadable_stored_credentials_are_replaced_with_a_warning(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app.path("/data/oauth_creds.json").write_text("not valid json{{{")
 
-    client_id, secret = _resolve(app)
+    client_id, secret = await _legacy_start(hass, app, upstream)
 
     assert len(client_id) >= 16
     assert len(secret) >= 43
     assert "Could not read existing OAuth creds" in capsys.readouterr().err
 
 
-def test_stored_credentials_file_is_private(app: App) -> None:
-    _resolve(app)
+async def test_stored_credentials_file_is_private(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    await _legacy_start(hass, app, upstream)
 
     assert file_mode(app.path("/data/oauth_creds.json")) == 0o600
 
 
-def test_credentials_persist_with_a_warning_where_0600_is_unavailable(
-    app: App, capsys: pytest.CaptureFixture[str]
+async def test_credentials_persist_with_a_warning_where_0600_is_unavailable(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """tmpfs or a non-POSIX filesystem cannot honour a restricted create; the
     credentials are still kept, and the wider permissions are reported."""
-    with no_restricted_create_under(app.fs_root):
-        client_id, secret = _resolve(app)
+    with no_restricted_create_under(app.path("/data")):
+        creds = await _legacy_start(hass, app, upstream)
 
-    assert len(client_id) >= 16
-    assert _resolve(app) == (client_id, secret)
-    assert "wider permissions than intended" in capsys.readouterr().err
+    assert await _legacy_start(hass, app, upstream) == creds
+    assert (
+        "Could not create the OAuth creds file with restricted permissions"
+        in capsys.readouterr().err
+    )
 
 
-def test_regenerate_gives_new_credentials(app: App) -> None:
+async def test_regenerate_gives_new_credentials(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     _store_creds(app, "old-id-1234567890", "old-secret")
 
-    app.step("_regenerate_oauth_creds")(app.path("/data"))
-    client_id, secret = _resolve(app)
+    client_id, secret = await _legacy_start(
+        hass, app, upstream, regenerate_oauth_creds=True
+    )
 
     assert client_id != "old-id-1234567890"
     assert secret != "old-secret"
 
 
-def test_regenerate_without_stored_credentials_is_harmless(app: App) -> None:
-    app.step("_regenerate_oauth_creds")(app.path("/data"))
-
-    assert not app.path("/data/oauth_creds.json").exists()
-
-
-def test_regenerate_toggle_is_switched_off_keeping_other_options(app: App) -> None:
-    """Left on, the toggle would regenerate the credentials on every restart."""
-    cleared = app.step("_clear_regenerate_toggle")(
-        {"remote_url": "https://example.com", "regenerate_oauth_creds": True}
+async def test_regenerate_without_stored_credentials_is_harmless(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Nothing to wipe is no error: the app starts with fresh credentials."""
+    client_id, secret = await _legacy_start(
+        hass, app, upstream, regenerate_oauth_creds=True
     )
 
-    assert cleared is True
+    stored = json.loads(app.path("/data/oauth_creds.json").read_text())
+    assert stored == {"client_id": client_id, "client_secret": secret}
+    assert "Failed to wipe" not in capsys.readouterr().err
+
+
+async def test_regenerate_toggle_is_switched_off_keeping_other_options(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    """Left on, the toggle would regenerate the credentials on every restart."""
+    await _legacy_start(
+        hass,
+        app,
+        upstream,
+        remote_url="https://example.com",
+        regenerate_oauth_creds=True,
+    )
+
+    options = json.loads(app.path("/data/options.json").read_text())
+    assert options["remote_url"] == "https://example.com"
     assert app.supervisor.posts == [
         (
             "/addons/self/options",
-            {
-                "options": {
-                    "remote_url": "https://example.com",
-                    "regenerate_oauth_creds": False,
-                }
-            },
+            {"options": {**options, "regenerate_oauth_creds": False}},
         )
     ]
 
 
-def test_webhook_id_is_generated_once_and_kept(app: App) -> None:
+async def test_webhook_id_is_generated_once_and_kept(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     """The webhook URL the user pasted into their MCP client must not change
     across restarts."""
-    get_id = app.step("_get_or_create_webhook_id")
-    webhook_id = get_id(app.path("/data"))
+    webhook_id = await _plain_start(hass, app, upstream)
 
     assert len(webhook_id) > 10
-    assert get_id(app.path("/data")) == webhook_id
+    assert await _plain_start(hass, app, upstream) == webhook_id
 
 
-def test_webhook_id_from_an_earlier_install_is_kept(app: App) -> None:
+async def test_webhook_id_from_an_earlier_install_is_kept(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     app.path("/data/webhook_id.txt").write_text("mcp_existing_test_id_12345")
 
-    webhook_id = app.step("_get_or_create_webhook_id")(app.path("/data"))
-
-    assert webhook_id == "mcp_existing_test_id_12345"
+    assert await _plain_start(hass, app, upstream) == "mcp_existing_test_id_12345"
 
 
-def test_empty_webhook_id_file_gets_a_new_id(app: App) -> None:
+async def test_empty_webhook_id_file_gets_a_new_id(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     app.path("/data/webhook_id.txt").write_text("")
-    get_id = app.step("_get_or_create_webhook_id")
 
-    webhook_id = get_id(app.path("/data"))
+    webhook_id = await _plain_start(hass, app, upstream)
 
     assert len(webhook_id) > 10
-    assert get_id(app.path("/data")) == webhook_id
+    assert await _plain_start(hass, app, upstream) == webhook_id
 
 
-def test_proxy_config_handed_to_the_component_is_private(app: App) -> None:
-    """The proxy config carries the OAuth client secret when legacy OAuth is on."""
-    config = {"target_url": "http://127.0.0.1:9583/private_x", "webhook_id": "w"}
-
-    assert app.step("_write_proxy_config")(config) is True
-
-    written = app.path(app.variant.config_file)
-    assert json.loads(written.read_text()) == config
-    assert file_mode(written) == 0o600
-
-
-def test_proxy_config_is_written_with_a_warning_where_0600_is_unavailable(
-    app: App, capsys: pytest.CaptureFixture[str]
+async def test_proxy_config_handed_to_the_component_is_private(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
 ) -> None:
-    config = {"target_url": "http://127.0.0.1:9583/private_x", "webhook_id": "w"}
+    """The proxy config carries the OAuth client secret when legacy OAuth is on."""
+    await _legacy_start(hass, app, upstream)
 
-    with no_restricted_create_under(app.fs_root):
-        assert app.step("_write_proxy_config")(config) is True
+    assert file_mode(app.path(app.variant.config_file)) == 0o600
 
-    assert json.loads(app.path(app.variant.config_file).read_text()) == config
+
+async def test_proxy_config_is_written_with_a_warning_where_0600_is_unavailable(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with no_restricted_create_under(app.path("/config")):
+        webhook_id = await _plain_start(hass, app, upstream)
+
+    assert app.proxy_config() == {
+        "target_url": upstream.target_url(),
+        "webhook_id": webhook_id,
+    }
     assert "Could not create the proxy config file" in capsys.readouterr().err
 
 

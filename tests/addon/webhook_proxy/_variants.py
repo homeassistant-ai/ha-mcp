@@ -10,11 +10,9 @@ stay off for stable after the code arrives.
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -90,19 +88,6 @@ def load_start(variant: Variant) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def script_function(start: ModuleType, name: str) -> Callable[..., Any]:
-    """A function of the app's ``start.py``, looked up by name.
-
-    ``start.py`` is a standalone script, loaded from a file path because both
-    flavors ship one, so ``from start import name`` cannot reach it. Its steps
-    are module-level functions with no entry point but ``main()``; a test of
-    one step reads it from the module namespace, which is what that import
-    would do.
-    """
-    function: Callable[..., Any] = vars(start)[name]
-    return function
 
 
 def relay_total_unbounded(variant: Variant) -> bool:

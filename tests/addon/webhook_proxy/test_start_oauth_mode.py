@@ -1,71 +1,121 @@
 """Which OAuth mode an enabled OAuth starts in: an upgrade never moves an
-existing legacy user to ha_auth, which would break their connector."""
+existing legacy user to ha_auth, which would break their connector.
+
+Each start is the app's ``main()`` against the real Core; the mode is the one
+in the config file it hands the component. A first enable with no legacy
+trace starting in ha_auth is ``test_start_main``'s
+``test_ha_auth_start_needs_no_app_credentials``.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._start import App, make_app
+from ._proxy import Upstream
+from ._start import App, CoreLink, connect_core, make_app, run_main
 from ._variants import Variant
 
 LEGACY = "legacy"
 HA_AUTH = "ha_auth"
+CONFIGURED_ID = {"oauth_client_id": "cid-1234567890ABCDEF"}
+CONFIGURED_SECRET = {"oauth_client_secret": "sec"}
 
 
 @pytest.fixture
 def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App:
-    return make_app(variant, fs_root, monkeypatch)
+    return make_app(variant, fs_root, monkeypatch, installed=True)
 
 
-def _mode(app: App, option: str, client_id: str = "", secret: str = "") -> str:
-    mode: str = app.step("_resolve_oauth_mode")(
-        option, client_id, secret, app.path("/data")
-    )
+@pytest.fixture
+async def core(
+    app: App,
+    component: ModuleType,
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    hass_access_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    socket_enabled: None,
+) -> CoreLink:
+    return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
+
+
+async def _mode(
+    hass: HomeAssistant, app: App, upstream: Upstream, **options: Any
+) -> str:
+    """Start the app with OAuth enabled; the mode it set the component up in."""
+    app.set_options(mcp_server_url=upstream.target_url(), enable_oauth=True, **options)
+    assert await run_main(hass, app) == 0
+    mode: str = app.proxy_config()["oauth"]["mode"]
     return mode
 
 
 def _store_legacy_creds(app: App) -> None:
     app.path("/data/oauth_creds.json").write_text(
-        json.dumps({"client_id": "x", "client_secret": "y"})
+        json.dumps({"client_id": "stored-client-1234567890", "client_secret": "stored"})
     )
 
 
-def test_explicit_ha_auth_wins_over_legacy_traces(app: App) -> None:
+async def test_explicit_ha_auth_wins_over_legacy_traces(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     _store_legacy_creds(app)
 
-    assert _mode(app, HA_AUTH, "cid-1234567890ABCDEF", "sec") == HA_AUTH
+    mode = await _mode(
+        hass, app, upstream, oauth_mode=HA_AUTH, **CONFIGURED_ID, **CONFIGURED_SECRET
+    )
+
+    assert mode == HA_AUTH
 
 
-def test_explicit_legacy_wins_on_a_first_enable(app: App) -> None:
-    assert _mode(app, LEGACY) == LEGACY
+async def test_explicit_legacy_wins_on_a_first_enable(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
+    assert await _mode(hass, app, upstream, oauth_mode=LEGACY) == LEGACY
 
 
-def test_stored_legacy_credentials_keep_legacy(app: App) -> None:
+async def test_stored_legacy_credentials_keep_legacy(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
+) -> None:
     _store_legacy_creds(app)
 
-    assert _mode(app, "") == LEGACY
+    assert await _mode(hass, app, upstream) == LEGACY
 
 
 @pytest.mark.parametrize(
-    ("client_id", "secret"),
-    [("cid-1234567890ABCDEF", ""), ("", "sec")],
-    ids=["client-id", "client-secret"],
+    "credential", [CONFIGURED_ID, CONFIGURED_SECRET], ids=["client-id", "client-secret"]
 )
-def test_a_configured_legacy_credential_keeps_legacy(
-    app: App, client_id: str, secret: str
+async def test_a_configured_legacy_credential_keeps_legacy(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    credential: dict[str, str],
 ) -> None:
-    assert _mode(app, "", client_id, secret) == LEGACY
+    assert await _mode(hass, app, upstream, **credential) == LEGACY
 
 
-def test_first_enable_defaults_to_ha_auth(app: App) -> None:
-    assert _mode(app, "") == HA_AUTH
-
-
-def test_unknown_mode_falls_back_to_detection(app: App) -> None:
+@pytest.mark.parametrize(
+    ("credentials", "expected"),
+    [({}, HA_AUTH), ({**CONFIGURED_ID, **CONFIGURED_SECRET}, LEGACY)],
+    ids=["first-enable", "legacy-credentials"],
+)
+async def test_unknown_mode_falls_back_to_detection(
+    hass: HomeAssistant,
+    app: App,
+    core: CoreLink,
+    upstream: Upstream,
+    credentials: dict[str, str],
+    expected: str,
+) -> None:
     """The Supervisor's enum check normally blocks it; if one gets through,
-    startup must not crash."""
-    assert _mode(app, "bogus") == HA_AUTH
-    assert _mode(app, "bogus", "cid-1234567890ABCDEF", "sec") == LEGACY
+    the app must still start, in the mode detection picks."""
+    assert await _mode(hass, app, upstream, oauth_mode="bogus", **credentials) == (
+        expected
+    )

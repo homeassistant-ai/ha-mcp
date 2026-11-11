@@ -19,7 +19,6 @@ import pytest
 import yaml
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import CoreState, HomeAssistant
-from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import ClientSessionGenerator
 
 from ._auth_modes import (
@@ -42,23 +41,28 @@ from ._proxy import (
     record_client_sessions,
     restart_issue,
     start_proxy,
-    state_path,
 )
-from ._variants import Variant, load_start, script_function
+from ._start import connect_core, entry_states, in_core, make_app, run_main
+from ._variants import Variant
 
 PINNED_LEGACY = "https://pinned-legacy.example"
 
 
 async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
     hass: HomeAssistant,
-    hass_client_no_auth: ClientSessionGenerator,
+    hass_client: ClientSessionGenerator,
+    hass_access_token: str,
+    socket_enabled: None,
     component: ModuleType,
     variant: Variant,
     fs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: Upstream,
 ) -> None:
-    """Each ``oauth_mode`` the app options offer must survive start.py's mode
-    resolution and config file, and set the integration up in that mode; a
-    literal that drifts between the three makes the option a silent no-op."""
+    """Each ``oauth_mode`` the app options offer must survive the app's start
+    (its mode resolution and the config file it writes) and set the
+    integration up in that mode; a literal that drifts between the three
+    makes the option a silent no-op."""
     config_yaml = yaml.safe_load((variant.addon_dir / "config.yaml").read_text())
     match = re.fullmatch(r"list\((.+)\)\?", config_yaml["schema"]["oauth_mode"])
     assert match is not None
@@ -76,29 +80,30 @@ async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
         "legacy": ["client_secret_basic", "client_secret_post"],
     }
     assert sorted(offered) == sorted(client_auth)
-    start = load_start(variant)
-    resolve = script_function(start, "_resolve_oauth_mode")
-    build = script_function(start, "_build_proxy_config")
-    entry: MockConfigEntry | None = None
+    app = make_app(variant, fs_root, monkeypatch, installed=True)
+    core = await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
+    document = as_document_urls(variant)[0]
+    seen: list[tuple[list[str], tuple[int, Any]]] = []
     for option in offered:
-        mode = resolve(option, "", "", state_path(fs_root, "/data"))
-        config, _ = build(
-            "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
-            WEBHOOK_ID,
-            True,
-            mode,
-            LEGACY["client_id"],
-            LEGACY["client_secret"],
-            "https://myhome.example",
-            False,
+        app.set_options(
+            mcp_server_url=upstream.target_url(),
+            enable_oauth=True,
+            oauth_mode=option,
+            oauth_client_id=LEGACY["client_id"],
+            oauth_client_secret=LEGACY["client_secret"],
+            remote_url="https://myhome.example",
         )
-        if entry is None:
-            entry = await start_proxy(hass, variant, fs_root, config)
-        else:
-            assert await reload_proxy(hass, fs_root, variant, entry, config)
-        assert entry.state is ConfigEntryState.LOADED, option
-        client = await hass_client_no_auth()
-        status, doc = await fetch_json(client, as_document_urls(variant)[0])
+        app.clock.while_running = lambda: seen.append(
+            (
+                in_core(hass, lambda: entry_states(hass, variant)),
+                core.get_json(document),
+            )
+        )
+
+        assert await run_main(hass, app) == 0, option
+
+        states, (status, doc) = seen[-1]
+        assert states == ["loaded"], option
         assert status == 200, option
         assert doc["token_endpoint_auth_methods_supported"] == client_auth[option]
 

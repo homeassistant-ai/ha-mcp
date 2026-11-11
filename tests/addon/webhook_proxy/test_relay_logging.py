@@ -7,7 +7,6 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
 
 import pytest
 from aiohttp import web
@@ -24,7 +23,7 @@ from ._proxy import (
     write_proxy_config,
 )
 from ._relay import LEGACY_OAUTH, WEBHOOK_ID, WEBHOOK_PATH, relay_config
-from ._variants import Variant, load_start, script_function
+from ._variants import Variant
 
 pytestmark = pytest.mark.usefixtures("component")
 
@@ -379,36 +378,3 @@ async def test_unwritable_mirror_never_fails_the_request(
     )
 
     assert status == 200
-
-
-def test_app_tail_emits_whole_new_lines_once_and_follows_rotation(
-    variant: Variant, tmp_path: Path
-) -> None:
-    """The app echoes only complete lines, holds a partial one for the next
-    poll, never repeats a line, and starts over when the file is rotated."""
-    start = load_start(variant)
-    emit_new_lines = script_function(start, "_emit_new_inbound_lines")
-    mirror = tmp_path / "inbound.log"
-    emitted: list[str] = []
-    with (
-        patch.object(start, "INBOUND_LOG_FILE", mirror),
-        patch.object(start, "log_info", side_effect=emitted.append),
-    ):
-        state = {"offset": 0}
-        emit_new_lines(state)
-        assert emitted == []
-
-        mirror.write_bytes(b"line A\nline B\npartial")
-        emit_new_lines(state)
-        assert emitted == ["line A", "line B"]
-
-        with mirror.open("ab") as fh:
-            fh.write(b" done\n")
-        emitted.clear()
-        emit_new_lines(state)
-        assert emitted == ["partial done"]
-
-        mirror.write_bytes(b"fresh\n")
-        emitted.clear()
-        emit_new_lines(state)
-        assert emitted == ["fresh"]

@@ -1,5 +1,6 @@
 """Only one flavor may run: both would own Core's root OAuth /authorize and
-/token routes. The refusal and its banner go through the real Core."""
+/token routes. Each start is the app's ``main()``; the refusal and its
+banner go through the real Core."""
 
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from ._variants import VARIANTS, Variant
 
 @pytest.fixture
 def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App:
-    return make_app(variant, fs_root, monkeypatch)
+    return make_app(variant, fs_root, monkeypatch, installed=True)
 
 
 @pytest.fixture
@@ -34,13 +35,6 @@ async def core(
     return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
 
 
-async def _refuses(hass: HomeAssistant, app: App) -> bool:
-    refused: bool = await hass.async_add_executor_job(
-        app.step("_refuse_if_sibling_running")
-    )
-    return refused
-
-
 async def test_refuses_and_tells_the_user_while_the_sibling_runs(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
@@ -53,9 +47,10 @@ async def test_refuses_and_tells_the_user_while_the_sibling_runs(
         {"slug": f"abc123_{variant.sibling_base}", "state": "started"}
     ]
 
-    assert await _refuses(hass, app) is True
+    assert await run_main(hass, app) == 1
 
     assert variant.mutex_id in await notifications(hass_ws_client)
+    assert not app.path(variant.config_file).exists()
 
 
 @pytest.mark.parametrize("sibling", ["stopped", "absent"])
@@ -64,6 +59,7 @@ async def test_starts_quietly_without_a_running_sibling(
     hass_ws_client: WebSocketGenerator,
     app: App,
     core: CoreLink,
+    upstream: Upstream,
     variant: Variant,
     sibling: str,
 ) -> None:
@@ -71,8 +67,9 @@ async def test_starts_quietly_without_a_running_sibling(
         app.supervisor.addons = [
             {"slug": f"abc123_{variant.sibling_base}", "state": "stopped"}
         ]
+    app.set_options(mcp_server_url=upstream.target_url())
 
-    assert await _refuses(hass, app) is False
+    assert await run_main(hass, app) == 0
 
     assert await notifications(hass_ws_client) == {}
 
@@ -82,16 +79,20 @@ async def test_starts_loudly_when_the_supervisor_cannot_say(
     hass_ws_client: WebSocketGenerator,
     app: App,
     core: CoreLink,
+    upstream: Upstream,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The check retries a few times, then starts anyway (the integration's
-    route-owner guard is the backstop) but says so in the log."""
+    """The check retries a few times, spaced out, then starts anyway (the
+    integration's route-owner guard is the backstop) but says so in the log."""
     app.supervisor.reachable = False
+    app.set_options(mcp_server_url=upstream.target_url())
+    waits: list[float] = []
+    app.clock.during_wait = waits.append
 
-    assert await _refuses(hass, app) is False
+    assert await run_main(hass, app) == 0
 
     assert app.supervisor.gets == ["/addons"] * 3
-    assert len(app.clock.sleeps) == 2
+    assert len(waits) == 2
     assert "Could not query the Supervisor /addons list" in capsys.readouterr().err
     assert await notifications(hass_ws_client) == {}
 
@@ -111,7 +112,6 @@ async def test_clean_start_clears_both_flavors_refusal_banners(
         persistent_notification.async_create(
             hass, "refused", notification_id=flavor.mutex_id
         )
-    app.deploy_component()
     app.set_options(mcp_server_url=upstream.target_url())
 
     assert await run_main(hass, app) == 0
