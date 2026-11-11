@@ -121,7 +121,7 @@ async def _is_trace_storage_enabled(
         return True
     try:
         return int(stored_traces) > 0
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

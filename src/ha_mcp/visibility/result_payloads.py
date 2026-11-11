@@ -27,7 +27,7 @@ def serialize_result(result: ToolResult) -> str:
     if structured is not None:
         try:
             parts.append(json.dumps(structured, default=str))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             parts.append(str(structured))
     return "\n".join(parts)
 
