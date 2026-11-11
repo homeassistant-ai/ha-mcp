@@ -24,9 +24,9 @@ from ._auth_modes import (
     fetch_json,
     pkce_pair,
     proxy_config,
-    start_proxy,
     submodule,
 )
+from ._proxy import start_proxy
 from ._variants import Variant
 
 
@@ -39,7 +39,7 @@ async def proxy_client(
     fs_root: Path,
 ) -> TestClient:
     """A client of a proxy running with OAuth off."""
-    await start_proxy(hass, fs_root, variant, proxy_config())
+    await start_proxy(hass, variant, fs_root, proxy_config())
     return await hass_client_no_auth()
 
 

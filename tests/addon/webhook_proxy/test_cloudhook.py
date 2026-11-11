@@ -19,8 +19,8 @@ from homeassistant.components import webhook
 from homeassistant.core import HomeAssistant
 from homeassistant.util.aiohttp import MockRequest, serialize_response
 
-from ._proxy import Upstream
-from ._relay import LEGACY_OAUTH, WEBHOOK_ID, relay_config, start_proxy
+from ._proxy import Upstream, start_proxy
+from ._relay import LEGACY_OAUTH, WEBHOOK_ID, relay_config
 from ._variants import Variant
 
 pytestmark = pytest.mark.usefixtures("component")

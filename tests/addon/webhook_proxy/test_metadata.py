@@ -9,8 +9,8 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream
-from ._relay import LEGACY_OAUTH, WEBHOOK_PATH, relay_config, start_proxy
+from ._proxy import Upstream, start_proxy
+from ._relay import LEGACY_OAUTH, WEBHOOK_PATH, relay_config
 from ._variants import Variant
 
 pytestmark = pytest.mark.usefixtures("component")

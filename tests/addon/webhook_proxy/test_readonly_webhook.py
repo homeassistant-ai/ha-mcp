@@ -13,14 +13,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream
+from ._proxy import Upstream, start_proxy
 from ._relay import (
     BEARER_MODES,
     WEBHOOK_ID,
     WEBHOOK_PATH,
     existing_webhook_handler,
     relay_config,
-    start_proxy,
 )
 from ._variants import Variant
 

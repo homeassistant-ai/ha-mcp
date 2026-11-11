@@ -14,19 +14,15 @@ import importlib
 import json
 import secrets
 from collections import Counter
-from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import aiohttp
-import pytest
 from aiohttp.test_utils import TestClient
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant.common import MockConfigEntry
 
-from ._proxy import set_up_proxy, state_path, write_proxy_config
+from ._proxy import state_path, write_proxy_config
 from ._variants import Variant
 
 WEBHOOK_ID = "mcp_auth_modes_webhook"
@@ -40,7 +36,6 @@ LEGACY: dict[str, Any] = {
 }
 CLAUDE_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 # The click-to-restart Repair both OAuth modes and none mode share.
-RESTART_ISSUE_ID = "oauth_restart_required"
 
 
 def proxy_config(
@@ -56,13 +51,6 @@ def proxy_config(
         config["oauth"] = dict(oauth)
     config.update(extra)
     return config
-
-
-async def start_proxy(
-    hass: HomeAssistant, fs_root: Path, variant: Variant, config: dict[str, Any]
-) -> MockConfigEntry:
-    write_proxy_config(fs_root, variant, config)
-    return await set_up_proxy(hass, variant)
 
 
 async def reload_proxy(
@@ -128,10 +116,6 @@ async def fetch_json(
     return response.status, body
 
 
-def restart_issue(hass: HomeAssistant, variant: Variant) -> ir.IssueEntry | None:
-    return ir.async_get(hass).async_get_issue(variant.domain, RESTART_ISSUE_ID)
-
-
 def marker_path(fs_root: Path, variant: Variant) -> Path:
     return state_path(fs_root, variant.oauth_marker)
 
@@ -166,17 +150,3 @@ def token_core_cannot_validate() -> str:
     header = _b64url_json({"alg": "HS256", "typ": "JWT"})
     claims = _b64url_json({"iss": ["not-a-refresh-token-id"]})
     return f"{header}.{claims}.c2ln"
-
-
-def record_sessions(monkeypatch: pytest.MonkeyPatch) -> list[aiohttp.ClientSession]:
-    """Record every aiohttp session created from now on (to prove none leak)."""
-    created: list[aiohttp.ClientSession] = []
-    session_class: Callable[..., aiohttp.ClientSession] = aiohttp.ClientSession
-
-    def recording_session(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
-        session = session_class(*args, **kwargs)
-        created.append(session)
-        return session
-
-    monkeypatch.setattr(aiohttp, "ClientSession", recording_session)
-    return created

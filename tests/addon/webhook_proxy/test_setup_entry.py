@@ -11,14 +11,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream, proxy_config_path, record_client_sessions, set_up_proxy
-from ._relay import (
-    WEBHOOK_ID,
-    WEBHOOK_PATH,
-    existing_webhook_handler,
-    relay_config,
+from ._proxy import (
+    Upstream,
+    proxy_config_path,
+    record_client_sessions,
+    set_up_proxy,
     start_proxy,
 )
+from ._relay import WEBHOOK_ID, WEBHOOK_PATH, existing_webhook_handler, relay_config
 from ._variants import Variant
 
 pytestmark = pytest.mark.usefixtures("component")

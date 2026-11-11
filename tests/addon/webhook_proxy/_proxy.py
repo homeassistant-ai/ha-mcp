@@ -13,12 +13,15 @@ import pytest
 from aiohttp import web
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
 from ._variants import Variant
 
 STATE_ROOTS = ("/config", "/data")
+# The click-to-restart Repair the component raises when OAuth changes need a restart.
+OAUTH_ISSUE = "oauth_restart_required"
 
 
 def state_path(fs_root: Path, path: str | PurePath) -> Path:
@@ -94,3 +97,18 @@ def record_client_sessions(
 
     monkeypatch.setattr(aiohttp, "ClientSession", opened)
     return created
+
+
+async def start_proxy(
+    hass: HomeAssistant, variant: Variant, fs_root: Path, config: dict[str, Any]
+) -> MockConfigEntry:
+    """Write ``config`` as the app would and let Core set the entry up."""
+    write_proxy_config(fs_root, variant, config)
+    return await set_up_proxy(hass, variant)
+
+
+def restart_issue(
+    hass: HomeAssistant, variant: Variant, issue_id: str = OAUTH_ISSUE
+) -> ir.IssueEntry | None:
+    """The proxy's click-to-restart Repairs issue, as Core's registry holds it."""
+    return ir.async_get(hass).async_get_issue(variant.domain, issue_id)

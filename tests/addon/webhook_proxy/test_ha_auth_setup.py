@@ -32,15 +32,18 @@ from ._auth_modes import (
     pkce_pair,
     prm_url,
     proxy_config,
-    record_sessions,
     reload_proxy,
-    restart_issue,
     route_counts,
     scoped_urls,
-    start_proxy,
     submodule,
 )
-from ._proxy import Upstream, state_path
+from ._proxy import (
+    Upstream,
+    record_client_sessions,
+    restart_issue,
+    start_proxy,
+    state_path,
+)
 from ._variants import Variant, load_start, script_function
 
 PINNED_LEGACY = "https://pinned-legacy.example"
@@ -90,7 +93,7 @@ async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
             False,
         )
         if entry is None:
-            entry = await start_proxy(hass, fs_root, variant, config)
+            entry = await start_proxy(hass, variant, fs_root, config)
         else:
             assert await reload_proxy(hass, fs_root, variant, entry, config)
         assert entry.state is ConfigEntryState.LOADED, option
@@ -109,7 +112,7 @@ async def test_ha_auth_binds_scoped_oauth_surface_but_no_root_views(
     marker = marker_path(fs_root, variant)
     marker.write_text('{"reason": "stale"}')
 
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
 
     assert entry.state is ConfigEntryState.LOADED
     routes = route_counts(hass)
@@ -133,7 +136,7 @@ async def test_dcr_registration_still_resolves_after_a_reload(
     """A client registered through DCR keeps working after the entry reloads:
     the signing key persists, so its client_id still translates to the
     redirect origin core accepts instead of reaching core unrecognised."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
     client = await hass_client_no_auth()
     response = await client.post(
         f"{variant.oauth_base}/register",
@@ -174,8 +177,8 @@ async def test_ha_auth_unload_closes_relay_and_cimd_sessions(
 ) -> None:
     """Anonymous CIMD lookups run on their own session, apart from the relay's
     pool, and unloading the entry closes both (no leaked connector)."""
-    sessions = record_sessions(monkeypatch)
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    sessions = record_client_sessions(monkeypatch)
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
     data = hass.data[variant.domain]
     assert data["cimd_session"] is not data["session"]
 
@@ -202,12 +205,12 @@ async def test_ha_auth_setup_failure_refuses_to_leave_the_webhook_open(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(submodule(component, "oauth"), "register_metadata_views", fail)
-    sessions = record_sessions(monkeypatch)
+    sessions = record_client_sessions(monkeypatch)
 
     entry = await start_proxy(
         hass,
-        fs_root,
         variant,
+        fs_root,
         proxy_config(target_url=upstream.target_url(), oauth=HA_AUTH),
     )
 
@@ -233,8 +236,8 @@ async def test_stray_public_base_url_does_not_pin_ha_auth_discovery(
     reached by, so its URLs follow the request host."""
     await start_proxy(
         hass,
-        fs_root,
         variant,
+        fs_root,
         proxy_config(oauth=HA_AUTH, public_base_url="https://stray-pinned.example"),
     )
     client = await hass_client_no_auth()
@@ -258,7 +261,7 @@ async def test_ha_auth_reload_reuses_the_bound_views(
 ) -> None:
     """A reload must not bind the OAuth views again: Home Assistant cannot
     drop the first binding, so every reload would stack shadowed duplicates."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
 
     assert await reload_proxy(
         hass, fs_root, variant, entry, proxy_config(oauth=HA_AUTH)
@@ -283,7 +286,7 @@ async def test_rotated_webhook_id_under_ha_auth_raises_restart_repair(
     """The discovery URL embeds the webhook id and Home Assistant cannot bind
     one for a new id until it restarts, so a rotation raises the restart
     Repair, and the old id's URL stops answering."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
     assert restart_issue(hass, variant) is None
 
     rotated = proxy_config(oauth=HA_AUTH, webhook_id="mcp_rotated_webhook")
@@ -308,7 +311,7 @@ async def test_switch_from_ha_auth_to_legacy_serves_pinned_legacy_documents(
     ha_auth bound now serve legacy's document pinned to its public URL; the
     request host cannot poison it."""
     hass.set_state(CoreState.not_running)  # legacy root views bind at boot
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
 
     legacy = proxy_config(oauth=LEGACY, public_base_url=PINNED_LEGACY)
     assert await reload_proxy(hass, fs_root, variant, entry, legacy)
@@ -343,8 +346,8 @@ async def test_switch_from_legacy_to_ha_auth_serves_host_derived_documents(
     hass.set_state(CoreState.not_running)
     entry = await start_proxy(
         hass,
-        fs_root,
         variant,
+        fs_root,
         proxy_config(oauth=LEGACY, public_base_url=PINNED_LEGACY),
     )
     assert route_counts(hass)[f"{variant.oauth_base}/register"] == 0
@@ -394,12 +397,12 @@ async def test_unusable_oauth_section_refuses_setup_and_closes_the_webhook(
     mode, or ha_auth still carrying legacy credentials) is refused rather
     than guessed: setup fails, no OAuth view is bound, the webhook is torn
     down and the session closed."""
-    sessions = record_sessions(monkeypatch)
+    sessions = record_client_sessions(monkeypatch)
 
     entry = await start_proxy(
         hass,
-        fs_root,
         variant,
+        fs_root,
         proxy_config(target_url=upstream.target_url(), oauth=oauth),
     )
 
@@ -427,7 +430,7 @@ async def test_credentials_without_a_mode_stay_on_legacy(
     hass.set_state(CoreState.not_running)
     oauth = {key: value for key, value in LEGACY.items() if key != "mode"}
 
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=oauth))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=oauth))
 
     assert entry.state is ConfigEntryState.LOADED
     assert hass.data[component.OAUTH_ROUTE_OWNER_KEY] == variant.domain

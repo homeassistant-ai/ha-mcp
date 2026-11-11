@@ -23,11 +23,10 @@ from ._auth_modes import (
     WEBHOOK_ID,
     prm_url,
     proxy_config,
-    start_proxy,
     submodule,
     token_core_cannot_validate,
 )
-from ._proxy import Upstream, state_path
+from ._proxy import Upstream, start_proxy, state_path
 from ._variants import Variant
 
 WEBHOOK = f"/api/webhook/{WEBHOOK_ID}"
@@ -44,7 +43,7 @@ async def _start_ha_auth(
     config = proxy_config(target_url=upstream.target_url(), oauth=HA_AUTH)
     if debug_logging:
         config["debug_logging"] = True
-    await start_proxy(hass, fs_root, variant, config)
+    await start_proxy(hass, variant, fs_root, config)
 
 
 @pytest.mark.parametrize("scheme", ["Bearer", "bEaReR"])

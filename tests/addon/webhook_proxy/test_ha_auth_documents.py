@@ -25,9 +25,8 @@ from ._auth_modes import (
     prm_url,
     proxy_config,
     reload_proxy,
-    start_proxy,
 )
-from ._proxy import Upstream
+from ._proxy import Upstream, start_proxy
 from ._variants import Variant
 
 
@@ -41,7 +40,7 @@ async def test_ha_auth_as_document_is_identical_at_every_discovery_url(
     """claude.ai caches the authorization config per URL (#1714), so every
     well-known spelling must serve the one ha_auth document: a public PKCE
     client with CIMD and DCR, whose endpoints all belong to the proxy."""
-    await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
     client = await hass_client_no_auth()
     base = f"http://ha.example{variant.oauth_base}"
 
@@ -74,7 +73,7 @@ async def test_ha_auth_protected_resource_document_names_the_proxy_issuer(
 ) -> None:
     """The webhook's RFC 9728 document points clients at the proxy's own
     authorization server for the host they reached it on."""
-    await start_proxy(hass, fs_root, variant, proxy_config(oauth=HA_AUTH))
+    await start_proxy(hass, variant, fs_root, proxy_config(oauth=HA_AUTH))
     client = await hass_client_no_auth()
 
     status, body = await fetch_json(client, prm_url(), host="ha.example")
@@ -111,7 +110,7 @@ async def test_root_authorize_and_token_stop_serving_once_ha_auth_replaces_legac
     """Legacy's root /authorize and /token stay bound after a switch to
     ha_auth, but must not render consent or mint legacy tokens any more."""
     hass.set_state(CoreState.not_running)
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=LEGACY))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=LEGACY))
     client = await hass_client_no_auth()
     query = _consent_query()
     serving = await client.get("/authorize", params=query)
@@ -161,7 +160,7 @@ async def test_unloaded_entry_leaves_every_bound_oauth_view_answering_404(
     """After the entry is unloaded the views stay bound until a restart; each
     must answer like an unregistered route instead of serving a dead mode."""
     hass.set_state(CoreState.not_running)
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=LEGACY))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=LEGACY))
 
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -181,7 +180,7 @@ async def test_oauth_off_without_live_discovery_leaves_stale_views_answering_404
     forwarding, and every view still bound from legacy answers 404 rather than
     falling back to serving legacy."""
     hass.set_state(CoreState.not_running)
-    entry = await start_proxy(hass, fs_root, variant, proxy_config(oauth=LEGACY))
+    entry = await start_proxy(hass, variant, fs_root, proxy_config(oauth=LEGACY))
     break_dcr_secret(fs_root, variant)
 
     off = proxy_config(target_url=upstream.target_url())
@@ -206,7 +205,7 @@ async def test_401_challenge_is_identical_in_legacy_and_ha_auth(
     base URL and ha_auth derives it, so for the pinned host they match."""
     hass.set_state(CoreState.not_running)
     legacy = proxy_config(oauth=LEGACY, public_base_url="http://myhost.example")
-    entry = await start_proxy(hass, fs_root, variant, legacy)
+    entry = await start_proxy(hass, variant, fs_root, legacy)
     client = await hass_client_no_auth()
 
     async def challenge() -> str:

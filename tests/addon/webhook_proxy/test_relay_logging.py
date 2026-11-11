@@ -15,8 +15,8 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream, state_path, write_proxy_config
-from ._relay import LEGACY_OAUTH, WEBHOOK_ID, WEBHOOK_PATH, relay_config, start_proxy
+from ._proxy import Upstream, start_proxy, state_path, write_proxy_config
+from ._relay import LEGACY_OAUTH, WEBHOOK_ID, WEBHOOK_PATH, relay_config
 from ._variants import Variant, load_start, script_function
 
 pytestmark = pytest.mark.usefixtures("component")

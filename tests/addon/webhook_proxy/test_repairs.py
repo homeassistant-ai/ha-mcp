@@ -17,15 +17,8 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import async_mock_service
 from pytest_homeassistant.typing import ClientSessionGenerator, WebSocketGenerator
 
-from ._proxy import set_up_proxy
-from ._relay import (
-    OAUTH_ISSUE,
-    UPDATE_ISSUE,
-    WEBHOOK_ID,
-    restart_issue,
-    restart_marker,
-    start_proxy,
-)
+from ._proxy import OAUTH_ISSUE, restart_issue, set_up_proxy, start_proxy
+from ._relay import UPDATE_ISSUE, WEBHOOK_ID, restart_marker
 from ._variants import Variant
 
 pytestmark = pytest.mark.usefixtures("component")

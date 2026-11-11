@@ -28,12 +28,10 @@ from ._auth_modes import (
     prm_url,
     proxy_config,
     reload_proxy,
-    restart_issue,
     route_counts,
     scoped_urls,
-    start_proxy,
 )
-from ._proxy import Upstream
+from ._proxy import Upstream, restart_issue, start_proxy
 from ._variants import Variant
 
 
@@ -50,7 +48,7 @@ async def test_oauth_off_binds_discovery_and_autoapprove_routes_but_no_root_view
     marker = marker_path(fs_root, variant)
     marker.write_text('{"reason": "stale"}')
 
-    entry = await start_proxy(hass, fs_root, variant, proxy_config())
+    entry = await start_proxy(hass, variant, fs_root, proxy_config())
 
     assert entry.state is ConfigEntryState.LOADED
     routes = route_counts(hass)
@@ -73,7 +71,7 @@ async def test_rotated_webhook_id_with_oauth_off_raises_the_shared_restart_repai
     """A webhook id rotated with OAuth off needs a restart too (its discovery
     URL binds only at startup). It raises the shared restart Repair, whose
     text must cover a rotation, not only enabling OAuth."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config())
+    entry = await start_proxy(hass, variant, fs_root, proxy_config())
     assert restart_issue(hass, variant) is None
 
     rotated = proxy_config(webhook_id="mcp_rotated_webhook")
@@ -104,7 +102,7 @@ async def test_failed_autoapprove_setup_keeps_the_plain_webhook_forwarding(
     break_dcr_secret(fs_root, variant)
 
     entry = await start_proxy(
-        hass, fs_root, variant, proxy_config(target_url=upstream.target_url())
+        hass, variant, fs_root, proxy_config(target_url=upstream.target_url())
     )
 
     assert entry.state is ConfigEntryState.LOADED
@@ -127,7 +125,7 @@ async def test_forged_bearer_is_ignored_with_oauth_off(
     """The auto-approve token is cosmetic: with OAuth off the webhook never
     401s, whatever bearer a client sends, and forwards the call."""
     await start_proxy(
-        hass, fs_root, variant, proxy_config(target_url=upstream.target_url())
+        hass, variant, fs_root, proxy_config(target_url=upstream.target_url())
     )
     client = await hass_client_no_auth()
 
@@ -150,7 +148,7 @@ async def test_none_and_ha_auth_switch_documents_without_rebinding(
 ) -> None:
     """Switching none -> ha_auth -> none needs no restart: the views bound
     once serve whichever mode is live, so the document changes with it."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config())
+    entry = await start_proxy(hass, variant, fs_root, proxy_config())
     client = await hass_client_no_auth()
     url = as_document_urls(variant)[0]
 
@@ -186,7 +184,7 @@ async def test_no_discovery_url_without_the_webhook_id_reveals_it_in_any_mode(
     document reachable without already knowing it may contain it, in any
     mode, since a later switch to none mode would promote a published id
     into the credential."""
-    entry = await start_proxy(hass, fs_root, variant, proxy_config())
+    entry = await start_proxy(hass, variant, fs_root, proxy_config())
     client = await hass_client_no_auth()
 
     for config in (
@@ -211,7 +209,7 @@ async def test_path_scoped_protected_resource_serves_with_oauth_off(
     """The protected-resource document whose URL carries the webhook id keeps
     serving in none mode: its caller already holds the id, and it is the
     document claude.ai's none-mode discovery follows."""
-    await start_proxy(hass, fs_root, variant, proxy_config())
+    await start_proxy(hass, variant, fs_root, proxy_config())
     client = await hass_client_no_auth()
 
     status, body = await fetch_json(client, prm_url(), host="legit.example")
