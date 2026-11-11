@@ -9,29 +9,7 @@ from ha_mcp.settings_ui import _SETTINGS_HTML
 
 from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import extract_script_body, run_script
-
-DEFAULT_FETCHES: dict[str, dict] = {
-    "/api/settings/features": {
-        "status": 200,
-        "json": {"features": [], "values": {}},
-    },
-    "/api/settings/tools": {
-        "status": 200,
-        "json": {"tools": [], "states": {}, "addon_mode": True},
-    },
-    "/api/settings/info": {
-        "status": 200,
-        "json": {"instance_id": "baseline-id"},
-    },
-    "/api/settings/backup-config": {
-        "status": 200,
-        "json": {},
-    },
-    "/api/policy/decision-pin": {
-        "status": 200,
-        "json": {"set": False},
-    },
-}
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 
 @pytest.mark.parametrize("env_disabled", [False, True])
@@ -44,7 +22,7 @@ def test_ignored_disable_renders_enabled_and_roundtrips(
 ) -> None:
     result = run_script(
         extract_script_body(_SETTINGS_HTML),
-        initial_html=_SETTINGS_HTML,
+        initial_html=MIN_DOM,
         fetch_map={
             **DEFAULT_FETCHES,
             "/api/settings/tools": {
