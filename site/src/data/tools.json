@@ -2468,7 +2468,7 @@
         },
         "start_time": {
           "type": "str | None",
-          "description": "Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
+          "description": "Start time: ISO datetime (HA local time without an offset) or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
           "default": null
         },
         "end_time": {

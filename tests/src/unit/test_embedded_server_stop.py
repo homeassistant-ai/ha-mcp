@@ -25,22 +25,13 @@ import pytest
 from custom_components.ha_mcp_tools.const import OPT_SERVER_URL
 
 from ._embedded_helpers import no_direct_listener_helpers  # noqa: F401
+from ._embedded_server_helpers import _clear_worker_env as _clear_worker_env
 from .test_embedded_server import (
     _manager,
     _no_manifest_pin,  # noqa: F401 - autouse fixture
     _stub_ha_mcp_surface,
     es,
 )
-
-
-def _clear_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The worker writes these into os.environ. setenv first so monkeypatch
-    # records the prior state and undoes the worker's writes; a bare delenv of
-    # an unset key records nothing, and HA_MCP_EMBEDDED=1 would leak into later
-    # tests (every app-mode check reads it).
-    for key in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED"):
-        monkeypatch.setenv(key, "")
-        monkeypatch.delenv(key)
 
 
 async def test_stop_before_the_worker_publishes_its_event_stops_it(

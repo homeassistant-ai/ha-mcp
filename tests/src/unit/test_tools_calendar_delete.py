@@ -5,41 +5,92 @@ the WebSocket command ``calendar/event/delete``, now routed through the shared
 pooled client (``client.send_websocket_message``) instead of a per-call
 dedicated connection. A failed WS command comes back as ``{"success": False}``
 and is re-raised so the failure reaches the tool's existing error handler.
+
+The tool runs on the server's own client against a real ``hass``, whose
+``calendar`` integration serves a calendar of a test integration that
+supports deleting events.
 """
 
+import datetime as dt
 import json
-from unittest.mock import AsyncMock, MagicMock
+from contextlib import AbstractContextManager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components.calendar import (
+    CalendarEntity,
+    CalendarEntityFeature,
+    CalendarEvent,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import setup_test_component_platform
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 
-def _make_mock_client(ws_return: dict | None = None) -> MagicMock:
-    client = MagicMock()
-    client.base_url = "http://ha.local:8123"
-    client.token = "test-token"
-    client.verify_ssl = True
-    client.send_websocket_message = AsyncMock(
-        return_value=ws_return or {"success": True, "result": None}
+class DeletableCalendar(CalendarEntity):
+    """``calendar.test``: records each delete Core hands it."""
+
+    _attr_name = "Test"
+    _attr_supported_features = CalendarEntityFeature.DELETE_EVENT
+
+    def __init__(self) -> None:
+        self.deleted: list[tuple[str, str | None, str | None]] = []
+
+    @property
+    def event(self) -> CalendarEvent | None:
+        return None
+
+    async def async_get_events(
+        self, hass: HomeAssistant, start_date: dt.datetime, end_date: dt.datetime
+    ) -> list[CalendarEvent]:
+        return []
+
+    async def async_delete_event(
+        self,
+        uid: str,
+        recurrence_id: str | None = None,
+        recurrence_range: str | None = None,
+    ) -> None:
+        self.deleted.append((uid, recurrence_id, recurrence_range))
+
+
+@pytest.fixture
+async def calendar(hass: HomeAssistant) -> DeletableCalendar:
+    entity = DeletableCalendar()
+    setup_test_component_platform(hass, "calendar", [entity])
+    assert await async_setup_component(
+        hass, "calendar", {"calendar": {"platform": "test"}}
     )
-    return client
+    await hass.async_block_till_done()
+    return entity
 
 
-@pytest.mark.asyncio
-async def test_delete_routes_via_pooled_websocket():
-    client = _make_mock_client(ws_return={"success": True, "result": {"ok": True}})
-
-    tools = CalendarTools(client)
-    result = await tools.ha_config_remove_calendar_event(
-        entity_id="calendar.test",
-        uid="evt-123",
+def _spy(
+    client: HomeAssistantClient,
+) -> AbstractContextManager[MagicMock | AsyncMock]:
+    """A spy on the client's WebSocket bridge; Core still answers."""
+    return patch.object(
+        client, "send_websocket_message", wraps=client.send_websocket_message
     )
 
-    client.send_websocket_message.assert_awaited_once()
-    message = client.send_websocket_message.await_args.args[0]
+
+async def test_delete_routes_via_pooled_websocket(
+    calendar: DeletableCalendar, core_client: HomeAssistantClient
+) -> None:
+    tools = CalendarTools(core_client)
+    with _spy(core_client) as send:
+        result = await tools.ha_config_remove_calendar_event(
+            entity_id="calendar.test",
+            uid="evt-123",
+        )
+
+    send.assert_awaited_once()
+    message = send.await_args_list[0].args[0]
     assert message["type"] == "calendar/event/delete"
     assert message["entity_id"] == "calendar.test"
     assert message["uid"] == "evt-123"
@@ -48,39 +99,39 @@ async def test_delete_routes_via_pooled_websocket():
     assert "recurrence_range" not in message
     assert result["success"] is True
     assert result["uid"] == "evt-123"
+    assert calendar.deleted == [("evt-123", None, None)]
     # The dedicated-connection helper is gone from the module namespace.
     assert not hasattr(tools_calendar, "get_connected_ws_client")
 
 
-@pytest.mark.asyncio
-async def test_delete_forwards_recurrence_params():
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    await tools.ha_config_remove_calendar_event(
-        entity_id="calendar.test",
-        uid="evt-123",
-        recurrence_id="20260101T100000",
-        recurrence_range="THISANDFUTURE",
-    )
-
-    message = client.send_websocket_message.await_args.args[0]
-    assert message["recurrence_id"] == "20260101T100000"
-    assert message["recurrence_range"] == "THISANDFUTURE"
-
-
-@pytest.mark.asyncio
-async def test_delete_failure_surfaces_structured_error():
-    # Pooled client collapses a failed WS command into {"success": False}; the
-    # tool re-raises so the outer handler builds the delete-specific suggestions.
-    client = _make_mock_client(
-        ws_return={"success": False, "error": "Command failed: event not found"}
-    )
-
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
+async def test_delete_forwards_recurrence_params(
+    calendar: DeletableCalendar, core_client: HomeAssistantClient
+) -> None:
+    tools = CalendarTools(core_client)
+    with _spy(core_client) as send:
         await tools.ha_config_remove_calendar_event(
             entity_id="calendar.test",
+            uid="evt-123",
+            recurrence_id="20260101T100000",
+            recurrence_range="THISANDFUTURE",
+        )
+
+    message = send.await_args_list[0].args[0]
+    assert message["recurrence_id"] == "20260101T100000"
+    assert message["recurrence_range"] == "THISANDFUTURE"
+    assert calendar.deleted == [("evt-123", "20260101T100000", "THISANDFUTURE")]
+
+
+async def test_delete_failure_surfaces_structured_error(
+    calendar: DeletableCalendar, core_client: HomeAssistantClient
+) -> None:
+    # Core refuses the delete (no such calendar); the pooled client collapses
+    # that into {"success": False} and the tool re-raises so the outer handler
+    # builds the delete-specific suggestions.
+    tools = CalendarTools(core_client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_remove_calendar_event(
+            entity_id="calendar.missing",
             uid="missing",
         )
 
@@ -91,16 +142,16 @@ async def test_delete_failure_surfaces_structured_error():
         "not found" in s.lower() or "uid" in s.lower() or "event" in s.lower()
         for s in suggestions
     )
+    assert calendar.deleted == []
 
 
 @pytest.mark.parametrize("bad", ["", "   "])
-@pytest.mark.asyncio
-async def test_delete_rejects_blank_recurrence_id(bad):
+async def test_delete_rejects_blank_recurrence_id(
+    core_client: HomeAssistantClient, bad: str
+) -> None:
     """A blank recurrence_id reaches HA as a real one and matches nothing."""
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
+    tools = CalendarTools(core_client)
+    with _spy(core_client) as send, pytest.raises(ToolError) as exc_info:
         await tools.ha_config_remove_calendar_event(
             entity_id="calendar.test",
             uid="series-1",
@@ -110,16 +161,15 @@ async def test_delete_rejects_blank_recurrence_id(bad):
     message = str(exc_info.value)
     assert "VALIDATION_INVALID_PARAMETER" in message
     assert '"parameter": "recurrence_id"' in message, message
-    client.send_websocket_message.assert_not_awaited()
+    send.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_delete_rejects_recurrence_range_without_recurrence_id():
+async def test_delete_rejects_recurrence_range_without_recurrence_id(
+    core_client: HomeAssistantClient,
+) -> None:
     """Without an occurrence id, ical deletes the ENTIRE series instead."""
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
+    tools = CalendarTools(core_client)
+    with _spy(core_client) as send, pytest.raises(ToolError) as exc_info:
         await tools.ha_config_remove_calendar_event(
             entity_id="calendar.test",
             uid="series-1",
@@ -128,4 +178,4 @@ async def test_delete_rejects_recurrence_range_without_recurrence_id():
 
     assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
     assert "recurrence_id" in str(exc_info.value)
-    client.send_websocket_message.assert_not_awaited()
+    send.assert_not_awaited()
