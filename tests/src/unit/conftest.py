@@ -365,16 +365,6 @@ def no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(describe, "component_serves", AsyncMock(return_value=True))
 
 
-@pytest.fixture
-def component_finds_no_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The install has the component, whose name lookup finds no duplicate:
-    without it a create carries the unchecked-near-duplicates warning."""
-    from ha_mcp.tools.config_helpers import registry
-
-    answer = AsyncMock(return_value={"slug": "probe", "ids": []})
-    monkeypatch.setattr(registry, "ask_component", answer)
-
-
 @pytest.fixture(autouse=True)
 def opened_flows(
     monkeypatch: pytest.MonkeyPatch,

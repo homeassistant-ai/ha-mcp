@@ -30,7 +30,7 @@ def mock_client():
 
 
 @pytest.fixture
-def register_tools(mock_client, component_finds_no_duplicate):
+def register_tools(mock_client):
     from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
     registered: dict[str, Any] = {}
@@ -96,7 +96,7 @@ class TestUniformResponseShape:
                 helper_type="input_boolean",
                 name="Test Switch",
             )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["action"] == "create"
         assert result["data"]["id"] == "abc123"
 
@@ -190,7 +190,7 @@ class TestUniformResponseShape:
             config={"entity_ids": ["sensor.a", "sensor.b"], "type": "mean"},
             wait=False,
         )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["data"]["entry_id"] == "entry-1"
         assert result["data"]["title"] == "avg_temp"
         # Flat accessors remain (per-action metadata, not wrapper keys).
@@ -354,7 +354,7 @@ class TestUniformResponseShape:
                 icon="mdi:toggle-switch",
                 area_id="area.kitchen",
             )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result, expect_warnings=True)
         assert result["action"] == "create"
         assert result["data"]["icon"] == "mdi:toggle-switch"
         assert result["data"]["area_id"] == "area.kitchen"

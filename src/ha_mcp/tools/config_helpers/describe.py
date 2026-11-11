@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ...client.rest_client import HomeAssistantConnectionError
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_api import COMPONENT_INSTALL_HINT, component_serves
@@ -174,14 +175,25 @@ async def describe_form(
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
     declared = None
+    outline_lost = False
     if step_id and domain and path in ("config", "options"):
-        outline = await flow_outline(client, domain, path)
+        try:
+            outline = await flow_outline(client, domain, path)
+        except HomeAssistantConnectionError:
+            # The flow is already at this step: the form goes back without
+            # its later forms rather than not at all.
+            outline, outline_lost = None, True
+            described.setdefault("warnings", []).append(_OUTLINE_LOST_WARNING)
         declared = steps_after(outline, step_id) if outline is not None else None
     if declared is None:
         # Core's flow is not declared as steps, or no component reads the
         # declaration: only the step itself says.
         described.update(_later_forms(step))
-        if "note" in described and not await component_serves(client, "flow_outline"):
+        if (
+            "note" in described
+            and not outline_lost
+            and not await component_serves(client, "flow_outline")
+        ):
             described["note"] += (
                 " The ha_mcp_tools component lists a flow's later forms up "
                 f"front. {COMPONENT_INSTALL_HINT}"
@@ -197,6 +209,11 @@ async def describe_form(
     return described
 
 
+_OUTLINE_LOST_WARNING = (
+    "The flow's later forms could not be read: the connection to Home "
+    "Assistant was lost while reading them. This form is complete; each "
+    "later form is returned by the call that answers the one before it."
+)
 _LATER_FORMS_NOTE = (
     "later_forms are the steps Home Assistant's flow declares after this one. "
     "A config list answers this form and later ones in one call, one object "
