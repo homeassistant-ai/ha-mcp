@@ -783,9 +783,8 @@ def _history_workload_violation(
     if not minimal_response:
         detail_weight *= 2
     entity_count = len(entity_ids)
-    estimated_entity_hours = (
-        (end_dt - start_dt).total_seconds() / 3600 * entity_count * detail_weight
-    )
+    hours = (end_dt.timestamp() - start_dt.timestamp()) / 3600  # elapsed, DST-safe
+    estimated_entity_hours = hours * entity_count * detail_weight
     if (
         entity_count <= _MAX_HISTORY_ENTITIES
         and estimated_entity_hours <= _MAX_HISTORY_ENTITY_HOURS
@@ -840,10 +839,8 @@ def _statistics_workload_violation(
         else _MAX_LONG_TERM_STATISTICS_ROWS
     )
     entity_count = len(entity_ids)
-    estimated_rows = (
-        math.ceil((scan_end - scan_start).total_seconds() / scan_granularity_seconds)
-        * entity_count
-    )
+    seconds = scan_end.timestamp() - scan_start.timestamp()  # elapsed, DST-safe
+    estimated_rows = math.ceil(seconds / scan_granularity_seconds) * entity_count
     if (
         entity_count <= _MAX_STATISTICS_ENTITIES
         and estimated_rows <= max_statistics_rows
