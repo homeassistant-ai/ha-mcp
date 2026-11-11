@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import probatio
 import pytest
@@ -31,12 +32,16 @@ from pytest_homeassistant.common import (
 )
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.config_entry_flow import (
     CreationFlowError,
     recreate_flow_helper,
     restore_config_entry_options,
 )
+from ha_mcp.tools.config_helpers import describe
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 _SOURCES = ["sensor.a", "sensor.b"]
@@ -284,6 +289,22 @@ async def test_steps_core_picks_from_the_answers_are_listed_as_candidates(
     assert {"lowpass", "outlier"} <= {form["step_id"] for form in later}
     assert all(form.get("may_follow") for form in later)
     assert "unverified candidate" in described["note"]
+
+
+async def test_a_connection_lost_reading_the_later_forms_still_returns_the_form(
+    component_tools: HelperConfigTools,
+) -> None:
+    """The flow is open by the time its later forms are read. A connection
+    lost on that read costs the later forms, not the form and its flow_id."""
+    lost = AsyncMock(side_effect=HomeAssistantConnectionError("connection lost"))
+    with patch.object(describe, "flow_outline", lost):
+        shown = await component_tools.ha_config_set_helper(
+            helper_type="generic_thermostat", config=dict(_THERMOSTAT)
+        )
+
+    assert shown["step_id"] == "presets"
+    assert shown["flow_id"]
+    assert any("later forms" in warning for warning in shown["warnings"])
 
 
 async def test_an_open_form_names_the_later_forms_and_the_last_one_none(
