@@ -351,6 +351,39 @@ class TestHiddenScriptStorageKeyInContent:
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_unkeyed_hidden_item_keeps_a_partly_keyed_domain_closed(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """One keyed hidden automation must not clear another unkeyed one."""
+        set_config(
+            enabled=True,
+            enforce=True,
+            deny_entity_ids=["automation.keyed", "automation.unkeyed"],
+        )
+        client = FakeClient(
+            registry=_registry(
+                _entry("automation.keyed", "1700000000009", "automation")
+            )
+        )
+        mw = make_mw(get_client=lambda: client)
+        listing = {
+            "success": True,
+            "result": [
+                {"domain": "automation", "item_id": "1700000000002", "run_id": "1"}
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_service",
+                    {"ws_command": "trace/list", "data": {"domain": "automation"}},
+                ),
+                _returns(text_result(json.dumps(listing), listing)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_trace_listing_with_an_unkeyed_hidden_script_is_refused(
         self, set_config: Callable[..., Any]
     ) -> None:

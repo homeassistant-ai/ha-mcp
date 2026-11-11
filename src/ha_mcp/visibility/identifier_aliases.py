@@ -124,12 +124,10 @@ def build_identifier_aliases(
     object_ids: dict[str, set[str]] = {}
     storage_keys: dict[str, set[str]] = {}
     hidden_scripts: dict[str, str] = {}
-    hidden_domains: set[str] = set()
-    keyed_domains: set[str] = set()
+    keyed_ids: set[str] = set()
     for hidden_id in hidden:
         domain, _, object_id = hidden_id.partition(".")
         if domain in _ALIASED_DOMAINS and object_id:
-            hidden_domains.add(domain)
             if domain in _OBJECT_ID_DOMAINS:
                 object_ids.setdefault(domain, set()).add(object_id.casefold())
             if domain == "script":
@@ -151,7 +149,7 @@ def build_identifier_aliases(
             continue
         domain = entity_id.partition(".")[0]
         if domain in _ALIASED_DOMAINS:
-            keyed_domains.add(domain)
+            keyed_ids.add(entity_id)
             storage_keys.setdefault(domain, set()).add(unique_id)
             if domain == "script":
                 hidden_scripts[entity_id] = unique_id
@@ -160,7 +158,11 @@ def build_identifier_aliases(
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
         script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
         unkeyed_trace_domains=frozenset(
-            (hidden_domains & _TRACE_DOMAINS) - keyed_domains
+            domain
+            for hidden_id in hidden
+            if hidden_id not in keyed_ids
+            for domain, _, object_id in [hidden_id.partition(".")]
+            if domain in _TRACE_DOMAINS and object_id
         ),
     )
 
