@@ -463,10 +463,10 @@ class TestSnapshotDelete:
         """
         logger.info("🗑️ Testing snapshot delete success path...")
 
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
         monkeypatch.setenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", "0")
-        _reset_global_settings()
+        reset_global_settings()
 
         # Two backups so the target is never the single newest snapshot.
         target = await safe_call_tool(

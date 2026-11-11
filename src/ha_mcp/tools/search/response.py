@@ -53,8 +53,9 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
 # pins their presence (search_type at 17+ sites, domain_filter at 6,
 # area_filter at 1, message at 2), so callers verifiably depend on them.
 # All are documented as top-level keys + retained in
-# ``_ALWAYS_KEEP_PROJECTION``.
-_ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
+# ``_ALWAYS_KEEP_PROJECTION``. Public so the fields-docstring drift test can
+# require every emitted entities-branch key to be stripped or documented.
+ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
     "results",
     "total_matches",
     "has_more",
@@ -522,7 +523,7 @@ def _apply_search_outcome(
         _merge_payload_metadata(
             response,
             payload,
-            skip_keys=_ENTITIES_BRANCH_SKIP_KEYS,
+            skip_keys=ENTITIES_BRANCH_SKIP_KEYS,
         )
     elif label == "configs":
         for bucket in _CONFIG_BUCKETS:

@@ -2119,11 +2119,11 @@ class TestFeatureFlagsEndpoint:
 
     @pytest.fixture(autouse=True)
     def _reset_settings(self) -> Generator[None]:
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         yield
-        _reset_global_settings()
+        reset_global_settings()
 
     def test_get_returns_all_flags_with_defaults(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -2136,9 +2136,9 @@ class TestFeatureFlagsEndpoint:
         for _, env_name, _ in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(env_name, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(
@@ -2166,12 +2166,12 @@ class TestFeatureFlagsEndpoint:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Explicit env var → origin=env, editable=False, value from env."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
-        _reset_global_settings()
+        reset_global_settings()
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(
@@ -2200,15 +2200,15 @@ class TestFeatureFlagsEndpoint:
         from ha_mcp.config import (
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
             get_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
 
         for _, env_name, _ in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(env_name, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(
@@ -2238,12 +2238,12 @@ class TestFeatureFlagsEndpoint:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Env-locked field → 400 with the env var name in the message."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")
-        _reset_global_settings()
+        reset_global_settings()
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(
@@ -2267,13 +2267,13 @@ class TestFeatureFlagsEndpoint:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Numeric field outside the pydantic bound → 400, not silent clamp."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         for _, env_name, _ in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(env_name, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(
@@ -2296,13 +2296,13 @@ class TestFeatureFlagsEndpoint:
         with all FEATURE_FLAG_FIELDS env vars cleared so origin defaults
         to ``file``/``default`` and writes are accepted.
         """
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         for _, env_name, _ in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(env_name, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         app = Starlette(
             routes=[
@@ -2460,11 +2460,11 @@ class TestFeatureFlagAddonMode:
 
     @pytest.fixture(autouse=True)
     def _reset_settings(self) -> Generator[None]:
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         yield
-        _reset_global_settings()
+        reset_global_settings()
 
     def test_origin_returns_addon_when_supervisor_token_set(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -2523,11 +2523,11 @@ class TestFeatureFlagOverrideReadErrors:
 
     @pytest.fixture(autouse=True)
     def _reset_settings(self) -> Generator[None]:
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         yield
-        _reset_global_settings()
+        reset_global_settings()
 
     def test_missing_file_does_not_log(self, tmp_data_dir: Path, caplog) -> None:
         import logging as _l

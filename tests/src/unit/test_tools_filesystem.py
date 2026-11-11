@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.config import _reset_global_settings
+from ha_mcp.config import reset_global_settings
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
@@ -38,9 +38,9 @@ def _reset_settings_singleton(tmp_path, monkeypatch):
 
     get_data_dir.cache_clear()
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-    _reset_global_settings()
+    reset_global_settings()
     yield
-    _reset_global_settings()
+    reset_global_settings()
     get_data_dir.cache_clear()
 
 
