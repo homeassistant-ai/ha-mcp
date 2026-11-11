@@ -1,22 +1,35 @@
-"""Config-entry-flow helpers and config subentries for ha_config_set_helper."""
+"""Config-entry-flow helpers and config subentries for ha_config_set_helper.
+
+Each call answers one step of Home Assistant's flow, as the HA UI does
+(``integration_flow_steps``); the registry settings are applied once the flow
+has created or updated the helper.
+"""
 
 import asyncio
 import logging
+from functools import partial
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
-from ...redaction import redact_flow_schema, redaction_enabled
 from ..coercion import parse_json_param, parse_string_list_param
 from ..config_entry_flow import (
-    create_flow_helper,
-    get_user_step_field_names,
-    set_config_subentry,
-    update_flow_helper,
+    _created_subentry_id,
+    _subentry_ids,
+    subentry_create_lock,
 )
-from ..config_entry_flow_introspect import fetch_helper_flow_info
 from ..helpers import raise_tool_error, validate_identifier_not_empty
+from ..integration_flow_steps import (
+    FlowTarget,
+    abort_open_flow,
+    advance_flow,
+    open_step_answer,
+    options_target,
+    start_setup_flow,
+    unsent_answers_warning,
+)
 from .registry import (
     _apply_registry_updates_to_entity,
+    _check_name_collision,
     _get_entities_for_config_entry,
     validate_registry_ids,
 )
@@ -24,198 +37,46 @@ from .schemas import _attach_helper_skill, _helper_response
 
 logger = logging.getLogger(__name__)
 
-
-# Keys callers may pass inside ``config`` to select a menu branch — mirrors
-# ``_MENU_SELECTION_KEY_ORDER`` in ``config_entry_flow_menu.py`` (kept in parallel
-# rather than imported to avoid widening that module's surface). The ORDER is
-# load-bearing on both sides: it fixes which key wins when a config carries
-# more than one selection key.
-_MENU_CHOICE_CONFIG_KEYS: tuple[str, ...] = (
-    "group_type",
-    "next_step_id",
-    "menu_option",
-)
+_OPEN_STEP_TYPES = ("form", "menu")
 
 
-def _extract_menu_choice_from_config(
-    config_dict: dict[str, Any] | None,
-) -> str | None:
-    """Best-effort menu-choice extraction for pre-flow error context.
-
-    Walks ``_MENU_CHOICE_CONFIG_KEYS`` in order and returns the first usable
-    selection, stringified: a scalar value, or the first element of a list of
-    successive selections (flows that revisit menus, issue #2116). Empty and
-    missing values fall through to the next key; ``None`` when nothing
-    usable is supplied. Follows ``_handle_menu_step``'s key precedence —
-    without this, ``_flow_helper_error_context`` falls back to
-    ``menu_choice=None`` and silently omits ``data_schema`` for menu-rooted
-    types (``template``/``group`` — the most common ones).
-    """
-    if not config_dict:
-        return None
-    for key in _MENU_CHOICE_CONFIG_KEYS:
-        value = config_dict.get(key)
-        if isinstance(value, list):
-            value = value[0] if value else None
-        if value is None or value == "":
-            continue
-        return str(value)
-    return None
-
-
-async def _flow_helper_error_context(
-    client: Any,
-    helper_type: str,
-    *,
-    menu_choice: str | None = None,
-    **extra: Any,
-) -> dict[str, Any]:
-    """Build a validation-error `context` dict carrying the flow data_schema.
-
-    Complements ``_simple_helper_error_context`` for the FLOW pre-flow
-    validation gates in ``_handle_flow_helper`` — those fire before HA
-    itself sees the request, so the auto-attach in ``_raise_flow_api_error``
-    never runs.
-
-    For a helper whose first step HA reports as a menu (``template``,
-    ``group``, ``random``) without a derivable ``menu_choice``, the schema
-    can't be fetched without picking a branch;
-    a ``data_schema_unavailable_reason: "menu_helper_requires_branch"``
-    marker is added instead, along with the legal sub-types under
-    ``menu_options`` (issue #1186), so the caller can pick a branch on
-    the next try without a separate discovery round-trip.
-    """
-    context: dict[str, Any] = {"helper_type": helper_type}
-    try:
-        info = await fetch_helper_flow_info(
-            client, helper_type, menu_choice=menu_choice
-        )
-    except Exception as e:  # noqa: BLE001
-        # Mirror the breadcrumb in ``abort_config_flow``'s own swallow
-        # (config_entry_flow_walker), so a fetch failure here doesn't
-        # disappear silently — this PR raises the call rate by 5 sites
-        # and the swallow needs an audit-trail entry.
-        logger.debug(
-            "_flow_helper_error_context: flow-info fetch failed for "
-            "helper_type=%r menu_choice=%r: %s",
-            helper_type,
-            menu_choice,
-            e,
-        )
-        info = {}
-    if "schema" in info:
-        # Under redact_secrets, password-field current values must not ride
-        # into the error context verbatim (#2157).
-        context["data_schema"] = (
-            redact_flow_schema(info["schema"])
-            if redaction_enabled()
-            else info["schema"]
-        )
-    elif "menu_options" in info:
-        # HA reports a menu first step: no schema until a branch is picked.
-        context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
-        context["menu_options"] = info["menu_options"]
-    context.update(extra)
-    return context
-
-
-def _resolve_flow_action(
-    action: str | None, helper_id: str | None, helper_type: str
-) -> str:
-    """Resolve action from explicit value or implicit discriminator (presence of helper_id).
-
-    Defence in depth: when reached via the legacy implicit-action path, an
-    empty/whitespace helper_id would otherwise be falsy and silently route to
-    create — same destructive intent-loss class as the registry-metadata twins.
-    None stays the documented "create-new" sentinel.
-    """
-    if action is not None:
-        return action
-    if helper_id is not None:
-        validate_identifier_not_empty(
-            helper_id,
-            "helper_id",
-            suggestions=[
-                "Omit helper_id entirely to create a new flow helper",
-                "Pass a valid helper_id to update an existing one",
-                "Or pass action='create' / action='update' explicitly",
-            ],
-            context={"helper_type": helper_type},
-        )
-    return "update" if helper_id else "create"
-
-
-async def _normalize_flow_config(
-    config: str | dict[str, Any] | None,
-    client: Any,
-    helper_type: str,
-) -> dict[str, Any]:
-    """Normalize config to a dict. Raises ToolError on invalid input."""
-    # Treat empty string as "nothing passed" — parse_json_param("") would raise
-    # a confusing "Invalid JSON" error rather than signalling an absent config.
-    if config == "":
-        return {}
-    if isinstance(config, str):
-        parsed = parse_json_param(config)
-        if not isinstance(parsed, dict):
+def _flow_answers(
+    config: str | dict[str, Any] | list[Any] | None, **context: Any
+) -> dict[str, Any] | list[dict[str, Any]] | None:
+    """The call's answers: ``config`` as an object (the form the flow is at)
+    or a list of objects (that form and the ones after it). ``None`` answers
+    no form."""
+    parsed: Any = None if config == "" else config
+    if isinstance(parsed, str):
+        try:
+            parsed = parse_json_param(parsed, "config")
+        except ValueError as err:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "config must be a JSON object (dict) for flow-based helpers",
-                    suggestions=[
-                        'Example: {"name": "my_helper", "source": "sensor.x"}'
-                    ],
-                    context=await _flow_helper_error_context(client, helper_type),
+                    str(err),
+                    context={**context, "parameter": "config"},
                 )
             )
-        return parsed
-    if isinstance(config, dict):
-        return dict(config)  # shallow copy — we may mutate
-    if config is None:
-        return {}
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"config must be a dict or JSON string, got {type(config).__name__}",
-            context=await _flow_helper_error_context(client, helper_type),
+    if parsed is None:
+        return None
+    if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+        return [dict(item) for item in parsed]
+    if not isinstance(parsed, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config must be an object, or a list of objects (one per "
+                f"form, in order), got {type(parsed).__name__}",
+                context={**context, "parameter": "config"},
+            )
         )
-    )
-    return {}  # unreachable; satisfies type checker
+    return dict(parsed)
 
 
-async def _inject_or_strip_name(
-    action: str,
-    name: str | None,
-    config_dict: dict[str, Any],
-    client: Any,
-    helper_type: str,
-) -> tuple[dict[str, Any], list[str]]:
-    """Inject name on create or strip it on update, returning (config_dict, pre_warnings).
-
-    CREATE: most flow helpers accept `name` as a top-level form field, so the
-    tool folds the top-level `name` parameter into the form payload. But some
-    helpers (switch_as_x) reject `name` as an extra key — probe the user-step
-    schema first; only inject if the schema actually accepts a `name` field.
-    If introspection fails or the top step is a menu (template, group), fall
-    back to injecting — those helpers are known to accept `name`.
-
-    UPDATE: options flows are strict about extra keys; HA rejects any
-    caller-supplied `name`. Strip it and emit a warning so the caller learns
-    their attempted rename was a no-op.
-    """
-    pre_warnings: list[str] = []
-    if action == "create" and name and name.strip() and "name" not in config_dict:
-        schema_fields = await get_user_step_field_names(client, helper_type)
-        if schema_fields is None or "name" in schema_fields:
-            config_dict["name"] = name
-    elif action == "update" and "name" in config_dict:
-        stripped_name = config_dict.pop("name")
-        pre_warnings.append(
-            f"Ignored 'name' in config: flow helper options flows do not "
-            f"support renaming (attempted name={stripped_name!r}). Use "
-            f"ha_set_entity to change the friendly name of the resulting entity."
-        )
-    return config_dict, pre_warnings
+def _append_unsent(response: dict[str, Any], unsent: int) -> None:
+    if unsent:
+        response.setdefault("warnings", []).append(unsent_answers_warning(unsent))
 
 
 async def _wait_for_flow_entities(
@@ -312,34 +173,40 @@ async def _handle_flow_helper(
     helper_type: str,
     name: str | None,
     helper_id: str | None,
-    config: str | dict | None,
+    config: str | dict[str, Any] | list[Any] | None,
     area_id: str | None,
     labels: str | list[str] | None,
     category: str | None,
     wait: bool,
     icon: str | None = None,
-    action: str | None = None,
+    *,
+    action: str,
+    MandatoryBPS: bool = False,
+    flow_id: str | None = None,
+    menu_choice: str | None = None,
+    abort: bool = False,
 ) -> dict[str, Any]:
-    """Create or update a flow-based helper and apply registry updates to all entities.
-
-    Routes between create_flow_helper and update_flow_helper based on helper_id,
-    then resolves the resulting config_entry_id to its entity(ies) and applies
-    area_id / labels / category / icon across the full set.
-
-    For utility_meter with tariffs, this means the same label/area/icon is
-    applied to every tariff sensor (and the select entity) uniformly.
-
-    `action` may be passed by the caller (Bug 11 explicit-intent path) — when
-    None, falls back to the legacy implicit discriminator (presence of
-    helper_id => update). Validation that the (action, helper_id) combination
-    is consistent has already happened upstream in ha_config_set_helper.
+    """One step of a flow helper's config flow (create) or options flow
+    (update). Once Home Assistant finishes the flow, area_id / labels /
+    category / icon are applied to every entity of the helper's config entry
+    (a utility_meter's tariff sensors and its select alike).
     """
-    action = _resolve_flow_action(action, helper_id, helper_type)
-    config_dict = await _normalize_flow_config(config, client, helper_type)
-    config_dict, pre_warnings = await _inject_or_strip_name(
-        action, name, config_dict, client, helper_type
-    )
+    if action == "create":
+        target = FlowTarget("setup", helper_type)
+        start: Any = partial(start_setup_flow, client, helper_type)
+    else:
+        entry_id = validate_identifier_not_empty(
+            helper_id, "helper_id", context={"helper_type": helper_type}
+        )
+        target = await options_target(client, entry_id, helper_type)
+        start = partial(client.start_options_flow, entry_id)
+    if abort:
+        return await abort_open_flow(client, target, flow_id)
 
+    answers = _flow_answers(config, helper_type=helper_type)
+    # The top-level name is the new helper's: it answers a creation form's
+    # name field, and is left out of a form without one (switch_as_x).
+    named = action == "create" and name is not None and bool(name.strip())
     try:
         labels_list = parse_string_list_param(labels, "labels")
     except ValueError as e:
@@ -347,70 +214,77 @@ async def _handle_flow_helper(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Invalid labels parameter: {e}",
-                context=await _flow_helper_error_context(
-                    client,
-                    helper_type,
-                    menu_choice=_extract_menu_choice_from_config(config_dict),
-                ),
+                context={"helper_type": helper_type},
             )
         )
-
+    # Bug 12: a new helper named like an existing one is refused before a
+    # flow is opened, rather than created as a "_2" duplicate.
+    unchecked: str | None = None
+    if action == "create":
+        named_answer = next(
+            (
+                answer
+                for answer in (
+                    [answers] if isinstance(answers, dict) else answers or []
+                )
+                if "name" in answer
+            ),
+            {},
+        )
+        new_name = named_answer.get("name", name)
+        unchecked = await _check_name_collision(
+            client, helper_type, new_name if isinstance(new_name, str) else None
+        )
     # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config entry.
     await validate_registry_ids(
+        client, area_id, labels_list, {"helpers": category}, fail_closed=True
+    )
+
+    flow_id, step, unsent = await advance_flow(
         client,
-        area_id,
-        labels_list,
-        {"helpers": category},
-        fail_closed=True,
+        target,
+        flow_id=flow_id,
+        config=answers,
+        menu_choice=menu_choice,
+        start=start,
+        defaults={"name": name} if named else None,
     )
-
-    if action == "create":
-        # Validate against EITHER the top-level `name` arg OR `config_dict["name"]`.
-        # Some helpers (switch_as_x) deliberately don't have `name` injected into
-        # config_dict because their schema rejects it — but the tool still
-        # requires `name` to be supplied so callers fail fast and consistently.
-        config_name = config_dict.get("name")
-        config_name_ok = isinstance(config_name, str) and bool(config_name.strip())
-        name_ok = name is not None and bool(name.strip())
-        if not (name_ok or config_name_ok):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f'name is required for create action. Include "name" as a '
-                    f'top-level argument, e.g. {{"helper_type": "{helper_type}", "name": "My Helper"}}.',
-                    suggestions=[
-                        'Add "name": "My Helper" at the top level of the JSON arguments',
-                        'Or include "name": "My Helper" inside the "config" dict',
-                    ],
-                    context=await _flow_helper_error_context(
-                        client,
-                        helper_type,
-                        menu_choice=_extract_menu_choice_from_config(config_dict),
-                    ),
-                )
-            )
-        flow_result = await create_flow_helper(client, helper_type, config_dict)
-    else:
-        flow_result = await update_flow_helper(
-            client,
-            helper_type,
-            config_dict,
-            helper_id,  # type: ignore[arg-type]
+    registry_given = [
+        param
+        for param, value in (
+            ("area_id", area_id),
+            ("labels", labels_list),
+            ("category", category),
+            ("icon", icon),
         )
+        if value is not None
+    ]
+    if step.get("type") in _OPEN_STEP_TYPES:
+        response = await open_step_answer(client, target, flow_id, step)
+        response.update(action=action, helper_type=helper_type)
+        if unchecked:
+            response.setdefault("warnings", []).append(unchecked)
+        if registry_given:
+            response.setdefault("warnings", []).append(
+                f"{', '.join(registry_given)} not applied yet: pass them "
+                "again with the call that finishes the flow, which applies "
+                "them to the helper's entities."
+            )
+        return response
 
-    entry_id = flow_result.get("entry_id")
-    title = flow_result.get("title")
-    warnings = list(pre_warnings)
-    warnings.extend(flow_result.get("warnings", []))
-    entities, wait_warnings = await _wait_for_flow_entities(
-        client, entry_id, action, wait
-    )
-    warnings.extend(wait_warnings)
+    result = step.get("result")
+    result = result if isinstance(result, dict) else {}
+    saved_id = result.get("entry_id") if action == "create" else target.entry_id
+    # An options flow's result carries no title; the entry's own stands.
+    title = result.get("title") or step.get("title") or target.title
+    entities, warnings = await _wait_for_flow_entities(client, saved_id, action, wait)
+    if unchecked:
+        warnings.append(unchecked)
     entity_ids = [e["entity_id"] for e in entities if e.get("entity_id")]
 
     extras: dict[str, Any] = {
         "method": "config_flow",
-        "entry_id": entry_id,
+        "entry_id": saved_id,
         "title": title,
         "entity_ids": entity_ids,
     }
@@ -421,19 +295,44 @@ async def _handle_flow_helper(
         client, entity_ids, area_id, labels_list, category, icon, extras, warnings
     )
 
-    return _helper_response(
+    response = _helper_response(
         action,
         helper_type,
-        data={"entry_id": entry_id, "title": title},
-        message=flow_result.get("message"),
+        data={"entry_id": saved_id, "title": title},
+        message=f"{helper_type} helper {action}d successfully",
         warnings=warnings,
         **extras,
     )
+    _append_unsent(response, unsent)
+    _attach_helper_skill(response, MandatoryBPS)
+    return response
 
 
-# ---------------------------------------------------------------------------
-# ha_config_set_helper DISPATCH HELPERS
-# ---------------------------------------------------------------------------
+def _subentry_action(action: str | None, subentry_id: str | None) -> str:
+    if action is None:
+        return "update" if subentry_id else "create"
+    if action == "create" and subentry_id is not None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "action='create' was passed with subentry_id. "
+                "Omit subentry_id to create a new subentry.",
+                context={
+                    "helper_type": "config_subentry",
+                    "action": action,
+                    "subentry_id": subentry_id,
+                },
+            )
+        )
+    if action == "update" and subentry_id is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "action='update' requires subentry_id.",
+                context={"helper_type": "config_subentry", "action": action},
+            )
+        )
+    return action
 
 
 async def _handle_set_config_subentry(
@@ -442,41 +341,25 @@ async def _handle_set_config_subentry(
     entry_id: str | None,
     subentry_type: str | None,
     subentry_id: str | None,
-    show_advanced_options: bool,
-    config: dict[str, Any] | str | None,
+    config: dict[str, Any] | list[Any] | str | None,
     MandatoryBPS: bool,
+    *,
+    flow_id: str | None = None,
+    menu_choice: str | None = None,
+    abort: bool = False,
+    show_advanced_options: bool = False,
 ) -> dict[str, Any]:
-    """Handle the config_subentry branch of ha_config_set_helper."""
-    if action is not None:
-        if action == "create" and subentry_id is not None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "action='create' was passed with subentry_id. "
-                    "Omit subentry_id to create a new subentry.",
-                    context={
-                        "helper_type": "config_subentry",
-                        "action": action,
-                        "subentry_id": subentry_id,
-                    },
-                )
-            )
-        if action == "update" and subentry_id is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "action='update' requires subentry_id.",
-                    context={"helper_type": "config_subentry", "action": action},
-                )
-            )
-    else:
-        action = "update" if subentry_id else "create"
-
+    """One step of a config subentry's flow: its create flow, or with
+    ``subentry_id`` its reconfigure flow. ``show_advanced_options`` goes to
+    the call that starts the flow; only Home Assistant before 2026.6 reads
+    it."""
+    action = _subentry_action(action, subentry_id)
+    context = {"helper_type": "config_subentry", "action": action}
     entry_id = validate_identifier_not_empty(
         entry_id,
         "entry_id",
         suggestions=["Use ha_get_integration() to find the parent config entry ID"],
-        context={"helper_type": "config_subentry", "action": action},
+        context=context,
     )
     subentry_type = validate_identifier_not_empty(
         subentry_type,
@@ -485,48 +368,76 @@ async def _handle_set_config_subentry(
             "Use ha_get_integration(entry_id=..., include_subentries=True, "
             "include_subentry_schema=True) to inspect available subentry metadata.",
         ],
-        context={"helper_type": "config_subentry", "action": action},
+        context=context,
     )
     if subentry_id is not None:
         subentry_id = validate_identifier_not_empty(
-            subentry_id,
-            "subentry_id",
-            context={"helper_type": "config_subentry", "action": action},
+            subentry_id, "subentry_id", context=context
         )
+    answers = _flow_answers(config, **context)
 
-    if not isinstance(config, dict):
-        try:
-            config_dict = parse_json_param(config, "config") if config else {}
-        except ValueError as err:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(err),
-                    context={
-                        "helper_type": "config_subentry",
-                        "action": action,
-                        "parameter": "config",
-                    },
-                )
-            )
-    else:
-        config_dict = config
-    if not isinstance(config_dict, dict):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "config must be an object for config_subentry",
-                context={"helper_type": "config_subentry", "action": action},
-            )
-        )
+    entry = await client.get_config_entry(entry_id)
+    domain = entry.get("domain")
+    target = FlowTarget(
+        "subentry",
+        domain if isinstance(domain, str) else None,
+        entry_id,
+        subentry_type=subentry_type,
+        subentry_id=subentry_id,
+    )
+    if abort:
+        return await abort_open_flow(client, target, flow_id)
 
-    subentry_response = await set_config_subentry(
-        client,
+    start = partial(
+        client.start_config_subentry_flow,
         entry_id,
         subentry_type,
-        config_dict,
         subentry_id=subentry_id,
         show_advanced_options=show_advanced_options,
     )
-    _attach_helper_skill(subentry_response, MandatoryBPS)
-    return subentry_response
+
+    async def advance() -> tuple[str, dict[str, Any], int]:
+        return await advance_flow(
+            client,
+            target,
+            flow_id=flow_id,
+            config=answers,
+            menu_choice=menu_choice,
+            start=start,
+        )
+
+    if subentry_id is not None:
+        flow_id, step, unsent = await advance()
+    else:
+        # Core's create result carries no subentry_id: the new one is the
+        # difference in the parent's listing, so creates under one parent
+        # finish one at a time.
+        async with subentry_create_lock(entry_id):
+            before = await _subentry_ids(client, entry_id)
+            flow_id, step, unsent = await advance()
+            if before is not None and step.get("type") == "create_entry":
+                subentry_id = await _created_subentry_id(client, entry_id, before)
+
+    if step.get("type") in _OPEN_STEP_TYPES:
+        response = await open_step_answer(client, target, flow_id, step)
+        response.update(
+            action=action,
+            helper_type="config_subentry",
+            entry_id=entry_id,
+            subentry_type=subentry_type,
+        )
+        return response
+
+    operation = "reconfigured" if action == "update" else "created"
+    response = {
+        "success": True,
+        "entry_id": entry_id,
+        "subentry_type": subentry_type,
+        "subentry_id": subentry_id,
+        "operation": operation,
+        "flow_result": step,
+        "message": f"Config subentry {operation} successfully",
+    }
+    _append_unsent(response, unsent)
+    _attach_helper_skill(response, MandatoryBPS)
+    return response

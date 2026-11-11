@@ -702,12 +702,7 @@ class ZoneTools:
                 response["updated_fields"] = updated
                 return response
 
-            # Core's zone/create names any other missing field itself; the
-            # shared create path refuses a missing name in its own tool's terms.
-            if name is None:
-                raise_tool_error(
-                    create_validation_error("name is required when creating a zone.")
-                )
+            # Core's zone/create names a missing field itself, the name included.
             result = await _execute_create_simple_helper(
                 self._client,
                 "zone",

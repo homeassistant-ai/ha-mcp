@@ -130,7 +130,7 @@ class TestInputBooleanFieldPersistence:
                 "helper_type": helper_type,
                 "name": original_name,
                 "icon": original_icon,
-                "initial": "on",
+                "config": {"initial": "on"},
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_boolean")
@@ -190,9 +190,8 @@ class TestInputSelectFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Select",
-                "options": original_options,
-                "initial": "Beta",
                 "icon": original_icon,
+                "config": {"options": original_options, "initial": "Beta"},
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_select")
@@ -267,13 +266,15 @@ class TestInputNumberFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Number",
-                "min_value": original["min"],
-                "max_value": original["max"],
-                "step": original["step"],
-                "mode": original["mode"],
-                "unit_of_measurement": original["unit_of_measurement"],
-                "initial": original["initial"],
                 "icon": original["icon"],
+                "config": {
+                    "min": original["min"],
+                    "max": original["max"],
+                    "step": original["step"],
+                    "mode": original["mode"],
+                    "unit_of_measurement": original["unit_of_measurement"],
+                    "initial": original["initial"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_number")
@@ -337,11 +338,13 @@ class TestInputTextFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Text",
-                "min_value": original["min"],
-                "max_value": original["max"],
-                "mode": original["mode"],
                 "icon": original["icon"],
-                "initial": "secret",
+                "config": {
+                    "min": original["min"],
+                    "max": original["max"],
+                    "mode": original["mode"],
+                    "initial": "secret",
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_text")
@@ -406,9 +409,11 @@ class TestInputDatetimeFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Datetime",
-                "has_date": original["has_date"],
-                "has_time": original["has_time"],
                 "icon": original["icon"],
+                "config": {
+                    "has_date": original["has_date"],
+                    "has_time": original["has_time"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_datetime")
@@ -477,12 +482,14 @@ class TestCounterFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Counter",
-                "min_value": original["minimum"],
-                "max_value": original["maximum"],
-                "step": original["step"],
-                "initial": original["initial"],
                 "icon": original["icon"],
-                "restore": True,
+                "config": {
+                    "minimum": original["minimum"],
+                    "maximum": original["maximum"],
+                    "step": original["step"],
+                    "initial": original["initial"],
+                    "restore": True,
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create counter")
@@ -541,9 +548,8 @@ class TestTimerFieldPersistence:
             {
                 "helper_type": helper_type,
                 "name": "E2E Persistence Timer",
-                "duration": original_duration,
                 "icon": original_icon,
-                "restore": True,
+                "config": {"duration": original_duration, "restore": True},
             },
         )
         create_data = assert_mcp_success(create_result, "Create timer")
@@ -637,13 +643,15 @@ class TestInputNumberPartialUpdatePreservesFields:
             {
                 "helper_type": helper_type,
                 "name": "E2E Partial Update Number",
-                "min_value": 0,
-                "max_value": preserved["max"],
-                "step": preserved["step"],
-                "mode": preserved["mode"],
-                "unit_of_measurement": preserved["unit_of_measurement"],
-                "initial": preserved["initial"],
                 "icon": preserved["icon"],
+                "config": {
+                    "min": 0,
+                    "max": preserved["max"],
+                    "step": preserved["step"],
+                    "mode": preserved["mode"],
+                    "unit_of_measurement": preserved["unit_of_measurement"],
+                    "initial": preserved["initial"],
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create input_number")
@@ -674,7 +682,7 @@ class TestInputNumberPartialUpdatePreservesFields:
             {
                 "helper_type": helper_type,
                 "helper_id": entity_id,
-                "min_value": new_min,
+                "config": {"min": new_min},
             },
         )
         assert_mcp_success(update_result, "Partial update (min_value only)")

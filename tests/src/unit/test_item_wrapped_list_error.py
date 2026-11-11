@@ -7,7 +7,7 @@ import json
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.config_entry_flow_form import _consume_form_schema
+from ha_mcp.tools.config_entry_flow_form import form_submission
 from ha_mcp.tools.dashboard_list_checks import (
     patch_writes_inside_card,
     reject_malformed_dashboard_config,
@@ -113,7 +113,7 @@ _BUTTON_SCHEMA = [
 def test_flow_action_selector_malformed_is_named(press: object) -> None:
     config = {"name": "b", "press": press}
     with pytest.raises(ToolError) as exc_info:
-        _consume_form_schema(_BUTTON_SCHEMA, config)
+        form_submission(_BUTTON_SCHEMA, config, keep_shown=False)
     error = _error(exc_info.value)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "'press'" in error["message"]
@@ -130,7 +130,7 @@ def test_flow_action_selector_malformed_is_named(press: object) -> None:
 )
 def test_flow_valid_values_pass(config: dict) -> None:
     expected = dict(config)
-    assert _consume_form_schema(_BUTTON_SCHEMA, config) == expected
+    assert form_submission(_BUTTON_SCHEMA, config, keep_shown=False) == expected
 
 
 @pytest.mark.parametrize("key", ["triggers", "conditions", "actions"])

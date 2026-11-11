@@ -636,7 +636,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             ),
             pytest.raises(ToolError) as exc_info,
         ):
-            await history_tool(entity_ids="sensor.test", start_time="9998-01-01")
+            await history_tool(entity_ids="sensor.test", start_time="9998-01-01T00Z")
 
         error = json.loads(str(exc_info.value))["error"]
         assert "start_time" in error["message"]

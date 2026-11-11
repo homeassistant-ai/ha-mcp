@@ -28,6 +28,8 @@ from ha_mcp.tools.tools_integrations import (
     fetch_entry_options_with_status,
 )
 
+pytestmark = pytest.mark.usefixtures("no_flow_outline")
+
 _HOST = {
     "name": "host",
     "required": True,

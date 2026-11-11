@@ -3,18 +3,11 @@ E2E tests for Config Entry Flow API.
 
 Covers:
 - Creating a form-only helper (min_max, mold_indicator)
-- Creating a multi-step form helper (history_stats — user, state, options)
+- Creating a multi-form helper one form per call (history_stats — user,
+  state, options)
 - Creating a menu-based helper (group — menu then form)
-- Error feedback on missing menu selection (data_schema_unavailable_reason
-  marker + menu_options inline on validation errors)
+- Error feedback on a menu answered with config (menu_options inline)
 - Deletion of config-entry-based helpers
-
-Known limitation: CYCLIC menu flows (a menu re-presented after each branch,
-issue #2116 — battery_sim, MQTT device-subentry reconfigure) have no e2e
-coverage because no integration in the test container exposes one; every
-menu-rooted flow reachable here (group, template) is linear. The successive-
-selection-list behavior is pinned by the ``TestCyclicMenuFlows`` unit suite
-against the shared walker instead.
 """
 
 import logging
@@ -29,20 +22,23 @@ logger = logging.getLogger(__name__)
 
 
 async def _create_config_entry_helper(
-    mcp_client, helper_type: str, config: dict, description: str
+    mcp_client,
+    helper_type: str,
+    config: dict,
+    description: str,
+    menu_choice: str | None = None,
 ) -> str:
     """Create a config entry helper via unified ha_config_set_helper.
 
-    The unified tool expects either a top-level `name` param or a `name` key
-    in the `config` dict. The test fixtures place `name` inside `config`, so
-    we forward it as-is. Polls until the new entry is registered, returns entry_id.
+    ``menu_choice`` answers the flow's opening menu and ``config`` the form
+    behind it. Polls until the new entry is registered, returns entry_id.
     """
     async with MCPAssertions(mcp_client) as mcp:
         data = await mcp.call_tool_success(
             "ha_config_set_helper",
             {
                 "helper_type": helper_type,
-                "name": config.get("name", ""),
+                "menu_choice": menu_choice,
                 "config": config,
             },
         )
@@ -90,28 +86,52 @@ class TestConfigEntryFlow:
     async def test_create_history_stats_helper(self, mcp_client):
         """Create a history_stats helper (issue #2187).
 
-        Three form steps — user, state, options — driven from one flat config:
-        each step pops the keys its own schema declares and leaves the rest for
-        the next. The options step takes exactly two of start/end/duration; the
-        `entity_id`/`state`/`type` it redeclares read-only are already in the
-        flow's options, so nothing is resubmitted to them.
+        Three forms — user, state, options — each answered in its own call
+        with the flow_id the previous answer returned, as the HA dialog walks
+        them. The options form takes exactly two of start/end/duration.
         """
         async with MCPAssertions(mcp_client) as mcp:
-            data = await mcp.call_tool_success(
+            state_form = await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {
                     "helper_type": "history_stats",
-                    "name": "test_history_stats_e2e",
                     "config": {
                         "name": "test_history_stats_e2e",
                         "entity_id": "sensor.demo_temperature",
                         "type": "time",
-                        "state": ["22.5"],
-                        "start": "{{ today_at('00:00') }}",
-                        "end": "{{ now() }}",
                     },
                 },
             )
+            flow_id = state_form["flow_id"]
+            try:
+                assert state_form["step_id"] == "state", state_form
+                options_form = await mcp.call_tool_success(
+                    "ha_config_set_helper",
+                    {
+                        "helper_type": "history_stats",
+                        "flow_id": flow_id,
+                        "config": {"state": ["22.5"]},
+                    },
+                )
+                assert options_form["step_id"] == "options", options_form
+                data = await mcp.call_tool_success(
+                    "ha_config_set_helper",
+                    {
+                        "helper_type": "history_stats",
+                        "flow_id": flow_id,
+                        "config": {
+                            "start": "{{ today_at('00:00') }}",
+                            "end": "{{ now() }}",
+                        },
+                    },
+                )
+            except BaseException:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_set_helper",
+                    {"helper_type": "history_stats", "flow_id": flow_id, "abort": True},
+                )
+                raise
         assert data.get("success") is True
         entry_id = data.get("entry_id")
         assert entry_id is not None
@@ -144,7 +164,6 @@ class TestConfigEntryFlow:
                 "ha_config_set_helper",
                 {
                     "helper_type": "mold_indicator",
-                    "name": "test_mold_indicator_e2e",
                     "config": {
                         "name": "test_mold_indicator_e2e",
                         "indoor_temp_sensor": "sensor.demo_temperature",
@@ -178,13 +197,12 @@ class TestConfigEntryFlow:
     async def test_create_group_helper_light(self, mcp_client):
         """Create a light group helper (menu then form flow)."""
         config = {
-            "group_type": "light",
             "name": "test_light_group_e2e",
             "entities": [],  # empty list is valid
             "hide_members": False,
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "group", config, "light group helper"
+            mcp_client, "group", config, "light group helper", "light"
         )
 
         await safe_call_tool(
@@ -196,12 +214,11 @@ class TestConfigEntryFlow:
     async def test_create_template_sensor(self, mcp_client):
         """Create a template sensor helper end-to-end."""
         config = {
-            "next_step_id": "sensor",
             "name": "test_template_sensor_e2e",
             "state": "{{ states('sun.sun') }}",
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "template", config, "template sensor"
+            mcp_client, "template", config, "template sensor", "sensor"
         )
 
         await safe_call_tool(
@@ -213,35 +230,48 @@ class TestConfigEntryFlow:
     async def test_update_template_sensor_availability(self, mcp_client):
         """Persist and read a template field nested under additional options."""
         config = {
-            "next_step_id": "sensor",
             "name": "test_template_availability_e2e",
             "state": "{{ 1 }}",
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "template", config, "template sensor with availability"
+            mcp_client,
+            "template",
+            config,
+            "template sensor with availability",
+            "sensor",
         )
         availability = "{{ has_value('sensor.demo_temperature') }}"
+        update = {
+            "helper_type": "template",
+            "helper_id": entry_id,
+            "action": "update",
+        }
 
         try:
             async with MCPAssertions(mcp_client) as mcp:
+                # A key the section does not declare is refused by Home
+                # Assistant itself, and the flow stays open to be answered.
+                refused = await mcp.call_tool_failure(
+                    "ha_config_set_helper",
+                    {
+                        **update,
+                        "config": {
+                            "additional_options": {"availabilty": "{{ false }}"}
+                        },
+                    },
+                )
+                assert "availabilty" in str(refused), refused
                 update_data = await mcp.call_tool_success(
                     "ha_config_set_helper",
                     {
-                        "helper_type": "template",
-                        "helper_id": entry_id,
-                        "action": "update",
+                        **update,
+                        "flow_id": refused["flow_id"],
                         "config": {
-                            "state": "{{ 1 }}",
-                            "availability": availability,
-                            "availabilty": "{{ false }}",
+                            "additional_options": {"availability": availability}
                         },
                     },
                 )
             warnings = update_data.get("warnings") or []
-            assert (
-                "Ignored config keys not declared by the Home Assistant flow "
-                "schema: availabilty"
-            ) in warnings
             # Without the component the options cannot be read for the
             # pre-write backup, and the response says so (#2632).
             skipped = [w for w in warnings if w.startswith("No pre-write backup")]
@@ -273,12 +303,11 @@ class TestConfigEntryFlow:
     async def test_create_template_binary_sensor(self, mcp_client):
         """Create a template binary sensor helper end-to-end."""
         config = {
-            "next_step_id": "binary_sensor",
             "name": "test_template_binary_sensor_e2e",
             "state": "{{ is_state('sun.sun', 'above_horizon') }}",
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "template", config, "template binary sensor"
+            mcp_client, "template", config, "template binary sensor", "binary_sensor"
         )
 
         await safe_call_tool(
@@ -301,9 +330,8 @@ class TestConfigEntryFlow:
                 "ha_config_set_helper",
                 {
                     "helper_type": "template",
-                    "name": "e2e icon template",
+                    "menu_choice": "sensor",
                     "config": {
-                        "next_step_id": "sensor",
                         "name": "e2e icon template",
                         "state": "{{ states('sun.sun') }}",
                     },
@@ -359,12 +387,11 @@ class TestConfigEntryFlow:
         # e.g. "Weather Message" -> sensor.weather_message (issue #1457).
         entity_id = "sensor.e2e_optimal_path_template"
         config = {
-            "next_step_id": "sensor",
             "name": name,
             "state": "{{ states('sensor." + body_marker + "') }}",
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "template", config, "template sensor (optimal path)"
+            mcp_client, "template", config, "template sensor (optimal path)", "sensor"
         )
         try:
             # Change #2: ha_get_entity surfaces the parent config_entry_id, so
@@ -417,14 +444,17 @@ class TestConfigEntryFlow:
         ``True``, not the static default the buggy precedence used to pick.
         """
         config = {
-            "group_type": "light",
             "name": "test_hide_members_1575_e2e",
             "entities": [],  # empty keeps the test self-contained; the
             # hide_members OPTION is stored regardless of membership
             "hide_members": True,
         }
         entry_id = await _create_config_entry_helper(
-            mcp_client, "group", config, "light group helper (hide_members=True)"
+            mcp_client,
+            "group",
+            config,
+            "light group helper (hide_members=True)",
+            "light",
         )
         try:
             async with MCPAssertions(mcp_client) as mcp:
@@ -526,33 +556,33 @@ class TestConfigEntryFlow:
         assert fields["bool"]["description"] == expected
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
-        """Creating a group helper without group_type returns a helpful error
+        """Answering a group helper's menu with config returns a helpful error
         with the legal sub-types inline as ``menu_options`` (issue #1186).
         """
-        config = {"name": "my_group", "entities": []}  # missing group_type
+        config = {"name": "my_group", "entities": []}  # no menu_choice
 
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_helper",
-            {"helper_type": "group", "name": "my_group", "config": config},
-        )
-        assert data.get("success") is not True, "Should fail without group_type"
-        # The error should mention available options or the missing key
-        error_str = str(data)
-        assert any(
-            kw in error_str.lower()
-            for kw in ("menu", "group_type", "next_step_id", "selection", "option")
-        ), f"Error should mention menu selection: {error_str}"
-        # The error context must carry the legal sub-types inline so the
-        # caller can pick a branch on the next try without a discovery
-        # round-trip — see _handle_menu_step in config_entry_flow_menu.
-        menu_options = data.get("menu_options")
-        assert isinstance(menu_options, list) and menu_options, (
-            f"Error should carry menu_options list: {data}"
-        )
-        assert "light" in menu_options, (
-            f"Group menu_options should include 'light': {menu_options}"
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_config_set_helper", {"helper_type": "group", "config": config}
+            )
+        try:
+            assert "menu_choice" in str(data), data
+            # The error context carries the legal sub-types inline so the
+            # caller can pick a branch on the next try without a discovery
+            # round-trip.
+            menu_options = data.get("menu_options")
+            assert isinstance(menu_options, list) and menu_options, (
+                f"Error should carry menu_options list: {data}"
+            )
+            assert "light" in menu_options, (
+                f"Group menu_options should include 'light': {menu_options}"
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_set_helper",
+                {"helper_type": "group", "flow_id": data.get("flow_id"), "abort": True},
+            )
 
 
 @pytest.mark.asyncio
@@ -569,7 +599,6 @@ class TestRemoveHelperByEntity:
                 "ha_config_set_helper",
                 {
                     "helper_type": "min_max",
-                    "name": "test_remove_by_entity_e2e",
                     "config": {
                         "name": "test_remove_by_entity_e2e",
                         "entity_ids": ["sensor.demo_temperature"],

@@ -68,12 +68,16 @@ def _no_strings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core's strings are not read: texts come back as the test sets them."""
 
     async def describe_form(_client, _domain, _path, step):
-        return {"fields": step.get("data_schema"), "note": "walker advice"}
+        return {"fields": step.get("data_schema")}
 
     async def flow_texts(_client, _flow, _step, _kind, keys):
         return {key: f"text of {value}" for key, value in keys.items()}
 
     monkeypatch.setattr(integration_flow_steps, "describe_form", describe_form)
+    # No component: a flow is bound by the server's own list alone.
+    monkeypatch.setattr(
+        integration_flow_steps, "flow_record", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(integration_flow_steps, "_flow_texts", flow_texts)
     monkeypatch.setattr(config_entry_flow_errors, "_flow_texts", flow_texts)
 
@@ -143,6 +147,27 @@ async def test_new_flow_submits_config_to_its_first_form_and_finishes():
     }
 
 
+async def test_a_config_list_answers_the_flows_forms_in_order():
+    """Each object goes to the form the flow is then at, and an integration
+    whose flow ends early reports the answers it never asked for."""
+    client = _client(
+        start_config_flow=AsyncMock(return_value=_form("user", _field("host"))),
+        submit_config_flow_step=AsyncMock(
+            side_effect=[_form("routing", _field("individual_address")), CREATED]
+        ),
+    )
+    answers = [{"host": "10.0.0.2"}, {"individual_address": "0.0.240"}, {"x": 1}]
+
+    result = await _run(client, config=answers)
+
+    assert [call.args for call in client.submit_config_flow_step.await_args_list] == [
+        ("f1", answers[0]),
+        ("f1", answers[1]),
+    ]
+    assert result["entry_id"] == "new1"
+    assert "before the last 1" in result["warnings"][0]
+
+
 async def test_new_flow_answers_its_menu_then_the_form_in_one_call():
     client = _client(
         submit_config_flow_step=AsyncMock(
@@ -176,7 +201,6 @@ async def test_new_flow_without_config_stops_at_the_form_after_its_menu():
     )
     assert result["flow_id"] == "f1"
     assert result["step_id"] == "routing"
-    assert "note" not in result
 
 
 @pytest.mark.parametrize(
@@ -251,20 +275,25 @@ async def test_a_menu_answer_lists_its_options():
     assert "menu_choice" in result["message"]
 
 
-@pytest.mark.parametrize(
-    ("config", "note"),
-    [({"host": "h", "port": 1}, False), ({"host": "h", "next_step_id": "x"}, True)],
-)
-async def test_an_undeclared_key_is_refused_before_anything_is_sent(config, note):
-    client = _client()
+async def test_an_undeclared_key_is_left_to_home_assistant_to_refuse():
+    """Core's schema decides what a form takes: the key is sent, and Core's
+    refusal comes back with the form's schema and the flow still open."""
+    refusal = HomeAssistantAPIError("bad", status_code=400)
+    refusal.response_data = {
+        "errors": {"base": ["extra keys not allowed @ data['port']"]}
+    }
+    client = _client(submit_config_flow_step=AsyncMock(side_effect=refusal))
     with pytest.raises(ToolError) as exc_info:
-        await _drive(client, config=config)
+        await _drive(client, config={"host": "h", "port": 1})
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "f1", {"host": "h", "port": 1}
+    )
     error = _error(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "extra keys not allowed" in error["error"]["message"]
     assert error["flow_id"] == "f1"
-    assert error["fields"]
-    assert ("note" in error) is note
-    client.submit_config_flow_step.assert_not_awaited()
+    assert error["data_schema"] == [_field("host")]
+    assert any("still open" in hint for hint in error["error"]["suggestions"])
     client.abort_config_flow.assert_not_awaited()
 
 
@@ -351,12 +380,51 @@ async def test_a_flow_not_opened_for_the_calls_anchor_is_refused(
     client = _client()
     with pytest.raises(ToolError) as exc_info:
         await _drive(client, target, opened=False, flow_id="f1", **call)
-    assert "flow ha-mcp opened for this call" in _error(exc_info)["error"]["message"]
+    assert "of this call's target" in _error(exc_info)["error"]["message"]
     client._request.assert_not_awaited()
     client.submit_config_flow_step.assert_not_awaited()
     client.submit_options_flow_step.assert_not_awaited()
     client.abort_config_flow.assert_not_awaited()
     client.abort_options_flow.assert_not_awaited()
+
+
+_RECONFIGURE_RECORD = {
+    "found": True,
+    "handler": "filesize",
+    "source": "reconfigure",
+    "entry_id": "entry2",
+    "subentry_id": None,
+}
+
+
+@pytest.mark.parametrize(
+    ("target", "record", "continued"),
+    [
+        (RECONFIGURE, _RECONFIGURE_RECORD, True),
+        (RECONFIGURE, {**_RECONFIGURE_RECORD, "entry_id": "entry9"}, False),
+        (SETUP, {**_RECONFIGURE_RECORD, "handler": "knx", "source": "user"}, True),
+        (SETUP, {**_RECONFIGURE_RECORD, "handler": "knx", "source": "reauth"}, False),
+    ],
+    ids=["its-entry", "another-entry", "user-setup", "reauth-as-setup"],
+)
+async def test_a_flow_the_server_forgot_is_bound_by_cores_record(
+    monkeypatch: pytest.MonkeyPatch, target, record, continued
+):
+    """After an ha-mcp restart the flow's target is the one Core recorded: a
+    reconfigure flow continues only for its own entry, and a reauth flow Core
+    started for the domain is not a setup flow to answer."""
+    monkeypatch.setattr(
+        integration_flow_steps, "flow_record", AsyncMock(return_value=record)
+    )
+    client = _client(_request=AsyncMock(return_value=_form("user", _field("host"))))
+
+    if continued:
+        result = await _drive(client, target, opened=False, flow_id="f1")
+        assert result["flow_id"] == "f1"
+    else:
+        with pytest.raises(ToolError):
+            await _drive(client, target, opened=False, flow_id="f1")
+        client._request.assert_not_awaited()
 
 
 async def test_a_flow_of_the_calls_own_anchor_is_answered():
@@ -365,9 +433,7 @@ async def test_a_flow_of_the_calls_own_anchor_is_answered():
     client.submit_options_flow_step.assert_awaited_once_with("f1", {"host": "h"})
 
 
-async def test_a_rejected_answer_says_the_flow_is_still_open(monkeypatch):
-    introspect = AsyncMock(return_value={})
-    monkeypatch.setattr(config_entry_flow_errors, "fetch_helper_flow_info", introspect)
+async def test_a_rejected_answer_says_the_flow_is_still_open():
     client = _client(
         _request=AsyncMock(return_value=MENU),
         submit_config_flow_step=AsyncMock(
@@ -377,7 +443,6 @@ async def test_a_rejected_answer_says_the_flow_is_still_open(monkeypatch):
     with pytest.raises(ToolError) as exc_info:
         await _drive(client, flow_id="f1", menu_choice="routing")
     assert "still open" in _error(exc_info)["error"]["suggestion"]
-    introspect.assert_not_awaited()  # it would open a second flow
 
 
 async def test_a_flow_home_assistant_no_longer_has_is_not_found():
@@ -552,9 +617,17 @@ async def test_a_success_reason_outside_reconfigure_raises_as_applied(reason):
     assert "updated an existing config entry" in error["error"]["message"]
 
 
-async def test_a_reconfigure_flow_that_creates_an_entry_is_unverified():
+@pytest.mark.parametrize(
+    "target",
+    [
+        RECONFIGURE,
+        FlowTarget("subentry", "demo", "entry1", subentry_type="x", subentry_id="s1"),
+    ],
+    ids=["entry", "subentry"],
+)
+async def test_a_reconfigure_flow_that_creates_an_entry_is_unverified(target):
     with pytest.raises(ToolError) as exc_info:
-        await settle(_client(), RECONFIGURE, "f1", CREATED)
+        await settle(_client(), target, "f1", CREATED)
     assert _error(exc_info)["status"] == "applied_but_unverified"
 
 

@@ -42,8 +42,7 @@
   ],
   "0f28231fdeb3": [
     "tests/src/unit/test_helper_field_persistence.py::_find_msg",
-    "tests/src/unit/test_helper_input_validation.py::_find_msg",
-    "tests/src/unit/test_helper_kwarg_aliases.py::_find_msg"
+    "tests/src/unit/test_helper_input_validation.py::_find_msg"
   ],
   "0fb9daa255ef": [
     "tests/src/unit/test_component_server_entry_update_contract.py::_BgHass.__init__",
@@ -67,7 +66,6 @@
   ],
   "13ca6f2e0e62": [
     "tests/src/unit/test_helper_input_validation.py::_assert_invalid_param",
-    "tests/src/unit/test_helper_param_rejection.py::_assert_invalid_param",
     "tests/src/unit/test_helper_registry_id_validation.py::_assert_invalid_param"
   ],
   "16880f41f844": [
@@ -96,10 +94,6 @@
     "tests/src/unit/test_websocket_client.py::TestSubscribeCommand._prepare_client",
     "tests/src/unit/test_websocket_client.py::TestSubscribeEventsContract._prepare_client"
   ],
-  "1fda609126ba": [
-    "tests/src/unit/test_list_services_fields_projection.py::TestHaListServicesFieldsProjection.list_services_tool",
-    "tests/src/unit/test_list_services_fields_projection.py::TestHaListServicesServiceFieldsProjection.list_services_tool"
-  ],
   "20c68d8161e7": [
     "tests/src/unit/test_tools_get_states.py::TestAttributeKeysTypoGuardBulk.get_states_tool",
     "tests/src/unit/test_tools_get_states.py::TestAttributeKeysTypoGuardSingleEntity.ha_get_state",
@@ -111,7 +105,6 @@
     "tests/src/unit/test_identifier_validation_family.py::_register_registry_tools_and_capture"
   ],
   "256cfabf1cef": [
-    "tests/src/unit/test_deep_search_error_handling.py::TestDeepSearchErrorHandling.mock_mcp",
     "tests/src/unit/test_overview_repairs.py::TestHaGetOverviewRepairs.mock_mcp",
     "tests/src/unit/test_overview_system_info.py::TestHaGetOverviewSystemInfo.mock_mcp",
     "tests/src/unit/test_search_fields_projection.py::TestHaSearchEntitiesFieldsProjection.mock_mcp",
@@ -211,10 +204,6 @@
     "custom_components/ha_mcp_tools/oauth_legacy.py::PKCECodeStore.consume_code",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::PKCECodeStore.consume_code"
   ],
-  "3b976235bd59": [
-    "tests/src/unit/test_ha_search_request_count.py::CountingClient.get_config",
-    "tests/src/unit/test_ha_timezone_component_routing.py::RoutingClient.get_config"
-  ],
   "3d3400bfc911": [
     "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
     "tests/src/unit/test_categorized_search.py::TestCategorizedCallDispatch._get_proxy_fn",
@@ -286,7 +275,6 @@
     "tests/src/unit/test_component_call_service_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_entity_lookup_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_info_report_contract.py::_clear_caps_cache",
-    "tests/src/unit/test_component_server_entry_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_services_list_contract.py::_clear_caps_cache",
     "tests/src/unit/test_component_system_snapshot_contract.py::_clear_caps_cache",
     "tests/src/unit/test_ha_bulk_control_component_routing.py::_clear_caps_cache",
@@ -306,10 +294,7 @@
     "tests/src/unit/test_ha_manage_blueprints_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_remove_device_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_system_health_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_ha_timezone_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_list_tools_pagination.py::_clear_caps_cache",
-    "tests/src/unit/test_radio_resolve_entry_id_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_radio_update_entity_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_radio_zigbee_component_routing.py::_clear_caps_cache"
   ],
   "53d660951f36": [
@@ -478,10 +463,6 @@
     "tests/src/unit/test_container_param_coercion_complete.py::test_container_param_coerces_json_array_string",
     "tests/src/unit/test_container_param_coercion_complete.py::test_dict_only_param_coerces_json_object_string"
   ],
-  "858e86732903": [
-    "tests/src/unit/test_rest_client_get_error_log.py::client",
-    "tests/src/unit/test_rest_client_retry.py::client"
-  ],
   "860ff0b9cd5e": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_oauth_route_fingerprint",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py::_oauth_route_fingerprint"
@@ -624,10 +605,6 @@
     "tests/src/unit/test_component_ws_phase2_async.py::TestDashboardsSchema.test_malformed_rejected",
     "tests/src/unit/test_component_ws_phase2_async.py::TestServicesListSchema.test_malformed_rejected"
   ],
-  "ae9c2472dc15": [
-    "tests/src/unit/test_helper_field_persistence.py::mock_client",
-    "tests/src/unit/test_helper_param_rejection.py::mock_client"
-  ],
   "af2e03446ed9": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::_redirect_uris_error",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::_redirect_uris_error"
@@ -691,7 +668,6 @@
     "tests/src/unit/test_tools_areas.py::TestSetAreaOrFloorCrossKindRejection.tools"
   ],
   "bcd3703b7111": [
-    "tests/src/unit/test_deep_search_error_handling.py::TestDeepSearchErrorHandling.ha_search_tool",
     "tests/src/unit/test_search_fields_projection.py::TestHaSearchEntitiesFieldsProjection.search_tool",
     "tests/src/unit/test_search_fields_projection.py::TestHaSearchEntitiesFieldsProjectionAreaBranches.search_tool_empty",
     "tests/src/unit/test_search_fields_projection.py::TestHaSearchEntitiesFieldsProjectionAreaBranches.search_tool_populated",
@@ -914,11 +890,9 @@
   "ec1fbbf7c3d1": [
     "tests/src/unit/test_action_and_collision.py::register_tools",
     "tests/src/unit/test_action_discriminator.py::register_tools",
-    "tests/src/unit/test_flow_name_injection.py::register_tools",
     "tests/src/unit/test_helper_field_persistence.py::register_tools",
     "tests/src/unit/test_helper_input_validation.py::register_tools",
     "tests/src/unit/test_helper_list_registry_join.py::register_tools",
-    "tests/src/unit/test_helper_param_rejection.py::register_tools",
     "tests/src/unit/test_helper_registry_id_validation.py::register_tools",
     "tests/src/unit/test_helper_update_persistence.py::register_tools"
   ],

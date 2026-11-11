@@ -77,8 +77,8 @@ class TestShowAs:
             {
                 "helper_type": "template",
                 "name": "e2e_show_as_test",
+                "menu_choice": "binary_sensor",
                 "config": {
-                    "next_step_id": "binary_sensor",
                     "state": "{{ true }}",
                 },
             },
@@ -120,8 +120,8 @@ class TestShowAs:
             {
                 "helper_type": "template",
                 "name": "e2e_options_test",
+                "menu_choice": "sensor",
                 "config": {
-                    "next_step_id": "sensor",
                     "state": "{{ 1.234 }}",
                     "unit_of_measurement": "kWh",
                 },
@@ -166,8 +166,8 @@ class TestShowAs:
             {
                 "helper_type": "template",
                 "name": "e2e_multi_options_test",
+                "menu_choice": "sensor",
                 "config": {
-                    "next_step_id": "sensor",
                     "state": "{{ 9.87 }}",
                     "unit_of_measurement": "kWh",
                 },

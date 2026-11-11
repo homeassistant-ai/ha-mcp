@@ -2167,7 +2167,7 @@
   {
     "name": "ha_config_list_helpers",
     "title": "List Helpers",
-    "description": "List Home Assistant helpers of a specific type with their configurations.\n\nReturns one page of helpers; `total_count` and `has_more` report the full\nset. Each record carries the configuration for its helper:\nid (immutable storage key), entity_id (current — address the helper by\nthis, where available), name (current display name), original_name\n(creation-time name), icon, type-specific settings, and area and label\nassignments. A flow helper record carries entry_id and options instead of\nid; a custom helper integration's options are withheld, marked\n`options_withheld`.\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nStorage types list what HA's ``{type}/list`` command returns: the\nstorage-backed helpers (created via UI/API), not the YAML-defined ones.\n``person`` is the exception — HA lists its YAML-configured persons\nalongside the storage ones, so both appear here.\n\nListing flow types requires the ha_mcp_tools custom component (>= 1.1.0);\nwithout it, such a listing returns a COMPONENT_NOT_INSTALLED error.\n\nWith helper_type=\"all\", each record carries its own ``helper_type``.\nThis mode is component-only (there is no single built-in command that\nlists all types): without the ha_mcp_tools component it returns a\nCOMPONENT_NOT_INSTALLED error rather than a partial or empty list.\n\ndescribe=True returns each field's name, type, required flag, options,\ndefault and (with helper_id) current value, or the menu_options a\nmenu-based helper needs a menu_choice from. Call it before\nha_config_set_helper to learn the config keys for a type.\n\nEXAMPLES:\n- List all counters: ha_config_list_helpers(\"counter\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n- Next page: ha_config_list_helpers(\"input_boolean\", offset=100)\n- Fields for a template sensor:\n  ha_config_list_helpers(\"template\", describe=True, menu_choice=\"sensor\")\n\nFor detailed helper documentation, use ha_get_skill_guide.",
+    "description": "List Home Assistant helpers of a specific type with their configurations.\n\nReturns one page of helpers; `total_count` and `has_more` report the full\nset. Each record carries the configuration for its helper:\nid (immutable storage key), entity_id (current — address the helper by\nthis, where available), name (current display name), original_name\n(creation-time name), icon, type-specific settings, and area and label\nassignments. A flow helper record carries entry_id and options instead of\nid; a custom helper integration's options are withheld, marked\n`options_withheld`.\n\nFor a helper renamed in the UI, id/original_name keep the storage values while\nentity_id/name reflect the current entity registry (entity_id is the identifier\nha_config_set_helper resolves against, so prefer it over id for a renamed helper).\nentity_id/original_name are present only for storage-collection helpers matched in\nthe entity registry — types with no backing entity (e.g. tag), and every record when\nthe registry read degrades, carry only id/name (a warning flags the degraded case).\n\nStorage types list what HA's ``{type}/list`` command returns: the\nstorage-backed helpers (created via UI/API), not the YAML-defined ones.\n``person`` is the exception — HA lists its YAML-configured persons\nalongside the storage ones, so both appear here.\n\nListing flow types requires the ha_mcp_tools custom component (>= 1.1.0);\nwithout it, such a listing returns a COMPONENT_NOT_INSTALLED error.\n\nWith helper_type=\"all\", each record carries its own ``helper_type``.\nThis mode is component-only (there is no single built-in command that\nlists all types): without the ha_mcp_tools component it returns a\nCOMPONENT_NOT_INSTALLED error rather than a partial or empty list.\n\ndescribe=True returns each field's name, type, required flag, options,\ndefault and (with helper_id) current value, the later_forms of a\nhelper with several forms, or the menu_options a menu-based helper\nneeds a menu_choice from. Call it before ha_config_set_helper.\n\nEXAMPLES:\n- List all counters: ha_config_list_helpers(\"counter\")\n- List every helper type at once: ha_config_list_helpers(\"all\")\n- Next page: ha_config_list_helpers(\"input_boolean\", offset=100)\n- Fields for a template sensor:\n  ha_config_list_helpers(\"template\", describe=True, menu_choice=\"sensor\")\n\nFor detailed helper documentation, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -2225,7 +2225,7 @@
   {
     "name": "ha_config_set_helper",
     "title": "Create or Update Helper",
-    "description": "Create or update Home Assistant helpers: storage types, every helper\nflow HA lists, and config subentries.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types (pass `config` dict): input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag. Create requires `name`; update requires `helper_id`.\n\nFLOW types (pass `config` dict, Config Entry Flow API): every helper flow\nHome Assistant lists, read from it at call time — template, group,\nutility_meter, derivative, min_max, threshold, integration, statistics,\ntrend, ... and custom helper integrations. Create requires `name`; for\nupdates pass the existing entry_id as `helper_id` (options flows reject\nthe `name` key).\nDo not create `otp` here although Home Assistant lists it: the user sets\nit up in the HA UI, since its secret is a credential they enroll in an\nauthenticator app.\n\nCONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,\n`subentry_type` and `config`; pass `subentry_id` to reconfigure an existing\nsubentry, omit it to create one.\n\nBehavior:\n- UPDATE preserves type-specific fields not re-passed (a rename never wipes\n  initial/icon/etc.); flow-helper and config subentry updates behave the same\n  way (see `config`).\n- Omitted `action` falls back to the `helper_id`-presence discriminator\n  (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config\n  subentries).\n- For flow-based helpers, config keys not declared by any step's data_schema\n  are silently ignored by HA. Validation errors carry the helper's\n  `data_schema` (and `menu_options` for menu-rooted helpers like\n  `template`/`group` when no sub-type is chosen yet), so a follow-up call\n  can self-correct without a separate schema-discovery round-trip.\n- Flows that present more than one menu (e.g. an MQTT device subentry\n  reconfigure looping through its summary menu) take `next_step_id` as a\n  LIST of successive selections, consumed one per menu encounter.\n\nEXAMPLES:\n- input_number: ha_config_set_helper(helper_type=\"input_number\", name=\"Target\", config={\"min\": 0, \"max\": 100, \"step\": 5})\n- template sensor: ha_config_set_helper(helper_type=\"template\", name=\"Room Temp\", config={\"next_step_id\": \"sensor\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", name=\"Kitchen Lights\", config={\"group_type\": \"light\", \"entities\": [\"light.a\", \"light.b\"]})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
+    "description": "Create or update Home Assistant helpers: storage types, every helper\nflow HA lists, and config subentries.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``helper-selection.md`` ships under ``skill_content`` by default.\n\nSIMPLE types, written in one call: input_boolean, input_button,\ninput_select, input_number, input_text, input_datetime, counter, timer, schedule,\nzone, person, tag.\n\nFLOW types: every helper flow Home Assistant lists, read from it at\ncall time — template, group, utility_meter, derivative, min_max,\nthreshold, integration, statistics, trend, ... and custom helper\nintegrations. Creating one runs its config flow; `helper_id` (the\nconfig entry id) runs its options flow instead.\nDo not create `otp` here although Home Assistant lists it: the user sets\nit up in the HA UI, since its secret is a credential they enroll in an\nauthenticator app.\n\nCONFIG_SUBENTRY type: pass `entry_id` and `subentry_type`; with\n`subentry_id` the subentry's reconfigure flow runs, without it its\ncreate flow.\n\nFlows, one step per call, as the HA UI runs them: a call answers the\nstep the flow is at and returns Home Assistant's next answer. A form\ncomes back with its fields (type, default, current value, Home\nAssistant's help text) and flow_id; a menu with menu_options. Answer\nwith flow_id and config (a form) or menu_choice (a menu); flow_id alone\nreturns the step again, and flow_id with abort=True ends the flow.\nWithout flow_id a new flow starts: menu_choice answers its opening\nmenu and config the form after it, so a one-form helper is created or\nupdated in one call; without config the call returns the form, and\nits later_forms when the helper has more than one (statistics,\nhistory_stats, generic_thermostat, ...). With a config list the call\nanswers form after form and returns at the first one Home Assistant\nrejects, or once the answers run out. A rejected form is an error\nwith Core's text, and the flow stays open to correct it. Nothing is\nsaved until the flow finishes.\n\nWHEN NOT TO USE:\n- An integration that is not a helper: ha_set_integration.\n- Removing a helper: ha_remove_helpers_integrations.\n- Renaming a flow helper's entity, or its registry settings alone:\n  ha_set_entity.\n\nBehavior:\n- A SIMPLE update preserves type-specific fields not re-passed (a rename\n  never wipes initial/icon/etc.).\n- Omitted `action`: update when `helper_id` (for a config subentry,\n  `subentry_id`) is given, else create.\n- area_id, labels, category and icon are applied to a flow helper's\n  entities by the call that finishes the flow.\n- A progress step (Home Assistant working in the background) is waited\n  out for up to 120 s. When Home Assistant does not answer a submit,\n  the error carries status applied_but_unverified: check the helper\n  before retrying.\n\nEXAMPLES:\n- input_number: ha_config_set_helper(helper_type=\"input_number\", name=\"Target\", config={\"min\": 0, \"max\": 100, \"step\": 5})\n- template sensor: ha_config_set_helper(helper_type=\"template\", menu_choice=\"sensor\", config={\"name\": \"Room Temp\", \"state\": \"{{ states('sensor.x')|float }}\", \"unit_of_measurement\": \"°C\"})\n- group: ha_config_set_helper(helper_type=\"group\", menu_choice=\"light\", config={\"name\": \"Kitchen Lights\", \"entities\": [\"light.a\", \"light.b\"]})\n- see a form first: ha_config_set_helper(helper_type=\"statistics\"), then answer it: ha_config_set_helper(helper_type=\"statistics\", flow_id=\"...\", config={...})\n- several forms in one call: ha_config_set_helper(helper_type=\"statistics\", config=[{\"name\": \"Temp Mean\", \"entity_id\": \"sensor.temp\"}, {\"state_characteristic\": \"mean\"}, {\"sampling_size\": 20}])\n- update one option: ha_config_set_helper(helper_type=\"group\", helper_id=\"01HXYZ...\", config={\"hide_members\": true})\n- config subentry: ha_config_set_helper(helper_type=\"config_subentry\", entry_id=\"01HXYZ...\", subentry_type=\"conversation\", config={\"name\": \"Local agent\", \"model\": \"gemma3:27b\"})",
     "inputSchema": {
       "properties": {
         "helper_type": {
@@ -2234,12 +2234,12 @@
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for simple/flow helper creation. Optional on helper update. Ignored for helper_type='config_subentry', which uses entry_id/subentry_type/subentry_id instead. For flow-based helper updates (template, group, utility_meter, ...), this is ignored because options flows don't expose renaming; change the resulting entity's display name with ha_set_entity(name=...).",
+          "description": "Display name. Home Assistant decides which SIMPLE helper types need one to be created; optional on an update. Creating a FLOW helper, it answers the form's `name` field when the form has one and config sets none; a FLOW update does not use it (rename the entity with ha_set_entity). Not used by config_subentry.",
           "default": null
         },
         "helper_id": {
           "type": "str | None",
-          "description": "The helper's storage id ('my_button'), not the name of its entity, or its full entity_id ('input_button.my_button'). Omit to create a new helper.",
+          "description": "The helper's storage id ('my_button'), not the name of its entity, or its full entity_id ('input_button.my_button'); for a FLOW helper its config entry id. Omit to create a new helper.",
           "default": null
         },
         "entry_id": {
@@ -2277,127 +2277,30 @@
           "description": "Labels to categorize the helper",
           "default": null
         },
-        "min_value": {
-          "type": "float | None",
-          "default": null
-        },
-        "max_value": {
-          "type": "float | None",
-          "default": null
-        },
-        "step": {
-          "type": "float | None",
-          "default": null
-        },
-        "unit_of_measurement": {
-          "type": "str | None",
-          "default": null
-        },
-        "options": {
-          "type": "str | list[str] | None",
-          "default": null
-        },
-        "initial": {
-          "type": "str | bool | int | float | None",
-          "default": null
-        },
-        "mode": {
-          "type": "str | None",
-          "default": null
-        },
-        "has_date": {
-          "type": "bool | None",
-          "default": null
-        },
-        "has_time": {
-          "type": "bool | None",
-          "default": null
-        },
-        "restore": {
-          "type": "bool | None",
-          "default": null
-        },
-        "duration": {
-          "type": "str | int | float | None",
-          "default": null
-        },
-        "monday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "tuesday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "wednesday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "thursday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "friday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "saturday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "sunday": {
-          "type": "list[dict[str, Any]] | None",
-          "default": null
-        },
-        "latitude": {
-          "type": "float | None",
-          "default": null
-        },
-        "longitude": {
-          "type": "float | None",
-          "default": null
-        },
-        "radius": {
-          "type": "float | None",
-          "default": null
-        },
-        "passive": {
-          "type": "bool | None",
-          "default": null
-        },
-        "user_id": {
-          "type": "str | None",
-          "default": null
-        },
-        "device_trackers": {
-          "type": "list[str] | None",
-          "default": null
-        },
-        "picture": {
-          "type": "str | None",
-          "default": null
-        },
-        "tag_id": {
-          "type": "str | None",
-          "default": null
-        },
-        "description": {
-          "type": "str | None",
-          "default": null
-        },
-        "pattern": {
-          "type": "str | None",
-          "default": null
-        },
         "category": {
           "type": "str | None",
           "description": "Category ID for this helper (ha_config_get_category(scope='helpers') lists them, ha_config_set_category() creates one); '' or ' ' clears it.",
           "default": null
         },
         "config": {
-          "type": "dict[str, Any] | None",
-          "description": "Type-specific fields. On update it is a patch: a field you omit keeps its current value. SIMPLE types take these keys: input_select: options (list, required), initial. input_number: min, max (required), step, unit_of_measurement, mode ('box'/'slider'), initial. input_text: min, max (length), mode ('text'/'password'), initial, unit_of_measurement, pattern (regex the value must match). input_datetime: has_date, has_time, initial. input_boolean: initial. counter: initial (starting value), minimum, maximum, step, restore (default true). timer: duration ('HH:MM:SS' or seconds), restore (default false). schedule: monday..sunday, each a list of {'from': 'HH:MM', 'to': 'HH:MM'} with optional 'data' dict of extra attributes. zone: latitude, longitude (both required), radius (meters, default 100), passive (won't trigger person state changes). person: user_id, device_trackers (device_tracker entity IDs), picture (URL). tag: tag_id (omit on create to auto-generate), description. On input_* types, `initial` — even false/0 — disables last-state restore and forces that value on every HA restart. ha_config_list_helpers(helper_type, describe=True) lists a type's fields. FLOW types and config_subentry take the flow's fields; a field set to null is cleared where the schema allows that field to be empty. A field two steps declare gets your one value both times; pass step_values={'<step_id>': {'<field>': <value>}} to give a step its own value, or to leave it out of that step; a LIST of those objects supplies one per encounter when the flow presents a step more than once.",
+          "type": "dict[str, Any] | list[dict[str, Any]] | None",
+          "description": "Type-specific fields. On update it is a patch: a field you omit keeps its current value, and a SIMPLE type's field set to null is removed. SIMPLE types take these keys: the fields of the type's own Home Assistant schema, under its names; Home Assistant validates them and its error names any mistake. With the ha_mcp_tools component installed, ha_config_list_helpers(helper_type, describe=True) lists a type's fields. FLOW types and config_subentry: the answers to the form the flow is at, under the form's own field names (a section's fields nested under the section's name). On an update a field you omit is sent as the form shows it (its `current` value); a field set to null is left empty. Home Assistant validates the answer. A list answers several forms: one object per form, in the order Home Assistant asks for them.",
           "default": null
+        },
+        "menu_choice": {
+          "type": "str | None",
+          "description": "FLOW types and config_subentry: the option to pick at a menu step (template and group open with one).",
+          "default": null
+        },
+        "flow_id": {
+          "type": "str | None",
+          "description": "Continue an open flow: the flow_id a previous call returned, with the same helper_type and helper_id (or entry_id, subentry_type and subentry_id).",
+          "default": null
+        },
+        "abort": {
+          "type": "bool",
+          "description": "With flow_id: end the open flow without saving.",
+          "default": false
         },
         "wait": {
           "type": "bool",
@@ -2565,7 +2468,7 @@
         },
         "start_time": {
           "type": "str | None",
-          "description": "Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
+          "description": "Start time: ISO datetime (HA local time without an offset) or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
           "default": null
         },
         "end_time": {
@@ -2977,7 +2880,7 @@
   {
     "name": "ha_set_integration",
     "title": "Set Integration",
-    "description": "Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ menu_choice, + config) — runs the\n  domain's config flow one step per call, as the HA UI does.\n- Update options: entry_id (+ menu_choice, + config) — the entry's\n  options flow (what the \"Configure\" button does in the HA UI), one\n  step per call.\n- Reconfigure: entry_id + reconfigure=True — connection settings\n  such as host, port, credentials, one step per call. Each call\n  except an abort first checks the entry's identity; the first call\n  without config returns the flow's first step.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n- Integration command: entry_id + ws_command (+ ws_data) — what the\n  integration's panel sends (KNX project, entities, telegrams).\n  Home Assistant marks none of these commands as read-only, so a read\n  such as knx/get_knx_project goes through this tool too.\n\nFlows, one step per call: a call answers the step the flow is at and\nreturns Home Assistant's next answer. A form comes back with its\nfields (type, default, current value, Home Assistant's help text) and\nflow_id; a menu with menu_options. Answer with flow_id and config (a\nform) or menu_choice (a menu); flow_id alone returns the step again,\nand flow_id with abort=True ends the flow. Without flow_id a new flow\nstarts: its first form gets config, and without config the call\nreturns that first step. A form Home Assistant rejects is an error\nwith errors and error_text (Core's text), and the flow stays open to\ncorrect it. A flow stays open until Home Assistant finishes\nit or you abort it; while a setup flow is open, Home Assistant\nrefuses another one for the same device as already_in_progress.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry'); subentry_type\n  here describes their form; a menu_choice that finishes the flow\n  saves the subentry.\n- Removing an entry: use ha_remove_helpers_integrations.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields. Its supports_reconfigure field tells you whether an\nentry qualifies for reconfigure=True, and\nha_get_integration(entry_id=..., include_ws_commands=True) lists the\ncommands ws_command accepts with their schemas.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) are refused at that step and\naborted. A progress step (Home Assistant working in the background)\nis waited out for up to 120 s; after that the error carries flow_id\nto ask again. When Home Assistant does not answer a submit or a\nprogress poll (or, on reconfigure, answers with any 5xx), the error\ncarries status applied_but_unverified: the entry may exist or the\nchange may be saved, so check it before retrying. An aborted flow\nreturns Core's own text next to the key (reason_text). Reconfigure\nedits the settings a live integration connects with: a wrong host or\ncredential takes it offline, and there is no automatic rollback. A\nfinished reconfigure waits for the reload Home Assistant runs and\nreports the entry's state as entry_state: status applied_and_verified\nonce it is loaded, applied_but_unverified otherwise.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"local_calendar\", config={\"calendar_name\": \"Chores\"})\n- Add in two steps: ha_set_integration(domain=\"knx\", config={\"connection_type\": \"routing\"}) returns the routing form and flow_id, then ha_set_integration(domain=\"knx\", flow_id=\"...\", config={})\n- Answer a menu: ha_set_integration(domain=\"...\", flow_id=\"...\", menu_choice=\"<one of menu_options>\")\n- See the setup form first: ha_set_integration(domain=\"workday\")\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure: ha_set_integration(entry_id=\"abc123\", reconfigure=True), then ha_set_integration(entry_id=\"abc123\", reconfigure=True, flow_id=\"...\", config={\"host\": \"10.0.0.5\"})\n- Cancel a flow: ha_set_integration(domain=\"knx\", flow_id=\"...\", abort=True)\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop\n- KNX project: ha_set_integration(entry_id=\"abc123\", ws_command=\"knx/get_knx_project\")",
+    "description": "Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ menu_choice, + config) — runs the\n  domain's config flow one step per call, as the HA UI does.\n- Update options: entry_id (+ menu_choice, + config) — the entry's\n  options flow (what the \"Configure\" button does in the HA UI), one\n  step per call.\n- Reconfigure: entry_id + reconfigure=True — connection settings\n  such as host, port, credentials, one step per call. Each call\n  except an abort first checks the entry's identity; the first call\n  without config returns the flow's first step.\n- Log level: log_level + domain (or entry_id) — sets how much the\n  integration logs; read it back with ha_get_integration's log_level.\n- Integration command: entry_id + ws_command (+ ws_data) — what the\n  integration's panel sends (KNX project, entities, telegrams).\n  Home Assistant marks none of these commands as read-only, so a read\n  such as knx/get_knx_project goes through this tool too.\n\nFlows, one step per call: a call answers the step the flow is at and\nreturns Home Assistant's next answer. A form comes back with its\nfields (type, default, current value, Home Assistant's help text) and\nflow_id; a menu with menu_options. Answer with flow_id and config (a\nform) or menu_choice (a menu); flow_id alone returns the step again,\nand flow_id with abort=True ends the flow. Without flow_id a new flow\nstarts: config answers its first form, or returns it when omitted. A\nconfig list answers several forms, one object each in order (see a\nform's later_forms). A form Home Assistant rejects is an error with\nerrors and error_text (Core's text), and the flow stays open to\ncorrect it, until Home Assistant finishes it or you abort it; while a\nsetup flow is open, another for the same device is already_in_progress.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. `otp` is the user's to set up in the HA UI: its\n  secret is a credential enrolled in an authenticator app; do not create it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry'); subentry_type\n  here describes their form; a menu_choice that finishes the flow\n  saves the subentry.\n- Removing an entry: use ha_remove_helpers_integrations.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields. Its supports_reconfigure field tells you whether an\nentry qualifies for reconfigure=True, and\nha_get_integration(entry_id=..., include_ws_commands=True) lists the\ncommands ws_command accepts with their schemas.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) are refused at that step and\naborted. A progress step (Home Assistant working in the background)\nis waited out for up to 120 s; after that the error carries flow_id\nto ask again. When Home Assistant does not answer a submit or a\nprogress poll (or, on reconfigure, answers with any 5xx), the error\ncarries status applied_but_unverified: the entry may exist or the\nchange may be saved, so check it before retrying. An aborted flow\nreturns Core's own text next to the key (reason_text). Reconfigure\nedits the settings a live integration connects with: a wrong host or\ncredential takes it offline, and there is no automatic rollback. A\nfinished reconfigure waits for the reload Home Assistant runs and\nreports the entry's state as entry_state: status applied_and_verified\nonce it is loaded, applied_but_unverified otherwise.\n\nEXAMPLES:\n- Add: ha_set_integration(domain=\"local_calendar\", config={\"calendar_name\": \"Chores\"})\n- Add in two steps: ha_set_integration(domain=\"knx\", config={\"connection_type\": \"routing\"}) returns the routing form and flow_id, then ha_set_integration(domain=\"knx\", flow_id=\"...\", config={})\n- Answer a menu: ha_set_integration(domain=\"...\", flow_id=\"...\", menu_choice=\"<one of menu_options>\")\n- See the setup form first: ha_set_integration(domain=\"workday\")\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure: ha_set_integration(entry_id=\"abc123\", reconfigure=True), then ha_set_integration(entry_id=\"abc123\", reconfigure=True, flow_id=\"...\", config={\"host\": \"10.0.0.5\"})\n- Cancel a flow: ha_set_integration(domain=\"knx\", flow_id=\"...\", abort=True)\n- Debug logging: ha_set_integration(domain=\"zha\", log_level=\"DEBUG\"), then log_level=\"DEFAULT\" to stop\n- KNX project: ha_set_integration(entry_id=\"abc123\", ws_command=\"knx/get_knx_project\")",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -2996,8 +2899,8 @@
           "default": null
         },
         "config": {
-          "type": "dict[str, Any] | None",
-          "description": "The values for the form the flow is at: one form per call. Without flow_id it answers the new flow's first form (after menu_choice, when the flow opens with a menu). A key the form does not declare is refused before anything is sent. On an existing entry (options, reconfigure) a field you omit keeps its current value, and a field set to null is cleared where the integration's schema allows that field to be empty.",
+          "type": "dict[str, Any] | list[dict[str, Any]] | None",
+          "description": "The values for the form the flow is at; a list answers that form and the ones after it, one object per form in order. Without flow_id it answers the new flow's first form (after menu_choice, when the flow opens with a menu). Home Assistant validates each answer. On an existing entry (options, reconfigure) a field you omit keeps its current value, and a field set to null is left empty.",
           "default": null
         },
         "reconfigure": {

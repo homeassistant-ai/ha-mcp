@@ -3,9 +3,10 @@
 Flow-based helpers are described from the live config flow (or the options
 flow of an existing entry), which is what the HA UI renders. Storage helpers
 are described from Core's own create schema, served by the ``ha_mcp_tools``
-component (tools entry or embedded server entry). Without the component, the
-static ``SIMPLE_HELPER_SCHEMAS`` table is the fallback, and it also fills in
-the few fields whose Core validator does not serialize (e.g. schedule days).
+component (tools entry or embedded server entry). The few fields whose Core
+validator does not serialize (an icon, schedule days) are named as untyped,
+not typed by hand. Without the component Core offers no field list for a
+storage helper, and the response says so: Core validates the write.
 """
 
 from __future__ import annotations
@@ -15,8 +16,11 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ...client.rest_client import HomeAssistantConnectionError
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
+from ..component_api import COMPONENT_INSTALL_HINT, component_serves
+from ..component_flow import flow_outline, steps_after
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_errors import (
@@ -32,10 +36,11 @@ from ..flow_translations import (
 )
 from ..helpers import exception_to_structured_error, raise_tool_error
 from .listing import listed_items
-from .schemas import SIMPLE_HELPER_SCHEMAS, SIMPLE_HELPER_TYPES
+from .schemas import SIMPLE_HELPER_TYPES
 
-# Long select lists (units, device classes) are truncated: the first few
-# values show the format, and HA reports the full list if a value is rejected.
+# A select that also takes a custom value (units, device classes) lists
+# suggestions, so a long list is truncated: the first values show the format.
+# A select whose answer must be one of its options is shown in full.
 MAX_OPTIONS = 12
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -51,11 +56,12 @@ _SELECTOR_KEYS = (
     "device_class",
     "mode",
     "filter",
+    "read_only",
 )
 _SERIALIZED_KEYS = ("valueMin", "valueMax", "lengthMin", "lengthMax", "allow_none")
 
 
-def _option_values(options: list[Any]) -> list[Any]:
+def _option_values(options: list[Any], *, suggestions: bool = False) -> list[Any]:
     values = [
         o[0]
         if isinstance(o, list | tuple)
@@ -64,7 +70,7 @@ def _option_values(options: list[Any]) -> list[Any]:
         else o
         for o in options
     ]
-    if len(values) <= MAX_OPTIONS:
+    if not suggestions or len(values) <= MAX_OPTIONS:
         return values
     return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
 
@@ -78,7 +84,9 @@ def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cfg.get("type"), str):
         out["input_type"] = cfg["type"]
     if isinstance(cfg.get("options"), list | tuple):
-        out["options"] = _option_values(cfg["options"])
+        out["options"] = _option_values(
+            cfg["options"], suggestions=bool(cfg.get("custom_value"))
+        )
     out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
     return out
 
@@ -117,32 +125,22 @@ def compact_schema(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [compact_field(f) for f in schema if isinstance(f, dict)]
 
 
-def _with_static_hints(
-    helper_type: str, core_fields: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Core's fields, typed from the static table where Core's validator is opaque."""
-    static = {f["name"]: f for f in SIMPLE_HELPER_SCHEMAS.get(helper_type, [])}
-    # Core's field order is arbitrary (schedule weekdays come back shuffled);
-    # follow the static table's order where it knows the field.
-    order = {name: i for i, name in enumerate(static)}
+def _untyped(core_fields: list[dict[str, Any]]) -> list[str]:
+    """The fields Core's serializer gave no type: their validator is a plain
+    function (an icon, a duration, a list of time ranges), which a schema
+    cannot describe. They are named as such, not typed by hand."""
+    return [
+        field["name"]
+        for field in core_fields
+        if "type" not in field and "selector" not in field and field.get("name")
+    ]
 
-    core_fields = sorted(
-        core_fields, key=lambda f: order.get(f.get("name", ""), len(order))
-    )
-    merged = []
-    for field in core_fields:
-        hint = static.get(field.get("name", ""))
-        opaque = "type" not in field and "selector" not in field
-        merged.append(
-            {
-                **field,
-                "selector": hint["selector"],
-                "description": hint.get("description"),
-            }
-            if opaque and hint
-            else field
-        )
-    return merged
+
+_UNTYPED_NOTE = (
+    "Home Assistant's schema gives no type for untyped_fields: their "
+    "validator is a function, which cannot be described. Home Assistant "
+    "validates the value on write and its error says what it expects."
+)
 
 
 def _with_help(
@@ -167,20 +165,95 @@ async def describe_form(
     text to read.
     """
     fields = compact_schema(step.get("data_schema") or [])
-    described: dict[str, Any] = {"fields": fields, **_later_forms(step)}
+    described: dict[str, Any] = {"fields": fields}
     step_id = step.get("step_id")
+    strings = None
     if step_id and domain:
         strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
         if strings is None:
             described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
+    declared = None
+    outline_lost = False
+    if step_id and domain and path in ("config", "options"):
+        try:
+            outline = await flow_outline(client, domain, path)
+        except HomeAssistantConnectionError:
+            # The flow is already at this step: the form goes back without
+            # its later forms rather than not at all.
+            outline, outline_lost = None, True
+            described.setdefault("warnings", []).append(_OUTLINE_LOST_WARNING)
+        declared = steps_after(outline, step_id) if outline is not None else None
+    if declared is None:
+        # Core's flow is not declared as steps, or no component reads the
+        # declaration: only the step itself says.
+        described.update(_later_forms(step))
+        if (
+            "note" in described
+            and not outline_lost
+            and not await component_serves(client, "flow_outline")
+        ):
+            described["note"] += (
+                " The ha_mcp_tools component lists a flow's later forms up "
+                f"front. {COMPONENT_INSTALL_HINT}"
+            )
+    elif declared:
+        described["later_forms"] = [
+            _later_form(later, always, strings, domain, path)
+            for later, always in declared
+        ]
+        described["note"] = _LATER_FORMS_NOTE + (
+            _LATER_FORMS_EDIT_NOTE if path == "options" else ""
+        )
     return described
 
 
+_OUTLINE_LOST_WARNING = (
+    "The flow's later forms could not be read: the connection to Home "
+    "Assistant was lost while reading them. This form is complete; each "
+    "later form is returned by the call that answers the one before it."
+)
+_LATER_FORMS_NOTE = (
+    "later_forms are the steps Home Assistant's flow declares after this one. "
+    "A config list answers this form and later ones in one call, one object "
+    "per form. A form marked fields_depend_on_answers is built from the "
+    "earlier answers and is returned by the call that answers the form "
+    "before it; one marked may_follow is an unverified candidate: Home "
+    "Assistant picks the next step from the answers, and the declaration does "
+    "not say which of these it can pick."
+)
+_LATER_FORMS_EDIT_NOTE = (
+    " A later form's current values are shown when the flow reaches it."
+)
+
+
+def _later_form(
+    step: dict[str, Any],
+    always: bool,
+    strings: dict[str, Any] | None,
+    domain: str | None,
+    path: str,
+) -> dict[str, Any]:
+    """One declared later step, in brief."""
+    step_id = step["step_id"]
+    form: dict[str, Any] = {"step_id": step_id}
+    if step.get("type") == "menu":
+        form["menu_options"] = step.get("menu_options") or "depends_on_answers"
+    elif step.get("schema_from_answers"):
+        form["fields_depend_on_answers"] = True
+    else:
+        # No schema: Core shows no form at this step.
+        form["fields"] = compact_schema(step.get("data_schema") or [])
+        if strings is not None and domain:
+            _with_help(form["fields"], field_help(strings, domain, path, step_id))
+    if not always:
+        form["may_follow"] = True
+    return form
+
+
 _LATER_FORM_TAIL = (
-    "Pass them in the same config; a missing one comes back in the error with "
-    "that form's fields."
+    "A later form is returned, with a flow_id, by the call that answers this one."
 )
 # ``last_step`` is False when a later form follows and None when the flow does
 # not say, which many flows do, single-form ones included.
@@ -417,18 +490,7 @@ async def _describe_simple(
 ) -> dict[str, Any]:
     core = await fetch_helper_schemas(client)
     core_fields = (core or {}).get(helper_type, {}).get("create")
-    if core_fields:
-        out: dict[str, Any] = {
-            "source": "core_schema",
-            "fields": compact_schema(_with_static_hints(helper_type, core_fields)),
-        }
-    else:
-        out = {
-            "source": "static_fallback",
-            "fields": compact_schema(
-                [dict(f) for f in SIMPLE_HELPER_SCHEMAS.get(helper_type, [])]
-            ),
-        }
+    item = None
     if helper_id:
         item = await _stored_item(client, helper_type, helper_id)
         if item is None:
@@ -440,10 +502,28 @@ async def _describe_simple(
                     suggestions=[f"ha_config_list_helpers({helper_type!r}) lists them"],
                 )
             )
-        else:
-            for field in out["fields"]:
-                if field["name"] in item:
-                    field["current"] = item[field["name"]]
+    if not core_fields:
+        # Core has no command that lists a storage helper's fields.
+        out: dict[str, Any] = {
+            "source": "unavailable",
+            "note": (
+                f"Home Assistant's field list for {helper_type} is read "
+                "through the ha_mcp_tools component, which is not installed "
+                "or does not serve it. Send the fields under Home "
+                "Assistant's own names: it validates the write, and its "
+                f"error names a wrong or missing field. {COMPONENT_INSTALL_HINT}"
+            ),
+        }
+        if item is not None:
+            out["stored"] = item
+        return out
+    out = {"source": "core_schema", "fields": compact_schema(core_fields)}
+    if untyped := _untyped(core_fields):
+        out.update(untyped_fields=untyped, note=_UNTYPED_NOTE)
+    if item is not None:
+        for field in out["fields"]:
+            if field["name"] in item:
+                field["current"] = item[field["name"]]
     return out
 
 

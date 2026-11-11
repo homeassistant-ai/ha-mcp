@@ -1,34 +1,47 @@
-"""Integration log levels through ha_set_integration(log_level=...)."""
+"""Integration log levels through ha_set_integration(log_level=...).
+
+Core's ``logger`` integration answers ``logger/integration_log_level``; the
+tool reaches it through the server's own client.
+"""
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
-def _client(reply: dict[str, Any] | None = None) -> MagicMock:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(
-        return_value=reply or {"success": True, "result": None}
-    )
-    client.get_config_entry = AsyncMock(return_value={"domain": "zha"})
-    return client
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The client on a ``hass`` with the logger and a ``zha`` entry ``abc123``."""
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "logger", {})
+    MockConfigEntry(domain="zha", entry_id="abc123").add_to_hass(hass)
+    return core_client
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(("level", "sent"), [("DEBUG", "DEBUG"), ("DEFAULT", "NOTSET")])
-async def test_sets_level_like_the_integration_page(level: str, sent: str) -> None:
-    client = _client()
+async def test_sets_level_like_the_integration_page(
+    client: HomeAssistantClient, level: str, sent: str
+) -> None:
+    with patch.object(
+        client, "send_websocket_message", wraps=client.send_websocket_message
+    ) as ws:
+        result = await IntegrationTools(client).ha_set_integration(
+            domain="zha", log_level=level
+        )
 
-    result = await IntegrationTools(client).ha_set_integration(
-        domain="zha", log_level=level
-    )
-
-    client.send_websocket_message.assert_awaited_once_with(
+    ws.assert_awaited_once_with(
         {
             "type": "logger/integration_log_level",
             "integration": "zha",
@@ -44,15 +57,22 @@ async def test_sets_level_like_the_integration_page(level: str, sent: str) -> No
 
 
 @pytest.mark.unit
-async def test_entry_id_resolves_to_its_domain() -> None:
-    client = _client()
+async def test_entry_id_resolves_to_its_domain(client: HomeAssistantClient) -> None:
+    with (
+        patch.object(
+            client, "get_config_entry", wraps=client.get_config_entry
+        ) as get_entry,
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as ws,
+    ):
+        result = await IntegrationTools(client).ha_set_integration(
+            entry_id="abc123", log_level="INFO"
+        )
 
-    result = await IntegrationTools(client).ha_set_integration(
-        entry_id="abc123", log_level="INFO"
-    )
-
-    client.get_config_entry.assert_awaited_once_with("abc123")
-    assert client.send_websocket_message.await_args.args[0]["integration"] == "zha"
+    get_entry.assert_awaited_once_with("abc123")
+    assert ws.await_args is not None
+    assert ws.await_args.args[0]["integration"] == "zha"
     assert result["domain"] == "zha"
 
 
@@ -71,27 +91,24 @@ async def test_entry_id_resolves_to_its_domain() -> None:
         {"domain": "zha", "expected_mac": "aa:bb:cc:dd:ee:ff"},
     ],
 )
-async def test_rejects_other_modes(kwargs: dict[str, Any]) -> None:
-    client = _client()
-
-    with pytest.raises(ToolError) as exc_info:
+async def test_rejects_other_modes(
+    client: HomeAssistantClient, kwargs: dict[str, Any]
+) -> None:
+    with (
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as ws,
+        pytest.raises(ToolError) as exc_info,
+    ):
         await IntegrationTools(client).ha_set_integration(log_level="DEBUG", **kwargs)
 
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    client.send_websocket_message.assert_not_called()
+    ws.assert_not_called()
 
 
 @pytest.mark.unit
-async def test_unknown_integration_is_not_found() -> None:
-    client = _client(
-        {
-            "success": False,
-            "error": "Command failed: Integration not found",
-            "error_code": "not_found",
-        }
-    )
-
+async def test_unknown_integration_is_not_found(client: HomeAssistantClient) -> None:
     with pytest.raises(ToolError) as exc_info:
         await IntegrationTools(client).ha_set_integration(
             domain="nope", log_level="DEBUG"
@@ -106,14 +123,18 @@ async def test_unknown_integration_is_not_found() -> None:
     ("persistence", "note"),
     [("permanent", "every Home Assistant restart"), ("none", "until the next")],
 )
-async def test_log_persistence_reaches_core(persistence: str, note: str) -> None:
-    client = _client()
+async def test_log_persistence_reaches_core(
+    client: HomeAssistantClient, persistence: str, note: str
+) -> None:
+    with patch.object(
+        client, "send_websocket_message", wraps=client.send_websocket_message
+    ) as ws:
+        result = await IntegrationTools(client).ha_set_integration(
+            domain="zha", log_level="DEBUG", log_persistence=persistence
+        )
 
-    result = await IntegrationTools(client).ha_set_integration(
-        domain="zha", log_level="DEBUG", log_persistence=persistence
-    )
-
-    sent = client.send_websocket_message.await_args.args[0]
+    assert ws.await_args is not None
+    sent = ws.await_args.args[0]
     assert sent["persistence"] == persistence
     assert note in result["note"]
 
@@ -127,10 +148,15 @@ async def test_log_persistence_reaches_core(persistence: str, note: str) -> None
         {"entry_id": "abc123", "config": {"x": 1}},
     ],
 )
-async def test_log_persistence_needs_a_log_level(kwargs: dict[str, Any]) -> None:
-    client = _client()
-
-    with pytest.raises(ToolError) as exc_info:
+async def test_log_persistence_needs_a_log_level(
+    client: HomeAssistantClient, kwargs: dict[str, Any]
+) -> None:
+    with (
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as ws,
+        pytest.raises(ToolError) as exc_info,
+    ):
         await IntegrationTools(client).ha_set_integration(
             log_persistence="permanent", **kwargs
         )
@@ -138,17 +164,30 @@ async def test_log_persistence_needs_a_log_level(kwargs: dict[str, Any]) -> None
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "log_level" in error["message"]
-    client.send_websocket_message.assert_not_called()
+    ws.assert_not_called()
 
 
 @pytest.mark.unit
-async def test_core_refusing_a_persistence_value_surfaces_its_error() -> None:
-    core_error = "expected LogPersistance for dictionary value @ data['persistence']"
-    client = _client(
-        {"success": False, "error": core_error, "error_code": "invalid_format"}
-    )
+async def test_core_refusing_a_persistence_value_surfaces_its_error(
+    client: HomeAssistantClient,
+) -> None:
+    message = {
+        "type": "logger/integration_log_level",
+        "integration": "zha",
+        "level": "DEBUG",
+        "persistence": "forever",
+    }
+    core_reply = await client.send_websocket_message(message)
+    assert core_reply["success"] is False
+    core_error = core_reply["error"]
+    assert "persistence" in core_error
 
-    with pytest.raises(ToolError) as exc_info:
+    with (
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as ws,
+        pytest.raises(ToolError) as exc_info,
+    ):
         await IntegrationTools(client).ha_set_integration(
             domain="zha", log_level="DEBUG", log_persistence="forever"
         )
@@ -156,4 +195,5 @@ async def test_core_refusing_a_persistence_value_surfaces_its_error() -> None:
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert core_error in error["message"]
-    assert client.send_websocket_message.await_args.args[0]["persistence"] == "forever"
+    assert ws.await_args is not None
+    assert ws.await_args.args[0]["persistence"] == "forever"
