@@ -373,8 +373,9 @@ async def test_summary_list_is_compact_and_full_keeps_cores_row() -> None:
     )
     get_device = _build_get_device(client)
 
-    summary = (await get_device())["devices"][0]
-    full = (await get_device(detail_level="full"))["devices"][0]
+    with _without_component():
+        summary = (await get_device())["devices"][0]
+        full = (await get_device(detail_level="full"))["devices"][0]
 
     # The fields the detail_level description names.
     assert {
@@ -402,34 +403,46 @@ def _refusal(code: str, error: str) -> dict[str, Any]:
     return {"success": False, "error": f"Command failed: {error}", "error_code": code}
 
 
+def _without_component() -> Any:
+    """A component without ``ha_mcp_tools/info``: the tools read Core's
+    registries, without a connection attempt deciding it."""
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+    )
+    return patch_ws(ws, component_devices)
+
+
 @pytest.mark.asyncio
 async def test_single_lookup_lists_linked_devices() -> None:
     """The single lookup carries Core's linked devices (the device page's
     Linked devices card). Core before 2026.8 has no such command: the lookup
     answers without the field and says why; any other refusal fails it."""
-    ok = {"success": True, "result": {"linked_devices": ["dev-2"]}}
-    resp = await _build_get_device(
-        RoutingClient(devices=[_raw_device("dev-1")], linked_reply=ok)
-    )(device_id="dev-1")
-    assert resp["device"]["linked_devices"] == ["dev-2"]
-
-    old_core = _refusal("unknown_command", "Unknown command.")
-    resp = await _build_get_device(
-        RoutingClient(devices=[_raw_device("dev-1")], linked_reply=old_core)
-    )(device_id="dev-1")
-    assert "linked_devices" not in resp["device"]
-    assert any("before 2026.8" in w for w in resp["warnings"])
-
-    refused = _refusal("not_found", "Device not found")
-    with pytest.raises(ToolError) as excinfo:
-        await _build_get_device(
-            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=refused)
+    with _without_component():
+        ok = {"success": True, "result": {"linked_devices": ["dev-2"]}}
+        resp = await _build_get_device(
+            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=ok)
         )(device_id="dev-1")
-    error = json.loads(str(excinfo.value))
-    assert (
-        error["error"]["message"] == "Failed to read linked devices: Device not found"
-    )
-    assert error["ha_error_code"] == "not_found"
+        assert resp["device"]["linked_devices"] == ["dev-2"]
+
+        old_core = _refusal("unknown_command", "Unknown command.")
+        resp = await _build_get_device(
+            RoutingClient(devices=[_raw_device("dev-1")], linked_reply=old_core)
+        )(device_id="dev-1")
+        assert "linked_devices" not in resp["device"]
+        assert any("before 2026.8" in w for w in resp["warnings"])
+
+        refused = _refusal("not_found", "Device not found")
+        with pytest.raises(ToolError) as excinfo:
+            await _build_get_device(
+                RoutingClient(devices=[_raw_device("dev-1")], linked_reply=refused)
+            )(device_id="dev-1")
+        error = json.loads(str(excinfo.value))
+        assert (
+            error["error"]["message"]
+            == "Failed to read linked devices: Device not found"
+        )
+        assert error["ha_error_code"] == "not_found"
 
 
 @pytest.mark.asyncio
@@ -442,14 +455,14 @@ async def test_split_composite_id_names_the_devices_that_replaced_it() -> None:
     )
     get_device = _build_get_device(client)
 
-    with pytest.raises(ToolError) as excinfo:
+    with _without_component(), pytest.raises(ToolError) as excinfo:
         await get_device(device_id="composite")
     error = json.loads(str(excinfo.value))
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert (error["split_ids"], error["primary_id"]) == (["new-a", "new-b"], None)
     assert "split_ids" in error["error"]["suggestion"]
 
-    with pytest.raises(ToolError) as excinfo:
+    with _without_component(), pytest.raises(ToolError) as excinfo:
         await get_device(device_id="ghost")
     error = json.loads(str(excinfo.value))
     assert "split_ids" not in error
@@ -474,7 +487,7 @@ async def test_split_read_degrades_only_on_core_without_it(
         devices=[_raw_device("new-a")],
         splits_reply=_refusal(error_code, "refused"),
     )
-    with pytest.raises(ToolError) as excinfo:
+    with _without_component(), pytest.raises(ToolError) as excinfo:
         await _build_get_device(client)(device_id="composite")
     error = json.loads(str(excinfo.value))
     assert error["error"]["code"] == expected
