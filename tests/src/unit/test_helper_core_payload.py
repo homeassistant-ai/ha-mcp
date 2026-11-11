@@ -10,6 +10,7 @@ covered through both write paths in test_helper_config_fold.py.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 from unittest.mock import patch
 
@@ -29,9 +30,10 @@ from ha_mcp.tools.config_helpers.update import _execute_legacy_update, _stored_i
 
 async def _stored_counter(hass: HomeAssistant, client: HomeAssistantClient) -> str:
     """Create a storage counter in Core and return its id."""
+    name = f"Count {uuid.uuid4().hex[:8]}"
     assert await async_setup_component(hass, "counter", {})
     created = await client.send_websocket_message(
-        {"type": "counter/create", "name": "Count", "minimum": 0, "maximum": 10}
+        {"type": "counter/create", "name": name, "minimum": 0, "maximum": 10}
     )
     assert created["success"], created
     return str(created["result"]["id"])
@@ -105,7 +107,13 @@ async def test_update_path_sends_a_step_core_accepts(
         wraps=core_client.send_websocket_message,
     ) as sent:
         result = await _execute_legacy_update(
-            core_client, "counter", "counter.count", counter_id, None, None, {"step": 0}
+            core_client,
+            "counter",
+            f"counter.{counter_id}",
+            counter_id,
+            None,
+            None,
+            {"step": 0},
         )
     assert sent.await_args is not None
     update_message = sent.await_args.args[0]
@@ -135,6 +143,12 @@ async def test_item_vanishing_before_the_update_reports_like_the_read(
         pytest.raises(ToolError) as exc_info,
     ):
         await _execute_legacy_update(
-            core_client, "counter", "counter.count", counter_id, "Renamed", None, {}
+            core_client,
+            "counter",
+            f"counter.{counter_id}",
+            counter_id,
+            "Renamed",
+            None,
+            {},
         )
     assert json.loads(str(exc_info.value))["error"]["code"] == "CONFIG_NOT_FOUND"

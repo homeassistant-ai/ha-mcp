@@ -9,6 +9,7 @@ input_button helpers and entity renames are Core's own.
 """
 
 import json
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -28,6 +29,17 @@ from ._client_spies import sent_messages
 def _immediate_registry_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core answers at once; the retry backoff only adds time."""
     monkeypatch.setattr("ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0)
+
+
+@pytest.fixture
+def mine() -> str:
+    """A storage id no deleted registry entry can be restored for."""
+    return f"my_button_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def other() -> str:
+    return f"other_{uuid.uuid4().hex[:8]}"
 
 
 async def _create_buttons(
@@ -52,14 +64,14 @@ async def _rename(
 
 
 async def _rename_my_button(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, mine: str, other: str
 ) -> None:
     """my_button's entity was renamed; other's entity now holds
     input_button.my_button."""
+    await _rename(hass, entity_registry, f"input_button.{mine}", "input_button.renamed")
     await _rename(
-        hass, entity_registry, "input_button.my_button", "input_button.renamed"
+        hass, entity_registry, f"input_button.{other}", f"input_button.{mine}"
     )
-    await _rename(hass, entity_registry, "input_button.other", "input_button.my_button")
 
 
 def _deleted(spy: Mock) -> list[str]:
@@ -85,15 +97,17 @@ async def test_a_stored_id_wins_over_an_entity_with_its_text(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    mine: str,
+    other: str,
 ) -> None:
     """The bare id deletes that helper and names its own entity."""
-    await _create_buttons(hass, core_client, "my_button", "other")
-    await _rename_my_button(hass, entity_registry)
+    await _create_buttons(hass, core_client, mine, other)
+    await _rename_my_button(hass, entity_registry, mine, other)
 
     with sent_messages(core_client) as sent:
-        result = await _remove(core_client, "my_button")
+        result = await _remove(core_client, mine)
 
-    assert _deleted(sent) == ["my_button"]
+    assert _deleted(sent) == [mine]
     assert result["entity_ids"] == ["input_button.renamed"]
 
 
@@ -101,13 +115,15 @@ async def test_a_stored_id_removal_waits_for_its_own_entity(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    mine: str,
+    other: str,
 ) -> None:
-    await _create_buttons(hass, core_client, "my_button", "other")
-    await _rename_my_button(hass, entity_registry)
+    await _create_buttons(hass, core_client, mine, other)
+    await _rename_my_button(hass, entity_registry, mine, other)
     verify = AsyncMock(return_value=True)
 
     with patch("ha_mcp.tools.tools_integrations.verify_entity_removed", verify):
-        await _remove(core_client, "my_button", wait=True)
+        await _remove(core_client, mine, wait=True)
 
     assert verify.await_args is not None
     assert verify.await_args.args[1] == "input_button.renamed"
@@ -117,16 +133,18 @@ async def test_a_repeated_bare_id_removal_deletes_no_other_helper(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    mine: str,
+    other: str,
 ) -> None:
     """After my_button's removal input_button.my_button is still other's
     entity: a repeated bare my_button would delete other."""
-    await _create_buttons(hass, core_client, "my_button", "other")
-    await _rename_my_button(hass, entity_registry)
-    await _remove(core_client, "my_button")
+    await _create_buttons(hass, core_client, mine, other)
+    await _rename_my_button(hass, entity_registry, mine, other)
+    await _remove(core_client, mine)
     await hass.async_block_till_done()
 
     with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
-        await _remove(core_client, "my_button")
+        await _remove(core_client, mine)
 
     assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
     assert _deleted(sent) == []
@@ -136,30 +154,33 @@ async def test_an_entity_id_removes_the_helper_its_entity_belongs_to(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    mine: str,
+    other: str,
 ) -> None:
-    await _create_buttons(hass, core_client, "other")
-    await _rename(hass, entity_registry, "input_button.other", "input_button.my_button")
+    await _create_buttons(hass, core_client, other)
+    await _rename(
+        hass, entity_registry, f"input_button.{other}", f"input_button.{mine}"
+    )
 
     with sent_messages(core_client) as sent:
-        await _remove(core_client, "input_button.my_button")
+        await _remove(core_client, f"input_button.{mine}")
 
-    assert _deleted(sent) == ["other"]
+    assert _deleted(sent) == [other]
 
 
 async def test_an_unknown_entity_id_is_not_deleted_by_its_object_id(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    mine: str,
 ) -> None:
     """input_button.my_button names no entity, and stored my_button belongs to
     input_button.renamed: deleting by the object id would remove it."""
-    await _create_buttons(hass, core_client, "my_button")
-    await _rename(
-        hass, entity_registry, "input_button.my_button", "input_button.renamed"
-    )
+    await _create_buttons(hass, core_client, mine)
+    await _rename(hass, entity_registry, f"input_button.{mine}", "input_button.renamed")
 
     with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
-        await _remove(core_client, "input_button.my_button")
+        await _remove(core_client, f"input_button.{mine}")
 
     assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
     assert _deleted(sent) == []

@@ -7,6 +7,7 @@ removal check, this repository's own waiter, is replaced.
 
 import asyncio
 import logging
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -41,14 +42,15 @@ class TestRemovalCheckAfterSuccessfulDelete:
     async def my_button(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> str:
-        """A stored input_button; its entity is input_button.my_button."""
+        """A stored input_button, freshly named; returns its entity_id."""
+        name = f"my_button_{uuid.uuid4().hex[:8]}"
         assert await async_setup_component(hass, "input_button", {})
         created = await core_client.send_websocket_message(
-            {"type": "input_button/create", "name": "my_button"}
+            {"type": "input_button/create", "name": name}
         )
         assert created["success"], created
         await hass.async_block_till_done()
-        return "input_button.my_button"
+        return f"input_button.{name}"
 
     @pytest.mark.parametrize(
         ("failure", "logs_traceback"),
