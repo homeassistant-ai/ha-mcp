@@ -149,7 +149,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   real exceptions. A client method is replaced for one thing only: the client
   getting no answer at all (a dropped connection, a timeout), as
   `AsyncMock(side_effect=HomeAssistantConnectionError(...))`. An error reply
-  (a 404, a rejected command) is an answer, and comes from Core.
+  (a 404, a rejected command) is an answer, and comes from Core. To prove a
+  call was made, counted or not made, spy on the real method
+  (`AsyncMock(wraps=client.get_states)`): it calls through, so the reply is
+  still Core's.
 - An integration whose requirements are not installed with Core (`cloud`,
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.

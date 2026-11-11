@@ -15,7 +15,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_backup_restore_consumers import response_for, run_restore
-from .test_backup_restore_consumers import settings_script as settings_script
 
 NAME = "automation.example.20260909_000000.yaml"
 

@@ -37,6 +37,7 @@ pytest_plugins = [
     "pytest_homeassistant.plugins",
     "tests.core_stand_in_guard",
     "tests.src.unit._core_client",
+    "tests.src.unit._settings_script",
 ]
 
 # quickjs starts its shared worker thread on import; importing it here starts

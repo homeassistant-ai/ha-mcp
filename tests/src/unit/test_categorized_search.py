@@ -17,7 +17,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
-from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.transforms.categorized_search import (
     DEFAULT_PINNED_TOOLS,
     CategorizedSearchTransform,
@@ -26,12 +25,7 @@ from ha_mcp.transforms.categorized_search import (
     _is_manage_tool,
 )
 
-
-@pytest.fixture(autouse=True)
-def search_connection():
-    """These tests exercise the transform on a search-mode connection."""
-    with catalog_endpoint("search"):
-        yield
+from ._search_mode_connection import search_connection as search_connection
 
 
 @pytest.fixture

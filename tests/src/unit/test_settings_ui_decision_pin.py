@@ -18,7 +18,6 @@ from .test_settings_ui_js_behavior import (
     _policy_panel_dom,
     _probe,
 )
-from .test_settings_ui_js_behavior import settings_script as settings_script
 
 # The decision-PIN endpoint answers from ``pinSet``, which DELETE and POST
 # change, so each test states the server's PIN without counting init GETs.

@@ -25,7 +25,7 @@ from ha_mcp.visibility.identifier_aliases import (
     PREFIXED_IDENTIFIER_ARGS,
 )
 
-from ..test_container_param_coercion_complete import _all_registered_tools
+from .._registered_tools import all_registered_tools
 from .test_enforcement import (
     FakeClient,
     _error_body,
@@ -354,7 +354,7 @@ def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
 
 
 def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:
-    tools = _all_registered_tools()
+    tools = all_registered_tools()
     assert tools, "no tools registered — guardrail cannot run"
 
     discovered = {

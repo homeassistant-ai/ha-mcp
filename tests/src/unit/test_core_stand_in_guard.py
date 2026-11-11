@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from typing import cast
 
 import homeassistant.core
 import pytest
@@ -11,6 +12,8 @@ import pytest
 from tests import core_stand_in_guard as guard
 
 _STAND_IN = "homeassistant.helpers.a_stand_in"
+# A file the guard still exempts; this test follows that list.
+_EXEMPT_FILE = "tests/src/unit/test_config_flow.py"
 
 
 def test_unit_conftest_registers_the_hook(pytestconfig: pytest.Config) -> None:
@@ -18,7 +21,7 @@ def test_unit_conftest_registers_the_hook(pytestconfig: pytest.Config) -> None:
 
 
 def test_an_object_in_place_of_a_core_module_is_reported() -> None:
-    sys.modules[_STAND_IN] = SimpleNamespace()  # type: ignore[assignment]
+    sys.modules[_STAND_IN] = cast(ModuleType, SimpleNamespace())
     try:
         assert _STAND_IN in guard.core_module_stand_ins()
     finally:
@@ -34,7 +37,7 @@ def test_hook_fails_a_test_whose_stand_in_is_still_in_place(
 ) -> None:
     hook = guard.pytest_runtest_call(request.node)
     next(hook)
-    sys.modules[_STAND_IN] = SimpleNamespace()  # type: ignore[assignment]
+    sys.modules[_STAND_IN] = cast(ModuleType, SimpleNamespace())
     try:
         with pytest.raises(pytest.fail.Exception, match=_STAND_IN):
             hook.send(None)
@@ -54,10 +57,10 @@ def test_hook_passes_the_result_of_a_test_that_left_none(
 
 def test_hook_leaves_a_grandfathered_file_alone() -> None:
     """Its stand-ins are still in place when the hook looks, and it passes."""
-    item = SimpleNamespace(nodeid=f"{sorted(guard._GRANDFATHERED)[0]}::test_x")
-    hook = guard.pytest_runtest_call(item)  # type: ignore[arg-type]
+    item = cast(pytest.Item, SimpleNamespace(nodeid=f"{_EXEMPT_FILE}::test_x"))
+    hook = guard.pytest_runtest_call(item)
     next(hook)
-    sys.modules[_STAND_IN] = SimpleNamespace()  # type: ignore[assignment]
+    sys.modules[_STAND_IN] = cast(ModuleType, SimpleNamespace())
     try:
         with pytest.raises(StopIteration):
             hook.send(None)
