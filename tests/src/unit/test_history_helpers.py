@@ -239,3 +239,34 @@ async def test_workload_across_dst_end_counts_elapsed_hours(
             end_time=end_time,
             **options,
         )
+
+
+@pytest.mark.parametrize(
+    ("guardrails", "start_time", "end_time"),
+    [
+        # 02:45 is not a New York time; it reads as 07:45 UTC, after 03:15 = 07:15 UTC
+        (False, "2026-03-08T02:45:00", "2026-03-08T03:15:00"),
+        # 02:30 and 03:30 are both 07:30 UTC: a zero-length window
+        (True, "2026-03-08T02:30:00", "2026-03-08T03:30:00"),
+    ],
+)
+async def test_window_across_spring_forward_gap_is_checked_as_instants(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    guardrails: bool,
+    start_time: str,
+    end_time: str,
+) -> None:
+    """A start in the spring-forward gap is not earlier than an end after the gap."""
+    await hass.config.async_set_time_zone("America/New_York")
+    with (
+        patch.object(
+            tools_history,
+            "get_global_settings",
+            return_value=MagicMock(enable_history_query_guardrails=guardrails),
+        ),
+        pytest.raises(ToolError, match="end_time must be later than start_time"),
+    ):
+        await tools_history.HistoryTools(core_client).ha_get_history(
+            entity_ids="sensor.temp", start_time=start_time, end_time=end_time
+        )

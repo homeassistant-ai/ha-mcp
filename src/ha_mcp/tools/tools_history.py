@@ -678,8 +678,11 @@ def _validate_time_range(
     reject_zero_length: bool = True,
 ) -> None:
     """Reject reversed ranges and, when requested, zero-length ranges."""
-    if end_dt < start_dt or (reject_zero_length and end_dt == start_dt):
-        if not end_time_was_provided and start_dt > end_dt:
+    # Same-zone datetimes compare by wall clock; a start in the spring-forward
+    # gap can be a later instant than an end after the gap.
+    start_ts, end_ts = start_dt.timestamp(), end_dt.timestamp()
+    if end_ts < start_ts or (reject_zero_length and end_ts == start_ts):
+        if not end_time_was_provided and start_ts > end_ts:
             message = "start_time must not be in the future when end_time is omitted"
             suggestions = ["Choose a start_time at or before the current time."]
         else:
