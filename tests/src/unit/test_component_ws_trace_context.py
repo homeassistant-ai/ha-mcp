@@ -149,6 +149,30 @@ async def test_real_run_beats_a_newer_not_triggered_diagnostic(
     ]
 
 
+@pytest.mark.usefixtures("trace_store")
+async def test_an_earlier_not_triggered_diagnostic_does_not_win(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """A diagnostic that started first still loses to the run that fired."""
+    with freeze_time(_FROZEN_START) as clock:
+        diagnostic = automation_run(
+            "diag",
+            item_id="uid_2",
+            context_id="own-diag",
+            parent_id="parent-1",
+            not_triggered=True,
+        )
+        clock.tick(timedelta(minutes=1))
+        run = automation_run("run", context_id="own-run", parent_id="parent-1")
+    await store_runs(hass, diagnostic, run)
+
+    result = await ws_result(component_ws, _COMMAND, context_id="parent-1")
+
+    assert result["match"] == "parent"
+    assert result["run_id"] == "run"
+    assert result["scanned"] == 2
+
+
 @pytest.mark.parametrize(
     ("selector", "expected_item_id"),
     [
@@ -364,3 +388,36 @@ async def test_ties_break_own_then_automation_then_item_id(
     result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
     assert result["run_id"] == expected_run_id
+
+
+@pytest.mark.usefixtures("trace_store")
+async def test_a_tie_inside_one_run_bucket_still_selects_one_run(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """Two runs of one item that start together differ only by run id."""
+    shared = "shared-context"
+    with freeze_time(_FROZEN_START):
+        await store_runs(
+            hass,
+            automation_run(
+                "run-b", item_id="uid_a", context_id="own-b", parent_id=shared
+            ),
+        )
+        await store_runs(
+            hass,
+            automation_run(
+                "run-a", item_id="uid_a", context_id="own-a", parent_id=shared
+            ),
+        )
+
+    result = await ws_result(component_ws, _COMMAND, context_id=shared)
+
+    assert result["run_id"] == "run-a"
+    assert result["other_matches"] == [
+        {
+            "domain": "automation",
+            "item_id": "uid_a",
+            "run_id": "run-b",
+            "match": "parent",
+        }
+    ]

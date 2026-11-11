@@ -110,8 +110,8 @@ class TestFormatDetailedTrace:
         assert len(result["warnings"]) == 1
         warning = result["warnings"][0]
         assert "unique_id" in warning
-        for key in ("trace", "config", "context"):
-            assert key in warning
+        listed = set(warning.split("This run has: ", 1)[1].split(", "))
+        assert listed == set(trace)
 
     async def test_a_present_metadata_key_is_not_a_warning(
         self, trace: dict[str, Any]
@@ -162,6 +162,7 @@ class TestFormatDetailedTrace:
         assert result["logbook_transport"] == "component"
         assert result["logbook_total"] == 1
         assert result["logbook_truncated"] is False
+        assert "warnings" not in result
 
     @pytest.mark.parametrize("sections", ["", "   "])
     async def test_whitespace_sections_returns_the_full_dict(

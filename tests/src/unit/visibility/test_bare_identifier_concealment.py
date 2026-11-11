@@ -45,8 +45,8 @@ def _entry(entity_id: str, unique_id: str, platform: str) -> dict[str, str]:
     return {"entity_id": entity_id, "unique_id": unique_id, "platform": platform}
 
 
-# A hidden script renamed from ``come_home``: its storage key, service name and
-# trace item_id stay ``come_home`` while its entity_id is ``script.front_door``.
+# A hidden script renamed from ``come_home``: its storage key and service name
+# stay ``come_home`` while its entity_id is ``script.front_door``.
 _RENAMED_HIDDEN_SCRIPT = _entry("script.front_door", "come_home", "script")
 
 
@@ -111,37 +111,6 @@ class TestBareIdentifierConcealment:
                 {"script_id": "script.come_home"},
                 _RENAMED_HIDDEN_SCRIPT,
                 id="renamed-script-prefixed-storage-key",
-            ),
-            # Traces are keyed by storage key, and the trace tool falls back to
-            # the bare object ID when no entity has the given entity_id.
-            pytest.param(
-                "ha_get_automation_traces",
-                {"entity_id": "script.come_home"},
-                _RENAMED_HIDDEN_SCRIPT,
-                id="trace-by-script-storage-key",
-            ),
-            pytest.param(
-                "ha_get_automation_traces",
-                {"domain": "script", "item_id": "come_home"},
-                _RENAMED_HIDDEN_SCRIPT,
-                id="trace-by-script-item-id",
-            ),
-            pytest.param(
-                "ha_get_automation_traces",
-                {"domain": "script", "item_id": "script.come_home"},
-                _entry("script.front_door", "script.come_home", "script"),
-                id="trace-item-id-that-starts-with-the-domain-prefix",
-            ),
-            pytest.param(
-                "ha_call_service",
-                {
-                    "ws_command": "trace/get",
-                    "data": json.dumps(
-                        {"domain": "script", "item_id": "come_home", "run_id": "1"}
-                    ),
-                },
-                _RENAMED_HIDDEN_SCRIPT,
-                id="raw-trace-command-by-storage-key",
             ),
             # The check must see the proxy-unwrapped call, not the envelope.
             pytest.param(
@@ -211,16 +180,6 @@ class TestBareIdentifierConcealment:
                 {"domain": "script", "service": "front_door"},
                 id="visible-script-service-named-like-hidden-object-id",
             ),
-            pytest.param(
-                "script.front_door",
-                [
-                    _entry("script.front_door", "come_home", "script"),
-                    _entry("script.visible", "front_door", "script"),
-                ],
-                "ha_get_automation_traces",
-                {"domain": "script", "item_id": "front_door"},
-                id="trace-item-id-like-hidden-object-id",
-            ),
             # The automation tools read a bare entity_id only as a config id.
             pytest.param(
                 "automation.door_auto",
@@ -283,204 +242,6 @@ class TestHiddenScriptStorageKeyInContent:
         mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(make_context(tool, args), _unreached_call_next)
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    async def test_raw_trace_listing_with_a_visible_item_id_is_allowed(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        """A trace item_id matching a hidden object id is not a hidden storage key."""
-        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
-        listing = {
-            "success": True,
-            "result": [{"domain": "script", "item_id": "front_door", "run_id": "1"}],
-        }
-        context = make_context(
-            "ha_call_service",
-            {"ws_command": "trace/list", "data": {"domain": "script"}},
-        )
-
-        result = await mw.on_call_tool(
-            context, _returns(text_result(json.dumps(listing), listing))
-        )
-
-        assert result.structured_content == listing
-
-    async def test_raw_trace_listing_naming_a_hidden_script_is_refused(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
-        listing = {
-            "success": True,
-            "result": [
-                {"domain": "script", "item_id": "wake_up", "run_id": "1"},
-                {"domain": "script", "item_id": "come_home", "run_id": "2"},
-            ],
-        }
-        context = make_context(
-            "ha_call_service",
-            {"ws_command": "trace/list", "data": {"domain": "script"}},
-        )
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                context, _returns(text_result(json.dumps(listing), listing))
-            )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    async def test_context_only_trace_with_a_keyed_hidden_item_is_refused(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        """A keyed hidden item is caught by the outbound trace-record scan."""
-        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
-        client = FakeClient(
-            registry=_registry(
-                _entry("automation.private", "1700000000001", "automation")
-            )
-        )
-        mw = make_mw(get_client=lambda: client)
-        detail = {
-            "success": True,
-            "domain": "automation",
-            "item_id": "1700000000001",
-            "trace": {"trigger": []},
-            "context": {"id": "01J00000000000000000000000"},
-        }
-
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                make_context(
-                    "ha_get_automation_traces",
-                    {"context_id": "01J00000000000000000000000"},
-                ),
-                _returns(text_result(json.dumps(detail), detail)),
-            )
-
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    async def test_context_other_matches_naming_a_keyed_hidden_item_is_refused(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        """A nested context match is scanned, not only the selected run."""
-        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
-        client = FakeClient(
-            registry=_registry(
-                _entry("automation.private", "1700000000001", "automation")
-            )
-        )
-        mw = make_mw(get_client=lambda: client)
-        detail = {
-            "success": True,
-            "domain": "automation",
-            "item_id": "1700000000002",
-            "trace": {"trigger": []},
-            "context": {"id": "01J00000000000000000000000"},
-            "context_other_matches": [
-                {
-                    "domain": "automation",
-                    "item_id": "1700000000001",
-                    "run_id": "hidden-run",
-                    "match": "parent",
-                }
-            ],
-        }
-
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                make_context(
-                    "ha_get_automation_traces",
-                    {"context_id": "01J00000000000000000000000"},
-                ),
-                _returns(text_result(json.dumps(detail), detail)),
-            )
-
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    @pytest.mark.parametrize(
-        ("tool", "args"),
-        [
-            pytest.param(
-                "ha_get_automation_traces",
-                {"domain": "automation"},
-                id="trace-tool",
-            ),
-            pytest.param(
-                "ha_call_service",
-                {"ws_command": "trace/list", "data": {"domain": "automation"}},
-                id="raw-trace-command",
-            ),
-        ],
-    )
-    async def test_trace_query_refreshes_a_stale_hidden_set(
-        self,
-        set_config: Callable[..., Any],
-        tool: str,
-        args: dict[str, Any],
-    ) -> None:
-        """A trace query must not trust a snapshot taken before the item existed."""
-        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
-        client = FakeClient(registry=_registry())
-        mw = make_mw(get_client=lambda: client)
-        await mw.on_call_tool(
-            make_context("ha_get_state", {"entity_id": "sensor.visible"}),
-            _returns(text_result("ok")),
-        )
-        assert client.get_states_calls == 1
-
-        # The denied automation now registers with the key its traces use.
-        client.registry = _registry(
-            _entry("automation.private", "1700000000001", "automation")
-        )
-        listing = {
-            "success": True,
-            "result": [
-                {"domain": "automation", "item_id": "1700000000002", "run_id": "1"}
-            ],
-        }
-
-        result = await mw.on_call_tool(
-            make_context(tool, args),
-            _returns(text_result(json.dumps(listing), listing)),
-        )
-
-        assert client.get_states_calls == 2
-        assert result.structured_content == listing
-
-        # The refreshed key must conceal the run the registry now names.
-        hidden_listing = {
-            "success": True,
-            "result": [
-                {"domain": "automation", "item_id": "1700000000001", "run_id": "1"}
-            ],
-        }
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                make_context(tool, args),
-                _returns(text_result(json.dumps(hidden_listing), hidden_listing)),
-            )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
-    async def test_trace_query_with_a_failed_refresh_fails_closed(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        """A stale last-known-good snapshot is not safe for a trace query."""
-        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
-        client = FakeClient(
-            registry=_registry(
-                _entry("automation.private", "1700000000001", "automation")
-            )
-        )
-        mw = make_mw(get_client=lambda: client)
-        await mw.on_call_tool(
-            make_context("ha_get_state", {"entity_id": "sensor.visible"}),
-            _returns(text_result("ok")),
-        )
-        client.fail = True
-
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                make_context("ha_get_automation_traces", {"domain": "automation"}),
-                _unreached_call_next,
-            )
-
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 

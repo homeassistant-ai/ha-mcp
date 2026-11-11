@@ -70,17 +70,25 @@ def _trace_start(trace: Any) -> str:
 
 def _selection_key(
     candidate: tuple[Any, str, str, str],
-) -> tuple[int, int, str, int, str]:
+) -> tuple[int, int, str, int, str, str]:
     """Rank one candidate: own context, real run, earliest start, then ties.
 
     ``timestamp.start`` is an ISO string, so its natural order is chronological.
-    Remaining ties break toward automations, then ascending ``item_id``.
+    Remaining ties break toward automations, then ascending ``item_id``, then
+    ``run_id``, so every candidate has a distinct key.
     """
     trace, domain, item_id, match = candidate
     own_order = 0 if match == "trace" else 1
     real_order = 0 if _trace_is_real(trace) else 1
     domain_order = 0 if domain == "automation" else 1
-    return (own_order, real_order, _trace_start(trace), domain_order, item_id)
+    return (
+        own_order,
+        real_order,
+        _trace_start(trace),
+        domain_order,
+        item_id,
+        trace.run_id,
+    )
 
 
 def _trace_is_real(trace: Any) -> bool:
@@ -101,8 +109,9 @@ def _trace_context_payload(
     collected. A run that owns the context is the one the caller asked about, so
     an own-context match wins over a run the context merely triggered. Within
     that rank a real run wins over a not-triggered diagnostic, then the earliest
-    ``timestamp.start`` wins, then ties break toward automations and ascending
-    ``item_id``. The unselected matches are returned as ``other_matches``.
+    ``timestamp.start`` wins, then ties break toward automations, ascending
+    ``item_id`` and ascending ``run_id``. The unselected matches are returned as
+    ``other_matches``.
     """
     if not available:
         return _empty_result(scanned=0, available=False)

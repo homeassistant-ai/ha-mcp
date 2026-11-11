@@ -66,7 +66,8 @@ class TestNoComponentContextLookup:
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error["scanned"] == 0
         hints = " ".join(error["error"]["suggestions"])
-        assert "component" in hints and "parent" in hints
+        assert "Install the ha_mcp_tools component" in hints
+        assert "parent" in hints
 
     @pytest.mark.parametrize(
         "selectors",

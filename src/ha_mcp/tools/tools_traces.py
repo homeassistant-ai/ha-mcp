@@ -761,6 +761,10 @@ _TRACE_METADATA_KEYS = frozenset(
     }
 )
 
+# Keys the tool adds around Core's extended dict rather than keys of the run.
+# Core's own ``run_id``, ``domain`` and ``item_id`` stay in the run's key list.
+_TOOL_ADDED_SECTION_KEYS = _TRACE_METADATA_KEYS - {"run_id", "domain", "item_id"}
+
 
 def _format_detailed_trace(
     entity_id: str | None,
@@ -805,8 +809,10 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
         available.add("logbook")
     missing = sorted(requested - available)
     if missing:
-        run_keys = sorted(set(result) - _TRACE_METADATA_KEYS)
-        if "logbook" in available:
+        # The run's own keys, as Core's extended dict names them; the logbook
+        # fields are the tool's name for the requested ``logbook`` section.
+        run_keys = sorted(set(result) - _TOOL_ADDED_SECTION_KEYS)
+        if "logbook_entries" in result:
             run_keys.append("logbook")
         result.setdefault("warnings", []).append(
             "Trace section(s) not in this run: "

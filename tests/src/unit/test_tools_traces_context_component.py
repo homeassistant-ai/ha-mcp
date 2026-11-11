@@ -111,3 +111,9 @@ class TestComponentContextLookup:
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert error["context_id"] == "missing"
         assert error["scanned"] == 1
+        hints = " ".join(error["error"]["suggestions"])
+        # The component already checked the run's own context, so it must not
+        # offer to install itself or to retry with a context id.
+        assert "Install the ha_mcp_tools component" not in hints
+        assert "Pass the trace's own `context.id`" not in hints
+        assert "component checked" in hints
