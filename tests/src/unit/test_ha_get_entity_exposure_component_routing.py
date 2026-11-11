@@ -1,4 +1,4 @@
-"""Routing tests for the exposure listing behind ``ha_get_entity``, over the ``ha_mcp_tools`` gate.
+"""Routing tests for the exposure listing behind ``ha_get_entity``.
 
 Core's ``expose_entity/list`` returns a bare ``{entity_id: {assistant: bool}}``
 map with no names/areas, forcing a second ha_search to identify an exposed
@@ -86,7 +86,9 @@ def _clear_caps_cache() -> Any:
     component_api._CAPS_LOCKS.clear()
 
 
-async def _listing(client: Any, assistant: str | None = None) -> dict[str, Any]:
+async def _listing(
+    client: RoutingClient, assistant: str | None = None
+) -> dict[str, Any]:
     """The exposure listing ``ha_get_entity`` returns without an entity."""
     return entity_exposure.list_exposures(
         *await entity_exposure.read_exposure(client), assistant
@@ -140,7 +142,7 @@ async def test_list_mode_entity_info_follows_assistant_filter() -> None:
     client = RoutingClient(_LEGACY_MAP)
 
     with patch_ws(ws, entity_exposure):
-        resp = await _listing(client, "cloud.alexa")
+        resp = await _listing(client, assistant="cloud.alexa")
 
     # Only light.b is exposed to cloud.alexa.
     assert set(resp["exposed_entities"]) == {"light.b"}

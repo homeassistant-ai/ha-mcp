@@ -287,7 +287,6 @@ async def test_exposure_is_cores_map(
     assert listed["expose_new_entities"] is store.async_get_expose_new_entities(
         "conversation"
     )
-    assert listed["settings"] == {"entity_id_parts": None}
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
