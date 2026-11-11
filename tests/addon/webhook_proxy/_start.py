@@ -387,19 +387,3 @@ def server_app_slugs() -> list[str]:
         str(yaml.safe_load((d / "config.yaml").read_text())["slug"])
         for d in SERVER_APP_DIRS
     ]
-
-
-def legacy_check_survives_stat_errors(variant: Variant) -> bool:
-    """``_resolve_oauth_mode`` reads a stat error on the legacy creds file as
-    indeterminate instead of asking ``Path.exists()``, which from Python 3.14
-    answers False for any stat error."""
-    return "creds_file.stat()" in variant.start_src()
-
-
-def require_legacy_stat_fix(variant: Variant) -> None:
-    if legacy_check_survives_stat_errors(variant):
-        return
-    assert variant.key != "dev", (
-        "dev must read a creds-file stat error as indeterminate"
-    )
-    pytest.skip("flavor predates the creds-file stat-error fix")

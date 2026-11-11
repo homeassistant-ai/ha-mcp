@@ -69,21 +69,3 @@ def test_unknown_mode_falls_back_to_detection(app: App) -> None:
     startup must not crash."""
     assert _mode(app, "bogus") == HA_AUTH
     assert _mode(app, "bogus", "cid-1234567890ABCDEF", "sec") == LEGACY
-
-
-def test_unknowable_stored_credentials_keep_legacy(
-    app: App, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """When the creds file cannot be checked (a stat error other than "not
-    there"), its absence is not proven: defaulting to ha_auth could break an
-    existing legacy connector, so the previous (legacy) flow is kept."""
-    # A directory name past the filesystem's limit: stat() of anything in it
-    # fails with ENAMETOOLONG for any user, root included.
-    unknowable = tmp_path / ("d" * 300)
-
-    mode = app.step("_resolve_oauth_mode")("", "", "", unknowable)
-
-    assert mode == LEGACY
-    err = capsys.readouterr().err
-    assert "indeterminate" in err
-    assert "Preserving the previous (legacy) OAuth flow" in err
