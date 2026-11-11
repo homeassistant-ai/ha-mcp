@@ -1,12 +1,19 @@
 """The repair issues the server entry's bring-up files on failure (#2427).
 
-Split from test_embedded_setup.py, whose fakes and fixtures it reuses.
+Runs on a real ``hass`` with a real server config entry and the real issue
+registry; only the in-process server's start and stop and the webhook / LLM API
+registration (this component's own collaborators) are replaced.
 """
 
 from __future__ import annotations
 
-import pytest
+from unittest.mock import AsyncMock
 
+import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+
+from custom_components.ha_mcp_tools import embedded_setup as esetup
 from custom_components.ha_mcp_tools.const import (
     DATA_MANAGER,
     DOMAIN,
@@ -14,89 +21,89 @@ from custom_components.ha_mcp_tools.const import (
     ISSUE_START_FAILED,
 )
 
-from .test_embedded_setup import (
-    _make_entry,
-    _make_hass,
-    esetup,
-    install_spies,
-    make_fake_manager,
-)
+from ._server_entry import add_server_entry
+
+
+class _Collaborators:
+    """The replaced collaborators a bring-up test asserts on."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.start = AsyncMock()
+        self.stop = AsyncMock()
+        self.register_webhook = AsyncMock(return_value=False)
+        self.register_llm_api = AsyncMock()
+        monkeypatch.setattr(esetup.EmbeddedServerManager, "async_start", self.start)
+        monkeypatch.setattr(esetup.EmbeddedServerManager, "async_stop", self.stop)
+        monkeypatch.setattr(esetup, "async_register_webhook", self.register_webhook)
+        monkeypatch.setattr(esetup, "async_register_llm_api", self.register_llm_api)
 
 
 @pytest.fixture
-def fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
-    return make_fake_manager(monkeypatch)
-
-
-@pytest.fixture(autouse=True)
-def _spy(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_spies(monkeypatch)
+def collaborators(monkeypatch: pytest.MonkeyPatch) -> _Collaborators:
+    return _Collaborators(monkeypatch)
 
 
 class TestBringUpRepairs:
     """Each failure kind files the repair issue whose fix flow addresses it."""
 
     async def test_package_failure_files_package_issue_and_skips_webhook(
-        self, fake_manager
-    ):
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
+        self, hass: HomeAssistant, collaborators: _Collaborators
+    ) -> None:
+        entry = add_server_entry(hass)
+        collaborators.start.side_effect = esetup.EmbeddedServerError(
             "pip failed", kind="package"
         )
 
         await esetup.async_bring_up_server(hass, entry)
 
-        fake_manager.async_stop.assert_awaited_once()  # teardown ran
+        collaborators.stop.assert_awaited_once()  # teardown ran
         assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
-        esetup.async_register_webhook.assert_not_awaited()
-        esetup.async_register_llm_api.assert_not_awaited()
+        collaborators.register_webhook.assert_not_awaited()
+        collaborators.register_llm_api.assert_not_awaited()
         # The failure kind selects the package-install repair issue, whose
         # fix flow reinstalls the server for this entry.
-        call = esetup.ir.async_create_issue.call_args
-        assert call.args[2] == ISSUE_PACKAGE_FAILED
-        assert call.kwargs["is_fixable"] is True
-        assert call.kwargs["data"] == {
-            "entry_id": entry.entry_id,
-            "detail": "pip failed",
-        }
+        issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_PACKAGE_FAILED)
+        assert issue is not None
+        assert issue.is_fixable is True
+        assert issue.data == {"entry_id": entry.entry_id, "detail": "pip failed"}
 
-    async def test_start_failure_files_start_issue(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
+    async def test_start_failure_files_start_issue(
+        self, hass: HomeAssistant, collaborators: _Collaborators
+    ) -> None:
+        entry = add_server_entry(hass)
+        collaborators.start.side_effect = esetup.EmbeddedServerError(
             "bind failed", kind="start"
         )
 
         await esetup.async_bring_up_server(hass, entry)
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_START_FAILED
 
-    async def test_a_missing_credential_asks_for_a_token_in_repairs(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
-        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
+        assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_START_FAILED)
+
+    async def test_a_missing_credential_asks_for_a_token_in_repairs(
+        self, hass: HomeAssistant, collaborators: _Collaborators
+    ) -> None:
+        entry = add_server_entry(hass)
+        collaborators.start.side_effect = esetup.EmbeddedServerError(
             "invalid_token", kind="token"
         )
 
         await esetup.async_bring_up_server(hass, entry)
 
-        call = esetup.ir.async_create_issue.call_args
-        assert call.args[2] == esetup.ISSUE_TOKEN_NEEDED
+        issue = ir.async_get(hass).async_get_issue(DOMAIN, esetup.ISSUE_TOKEN_NEEDED)
+        assert issue is not None
         # The repair's form replaces the token on this entry, and says why the
         # stored one stopped working.
-        assert call.kwargs["is_fixable"] is True
-        assert call.kwargs["data"] == {
-            "entry_id": entry.entry_id,
-            "reason": "invalid_token",
-        }
+        assert issue.is_fixable is True
+        assert issue.data == {"entry_id": entry.entry_id, "reason": "invalid_token"}
 
-    async def test_unexpected_error_files_start_issue(self, fake_manager):
-        hass = _make_hass()
-        entry = _make_entry()
+    async def test_unexpected_error_files_start_issue(
+        self, hass: HomeAssistant, collaborators: _Collaborators
+    ) -> None:
+        entry = add_server_entry(hass)
         # Server started, but webhook registration raised a non-EmbeddedServerError.
-        esetup.async_register_webhook.side_effect = RuntimeError("register boom")
+        collaborators.register_webhook.side_effect = RuntimeError("register boom")
 
         await esetup.async_bring_up_server(hass, entry)
 
-        fake_manager.async_stop.assert_awaited_once()
-        assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_START_FAILED
+        collaborators.stop.assert_awaited_once()
+        assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_START_FAILED)

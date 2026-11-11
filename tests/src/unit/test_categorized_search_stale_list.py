@@ -6,13 +6,35 @@ does not let grow.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.fastmcp.tools.base import ToolResult
+from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-from .test_categorized_search import _make_ctx, _make_tool, _prepopulate_cache
-from .test_categorized_search import search_connection as search_connection
+
+@pytest.fixture(autouse=True)
+def search_connection() -> Iterator[None]:
+    """These tests exercise the transform on a search-mode connection."""
+    with catalog_endpoint("search"):
+        yield
+
+
+def _make_tool(
+    name: str, *, read_only: bool = False, destructive: bool = False
+) -> Tool:
+    async def noop() -> str:
+        return "ok"
+
+    annotations = ToolAnnotations(
+        read_only_hint=read_only, destructive_hint=destructive
+    )
+    return Tool.from_function(fn=noop, name=name, annotations=annotations)
 
 
 @pytest.mark.anyio
@@ -34,19 +56,18 @@ async def test_proxy_call_on_a_retired_name_says_the_tool_list_is_stale(
     ever sees the current one and adds no warning; a client using the search
     proxies would be served without learning its list is stale."""
     transform = CategorizedSearchTransform(max_results=5)
-    _prepopulate_cache(
-        transform,
-        [
+    transform.get_tool_catalog = AsyncMock(
+        return_value=[
             _make_tool("ha_manage_app", destructive=True),
             _make_tool("ha_get_state", read_only=True),
-        ],
+        ]
     )
-    ctx = _make_ctx(call_tool_return=ToolResult(structured_content={"success": True}))
-    proxy = transform._make_categorized_proxy(
-        proxy_name="ha_call_write_tool",
-        category="write",
-        description="Test write proxy",
+    ctx = MagicMock()
+    ctx.fastmcp.call_tool = AsyncMock(
+        return_value=ToolResult(structured_content={"success": True})
     )
+    proxy = await transform.get_tool("ha_call_write_tool", AsyncMock())
+    assert proxy is not None
 
     result = await proxy.fn(name, arguments, ctx)
 

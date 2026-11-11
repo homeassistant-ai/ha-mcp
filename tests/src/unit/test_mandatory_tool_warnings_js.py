@@ -7,8 +7,40 @@ import pytest
 
 from ha_mcp.settings_ui import _SETTINGS_HTML
 
-from ._js_harness import extract_script_body, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
+from ._js_harness import HarnessResult, extract_script_body, run_script
+
+DEFAULT_FETCHES: dict[str, dict] = {
+    "/api/settings/features": {
+        "status": 200,
+        "json": {"features": [], "values": {}},
+    },
+    "/api/settings/tools": {
+        "status": 200,
+        "json": {"tools": [], "states": {}, "addon_mode": True},
+    },
+    "/api/settings/info": {
+        "status": 200,
+        "json": {"instance_id": "baseline-id"},
+    },
+    "/api/settings/backup-config": {
+        "status": 200,
+        "json": {},
+    },
+    "/api/policy/decision-pin": {
+        "status": 200,
+        "json": {"set": False},
+    },
+}
+
+
+def _assert_clean_init(result: HarnessResult) -> None:
+    """Surface script-init errors before the side-effect assertions."""
+    init_errors = [
+        e
+        for e in result.errors
+        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
+    ]
+    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 @pytest.mark.parametrize("env_disabled", [False, True])
@@ -21,7 +53,7 @@ def test_ignored_disable_renders_enabled_and_roundtrips(
 ) -> None:
     result = run_script(
         extract_script_body(_SETTINGS_HTML),
-        initial_html=MIN_DOM,
+        initial_html=_SETTINGS_HTML,
         fetch_map={
             **DEFAULT_FETCHES,
             "/api/settings/tools": {

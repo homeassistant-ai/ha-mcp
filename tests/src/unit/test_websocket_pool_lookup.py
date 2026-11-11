@@ -6,75 +6,48 @@ probed over (#2967), on every cached read, so it must never open one.
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
-
-from ha_mcp.client import websocket_client
-
-
-class _FakeConnection:
-    def __init__(self, url: str, token: str, verify_ssl: bool | None = None) -> None:
-        self.url = url
-        self.is_connected = False
-
-    async def connect(self) -> bool:
-        self.is_connected = True
-        return True
-
-    async def disconnect(self) -> None:
-        self.is_connected = False
-
-
-@pytest.fixture
-def made() -> list[_FakeConnection]:
-    return []
-
-
-@pytest.fixture
-def manager(monkeypatch: pytest.MonkeyPatch, made: list[_FakeConnection]) -> Any:
-    """The process-wide pool, emptied, opening fake connections."""
-    pool = websocket_client.websocket_manager
-
-    def factory(*args: Any, **kwargs: Any) -> _FakeConnection:
-        made.append(_FakeConnection(*args, **kwargs))
-        return made[-1]
-
-    monkeypatch.setattr(pool, "_clients", {})
-    monkeypatch.setattr(pool, "_last_used", {})
-    monkeypatch.setattr(pool, "_client_factory", factory)
-    return pool
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import websocket_manager
 
 
 async def test_returns_the_pooled_connection_without_connecting(
-    manager: Any, made: list[_FakeConnection]
+    core_client: HomeAssistantClient,
 ) -> None:
-    pooled = await manager.get_client(url="http://ha:8123", token="t", verify_ssl=True)
+    url, token = core_client.base_url, core_client.token
+    assert websocket_manager.pooled_client(url, token, False) is None
 
-    found = manager.pooled_client(url="http://ha:8123", token="t", verify_ssl=True)
+    pooled = await websocket_manager.get_client(url=url, token=token, verify_ssl=False)
+
+    found = websocket_manager.pooled_client(url=url, token=token, verify_ssl=False)
 
     assert found is pooled
-    assert len(made) == 1
+    assert found.is_connected
 
 
-async def test_a_dropped_connection_is_returned_until_replaced(manager: Any) -> None:
-    pooled = await manager.get_client(url="http://ha:8123", token="t", verify_ssl=True)
-    pooled.is_connected = False
+async def test_a_dropped_connection_is_returned_until_replaced(
+    core_client: HomeAssistantClient,
+) -> None:
+    url, token = core_client.base_url, core_client.token
+    pooled = await websocket_manager.get_client(url=url, token=token, verify_ssl=False)
+    await pooled.disconnect()
+    assert not pooled.is_connected
 
-    assert manager.pooled_client("http://ha:8123", "t", True) is pooled
+    assert websocket_manager.pooled_client(url, token, False) is pooled
 
-    replaced = await manager.get_client(
-        url="http://ha:8123", token="t", verify_ssl=True
+    replaced = await websocket_manager.get_client(
+        url=url, token=token, verify_ssl=False
     )
     assert replaced is not pooled
-    assert manager.pooled_client("http://ha:8123", "t", True) is replaced
+    assert replaced.is_connected
+    assert websocket_manager.pooled_client(url, token, False) is replaced
 
 
 async def test_other_credentials_have_no_connection(
-    manager: Any, made: list[_FakeConnection]
+    core_client: HomeAssistantClient,
 ) -> None:
-    await manager.get_client(url="http://ha:8123", token="t", verify_ssl=True)
+    url, token = core_client.base_url, core_client.token
+    pooled = await websocket_manager.get_client(url=url, token=token, verify_ssl=False)
 
-    assert manager.pooled_client("http://ha:8123", "other", True) is None
-    assert manager.pooled_client("http://ha:8123", "t", False) is None
-    assert len(made) == 1
+    assert websocket_manager.pooled_client(url, "other", False) is None
+    assert websocket_manager.pooled_client(url, token, True) is None
+    assert websocket_manager.pooled_client(url, token, False) is pooled

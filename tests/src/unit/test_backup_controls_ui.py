@@ -8,7 +8,24 @@ import pytest
 from starlette.requests import Request
 
 from ._js_harness import extract_script_body, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES
+
+# Init-time routes the settings page fetches on load; the backup-config route
+# is supplied by the test itself.
+INIT_FETCHES: dict[str, dict] = {
+    "/api/settings/features": {
+        "status": 200,
+        "json": {"features": [], "values": {}},
+    },
+    "/api/settings/tools": {
+        "status": 200,
+        "json": {"tools": [], "states": {}, "addon_mode": True},
+    },
+    "/api/settings/info": {
+        "status": 200,
+        "json": {"instance_id": "baseline-id"},
+    },
+    "/api/policy/decision-pin": {"status": 200, "json": {"set": False}},
+}
 
 
 @pytest.mark.parametrize("is_addon", [False, True])
@@ -37,7 +54,7 @@ def test_backup_controls_show_action_limits_and_save_both_values(
         extract_script_body(page),
         initial_html=page,
         fetch_map={
-            **DEFAULT_FETCHES,
+            **INIT_FETCHES,
             "/api/settings/backup-config": {
                 "byMethod": {
                     "GET": {

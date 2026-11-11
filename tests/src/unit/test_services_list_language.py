@@ -5,52 +5,69 @@ Both halves of the same contract: the command schema must NOT inject a
 runs, so ``default="en"`` would pin every non-English instance to English),
 and the prep must therefore read ``hass.config.language`` for an omitted value.
 
+The command runs on a real ``hass`` whose language is German, with Core's
+``homeassistant`` integration loaded; its ``turn_on`` service name is
+translated by Core's own translation files, so the language that reached Core
+is read from the reply.
+
 Kept in its own module rather than in ``test_component_ws_phase2_async.py``,
 which is already over the 1,000-line ratchet limit.
 """
 
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
-import voluptuous as vol
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
-from .test_component_ws_search import FakeHass, wsapi
+from ._component_core import ws_result
+
+NAME_KEY = "component.homeassistant.services.turn_on.name"
+ENGLISH = "Generic turn on"
+GERMAN = "Generisches Einschalten"
 
 
-def _validated(monkeypatch: pytest.MonkeyPatch, msg: dict) -> dict:
-    return vol.Schema(wsapi._services_list_schema())(msg)
+@pytest.fixture
+async def german_hass(hass: HomeAssistant) -> HomeAssistant:
+    """A real ``hass`` configured for German with ``homeassistant`` set up."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    hass.config.language = "de"
+    return hass
 
 
-def test_schema_leaves_an_omitted_language_unset(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_schema_leaves_an_omitted_language_unset(
+    german_hass: HomeAssistant, component_ws: Any
 ) -> None:
     """A default here would beat ``hass.config.language`` for every request."""
-    assert "language" not in _validated(monkeypatch, {"type": wsapi.WS_SERVICES_LIST})
-
-
-def test_omitted_language_requests_the_configured_language(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The prep asks Core for the instance's language, not English."""
-    seen: list[str] = []
-
-    async def _fake_desc(hass: HomeAssistant):
-        return {}
-
-    async def _fake_trans(hass: HomeAssistant, language):
-        seen.append(language)
-        return {}
-
-    monkeypatch.setattr(wsapi, "_fetch_service_descriptions", _fake_desc)
-    monkeypatch.setattr(wsapi, "_fetch_service_translations", _fake_trans)
-
-    msg = _validated(monkeypatch, {"type": wsapi.WS_SERVICES_LIST})
-    asyncio.run(
-        wsapi._services_list_prep(FakeHass(config=SimpleNamespace(language="de")), msg)
+    result = await ws_result(
+        component_ws, "ha_mcp_tools/services_list", domain="homeassistant"
     )
 
-    assert seen == ["de"]
+    assert result["translations"][NAME_KEY] != ENGLISH
+
+
+async def test_omitted_language_requests_the_configured_language(
+    german_hass: HomeAssistant, component_ws: Any
+) -> None:
+    """The prep asks Core for the instance's language, not English."""
+    result = await ws_result(
+        component_ws, "ha_mcp_tools/services_list", domain="homeassistant"
+    )
+
+    assert result["translations"][NAME_KEY] == GERMAN
+
+
+async def test_explicit_language_beats_the_configured_one(
+    german_hass: HomeAssistant, component_ws: Any
+) -> None:
+    """A language sent on the wire is the one Core is asked for."""
+    result = await ws_result(
+        component_ws,
+        "ha_mcp_tools/services_list",
+        domain="homeassistant",
+        language="en",
+    )
+
+    assert result["translations"][NAME_KEY] == ENGLISH
