@@ -1,11 +1,4 @@
-"""Read-only introspection of a helper's config flow.
-
-Starts a flow only to read its first form (or its menu, or the branch form a
-``menu_choice`` picks) and always aborts it. Feeds the ``data_schema`` and
-``menu_options`` attached to helper flow errors; split out of
-``config_entry_flow_walker``, which drives flows to completion. Also holds the
-shielded flow aborts.
-"""
+"""The flow-type vocabulary, a menu step's choices and the shielded flow aborts."""
 
 import asyncio
 import logging
@@ -14,8 +7,6 @@ from enum import StrEnum
 from typing import Any
 
 import anyio
-
-from ..client.rest_client import HomeAssistantAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -108,41 +99,6 @@ class _FlowType(StrEnum):
     CREATE_ENTRY = "create_entry"
 
 
-def _form_info(step: dict[str, Any]) -> dict[str, Any]:
-    """A FORM step's schema, else {}."""
-    schema = step.get("data_schema")
-    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
-        return {}
-    return {"schema": schema}
-
-
-async def _process_menu_flow_result(
-    flow_result: dict[str, Any],
-    client: Any,
-    intro_flow_id: str | None,
-    menu_choice: str | None,
-) -> dict[str, Any]:
-    """Return schema or menu_options dict for a MENU-type flow result."""
-    info: dict[str, Any] = {}
-    if menu_choice:
-        if not intro_flow_id:
-            return info
-        try:
-            step = await asyncio.wait_for(
-                client.submit_config_flow_step(
-                    intro_flow_id, {"next_step_id": menu_choice}
-                ),
-                timeout=10.0,
-            )
-        except (HomeAssistantAPIError, TimeoutError):
-            return info
-        return _form_info(step)
-
-    if choices := menu_choices(flow_result):
-        info["menu_options"] = choices
-    return info
-
-
 def menu_choices(step: dict[str, Any]) -> list[str]:
     """A MENU step's branch names: a list of step ids, or the keys of a
     ``{step_id: label}`` dict (HA allows both); malformed ones drop."""
@@ -152,49 +108,3 @@ def menu_choices(step: dict[str, Any]) -> list[str]:
     if not isinstance(options, list):
         return []
     return [opt for opt in options if isinstance(opt, str)]
-
-
-async def fetch_helper_flow_info(
-    client: Any,
-    helper_type: str | None,
-    menu_choice: str | None = None,
-) -> dict[str, Any]:
-    """Best-effort introspection of a helper's config-entry flow.
-
-    Starts a fresh introspection flow (always aborted) and returns a dict
-    with optional keys ``"schema"`` and ``"menu_options"`` so a single HA
-    round-trip serves both the schema-attach path (used by
-    ``_raise_flow_api_error`` and the pre-flow validation gates in
-    ``_handle_flow_helper``) and the menu-sub-types path (used when a
-    menu-rooted helper has no branch chosen yet — issue #1186).
-
-    Behaviour:
-
-    - FORM at top: ``{"schema": [...]}``
-    - MENU at top with ``menu_choice``: submits and returns the branch form
-      in the same shape (no ``menu_options`` since the caller already picked
-      a branch)
-    - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
-    - any failure or unparseable shape, including a ``menu_choice`` HA
-      rejects: ``{}`` (callers branch on ``"schema" in info`` /
-      ``"menu_options" in info``)
-    """
-    info: dict[str, Any] = {}
-    if not helper_type or client is None:
-        return info
-    intro_flow_id: str | None = None
-    try:
-        flow_result = await client.start_config_flow(helper_type)
-        intro_flow_id = flow_result.get("flow_id")
-        flow_type = flow_result.get("type")
-
-        if flow_type == _FlowType.MENU:
-            return await _process_menu_flow_result(
-                flow_result, client, intro_flow_id, menu_choice
-            )
-        return _form_info(flow_result)
-    except Exception:  # noqa: BLE001
-        return info
-    finally:
-        if intro_flow_id:
-            await abort_probe_flow(client.abort_config_flow, intro_flow_id, quiet=True)

@@ -3,7 +3,8 @@ E2E tests for ha_config_list_helpers(describe=True) (#2632).
 
 The field list comes from the running Home Assistant: a flow helper's config
 or options flow (with HA's own field help text), a storage helper's Core
-schema via the component, or the static table when no component is present.
+schema via the component. Without the component Core lists no fields for a
+storage helper, and an existing one is shown as Core stores it.
 """
 
 import logging
@@ -80,7 +81,8 @@ async def test_existing_flow_helper_reports_only_editable_fields_with_values(
 async def test_existing_storage_helper_reports_current_values(
     mcp_client, cleanup_tracker
 ):
-    """Holds with and without the component: Core schema or static fallback."""
+    """With the component the fields carry their current values; without it
+    Core's stored item is returned as it is."""
     created = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_config_set_helper",
@@ -98,5 +100,64 @@ async def test_existing_storage_helper_reports_current_values(
 
     data = await _describe(mcp_client, helper_type="input_number", helper_id=helper_id)
 
+    if data["source"] == "unavailable":  # a lane without the component
+        assert data["stored"]["max"] == 40, data
+        return
     currents = [f.get("current") for f in data["fields"] if "max" in f["name"]]
     assert currents == [40], data["fields"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+async def test_a_multi_form_helper_shows_what_follows_its_first_form(mcp_client):
+    """With the component the later form is read from Core's own declaration
+    of the flow; without it the answer says more follows and how to see it."""
+    data = await _describe(mcp_client, helper_type="generic_thermostat")
+
+    if "later_forms" in data:
+        (presets,) = data["later_forms"]
+        assert presets["step_id"] == "presets", data
+        assert "away_temp" in {f["name"] for f in presets["fields"]}, presets
+    else:  # a lane without the component
+        assert data["more_forms"] == "yes", data
+        assert "ha_mcp_tools component" in data["note"], data
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+async def test_a_storage_field_set_to_null_is_removed(mcp_client, cleanup_tracker):
+    """Core's update writes the whole item, so null drops the field from it
+    and the fields the update leaves out stay."""
+    created = assert_mcp_success(
+        await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_number",
+                "name": "E2E Null Number",
+                "config": {"min": 0, "max": 40, "initial": 10},
+            },
+        ),
+        "create input_number",
+    )
+    cleanup_tracker.track("input_number", created["entity_id"])
+    helper_id = created["data"]["id"]
+
+    assert_mcp_success(
+        await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_number",
+                "helper_id": helper_id,
+                "config": {"initial": None},
+            },
+        ),
+        "clear initial",
+    )
+
+    data = await _describe(mcp_client, helper_type="input_number", helper_id=helper_id)
+    if data["source"] == "unavailable":  # a lane without the component
+        stored = data["stored"]
+    else:
+        stored = {f["name"]: f.get("current") for f in data["fields"]}
+    assert stored.get("initial") is None, data
+    assert stored["max"] == 40, data

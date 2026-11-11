@@ -132,12 +132,6 @@ def _param_annotation(tool_name: str, param_name: str) -> Any:
         ),
         ("ha_config_set_group", "entities", '["light.a"]', ["light.a"]),
         ("ha_get_history", "entity_ids", '["sensor.x"]', ["sensor.x"]),
-        (
-            "ha_config_set_helper",
-            "monday",
-            '[{"from": "07:00", "to": "22:00"}]',
-            [{"from": "07:00", "to": "22:00"}],
-        ),
     ],
 )
 def test_container_param_coerces_json_array_string(

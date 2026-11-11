@@ -6,7 +6,6 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock
 
-import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -14,7 +13,7 @@ from ha_mcp.read_only import read_only_request
 from ha_mcp.tools import config_entry_flow_introspect
 from ha_mcp.tools.config_helpers import describe as mod
 
-from .test_flow_progress import _abort_recorder
+pytestmark = pytest.mark.usefixtures("no_flow_outline")
 
 _SCHEDULE_CORE = [
     {"type": "string", "lengthMin": 1, "name": "name", "required": True},
@@ -49,7 +48,8 @@ def no_component(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_storage_helper_fields_come_from_core_when_component_present(
     client: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With the component, the field list is Core's, typed where Core is opaque."""
+    """With the component, the field list is Core's; a field whose validator
+    Core cannot serialize is named as untyped, not typed by hand."""
     monkeypatch.setattr(
         mod,
         "fetch_helper_schemas",
@@ -61,20 +61,23 @@ async def test_storage_helper_fields_come_from_core_when_component_present(
     assert result["source"] == "core_schema"
     fields = _fields(result)
     assert fields["name"]["required"] is True
-    # Core's schedule-day validator does not serialize; the static table types it.
-    assert "type" in fields["monday"] and fields["monday"].get("description")
+    # Core's schedule-day validator does not serialize: named, not typed by hand.
+    assert "type" not in fields["monday"]
+    assert "monday" in result["untyped_fields"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_component")
-async def test_storage_helper_without_component_falls_back_to_static_table(
+async def test_storage_helper_without_component_gets_no_made_up_field_list(
     client: AsyncMock,
 ) -> None:
-    """A no-component install still gets a usable field list."""
+    """Core has no command that lists a storage helper's fields: without the
+    component the answer says so instead of offering a list that can go stale."""
     result = await mod.describe_helper(client, "input_number")
 
-    assert result["source"] == "static_fallback"
-    assert "name" in _fields(result) and len(_fields(result)) > 1
+    assert result["source"] == "unavailable"
+    assert "fields" not in result
+    assert "ha_mcp_tools component" in result["note"]
 
 
 @pytest.mark.asyncio
@@ -82,16 +85,15 @@ async def test_storage_helper_without_component_falls_back_to_static_table(
 async def test_existing_storage_helper_reports_current_values_without_component(
     client: AsyncMock,
 ) -> None:
-    """Editing an existing helper starts from its stored values."""
+    """Editing an existing helper starts from its stored values: without a
+    field list from Core, the item is returned as Core stores it."""
     client.send_websocket_message.return_value = {
         "result": [{"id": "pool", "name": "Pool", "min": 0, "max": 40}]
     }
 
     result = await mod.describe_helper(client, "input_number", helper_id="pool")
 
-    # The stored item says "max"; the fallback field may use the tool's alias.
-    currents = {f.get("current") for f in result["fields"] if "max" in f["name"]}
-    assert currents == {40}
+    assert result["stored"]["max"] == 40
 
 
 @pytest.mark.asyncio
@@ -110,8 +112,7 @@ async def test_helper_named_by_entity_id_reports_current_values_without_componen
         client, "input_number", helper_id="input_number.pool_temperature"
     )
 
-    currents = {f.get("current") for f in result["fields"] if "max" in f["name"]}
-    assert currents == {40}
+    assert result["stored"]["max"] == 40
 
 
 @pytest.mark.asyncio
@@ -129,7 +130,7 @@ async def test_existing_person_reports_current_values_without_component(
 
     result = await mod.describe_helper(client, "person", helper_id="pat")
 
-    assert _fields(result)["device_trackers"]["current"] == ["a.b"]
+    assert result["stored"]["device_trackers"] == ["a.b"]
 
 
 @pytest.mark.asyncio
@@ -361,7 +362,7 @@ async def test_read_only_still_describes_a_storage_helper_type(
     with read_only_request():
         result = await mod.describe_helper(client, "input_number")
 
-    assert result["source"] == "static_fallback"
+    assert result["source"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -472,17 +473,31 @@ async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-def test_long_select_lists_are_truncated_but_say_how_many_remain() -> None:
-    """A 175-unit dropdown must not flood a small model's context."""
+def test_long_suggestion_lists_are_truncated_but_say_how_many_remain() -> None:
+    """A 175-unit dropdown that also takes a custom value must not flood a
+    small model's context."""
+    units = [f"u{i}" for i in range(175)]
     field = {
         "name": "unit_of_measurement",
-        "selector": {"select": {"options": [f"u{i}" for i in range(175)]}},
+        "selector": {"select": {"options": units, "custom_value": True}},
     }
 
     options = mod.compact_field(field)["options"]
 
     assert len(options) <= mod.MAX_OPTIONS + 1
     assert str(175 - mod.MAX_OPTIONS) in options[-1]
+
+
+def test_a_select_that_must_be_answered_from_its_list_shows_every_choice() -> None:
+    """A statistics helper's 27 characteristics were cut to 12, which hid
+    ``mean`` from the agent choosing one."""
+    choices = [f"characteristic_{i}" for i in range(27)]
+    field = {
+        "name": "state_characteristic",
+        "selector": {"select": {"options": choices, "custom_value": False}},
+    }
+
+    assert mod.compact_field(field)["options"] == choices
 
 
 @pytest.mark.parametrize(
@@ -585,41 +600,6 @@ async def test_flow_field_without_help_text_gets_its_ui_label(
     result = await mod.describe_helper(client, "utility_meter")
 
     assert result["fields"][0]["description"] == "Input sensor"
-
-
-@pytest.mark.asyncio
-async def test_core_fields_follow_a_stable_order_with_hints_first(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Core returns weekdays shuffled; the hinted first day must lead."""
-    shuffled = [
-        {"name": "sunday", "required": False},
-        {"name": "name", "type": "string", "required": True},
-        {"name": "monday", "required": False},
-    ]
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_schemas",
-        AsyncMock(return_value={"schedule": {"create": shuffled}}),
-    )
-
-    result = await mod.describe_helper(client, "schedule")
-
-    assert [f["name"] for f in result["fields"]] == ["name", "monday", "sunday"]
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_error_context_read_still_closes_its_flow(
-    client: AsyncMock,
-) -> None:
-    client.start_config_flow.return_value = _form("user", [])
-    sent, client.abort_config_flow.side_effect = _abort_recorder()
-
-    with anyio.CancelScope() as scope:
-        scope.cancel()
-        await config_entry_flow_introspect.fetch_helper_flow_info(client, "group")
-
-    assert sent == ["f1"]
 
 
 @pytest.mark.asyncio

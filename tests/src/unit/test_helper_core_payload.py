@@ -23,9 +23,12 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_helpers import update
 from ha_mcp.tools.config_helpers.core_payload import (
     merged_update,
+    storage_fields,
     with_create_defaults,
 )
 from ha_mcp.tools.config_helpers.update import _execute_legacy_update, _stored_item
+
+from ._tool_errors import _error
 
 
 async def _stored_counter(hass: HomeAssistant, client: HomeAssistantClient) -> str:
@@ -46,6 +49,36 @@ def test_update_keeps_every_stored_field_it_does_not_change() -> None:
     stored = {"id": "t", "name": "T", "min": 0.0, "max": 50.0, "mode": "box"}
     body = merged_update("input_number", stored, None, None, {"max": 80.0})
     assert body == {"name": "T", "min": 0.0, "max": 80.0, "mode": "box"}
+
+
+def test_a_field_set_to_null_is_removed_from_the_stored_item() -> None:
+    """Core's update writes the whole item, so a field is cleared by leaving
+    it out, as the helper's dialog drops a box that is emptied."""
+    stored = {"id": "t", "name": "T", "min": 0.0, "max": 50.0, "initial": 5.0}
+    body = merged_update("input_number", stored, None, None, {"initial": None})
+    assert body == {"name": "T", "min": 0.0, "max": 50.0}
+
+
+def test_a_null_field_is_left_out_of_a_create() -> None:
+    assert with_create_defaults("input_number", {"min": 0, "initial": None}) == {
+        "min": 0
+    }
+
+
+def test_config_reaches_core_as_written_with_name_and_icon_lifted() -> None:
+    """``name`` and ``icon`` are Core fields too: ``config`` may carry them,
+    and every other key is sent under the name it was given."""
+    name, icon, fields = storage_fields(
+        "counter", {"name": "Laps", "icon": "mdi:run", "minimum": "0"}, None, None
+    )
+    assert (name, icon, fields) == ("Laps", "mdi:run", {"minimum": "0"})
+
+
+def test_a_list_is_not_a_storage_helpers_config() -> None:
+    """A list answers a flow's forms; a storage helper has no flow."""
+    with pytest.raises(ToolError) as exc_info:
+        storage_fields("input_number", [{"min": 0}], "T", None)
+    assert "written in one call" in _error(exc_info)["message"]
 
 
 def test_update_does_not_send_the_items_id() -> None:
@@ -77,20 +110,7 @@ def test_tag_update_does_not_echo_the_listed_name() -> None:
 # --- create defaults ---------------------------------------------------------
 
 
-def test_input_datetime_without_components_gets_date_and_time() -> None:
-    """Core rejects an input_datetime with neither; the tool defaults to both."""
-    assert with_create_defaults("input_datetime", {}) == {
-        "has_date": True,
-        "has_time": True,
-    }
-    only_date = with_create_defaults("input_datetime", {"has_date": True})
-    assert only_date == {"has_date": True}
-
-
-def test_tag_create_gets_a_tag_id_unless_given() -> None:
-    """Core's tag create requires tag_id; the tool documents it as optional."""
-    generated = with_create_defaults("tag", {})["tag_id"]
-    assert generated and generated != with_create_defaults("tag", {})["tag_id"]
+def test_a_given_tag_id_is_kept() -> None:
     assert with_create_defaults("tag", {"tag_id": "abc"})["tag_id"] == "abc"
 
 

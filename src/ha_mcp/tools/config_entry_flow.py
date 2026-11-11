@@ -1,36 +1,23 @@
 """
-Config Entry Flow API machinery for Home Assistant MCP server.
+Config-entry flow machinery shared by the helper, integration and backup tools.
 
-This module provides the shared machinery for creating and updating
-config-entry-based helpers (template, group, utility_meter, etc.) via the
-Config Entry Flow API.
+``ha_config_set_helper`` and ``ha_set_integration`` answer one flow step per
+call (``integration_flow_steps``), as the HA UI does. What lives here is the
+part no caller answers step by step: a backup restore replays a stored
+snapshot into a flow's forms (``restore_config_entry_options``,
+``recreate_flow_helper`` and, for subentries, ``config_subentry_restore``),
+and the guards for ha-mcp's own config entries.
 
-The create/update entry point is the unified ha_config_set_helper tool in
-tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
-for every helper flow Home Assistant lists (``helper_flows.helper_flow_types``).
-The tool description tells callers to leave `otp` to the user in the HA UI,
-since its secret is a credential they enroll in an authenticator app.
+The step machinery lives in sibling modules, each importing only modules
+upstream of it:
 
-The same flow walkers serve other config-entry surfaces, not just helpers:
-backup restore re-applies an entry's options through
-``update_config_entry_options``, and
-``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
-through ``set_config_subentry``. ``ha_set_integration`` does not walk: it
-answers one step per call (``integration_flow_steps``).
-
-The step machinery those entry points drive lives in six sibling modules.
-Each imports only modules upstream of it in these chains, so no import runs
-the other way: menu <- form <- walker <- here, and
-introspect <- errors <- progress <- walker.
-
-- ``config_entry_flow_introspect``: the flow-type vocabulary, the shielded
-  flow aborts, and the read-only helper flow introspection
+- ``config_entry_flow_introspect``: the flow-type vocabulary and the shielded
+  flow aborts
 - ``config_entry_flow_errors``: Home Assistant's flow answers as structured
   errors, and the reconfigure outcome vocabulary
-- ``config_entry_flow_menu``: menu selection keys and menu-step handling
-- ``config_entry_flow_form``: form-step schema consumption and reuse tracking
+- ``config_entry_flow_form``: one form's submit, as the HA dialog builds it
 - ``config_entry_flow_progress``: waiting out a progress step within a budget
-- ``config_entry_flow_walker``: step submission and the two flow walkers
+- ``config_entry_flow_submit``: submitting a step and classifying its answer
 """
 
 import asyncio
@@ -38,7 +25,6 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any, ClassVar, Literal, NoReturn
 
 from ..client.rest_client import (
@@ -48,24 +34,20 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import placeholder_option_keys
-from .config_entry_flow_errors import FlowRef
-from .config_entry_flow_form import _extract_schema_field_names
+from .component_flow import flow_outline, steps_after
+from .config_entry_flow_form import MISSING, shown_value
 from .config_entry_flow_introspect import (
-    abort_failed_flow,
-    abort_failed_flow_type_only,
-    shielded_abort,
-)
-from .config_entry_flow_menu import answer_menu_from_snapshot
-from .config_entry_flow_walker import (
     _FlowType,
-    _handle_config_subentry_flow_steps,
-    _handle_flow_steps,
-    leaves_flow_open,
+    abort_failed_flow_type_only,
 )
+from .config_entry_flow_submit import _rejected_on_submit
 from .helpers import raise_tool_error
 from .ignored_entries import refuse_ignored_entry
 
 logger = logging.getLogger(__name__)
+
+# A submit left unanswered this long counts as a lost reply.
+_SUBMIT_TIMEOUT_S = 20.0
 
 OptionsRestoreReason = Literal[
     "unsupported_form",
@@ -150,7 +132,7 @@ class CreationFlowError(OptionsFlowError):
 
 @dataclass
 class _OptionsFlowProgress:
-    """Track replies before the walker can fail while interpreting them.
+    """Track a restore flow's replies before they are interpreted.
 
     A complete snapshot may span several forms: each form takes the snapshot
     fields it declares. Before the form HA marks as the last (``last_step``),
@@ -199,7 +181,9 @@ class _OptionsFlowProgress:
         self.apply_status = "unknown"
         try:
             submit = submit_fn or client.submit_options_flow_step
-            result = await submit(flow_id, payload)
+            result: dict[str, Any] = await asyncio.wait_for(
+                submit(flow_id, payload), timeout=_SUBMIT_TIMEOUT_S
+            )
         except HomeAssistantAuthError:
             self.apply_status = "not_applied"
             raise
@@ -269,7 +253,7 @@ class _OptionsFlowProgress:
             self.refuse("identity_changed", changed)
 
     def record_reply(self, result: dict[str, Any]) -> None:
-        """Record application knowledge before the walker interprets a reply."""
+        """Record application knowledge before a reply is interpreted."""
         previous, self.current_step = self.current_step, result
         if result.get("type") == _FlowType.CREATE_ENTRY:
             self.apply_status = "applied"
@@ -288,7 +272,7 @@ class _OptionsFlowProgress:
             and previous.get("last_step") is not True
         ):
             # The next form of the flow: nothing is committed before
-            # CREATE_ENTRY; check_form settles it and the walker fills it.
+            # CREATE_ENTRY; check_form settles it and the replay fills it.
             self.apply_status = "not_applied"
         else:
             # A complete snapshot cannot choose a menu branch mid-flow, nor
@@ -336,10 +320,7 @@ class _CreationFlowProgress(_OptionsFlowProgress):
     operation = "Helper recreation"
 
     def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(entry_id="")
-        self.config = {
-            key: value for key, value in config.items() if key != "next_step_id"
-        }
+        super().__init__(entry_id="", config=dict(config))
 
     def record_reply(self, result: dict[str, Any]) -> None:
         previous_type = self.current_step.get("type")
@@ -367,35 +348,156 @@ class _CreationFlowProgress(_OptionsFlowProgress):
         )
 
 
-async def _create_snapshot_helper(
-    client: Any, helper_type: str, config: dict[str, Any]
+async def _creation_fields(
+    client: Any, helper_type: str
+) -> dict[str, set[str] | None] | None:
+    """For each step of a creation flow, the fields its form and the forms
+    after it declare, read from Core's declaration of the flow. ``None`` for a
+    step whose forms Core builds from the answers, and for the whole flow when
+    no component reads the declaration.
+    """
+    steps = await flow_outline(client, helper_type, "config")
+    if steps is None:
+        return None
+    declared: dict[str, set[str] | None] = {}
+    for step in steps:
+        chain = [
+            step,
+            *(later for later, _ in steps_after(steps, step["step_id"]) or []),
+        ]
+        if any(link.get("schema_from_answers") for link in chain):
+            declared[step["step_id"]] = None
+            continue
+        declared[step["step_id"]] = {
+            field["name"]
+            for link in chain
+            for field in link.get("data_schema") or []
+            if isinstance(field, dict) and isinstance(field.get("name"), str)
+        }
+    return declared
+
+
+async def _menu_branch_from_snapshot(
+    client: Any,
+    progress: _OptionsFlowProgress,
+    menu: dict[str, Any],
+    helper_type: str,
+) -> str:
+    """The creation menu's branch the snapshot names.
+
+    A menu-rooted helper stores its branch among its options (template's
+    ``template_type``, group's ``group_type``), and no creation form takes
+    that option. Another option's value can be a menu name too (a template
+    binary_sensor's ``device_class`` "light"): then the branch is the one
+    whose forms, as Core declares them, take the snapshot's other options.
+    Without that declaration such a snapshot is refused.
+    """
+    options = menu.get("menu_options")
+    choices = options if isinstance(options, list) else list(options or {})
+    config = progress.config
+    keys = [key for key, value in config.items() if value in choices]
+    declared = await _creation_fields(client, helper_type) if len(keys) > 1 else None
+    if declared is not None:
+
+        def takes_the_rest(key: str) -> bool:
+            fields = declared.get(config[key])
+            return fields is None or set(config) - {key} <= fields
+
+        keys = [key for key in keys if takes_the_rest(key)]
+    if len(keys) != 1:
+        progress.refuse("unsupported_form")
+    return str(config.pop(keys[0]))
+
+
+def _snapshot_answers(step: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """The snapshot's values for the fields a form declares.
+
+    A field the snapshot does not hold is left out, which is how a form
+    clears it; a required one goes back as the form shows it.
+    """
+    answers: dict[str, Any] = {}
+    for declared in step.get("data_schema") or []:
+        name = declared.get("name") if isinstance(declared, dict) else None
+        if not isinstance(name, str):
+            continue
+        if name in config:
+            answers[name] = config[name]
+        elif not declared.get("required"):
+            continue
+        elif isinstance(declared.get("schema"), list):
+            answers[name] = {}
+        elif (shown := shown_value(declared)) is not MISSING:
+            answers[name] = shown
+    return answers
+
+
+# A restore flow is its forms, plus one creation menu: more replies than this
+# is a flow that loops.
+_MAX_REPLAY_STEPS = 10
+
+
+async def replay_snapshot(
+    client: Any,
+    progress: _OptionsFlowProgress,
+    step: dict[str, Any],
+    *,
+    menu_branch: Callable[[dict[str, Any]], Awaitable[str]] | None = None,
 ) -> dict[str, Any]:
-    """Create a helper from a complete snapshot without dropping fields."""
-    progress = _CreationFlowProgress(config)
+    """Answer a restore flow's forms from ``progress.config``, the snapshot.
+
+    Returns the step that ended the flow. ``progress`` checks each form
+    against the snapshot before it is submitted and records what is known
+    about the write; a reply it cannot place (a second menu, a progress or
+    external step, a form after the last) raises its failure. A form Home
+    Assistant returns with errors, and a flow that does not end, raise it too.
+    """
+    flow_id = progress.flow_id or ""
+    for _ in range(_MAX_REPLAY_STEPS):
+        step_type = step.get("type")
+        if step_type == _FlowType.MENU and menu_branch is not None:
+            payload = {"next_step_id": await menu_branch(step)}
+            menu_branch = None
+        elif step_type == _FlowType.FORM:
+            payload = _snapshot_answers(step, progress.config)
+        else:
+            return step
+        answered = step if step_type == _FlowType.FORM else None
+        step = await progress.submit(client, flow_id, payload)
+        if _rejected_on_submit(step, answered):
+            break
+    raise progress.failure()
+
+
+async def recreate_flow_helper(
+    client: Any, helper_type: str, options: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a deleted helper again from its complete options snapshot.
+
+    Every option must be taken by a creation form, or name the creation
+    menu's branch. An uncertain or completed creation flow is left open for
+    reconciliation.
+    """
+    progress = _CreationFlowProgress(options)
     try:
-        _reject_redaction_sentinels(config)
+        _reject_redaction_sentinels(options)
         progress.apply_status = "unknown"
         initial_step = await client.start_config_flow(helper_type)
         progress.flow_id = initial_step.get("flow_id")
         progress.record_reply(initial_step)
         if not progress.flow_id:
             raise progress.failure()
-        if initial_step.get("type") == _FlowType.MENU:
-            config = answer_menu_from_snapshot(
-                progress, initial_step, config, helper_type
-            )
-        result = await _handle_flow_steps(
+        result = await replay_snapshot(
             client,
-            progress.flow_id,
+            progress,
             initial_step,
-            config,
-            submit_fn=partial(progress.submit, client),
-            helper_type=helper_type,
-            complete_snapshot=True,
-            flow=None,
-            refuse_progress=True,
+            menu_branch=lambda menu: _menu_branch_from_snapshot(
+                client, progress, menu, helper_type
+            ),
         )
-        entry = result["entry"].get("result", {})
+        entry = result.get("result")
+        if result.get("type") != _FlowType.CREATE_ENTRY or not isinstance(entry, dict):
+            # Without the created entry the caller cannot identify the helper.
+            raise progress.failure()
         return {
             "success": True,
             "entry_id": entry.get("entry_id"),
@@ -458,15 +560,6 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Module-level flow machinery
-#
-# These functions are shared by the unified ha_config_set_helper tool in
-# tools_config_helpers.py. They take a client instance as an explicit
-# parameter so the same logic can be used from any caller.
-# ---------------------------------------------------------------------------
-
-
 async def _subentry_ids(client: Any, entry_id: str) -> set[str] | None:
     """IDs of the entry's subentries; None when they can't be listed."""
     try:
@@ -490,208 +583,47 @@ async def _created_subentry_id(
     return created.pop() if len(created) == 1 else None
 
 
-# A create finds its subentry by diffing the parent's listing, so creates under
-# one parent run one at a time.
 _SUBENTRY_CREATE_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
-async def set_config_subentry(
+def subentry_create_lock(entry_id: str) -> asyncio.Lock:
+    """The lock a subentry create under ``entry_id`` holds: a create finds its
+    subentry by diffing the parent's listing, so creates under one parent run
+    one at a time."""
+    return _SUBENTRY_CREATE_LOCKS[entry_id]
+
+
+async def restore_config_entry_options(
     client: Any,
     entry_id: str,
-    subentry_type: str,
-    config_dict: dict[str, Any],
-    *,
-    subentry_id: str | None = None,
-    show_advanced_options: bool | None = None,
-) -> dict[str, Any]:
-    """Create or reconfigure a config subentry via its flow.
-
-    Presence of ``subentry_id`` is the discriminator: omitted creates a new
-    subentry, provided reconfigures that existing subentry.
-    ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
-    HA versions pending removal before HA 2027.6.
-
-    The reconfigure branch fails when the flow leaves any supplied config key
-    unconsumed, where it previously returned success plus a warning — see
-    :func:`_handle_config_subentry_flow_steps` for why. It also walks with
-    ``keep_current_values`` (issue #2254), so a partial patch keeps the
-    subentry fields it does not name instead of resetting them. The create
-    branch is unchanged on both counts.
-    """
-    if subentry_id is not None:
-        return await _run_config_subentry_flow(
-            client, entry_id, subentry_type, config_dict, subentry_id,
-            show_advanced_options,
-        )  # fmt: skip
-    async with _SUBENTRY_CREATE_LOCKS[entry_id]:
-        return await _run_config_subentry_flow(
-            client, entry_id, subentry_type, config_dict, None, show_advanced_options
-        )
-
-
-async def _run_config_subentry_flow(
-    client: Any,
-    entry_id: str,
-    subentry_type: str,
-    config_dict: dict[str, Any],
-    subentry_id: str | None,
-    show_advanced_options: bool | None,
-) -> dict[str, Any]:
-    _reject_redaction_sentinels(config_dict)
-    # Core's create result carries no subentry_id; the new one is the difference.
-    before = None if subentry_id else await _subentry_ids(client, entry_id)
-    flow_result = await client.start_config_subentry_flow(
-        entry_id,
-        subentry_type,
-        subentry_id=subentry_id,
-        show_advanced_options=show_advanced_options,
-    )
-    flow_id = flow_result.get("flow_id")
-
-    if not flow_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to start config subentry flow",
-                suggestions=[
-                    "Use ha_get_integration(include_subentries=True) to confirm "
-                    "the parent entry and available subentry metadata.",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "subentry_type": subentry_type,
-                    "subentry_id": subentry_id,
-                    "details": flow_result,
-                },
-            )
-        )
-
-    try:
-        result = await _handle_config_subentry_flow_steps(
-            client,
-            flow_id,
-            flow_result,
-            config_dict,
-            is_reconfigure=subentry_id is not None,
-            keep_current_values=subentry_id is not None,
-            flow=FlowRef(None, f"config_subentries.{subentry_type}", entry_id),
-        )
-    except (Exception, asyncio.CancelledError) as flow_error:
-        if not leaves_flow_open(flow_error):
-            await abort_failed_flow(
-                client.abort_config_subentry_flow,
-                flow_id,
-                kind="config subentry flow",
-            )
-        raise
-
-    if before is not None and result["operation"] == "created":
-        subentry_id = await _created_subentry_id(client, entry_id, before)
-    response = {
-        "success": True,
-        "entry_id": entry_id,
-        "subentry_type": subentry_type,
-        "subentry_id": subentry_id,
-        "operation": result["operation"],
-        "flow_result": result["flow_result"],
-        "message": f"Config subentry {result['operation']} successfully",
-    }
-    if result.get("warnings"):
-        response["warnings"] = result["warnings"]
-    return response
-
-
-async def get_user_step_field_names(client: Any, helper_type: str) -> set[str] | None:
-    """Return field names in the user-step form schema for ``helper_type``.
-
-    Starts a config flow, peeks at the initial step's ``data_schema``,
-    and immediately aborts the flow. Used to decide whether to fold the
-    top-level ``name`` parameter into the form payload — some helpers
-    (e.g. ``switch_as_x``) take their entity name from the source switch
-    and reject ``name`` as an extra key.
-
-    Returns:
-        A set of field names if the initial step is a form. ``None`` if
-        the flow type is not introspectable from the top step (menu or
-        unexpected) — callers should fall back to the legacy behaviour
-        in that case to avoid regressing menu helpers (template, group).
-        Also returns ``None`` if the introspection itself fails; the
-        subsequent real flow will surface the error in context.
-    """
-    flow_id = None
-    try:
-        flow_result = await client.start_config_flow(helper_type)
-        flow_id = flow_result.get("flow_id")
-        if flow_result.get("type") != _FlowType.FORM:
-            return None
-        return _extract_schema_field_names(flow_result.get("data_schema"))
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"Schema introspection failed for {helper_type}: {e}")
-        return None
-    finally:
-        if flow_id:
-            # Shielded: a cancelled helper write still closes this flow.
-            await shielded_abort(
-                client.abort_config_flow,
-                flow_id,
-                failure=f"Failed to abort introspection flow {flow_id}",
-            )
-
-
-async def update_config_entry_options(
-    client: Any,
-    entry_id: str,
-    config_dict: dict[str, Any],
+    options: dict[str, Any],
     *,
     expected_domain: str | None = None,
-    noun: str = "integration",
-    keep_current_values: bool = True,
     fixed_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update an existing config entry via its options flow.
+    """Put a complete options snapshot back through the entry's options flow.
 
-    When ``expected_domain`` is provided, verifies the entry's domain matches
-    it first (the helper path passes the helper_type, backup restore the
-    entry's domain; ``None`` accepts any domain). Starts
-    an options flow, walks the flow steps, and returns the result. ``noun``
-    only affects response wording.
-
-    By default the walk runs with ``keep_current_values``: every field an
-    options step declares that
-    ``config_dict`` does not name is submitted with the value the step itself
-    carries, exactly as the HA UI's "Configure" dialog posts back the boxes
-    nobody touched. Before issue #2254 those keys were dropped and voluptuous
-    substituted each field's static default, so a one-key patch silently reset
-    the rest of the entry's options. A key the caller sets to ``None`` is the
-    opposite request and is honoured as a clear, which for a field carrying a
-    schema default means submitting the ``None`` for Home Assistant to
-    validate rather than omitting it into that default.
-    A complete options snapshot restore passes ``keep_current_values=False``
-    so current values absent from the snapshot are not copied into the payload,
-    and ``fixed_options``, the entry's stored options: a snapshot field none of
-    the options forms offers must still hold its stored value, checked before
-    the form HA marks as last (a flow that marks none is verified by readback
-    after it applied). The caller must
+    Each options form takes the snapshot fields it declares; a field the
+    snapshot lacks is left out, so a current value absent from it is cleared
+    as the form clears it. ``fixed_options`` is the entry's stored options: a
+    snapshot field none of the forms offers must still hold its stored value,
+    checked before the form HA marks as last (a flow that marks none is
+    verified by the caller's readback after it applied). The caller must
     ensure the integration replaces its options only when its flow returns
-    CREATE_ENTRY. The restore requires authoritative forms and raises
-    ``OptionsFlowError`` with apply knowledge on failure; uncertain or
-    completed restores are not aborted. An ordinary edit aborts the flow on
-    error, unless Home Assistant's answer was lost (applied_but_unverified).
+    CREATE_ENTRY. Raises ``OptionsFlowError`` with apply knowledge on failure;
+    an uncertain or completed restore flow is not aborted.
+
+    ``expected_domain`` refuses an entry of another domain (``None`` accepts
+    any).
     """
-    progress = (
-        None
-        if keep_current_values
-        else _OptionsFlowProgress(
-            entry_id, config=dict(config_dict), fixed=dict(fixed_options or {})
-        )
+    progress = _OptionsFlowProgress(
+        entry_id, config=dict(options), fixed=dict(fixed_options or {})
     )
     try:
-        return await _update_config_entry_options(
-            client, entry_id, config_dict, expected_domain, noun, progress
+        return await _restore_config_entry_options(
+            client, entry_id, expected_domain, progress
         )
     except (Exception, asyncio.CancelledError) as err:
-        if progress is None:
-            raise
         failure = err if isinstance(err, OptionsFlowError) else progress.failure()
         if failure.flow_id and failure.apply_status != "not_applied":
             logger.warning(
@@ -781,15 +713,13 @@ def refuse_component_entry(
     )
 
 
-async def _update_config_entry_options(
+async def _restore_config_entry_options(
     client: Any,
     entry_id: str,
-    config_dict: dict[str, Any],
     expected_domain: str | None,
-    noun: str,
-    progress: _OptionsFlowProgress | None,
+    progress: _OptionsFlowProgress,
 ) -> dict[str, Any]:
-    _reject_redaction_sentinels(config_dict)
+    _reject_redaction_sentinels(progress.config)
     config_entry = await config_entry_of_domain(client, entry_id, expected_domain)
     actual_domain = config_entry.get("domain")
     refuse_component_entry(
@@ -801,10 +731,9 @@ async def _update_config_entry_options(
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")
-    if progress is not None:
-        progress.flow_id = flow_id
-        if flow_result.get("type") == _FlowType.CREATE_ENTRY:
-            progress.apply_status = "applied"
+    progress.flow_id = flow_id
+    if flow_result.get("type") == _FlowType.CREATE_ENTRY:
+        progress.apply_status = "applied"
 
     if not flow_id:
         raise_tool_error(
@@ -819,31 +748,12 @@ async def _update_config_entry_options(
         )
 
     try:
-        if progress is not None:
-            progress.start(flow_result)
-
-        result = await _handle_flow_steps(
-            client,
-            flow_id,
-            flow_result,
-            config_dict,
-            submit_fn=partial(progress.submit, client)
-            if progress is not None
-            else client.submit_options_flow_step,
-            helper_type=expected_domain,
-            keep_current_values=progress is None,
-            complete_snapshot=progress is not None,
-            # A restore reports its own refusal, never the flow's text, and
-            # refuses a progress step: its tracker sees submits, not polls.
-            flow=FlowRef(actual_domain, "options") if progress is None else None,
-            refuse_progress=progress is not None,
-        )
+        progress.start(flow_result)
+        result = await replay_snapshot(client, progress, flow_result)
+        if result.get("type") != _FlowType.CREATE_ENTRY:
+            raise progress.failure()
     except (Exception, asyncio.CancelledError) as flow_err:
-        if progress is not None:
-            should_abort = progress.apply_status == "not_applied"
-        else:
-            should_abort = not leaves_flow_open(flow_err)
-        if should_abort:
+        if progress.apply_status == "not_applied":
             await abort_failed_flow_type_only(
                 client.abort_options_flow,
                 flow_id,
@@ -855,113 +765,9 @@ async def _update_config_entry_options(
             )
         raise
 
-    entry = result["entry"].get("result", {})
-    response = {
+    return {
         "success": True,
         "entry_id": entry_id,
-        "title": entry.get("title"),
         "domain": actual_domain,
-        "message": f"{actual_domain} {noun} updated successfully",
         "updated": True,
     }
-    if result.get("warnings"):
-        response["warnings"] = result["warnings"]
-    return response
-
-
-async def update_flow_helper(
-    client: Any,
-    helper_type: str,
-    config_dict: dict[str, Any],
-    entry_id: str,
-) -> dict[str, Any]:
-    """Update an existing flow-based helper via its options flow.
-
-    Verifies the entry domain matches helper_type, starts an options flow,
-    walks the flow steps, and returns the result. Aborts the flow on error,
-    unless Home Assistant's answer was lost (applied_but_unverified).
-    """
-    return await update_config_entry_options(
-        client,
-        entry_id,
-        config_dict,
-        expected_domain=helper_type,
-        noun="helper",
-    )
-
-
-async def create_config_entry(
-    client: Any,
-    domain: str,
-    config_dict: dict[str, Any],
-    *,
-    noun: str = "integration",
-) -> dict[str, Any]:
-    """Create a config entry by driving ``domain``'s config flow.
-
-    Starts a config flow, walks the flow steps (menus and multi-step forms),
-    and returns the result. Aborts the flow on error, unless Home Assistant's
-    answer was lost (applied_but_unverified). ``noun`` only affects response
-    wording.
-    """
-    _reject_redaction_sentinels(config_dict)
-    flow_result = await client.start_config_flow(domain)
-    flow_id = flow_result.get("flow_id")
-
-    if not flow_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Failed to start config flow",
-                suggestions=[
-                    f"Check that the {noun} domain exists and Home Assistant is reachable"
-                ],
-                context={"domain": domain, "details": flow_result},
-            )
-        )
-
-    try:
-        result = await _handle_flow_steps(
-            client,
-            flow_id,
-            flow_result,
-            config_dict,
-            helper_type=domain,
-            flow=FlowRef(domain, "config"),
-        )
-    except (Exception, asyncio.CancelledError) as flow_error:
-        if not leaves_flow_open(flow_error):
-            await abort_failed_flow(client.abort_config_flow, flow_id)
-        raise
-
-    entry = result["entry"].get("result", {})
-    response = {
-        "success": True,
-        "entry_id": entry.get("entry_id"),
-        "title": entry.get("title"),
-        "domain": domain,
-        "message": f"{domain} {noun} created successfully",
-    }
-    if result.get("warnings"):
-        response["warnings"] = result["warnings"]
-    return response
-
-
-async def create_flow_helper(
-    client: Any,
-    helper_type: str,
-    config_dict: dict[str, Any],
-    *,
-    complete_snapshot: bool = False,
-) -> dict[str, Any]:
-    """Create a new flow-based helper via the config flow.
-
-    Starts a config flow, walks the flow steps, and returns the result.
-    Ordinary creation aborts the flow on error, unless Home Assistant's answer
-    was lost (applied_but_unverified). Complete snapshots require all options
-    in the selected form and preserve uncertain or completed creation flows
-    for reconciliation.
-    """
-    if complete_snapshot:
-        return await _create_snapshot_helper(client, helper_type, config_dict)
-    return await create_config_entry(client, helper_type, config_dict, noun="helper")

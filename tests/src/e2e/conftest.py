@@ -809,8 +809,8 @@ class TestDataFactory:
             "input_boolean": {"name": f"Test {name} Boolean", "initial": False},
             "input_number": {
                 "name": f"Test {name} Number",
-                "min_value": 0,
-                "max_value": 100,
+                "min": 0,
+                "max": 100,
                 "step": 1,
                 "unit_of_measurement": "units",
             },

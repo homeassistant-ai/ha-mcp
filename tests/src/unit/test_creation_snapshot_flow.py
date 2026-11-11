@@ -28,7 +28,7 @@ from pytest_homeassistant.common import (
 )
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.config_entry_flow import CreationFlowError, create_flow_helper
+from ha_mcp.tools.config_entry_flow import CreationFlowError, recreate_flow_helper
 
 DOMAIN = "recreate_probe"
 
@@ -152,7 +152,7 @@ async def run(
 def _config() -> dict[str, Any]:
     return {
         "name": "Example",
-        "next_step_id": "sensor",
+        "template_type": "sensor",
         "state": "{{ 12 }}",
         "additional_options": {"availability": "{{ false }}"},
     }
@@ -170,13 +170,11 @@ async def test_complete_recreation_submits_nested_options_unchanged(
             client, "abort_config_flow", wraps=client.abort_config_flow
         ) as abort,
     ):
-        result = await create_flow_helper(
-            client, DOMAIN, _config(), complete_snapshot=True
-        )
+        result = await recreate_flow_helper(client, DOMAIN, _config())
     [entry] = hass.config_entries.async_entries(DOMAIN)
     assert result["entry_id"] == entry.entry_id
     payload = deepcopy(_config())
-    payload.pop("next_step_id")
+    payload.pop("template_type")
     flow_id = submit.await_args_list[0].args[0]
     assert submit.await_args_list[1].args == (flow_id, payload)
     assert run.submissions == [payload]
@@ -218,7 +216,7 @@ async def test_complete_recreation_reports_native_outcomes_without_retry(
         caplog.at_level(logging.WARNING),
         pytest.raises(CreationFlowError) as caught,
     ):
-        await create_flow_helper(client, DOMAIN, _config(), complete_snapshot=True)
+        await recreate_flow_helper(client, DOMAIN, _config())
 
     assert caught.value.apply_status == status
     assert caught.value.reason == reason
@@ -243,9 +241,7 @@ async def test_complete_recreation_propagates_cancellation_without_aborting(
     with patch.object(
         client, "abort_config_flow", wraps=client.abort_config_flow
     ) as abort:
-        task = asyncio.ensure_future(
-            create_flow_helper(client, DOMAIN, _config(), complete_snapshot=True)
-        )
+        task = asyncio.ensure_future(recreate_flow_helper(client, DOMAIN, _config()))
         # Cancel while the request waits on Core's answer.
         await run.reached.wait()
         task.cancel()
