@@ -4885,14 +4885,6 @@ class TestBpsSkillGuideDependency:
         reset_global_settings()
         return build_settings_handlers(server=None)
 
-    @staticmethod
-    def _teardown():
-        from ha_mcp.config import reset_global_settings
-        from ha_mcp.utils.data_paths import get_data_dir
-
-        get_data_dir.cache_clear()
-        reset_global_settings()
-
     @pytest.mark.asyncio
     async def test_save_tools_rejects_skill_guide_disable_in_strict_mode(
         self, monkeypatch, tmp_path
@@ -4907,7 +4899,6 @@ class TestBpsSkillGuideDependency:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert "ha_get_skill_guide" in str(body)
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_tools_allows_skill_guide_disable_without_strict(
@@ -4923,7 +4914,6 @@ class TestBpsSkillGuideDependency:
         assert body["success"] is True
         saved = json.loads((tmp_path / "tool_config.json").read_text())
         assert saved["tools"]["ha_get_skill_guide"] == "disabled"
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_tools_allows_echo_of_persisted_disabled(
@@ -4942,7 +4932,6 @@ class TestBpsSkillGuideDependency:
         )
         resp = await handlers["save_tools"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_rejects_strict_on_with_tool_disabled(
@@ -4960,7 +4949,6 @@ class TestBpsSkillGuideDependency:
         assert resp.status_code == 409
         body = json.loads(resp.body)
         assert "ha_get_skill_guide" in str(body)
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_allows_strict_on_when_tool_enabled(
@@ -4973,7 +4961,6 @@ class TestBpsSkillGuideDependency:
         )
         resp = await handlers["save_feature_flags"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_ignores_env_pinned_skill_guide_disable(
@@ -4995,19 +4982,16 @@ class TestBpsSkillGuideDependency:
         )
         resp = await handlers["save_feature_flags"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_get_tools_reports_bps_locked_tools(self, monkeypatch, tmp_path):
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
         resp = await handlers["get_tools"](MagicMock())
         assert json.loads(resp.body)["bps_locked_tools"] == ["ha_get_skill_guide"]
-        self._teardown()
 
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
         resp = await handlers["get_tools"](MagicMock())
         assert json.loads(resp.body)["bps_locked_tools"] == []
-        self._teardown()
 
     def test_apply_strips_skill_guide_disable_in_strict_mode(self):
         """apply_tool_visibility is the authoritative enforcement — env
@@ -5057,7 +5041,6 @@ class TestBpsSkillGuideDependency:
         resp = await handlers["save_feature_flags"](request)
         assert resp.status_code == 409
         assert "ha_get_skill_guide" in str(json.loads(resp.body))
-        self._teardown()
 
 
 class TestPolicyScopeNotice:

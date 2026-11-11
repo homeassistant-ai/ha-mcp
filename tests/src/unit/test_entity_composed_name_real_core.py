@@ -81,7 +81,6 @@ async def test_search_finds_an_entity_by_the_name_home_assistant_shows(
 
     found = await search_tools.ha_search(
         query=composed,
-        search_types=["entity"],
         result_fields=["entity_id", "name", "friendly_name"],
     )
 

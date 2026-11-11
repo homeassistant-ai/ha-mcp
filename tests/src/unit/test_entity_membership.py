@@ -108,7 +108,6 @@ async def test_visibility_denied_member_withholds_ids_but_keeps_group_signal(
 
     data = await _build_ha_search(core_client)(
         query="light.group",
-        search_types=["entity"],
         result_fields=["entity_id", "is_group", "member_entity_ids"],
     )
 
