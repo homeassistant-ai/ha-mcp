@@ -87,6 +87,8 @@ async def _relay(
 ) -> None:
     try:
         async for message in source:
+            if message.type is aiohttp.WSMsgType.ERROR:
+                raise message.data
             if message.type is not aiohttp.WSMsgType.TEXT:
                 break
             if drops and json.loads(message.data).get("type") in drops:
