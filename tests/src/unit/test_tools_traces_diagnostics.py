@@ -66,13 +66,12 @@ class TestGatherDiagnostics:
     async def test_a_loaded_automation_that_never_ran_is_told_to_run_it(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        """With nothing stored, an enabled automation is told to run it once
-        rather than that its trace storage is off."""
+        """An enabled automation Core never ran has no last_triggered and is told
+        to run it once, rather than that its trace storage is off."""
         await _setup(hass, "automation", [_automation("test", "Test")])
-        hass.states.async_set("light.trigger", "on")
-        await hass.async_block_till_done()
         state = hass.states.get("automation.test")
         assert state is not None
+        assert state.attributes["last_triggered"] is None
 
         result, warnings = await _gather_diagnostics(
             component_core_client, "automation.test", "automation"
@@ -82,11 +81,28 @@ class TestGatherDiagnostics:
         assert result["entity_enabled"] is True
         assert result["trace_key_available"] is True
         assert result["trace_storage_enabled"] is True
-        assert (
-            result["last_triggered"] == state.attributes["last_triggered"].isoformat()
-        )
+        assert result["last_triggered"] is None
         assert "run the automation/script once" in result["suggestion"].lower()
         assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_a_ran_automation_reports_core_s_last_triggered(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        """Once a run sets last_triggered, diagnostics reports Core's own value."""
+        await _setup(hass, "automation", [_automation("test", "Test")])
+        hass.states.async_set("light.trigger", "on")
+        await hass.async_block_till_done()
+        state = hass.states.get("automation.test")
+        assert state is not None
+        last_triggered = state.attributes["last_triggered"]
+        assert last_triggered is not None
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
+        )
+
+        assert result["last_triggered"] == last_triggered.isoformat()
 
     @pytest.mark.asyncio
     async def test_automation_without_an_id_has_no_trace_key(

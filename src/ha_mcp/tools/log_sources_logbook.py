@@ -294,6 +294,8 @@ class LogbookLogSourceMixin:
         if rest is None:
             # get_logbook answers None only for a reply that was not a row
             # list; an empty logbook is a real list, so this is a failure.
+            # Core's ``/logbook`` always answers a list, so this guards a
+            # non-conforming responder and no test can produce it.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

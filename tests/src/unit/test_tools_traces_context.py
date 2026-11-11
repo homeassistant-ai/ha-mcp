@@ -6,9 +6,6 @@ component, Core's ``trace/contexts`` map is the only source: it holds each run's
 own ``context.id``, never the context that triggered it, so a triggering
 (parent) context is a not-found naming the component. The component path is
 covered in ``test_tools_traces_context_component.py``.
-
-The detail logbook read also runs on Core: the rows come from Core's logbook
-query over the real in-memory recorder.
 """
 
 from __future__ import annotations
@@ -18,11 +15,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.recorder import Recorder
-from homeassistant.core import Context, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
-from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -33,18 +27,9 @@ from ._trace_fixtures import automation_run, store_runs
 
 
 @pytest.fixture(autouse=True)
-async def trace_store(recorder_mock: Recorder, hass: HomeAssistant) -> None:
-    """Set up Core's trace store and logbook on the real in-memory recorder.
-
-    ``recorder_mock`` is requested before ``hass`` because its database fixture
-    refuses to run once Home Assistant exists; pytest resolves the arguments in
-    order. The logbook integration depends on ``frontend``, which the unit test
-    install does not ship, so the dependency is a Core ``mock_integration``;
-    logbook then registers its own processor, query and REST view.
-    """
-    mock_integration(hass, MockModule("frontend"))
+async def trace_store(hass: HomeAssistant) -> None:
+    """Set up Core's trace store, which serves the ``trace/*`` commands."""
     assert await async_setup_component(hass, "trace", {})
-    assert await async_setup_component(hass, "logbook", {})
 
 
 class TestNoComponentContextLookup:
@@ -224,31 +209,6 @@ class TestGlobalMatchWithoutTraceKey:
 
 class TestDetailLogbook:
     """A resolved run keeps its trace when the optional logbook read misbehaves."""
-
-    async def test_whitespace_sections_still_fetch_the_logbook(
-        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
-    ) -> None:
-        """A blank sections string must not suppress the detailed logbook read."""
-        context = Context()
-        await store_runs(hass, automation_run("r1", context_id=context.id))
-        hass.states.async_set("light.logbook_row", "initial")
-        await hass.async_block_till_done()
-        hass.states.async_set("light.logbook_row", "on", context=context)
-        await hass.async_block_till_done()
-        await async_wait_recording_done(hass)
-
-        result = await TraceTools(component_core_client).ha_get_automation_traces(
-            domain="automation",
-            item_id="uid_1",
-            run_id="r1",
-            sections="   ",
-            detailed=True,
-        )
-
-        assert result["logbook_transport"] == "component"
-        assert [row["entity_id"] for row in result["logbook_entries"]] == [
-            "light.logbook_row"
-        ]
 
     @pytest.mark.parametrize(
         "error",

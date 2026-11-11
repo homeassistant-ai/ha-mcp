@@ -28,6 +28,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
 )
 from ha_mcp.tools.component_api import get_component_caps
+from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_logbook import LOGBOOK_ROW_LIMIT, fetch_trace_logbook
 
 from ._component_core import ws_result
@@ -255,3 +256,32 @@ class TestFetchTraceLogbook:
             assert "context id" in warning.lower()
         else:
             assert "start timestamp" in warning.lower()
+
+
+class TestTraceDetailLogbookCall:
+    """The detail call reads the run's logbook; a blank sections option keeps it."""
+
+    @pytest.mark.asyncio
+    async def test_whitespace_sections_still_fetch_the_logbook(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        """A blank sections string must not suppress the detailed logbook read."""
+        context = Context()
+        await _trace(hass, hass_ws_client, context=context)
+        await _record(hass, [("light.logbook_row", "on", context)])
+
+        result = await TraceTools(component_core_client).ha_get_automation_traces(
+            domain="automation",
+            item_id="uid_1",
+            run_id="r1",
+            sections="   ",
+            detailed=True,
+        )
+
+        assert result["logbook_transport"] == "component"
+        assert [row["entity_id"] for row in result["logbook_entries"]] == [
+            "light.logbook_row"
+        ]
