@@ -15,6 +15,10 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.automation_registry_details import (
+    REFERENCES_NOT_LOADED,
+    registry_details,
+)
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_diagnostics import _gather_diagnostics
 
@@ -320,3 +324,41 @@ class TestDiagnosticsResponseWarnings:
         assert any(
             "validation failed" in warning.lower() for warning in result["warnings"]
         )
+
+
+class TestRegistryDetailsReferences:
+    """The component's lookup answer for an item's registry row and references."""
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_item_is_not_reported_as_an_unloaded_one(
+        self,
+    ) -> None:
+        """A typo'd entity id must not be told the automation exists but did not
+        load, which would send the user looking for a disabled automation."""
+        warnings: list[str] = []
+
+        await registry_details(
+            None,
+            {"loaded": False, "references": None, "found": False},
+            "automation.typo",
+            warnings,
+        )
+
+        assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_a_found_item_that_did_not_load_says_its_references_are_unavailable(
+        self,
+    ) -> None:
+        """A found item Core has not loaded has no references, and the user is
+        told why instead of reading an unexplained miss."""
+        warnings: list[str] = []
+
+        await registry_details(
+            None,
+            {"loaded": False, "references": None},
+            "automation.test",
+            warnings,
+        )
+
+        assert warnings == [REFERENCES_NOT_LOADED]
