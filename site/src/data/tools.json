@@ -4709,7 +4709,7 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, python_upgrade_hint, instructions."
+          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
         }
       }
     },
