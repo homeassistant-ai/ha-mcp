@@ -1,22 +1,45 @@
-"""Warning priority and coverage regressions reproduced on embedded HA."""
+"""Warning priority and coverage regressions on a real card-definition index."""
 
+import importlib
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
-from .test_card_definitions import _definitions, cd
+import pytest
+
+cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
+
+# A frontend build with one validated card: ``tile`` has an editor whose struct
+# lists the keys ``type`` and ``entity`` and rejects any other key as ``never``.
+_FRONTEND = (
+    "export const __webpack_modules__={"
+    '8(e){(0,e.EM)("hui-tile-card");class A{setConfig(c){}}},'
+    '9(e){(0,e.EM)("hui-entities-card");class B{setConfig(c){}}},'
+    '10(m,e,r){(0,e.EM)("hui-tile-card-editor");var s=r(11),'
+    "v=(0,s.object)({type:1,entity:1});class C{setConfig(c){(0,s.assert)(c,v)}}},"
+    "11(m,e,r){r.d(e,{},{object:(schema)=>({schema,validate:(c)=>{"
+    "const f=Object.keys(c).filter((k)=>!(k in schema)).map("
+    '(k)=>({path:[k],type:"never",message:"never"}));'
+    "return f.length?[{failures:()=>f}]:[undefined,c]}})})}};"
+)
 
 
-def test_inconclusive_notices_cannot_displace_schema_findings():
-    definitions = _definitions({"tile"}, {"tile": ["type", "entity"]})
-    definitions._engine = MagicMock(
-        return_value={"value": [[{"type": "never", "path": ["colour"]}]] * 19}
-    )
+def _definitions(root: Path) -> Any:
+    frontend = root / "frontend_latest"
+    frontend.mkdir()
+    (frontend / "cards.js").write_text(_FRONTEND, encoding="utf-8")
+    return cd.CardDefinitions(root)
+
+
+def test_inconclusive_notices_cannot_displace_schema_findings(tmp_path: Path) -> None:
+    definitions = _definitions(tmp_path)
     custom = MagicMock()
     custom.check.return_value = [
         {"source": "inspection", "message": "TypeError: missing panel"}
     ]
     cards = (
         [{"type": "custom:button-card"}] * 7
-        + [{"type": "tile"}] * 19
+        + [{"type": "tile", "colour": "red"}] * 19
         + [{"type": "tyle"}]
     )
     warnings = definitions.validate({"views": [{"cards": cards}]}, custom)
@@ -25,8 +48,10 @@ def test_inconclusive_notices_cannot_displace_schema_findings():
     assert warnings[-1] == "...and 1 more card diagnostic"
 
 
-def test_identical_inconclusive_notices_are_grouped_without_losing_the_error():
-    definitions = _definitions(set(), {})
+def test_identical_inconclusive_notices_are_grouped_without_losing_the_error(
+    tmp_path: Path,
+) -> None:
+    definitions = _definitions(tmp_path)
     custom = MagicMock()
     custom.check.return_value = [
         {"source": "inspection", "message": "TypeError: missing panel"}
@@ -39,14 +64,17 @@ def test_identical_inconclusive_notices_are_grouped_without_losing_the_error():
     assert "TypeError: missing panel" in warnings[0] and "inconclusive" in warnings[0]
 
 
-def test_unchecked_card_count_survives_warning_cap(monkeypatch):
-    definitions = _definitions(set(), {})
+def test_unchecked_card_count_survives_warning_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    definitions = _definitions(tmp_path)
     clock = [0.0]
     monkeypatch.setattr(cd.time, "monotonic", lambda: clock[0])
     custom = MagicMock()
 
     def check(*args):
-        clock[0] += cd._CUSTOM_WAIT_SECONDS + 1
+        # One check outlasts any custom-card time budget.
+        clock[0] += 3600
         return [{"source": "card", "message": "needs entity"}]
 
     custom.check.side_effect = check

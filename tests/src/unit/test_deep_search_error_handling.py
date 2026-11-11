@@ -8,16 +8,27 @@ The structured-error formatting (no traceback / error_type leak, code +
 message + suggestions) is still provided by ``exception_to_structured_error``
 inside the helper and survives the gather capture as a stringified
 ``ToolError`` payload (issue #517).
+
+``ha_search`` runs on the server's own client against a real ``hass``; only
+the search helpers that fail (this repository's own ``SmartSearchTools``
+methods) are replaced.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.errors import ErrorCode, create_error_response
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.smart_search import SmartSearchTools
+
+from ._search_tool import _build_ha_search, _setup_visibility_disabled
 
 
 def _extract_deep_search_error(response: dict) -> dict:
@@ -30,58 +41,29 @@ def _extract_deep_search_error(response: dict) -> dict:
     return json.loads(deep_errors[0]["error"])
 
 
+@pytest.fixture
+async def ha_search_tool(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    # ``config`` answers the entity-registry list both branches share.
+    assert await async_setup_component(hass, "config", {})
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    return _build_ha_search(core_client)
+
+
 class TestDeepSearchErrorHandling:
     """The deep-search helper's structured error survives the orchestrator capture."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.get_states = AsyncMock(return_value=[])
-        # ha_search now shares one entity-registry list between both branches by
-        # pre-fetching it in the orchestrator, so the client must support the WS
-        # call directly (previously the entity branch's copy was swallowed).
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart_tools = MagicMock()
-        smart_tools.deep_search = AsyncMock()
-        return smart_tools
-
-    @pytest.fixture
-    def ha_search_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search"]
-
-    @pytest.mark.asyncio
     async def test_error_does_not_leak_traceback_or_raw_fields(
-        self, mock_smart_tools, ha_search_tool
-    ):
-        mock_smart_tools.deep_search = AsyncMock(
-            side_effect=RuntimeError("Connection refused")
-        )
+        self, ha_search_tool: Any
+    ) -> None:
+        failing = AsyncMock(side_effect=RuntimeError("Connection refused"))
 
-        response = await ha_search_tool(query="test_query")
+        with patch.object(SmartSearchTools, "deep_search", failing):
+            response = await ha_search_tool(query="test_query")
 
         err = _extract_deep_search_error(response)
         assert err["success"] is False
@@ -93,27 +75,24 @@ class TestDeepSearchErrorHandling:
         assert "traceback" not in err
         assert "error_type" not in err
 
-    @pytest.mark.asyncio
     async def test_error_includes_search_specific_suggestions(
-        self, mock_smart_tools, ha_search_tool
-    ):
-        mock_smart_tools.deep_search = AsyncMock(
-            side_effect=RuntimeError("Something went wrong")
-        )
+        self, ha_search_tool: Any
+    ) -> None:
+        failing = AsyncMock(side_effect=RuntimeError("Something went wrong"))
 
-        response = await ha_search_tool(query="test_query")
+        with patch.object(SmartSearchTools, "deep_search", failing):
+            response = await ha_search_tool(query="test_query")
 
         err = _extract_deep_search_error(response)
         suggestions = err["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
 
-    @pytest.mark.asyncio
     async def test_operational_entities_tool_error_remains_partial(
-        self, mock_smart_tools, ha_search_tool
-    ):
+        self, ha_search_tool: Any
+    ) -> None:
         """An operational entity failure is captured, not re-raised as validation."""
-        mock_smart_tools.smart_entity_search = AsyncMock(
+        entities_down = AsyncMock(
             side_effect=ToolError(
                 json.dumps(
                     create_error_response(
@@ -123,7 +102,7 @@ class TestDeepSearchErrorHandling:
                 )
             )
         )
-        mock_smart_tools.deep_search = AsyncMock(
+        configs_answer = AsyncMock(
             return_value={
                 "success": True,
                 "automations": [],
@@ -136,13 +115,16 @@ class TestDeepSearchErrorHandling:
             }
         )
 
-        response = await ha_search_tool(query="test_query", exact_match=False)
+        with (
+            patch.object(SmartSearchTools, "smart_entity_search", entities_down),
+            patch.object(SmartSearchTools, "deep_search", configs_answer),
+        ):
+            response = await ha_search_tool(query="test_query", exact_match=False)
 
         assert response["partial"] is True
         assert any(e["surface"] == "entities" for e in response["errors"])
         assert any("incomplete results" in w for w in response["warnings"])
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "exception_cls,exception_msg,expected_code",
         [
@@ -153,17 +135,15 @@ class TestDeepSearchErrorHandling:
     )
     async def test_different_exception_types_produce_correct_error_codes(
         self,
-        mock_smart_tools,
-        ha_search_tool,
-        exception_cls,
-        exception_msg,
-        expected_code,
-    ):
-        mock_smart_tools.deep_search = AsyncMock(
-            side_effect=exception_cls(exception_msg)
-        )
+        ha_search_tool: Any,
+        exception_cls: type[Exception],
+        exception_msg: str,
+        expected_code: str,
+    ) -> None:
+        failing = AsyncMock(side_effect=exception_cls(exception_msg))
 
-        response = await ha_search_tool(query="test_query")
+        with patch.object(SmartSearchTools, "deep_search", failing):
+            response = await ha_search_tool(query="test_query")
 
         err = _extract_deep_search_error(response)
         assert err["success"] is False

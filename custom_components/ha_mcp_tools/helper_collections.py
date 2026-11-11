@@ -41,10 +41,12 @@ SIMPLE_HELPER_TYPES = (*FRONTEND_HELPER_DOMAINS, "zone", "person", "tag")
 WS_HELPER_SCHEMAS = "ha_mcp_tools/helper_schemas"
 WS_HELPER_ITEM = "ha_mcp_tools/helper_item"
 WS_HELPER_WRITE = "ha_mcp_tools/helper_write"
-COMMANDS = (WS_HELPER_SCHEMAS, WS_HELPER_ITEM, WS_HELPER_WRITE)
+WS_HELPERS_NAMED = "ha_mcp_tools/helpers_named"
+COMMANDS = (WS_HELPER_SCHEMAS, WS_HELPER_ITEM, WS_HELPER_WRITE, WS_HELPERS_NAMED)
 # Advertised by websocket_api's info; the server routes ha_config_set_helper's
-# simple-helper writes through these and falls back to Core's WS commands.
-CAPABILITIES = ("helper_schemas", "helper_item", "helper_write")
+# simple-helper writes through the first three and falls back to Core's WS
+# commands. ``helpers_named`` serves its duplicate-name refusal on its own.
+CAPABILITIES = ("helper_schemas", "helper_item", "helper_write", "helpers_named")
 
 # ``websocket_api.async_register_command`` stores ``{command: (handler, schema)}``
 # under the integration's domain key.
@@ -137,6 +139,59 @@ def _failure(code: str, message: str) -> dict[str, Any]:
 
 def _entity_id_for(registry: Any, helper_type: str, item_id: str) -> str | None:
     return registry.async_get_entity_id(helper_type, helper_type, item_id)  # type: ignore[no-any-return]
+
+
+def helpers_named(
+    hass: HomeAssistant, registry: Any, domain: str, name: str
+) -> dict[str, Any]:
+    """The helpers of ``domain`` a new one named ``name`` would be numbered
+    after: those whose id, or whose name, Core's ``slugify`` turns into the
+    same id. ``ids`` are storage ids, or config entry ids for a flow helper.
+    ``not_stored`` repeats the ones among ``ids`` that are neither: an id
+    held by something that is not a stored helper, which no storage write
+    reaches.
+    """
+    from homeassistant.util import slugify
+
+    slug = slugify(name)
+    owner = collection_owner(hass, domain) if domain in SIMPLE_HELPER_TYPES else None
+    if owner is None:
+        entries = hass.config_entries.async_entries(domain)
+        return {
+            "slug": slug,
+            "ids": [e.entry_id for e in entries if slugify(e.title) == slug],
+        }
+    stored = owner.storage_collection
+    ids: list[str] = []
+    for item in stored.async_items():
+        item_id, item_name = item["id"], item.get("name")
+        # A tag's name is the registry's, as Core's own tag listing reads it.
+        if item_name is None and (
+            entity_id := _entity_id_for(registry, domain, item_id)
+        ):
+            entry = registry.async_get(entity_id)
+            item_name = entry and (entry.name or entry.original_name)
+        if item_id == slug or (
+            isinstance(item_name, str) and slugify(item_name) == slug
+        ):
+            ids.append(item_id)
+    # Core numbers the new helper after anything that holds this id, and not
+    # all of it is a stored helper: a helper defined in YAML is not, nor is
+    # the home zone Core makes itself. The entity id is taken by an entity,
+    # and the storage id is reserved in the manager Core generates ids with.
+    not_stored: list[str] = []
+    taken = f"{domain}.{slug}"
+    if not ids and (
+        hass.states.get(taken)
+        or registry.async_is_registered(taken)
+        or stored.id_manager.has_id(slug)
+    ):
+        entry = registry.async_get(taken)
+        if entry and entry.platform == domain and entry.unique_id in stored.data:
+            ids.append(entry.unique_id)
+        else:
+            not_stored.append(slug)
+    return {"slug": slug, "ids": ids + not_stored, "not_stored": not_stored}
 
 
 def read_item(
@@ -345,8 +400,21 @@ def command_specs(vol: Any, er: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
         vol.Optional("labels"): [str],
         vol.Optional("category"): vol.Any(str, None),
     }
+
+    def do_named(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+        return helpers_named(hass, er.async_get(hass), msg["domain"], msg["name"])
+
     return [
         ({vol.Required("type"): WS_HELPER_SCHEMAS}, do_schemas, None),
+        (
+            {
+                vol.Required("type"): WS_HELPERS_NAMED,
+                vol.Required("domain"): str,
+                vol.Required("name"): str,
+            },
+            do_named,
+            None,
+        ),
         (
             {
                 vol.Required("type"): WS_HELPER_ITEM,

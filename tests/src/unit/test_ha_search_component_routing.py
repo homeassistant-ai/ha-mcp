@@ -27,13 +27,12 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools import tools_config_dashboards, tools_search
 from ha_mcp.tools.search import component as search_component
-from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._component_routing_helpers import make_ws, patch_ws, patch_ws_establish_failure
+from ._search_tool import _build_ha_search
 
 _STATES = [
     {
@@ -55,6 +54,8 @@ _ENTITY_REGISTRY = {
     ],
 }
 
+# The capability a component that composes entity names advertises.
+_NAMES = "entity_composed_name"
 _CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
@@ -63,7 +64,7 @@ _CAPS_PRE_CHILD_SEMANTICS = {
 }
 _CAPS_SEARCH = {
     **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": ["search", "device_registry_child_semantics"],
+    "capabilities": ["search", "device_registry_child_semantics", _NAMES],
 }
 _CAPS_SEARCH_MEMBERSHIP = {
     **_CAPS_SEARCH,
@@ -110,23 +111,6 @@ class RoutingClient:
 
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
         return {"config": {}}
-
-
-def _build_ha_search(client: Any) -> Any:
-    mcp = MagicMock()
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp.add_tool = capture_add_tool
-    register_search_tools(mcp, client, smart_tools=SmartSearchTools(client=client))
-    return registered["ha_search"]
 
 
 def _setup_visibility_disabled(tmp_path: Any, monkeypatch: Any) -> None:
@@ -1063,15 +1047,12 @@ class TestDashboardSearchTypesGate:
         still never runs."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         caps = {
-            "schema_version": 1,
-            "component_version": "1.2.4",
+            **_CAPS_SEARCH,
             "capabilities": [
-                "search",
+                *_CAPS_SEARCH["capabilities"],
                 "dashboards",
                 "dashboards_doc_search",
-                "device_registry_child_semantics",
             ],
-            "limits": {},
         }
 
         async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:

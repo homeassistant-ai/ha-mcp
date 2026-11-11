@@ -1,51 +1,78 @@
-"""Broken installed cards must stay within their resource budgets."""
+"""Broken installed cards must stay within their resource budgets.
+
+The cards run through the component's public ``CustomCards`` and
+``async_get_custom_cards``; the download test runs on a real ``hass`` whose
+dashboard resources name a local card.
+"""
 
 from __future__ import annotations
 
+import logging
 import threading
-from types import SimpleNamespace
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
+from aiohttp import web
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import ClientSessionGenerator, WebSocketGenerator
 
-from .test_card_definitions import cc
+from custom_components.ha_mcp_tools import custom_cards as cc
+
+from ._component_core import ws_result
+
+# This test covers native thread ownership; the real DOM is fetched through
+# the production cold-cache path in E2E, never vendored into fixtures.
+_DOM = """
+globalThis.__linkedom = {
+  HTMLElement: class HTMLElement {},
+  parseHTML: function () { return {
+    document: {}, customElements: {define: function () {}}
+  }; }
+};
+"""
+
+
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """The linkedom cache lives in the config dir; each test brings its own."""
+    return hass_tmp_config_dir
 
 
 @pytest.mark.parametrize("module", [False, True])
 def test_all_quickjs_context_operations_use_the_creating_thread(
-    monkeypatch, module
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: bool
 ) -> None:
     import quickjs
 
     context_type = quickjs.Context
+    function_type = quickjs.Function
     calls: list[int] = []
+    engines: list[Any] = []
 
     class TrackedContext:
-        def __init__(self):
+        def __init__(self) -> None:
             calls.append(threading.get_ident())
             self.context = context_type()
 
-        def __getattr__(self, name):
+        def __getattr__(self, name: str) -> Any:
             method = getattr(self.context, name)
 
-            def tracked(*args):
+            def tracked(*args: Any) -> Any:
                 calls.append(threading.get_ident())
                 return method(*args)
 
             return tracked
 
+    def tracked_function(*args: Any, **kwargs: Any) -> Any:
+        engine = function_type(*args, **kwargs)
+        engines.append(engine)
+        return engine
+
     monkeypatch.setattr(quickjs, "Context", TrackedContext)
-    # This test covers native thread ownership; the real DOM is fetched through
-    # the production cold-cache path in E2E, never vendored into fixtures.
-    dom = """
-    globalThis.__linkedom = {
-      HTMLElement: class HTMLElement {},
-      parseHTML: function () { return {
-        document: {}, customElements: {define: function () {}}
-      }; }
-    };
-    """
+    monkeypatch.setattr(quickjs, "Function", tracked_function)
     source = (
         "globalThis.modeOK = this === "
         + ("undefined;" if module else "globalThis;")
@@ -53,85 +80,122 @@ def test_all_quickjs_context_operations_use_the_creating_thread(
         + "class Card extends HTMLElement {setConfig(c) {if (!modeOK) throw new Error('wrong mode');}}"
         + "customElements.define('a-card', Card);"
     )
-    bundle = cc._Bundle(dom, source, module=module)
-    assert bundle.check("a-card", {}) == []
-    bundle.form("a-card")
-    assert bundle.memory > 0
-    bundle.close()
-    assert not hasattr(bundle.engine, "_context")
+    card = tmp_path / "card.js"
+    card.write_text(source)
+    custom = cc.CustomCards(_DOM)
+    custom.refresh([card], {card} if module else set())
+    assert custom.check("a-card", {}) == []
+    assert custom.describe("a-card") is not None
+    # Removing the resource disposes its runtime.
+    custom.refresh([])
+    (engine,) = engines
+    assert not hasattr(engine, "_context")
     with pytest.raises(RuntimeError, match="shutdown"):
-        bundle.engine._threadpool.submit(lambda: None)
+        engine("check", None)
     assert len(set(calls)) == 1
 
 
-def test_only_requested_editors_are_prepared_and_cached(monkeypatch) -> None:
-    import quickjs
+# ``getConfigElement`` records each editor it builds; the editor reports the
+# record when a config is checked against it. ``slow-card``'s editor never
+# finishes loading: its timers keep rescheduling themselves.
+_EDITORS = """
+globalThis.__prepared = [];
+function editorFor(tag) {
+  __prepared.push(tag);
+  return { setConfig: function () { throw new Error('prepared: ' + __prepared.join(',')); } };
+}
+class OneCard extends HTMLElement { setConfig(c) {} static getConfigElement() { return editorFor('one-card'); } }
+class TwoCard extends HTMLElement { setConfig(c) {} static getConfigElement() { return editorFor('two-card'); } }
+class SlowCard extends HTMLElement {
+  setConfig(c) {}
+  static getConfigForm() { return { schema: [{ name: 'entity', selector: { entity: {} } }] }; }
+  static getConfigElement() {
+    return new Promise(function () { (function spin() { setTimeout(spin); })(); });
+  }
+}
+customElements.define('one-card', OneCard);
+customElements.define('two-card', TwoCard);
+customElements.define('slow-card', SlowCard);
+"""
 
-    clock = [0.0]
-    prepared = []
 
-    def call(op: str, payload: Any, run_gc: bool = True) -> Any:
-        if op == "cards":
-            return {"value": {"tags": list(range(100)), "cards": []}}
-        if op == "prepare":
-            clock[0] += 1
-            prepared.append(payload)
-            return {"value": True}
-        return {}
+def test_only_requested_editors_are_prepared_and_cached(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cards = tmp_path / "cards.js"
+    cards.write_text(_EDITORS)
+    custom = cc.CustomCards(_DOM)
+    custom.refresh([cards])
+    try:
+        # Loading prepared no editor, the check prepared only its own, and a
+        # second check reuses it.
+        prepared = [{"source": "editor", "message": "prepared: one-card"}]
+        assert custom.check("one-card", {}) == prepared
+        assert custom.check("one-card", {}) == prepared
 
-    monkeypatch.setattr(
-        quickjs, "Function", MagicMock(return_value=MagicMock(side_effect=call))
-    )
-    monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(cc._Bundle, "_settle", lambda self: None)
-    monkeypatch.setattr(cc, "_PREPARE_SECONDS", 2, raising=False)
-    bundle = cc._Bundle("dom", "source")
-    assert prepared == []
-    bundle._prepare_tag("one-card")
-    bundle._prepare_tag("one-card")
-    assert prepared == [{"tag": "one-card"}]
-
-    def too_slow(self):
-        clock[0] += cc._CALL_SECONDS + 1
-        self._limit_preparation()
-
-    monkeypatch.setattr(cc._Bundle, "_settle", too_slow)
-    with pytest.raises(TimeoutError):
-        bundle._prepare_tag("slow-card")
-    assert "slow-card" not in bundle._prepared
+        # An editor that outlives its budget is stopped and never used.
+        with caplog.at_level(logging.DEBUG, logger=cc.__name__):
+            described = custom.describe("slow-card")
+        assert described is not None
+        assert described["fields"] is None
+        assert any(
+            record.exc_info and record.exc_info[0] is TimeoutError
+            for record in caplog.records
+        )
+        assert custom.check("slow-card", {}) == []
+    finally:
+        custom.refresh([])
 
 
 @pytest.mark.asyncio
 async def test_linkedom_download_stops_before_buffering_an_oversized_response(
-    tmp_path, monkeypatch
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    aiohttp_client: ClientSessionGenerator,
+    socket_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    import sys
+    chunk = b"x" * 64 * 1024
+    total = 1024  # 64 MiB, far past the download limit
+    sent: list[int] = []
 
-    consumed = []
+    async def linkedom(request: web.Request) -> web.StreamResponse:
+        response = web.StreamResponse()
+        await response.prepare(request)
+        try:
+            for i in range(total):
+                await response.write(chunk)
+                sent.append(i)
+        except OSError:
+            pass  # the client hung up
+        return response
 
-    async def chunks(size):
-        for i in range(20):
-            consumed.append(i)
-            yield b"x" * 8
-
-    response = MagicMock()
-    response.content.iter_chunked = chunks
-    response.read = AsyncMock(return_value=b"x" * 160)
-    session = MagicMock()
-    session.get.return_value.__aenter__ = AsyncMock(return_value=response)
-    monkeypatch.setitem(
-        sys.modules,
-        "homeassistant.helpers.aiohttp_client",
-        SimpleNamespace(async_get_clientsession=lambda hass: session),
-    )
-    monkeypatch.setattr(cc, "_dom_failed_at", None)
-    monkeypatch.setattr(cc, "_MAX_DOM_DOWNLOAD_BYTES", 16, raising=False)
+    app = web.Application()
+    app.router.add_get("/linkedom.tgz", linkedom)
+    server = await aiohttp_client(app)
+    monkeypatch.setattr(cc, "LINKEDOM_URL", str(server.make_url("/linkedom.tgz")))
+    for name in ("_custom", "_refresh_task", "_dom_failed_at", "_resource_error"):
+        monkeypatch.setattr(cc, name, None)
     transform = MagicMock(return_value="oversized content was accepted")
     monkeypatch.setattr(cc, "dom_script", transform)
-    hass = MagicMock()
-    hass.config.path.side_effect = lambda *parts: str(tmp_path.joinpath(*parts))
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
-    assert await cc._async_dom(hass) is None
+    assert await async_setup_component(hass, "lovelace", {})
+    ws = await hass_ws_client(hass)
+    await ws_result(
+        ws, "lovelace/resources/create", res_type="module", url="/local/card.js"
+    )
+
+    assert await cc.async_get_custom_cards(hass) is None
+
+    status = cc.custom_load_status(None)
+    assert status["state"] == "unavailable"
+    assert "linkedom" in status["reason"]
     transform.assert_not_called()
-    response.read.assert_not_awaited()
-    assert len(consumed) < 20
+    # The download ran and was cut off by its size limit, well before the end.
+    assert any(
+        isinstance(record.exc_info[1], ValueError)
+        and "size limit" in str(record.exc_info[1])
+        for record in caplog.records
+        if record.exc_info
+    )
+    assert 0 < len(sent) < total

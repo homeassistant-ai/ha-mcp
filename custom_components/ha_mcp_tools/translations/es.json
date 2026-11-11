@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "¿Mantener HA-MCP en un solo listado de la tienda?",
-            "description": "HA-MCP está marcado como instalado desde ambos {records}. Contienen la misma integración (el segundo es el espejo de distribución más antiguo). El Marketplace en Home Assistant 2026.11 permite que un solo listado sea dueño de una integración, por lo que allí ninguno de los dos puede actualizar HA-MCP; HACS todavía actualiza, pero la actualización a 2026.11 dejaría a HA-MCP bloqueado.\n\nAl enviar, se conserva **{keep}**, el listado en el catálogo predeterminado que no necesita un repositorio personalizado, y se marca el otro listado como no instalado. No se borra nada: tus entradas, configuraciones y archivos de HA-MCP se quedan exactamente como están, y a partir de ahora las actualizaciones aparecerán en {keep} como de costumbre."
+            "description": "HA-MCP aparece como instalado desde ambos {records}. Contienen la misma integración (el segundo es el espejo de distribución del que procedían las instalaciones anteriores). El Marketplace en Home Assistant 2026.11 permite que un solo listado posea una integración, por lo que allí ninguno de los dos puede actualizar HA-MCP; HACS sigue actualizándose, pero la actualización a 2026.11 dejaría HA-MCP bloqueado.\n\nEnviar mantiene **{keep}**, el listado en el catálogo predeterminado que no necesita un repositorio personalizado, y marca el otro listado como no instalado. No se borra nada: tus entradas, configuraciones y archivos de HA-MCP se quedan exactamente como están, y a partir de ahora las actualizaciones aparecerán en {keep} como de costumbre."
           }
         },
         "abort": {

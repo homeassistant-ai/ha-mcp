@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Conserver HA-MCP sur une seule liste du store ?",
-            "description": "HA-MCP est indiqué comme installé à partir de {records}. Ils contiennent la même intégration (le second est l'ancien miroir de distribution). Le Marketplace de Home Assistant 2026.11 ne permet qu'à une seule liste de posséder une intégration, de sorte qu'aucun d'eux ne peut y mettre à jour HA-MCP ; HACS effectue toujours les mises à jour, mais la mise à niveau vers 2026.11 bloquerait HA-MCP.\n\nValider permet de conserver **{keep}**, la liste du catalogue par défaut qui ne nécessite aucun dépôt personnalisé, et marque l'autre liste comme non installée. Rien n'est supprimé : vos entrées HA-MCP, vos paramètres et vos fichiers restent exactement tels quels, et désormais les mises à jour apparaîtront sous {keep} comme d'habitude."
+            "description": "HA-MCP est indiqué comme installé à partir de {records}. Ils contiennent la même intégration (le second est le miroir de distribution des installations précédentes). Le Marketplace de Home Assistant 2026.11 ne permet qu'à une seule fiche de posséder une intégration, aucun d'eux ne pourra donc y mettre à jour HA-MCP ; HACS continue de faire les mises à jour, mais la mise à niveau vers 2026.11 bloquerait HA-MCP.\n\nSoumettre conserve **{keep}**, la fiche dans le catalogue par défaut qui ne nécessite aucun dépôt personnalisé, et marque l'autre fiche comme non installée. Rien n'est supprimé : vos entrées HA-MCP, vos paramètres et vos fichiers restent exactement tels quels, et désormais les mises à jour apparaîtront sous {keep} comme d'habitude."
           }
         },
         "abort": {

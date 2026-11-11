@@ -25,6 +25,7 @@ matrix), and the code-scanning suites are the pre-merge security gate.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "codeql-quality.yml"
+_CODEQL_CONFIG = ".github/codeql/codeql-config.yml"
+_GATE_SCRIPT = _REPO_ROOT / "scripts" / "codeql_quality_gate.py"
 
 # The required-status-check context on the master ruleset. A job that no
 # longer emits it leaves the required check pending and blocks every merge.
@@ -124,8 +127,8 @@ def test_no_step_uses_always() -> None:
 
 
 def test_each_language_runs_both_its_quality_and_security_suites() -> None:
-    """The security suite is gated here because GitHub default setup only
-    analyzes master post-merge (workflow header)."""
+    """The security suite is gated here because GitHub default setup does
+    not block a merge (workflow header)."""
     analyses = "\n".join(
         _run(step) for step in _steps() if "database analyze" in _run(step)
     )
@@ -253,3 +256,25 @@ def test_each_language_builds_and_analyzes_its_own_database_directory() -> None:
             "cross-wiring the two analyze steps keeps every name present and "
             "every count identical, so only this pairing catches it"
         )
+
+
+def test_no_database_extracts_the_vendored_trees() -> None:
+    """A database built without the config extracts and analyzes every
+    vendored library again; the gate would still drop the findings, so only
+    the run time would show it."""
+    creates = [_run(step) for step in _steps() if "database create" in _run(step)]
+    assert len(creates) == len(_LANGUAGES)
+    for run in creates:
+        assert f"--codescanning-config={_CODEQL_CONFIG}" in run
+
+
+def test_extraction_skips_exactly_the_trees_the_gate_ignores() -> None:
+    """A tree only the gate ignores is still scanned for nothing; a tree only
+    the config skips is first-party code that silently stopped being gated."""
+    spec = importlib.util.spec_from_file_location("codeql_quality_gate", _GATE_SCRIPT)
+    assert spec and spec.loader
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+
+    config = yaml.safe_load((_REPO_ROOT / _CODEQL_CONFIG).read_text(encoding="utf-8"))
+    assert {f"{path}/" for path in config["paths-ignore"]} == set(gate.PATHS_IGNORE)

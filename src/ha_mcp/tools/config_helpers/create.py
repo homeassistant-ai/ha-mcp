@@ -17,7 +17,7 @@ from ..ws_waiters import wait_for_entity_registered
 from .core_payload import (
     with_create_defaults,
 )
-from .icon_route import collection_icon
+from .icon_route import icon_targets, note_hidden_icon
 from .registry import _ws_error_msg
 from .schemas import (
     _attach_helper_skill,
@@ -27,10 +27,10 @@ from .schemas import (
 
 
 def _build_create_message(
-    helper_type: str, name: str, icon: str | None, fields: dict[str, Any]
+    helper_type: str, name: str | None, icon: str | None, fields: dict[str, Any]
 ) -> dict[str, Any]:
     """The WebSocket {type}/create message: the caller's fields under Core's names."""
-    message: dict[str, Any] = {"name": name}
+    message: dict[str, Any] = {} if name is None else {"name": name}
     if icon:
         message["icon"] = icon
     message.update(with_create_defaults(helper_type, fields))
@@ -110,45 +110,32 @@ async def _execute_create_simple_helper(
     fields: dict[str, Any],
 ) -> dict[str, Any]:
     """Execute the create path for a simple (non-flow) helper type."""
-    if not name or not name.strip():
+    # Core says which types need a name (a tag does not). A blank one it would
+    # store for a zone or person is refused, as their dialogs refuse it.
+    if name is not None and not name.strip():
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"name is required for create action. Include "
-                f'"name" as a top-level argument, e.g. '
-                f'{{"helper_type": "{helper_type}", "name": "My Helper"}}.',
-                suggestions=[
-                    'Add "name": "My Helper" at the top level of the JSON arguments',
-                    'Or pass "helper_id": "my_helper" if you intended to update an existing helper',
-                ],
+                "name cannot be blank.",
                 context=_simple_helper_error_context(helper_type),
             )
         )
 
-    # A zone's update merges into the stored item and rejects an empty icon, so
-    # an icon stored there can never be removed: a new zone's icon goes to the
-    # entity registry (#2643), like the icon of a type whose schema has none or
-    # cannot be read.
-    item_icon = (
-        None
-        if helper_type == "zone"
-        else await collection_icon(client, helper_type, "create", icon)
-    )
-    registry_icon = icon if item_icon is None else None
-    message = _build_create_message(
-        helper_type, name, None if registry_icon else icon, fields
-    )
+    item_icon, registry_icon = await icon_targets(client, helper_type, "create", icon)
+    message = _build_create_message(helper_type, name, item_icon, fields)
     native = await _create_via_component(
         client, helper_type, message, area_id, labels, category, registry_icon
     )
     if native is not None:
         native_data, native_entity_id, native_warnings = native
+        await note_hidden_icon(client, native_entity_id, item_icon, native_warnings)
         create_response = _helper_response(
             "create",
             helper_type,
             data=native_data,
             entity_id=native_entity_id,
-            message=f"Successfully created {helper_type}: {name}",
+            message=f"Successfully created {helper_type}"
+            + (f": {name}" if name else ""),
             warnings=native_warnings,
         )
         _attach_helper_skill(create_response, MandatoryBPS)
@@ -212,13 +199,14 @@ async def _execute_create_simple_helper(
             registry_icon,
         )
         await _apply_create_category(client, entity_id, category, helper_data, warnings)
+        await note_hidden_icon(client, entity_id, item_icon, warnings)
 
     create_response = _helper_response(
         "create",
         helper_type,
         data=helper_data,
         entity_id=entity_id,
-        message=f"Successfully created {helper_type}: {name}",
+        message=f"Successfully created {helper_type}" + (f": {name}" if name else ""),
         warnings=warnings,
     )
     _attach_helper_skill(create_response, MandatoryBPS)

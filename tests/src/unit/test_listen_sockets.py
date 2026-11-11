@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import errno
-import importlib.util
 import logging
 import socket
 import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 import pytest_socket
 
+from ._embedded_server_helpers import _load as _load
+from ._embedded_server_helpers import _require_ipv6_loopback as _require_ipv6_loopback
 from .test_sidecar_pin_port import _a_free_port
 
 # These tests run their own listener on the loopback interface; Core's test
@@ -23,23 +23,7 @@ pytestmark = pytest.mark.usefixtures("socket_enabled")
 _REPO = Path(__file__).parents[3]
 
 
-def _load(path: Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 listen_sockets = _load(_REPO / "src/ha_mcp/listen_sockets.py", "listen_sockets_ut")
-
-
-def _require_ipv6_loopback() -> None:
-    try:
-        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
-            sock.bind(("::1", 0))
-    except OSError:
-        pytest.skip("IPv6 loopback unavailable on this machine")
 
 
 def _connects(address: str, port: int) -> bool:

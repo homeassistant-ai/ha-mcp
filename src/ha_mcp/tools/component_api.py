@@ -41,6 +41,7 @@ from ..client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -70,6 +71,11 @@ SUPPORTED_SCHEMA_VERSION = 1
 # predate Core 2026.9 child devices.  Because component and server releases update
 # independently, command presence alone cannot authorize the newer semantics.
 DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
+
+# Additive flag on search and overview: entity rows carry the name Core
+# composes, and search matches on it. A component without it serves the legacy
+# friendly_name alone, and the server says so where that changes the answer.
+ENTITY_COMPOSED_NAME = "entity_composed_name"
 
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
@@ -612,3 +618,38 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     """
     auth = info.get("webhook_auth") if info else None
     return auth if isinstance(auth, str) else None
+
+
+# Said wherever a response is poorer for want of a component command.
+COMPONENT_INSTALL_HINT = (
+    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
+    "on Home Assistant 2026.11+) and restart Home Assistant."
+)
+
+
+async def component_serves(client: Any, capability: str) -> bool:
+    """Whether the installed component advertises ``capability``."""
+    return component_supports(await get_component_caps(client), capability)
+
+
+async def ask_component(
+    client: Any, command: str, **params: Any
+) -> dict[str, Any] | None:
+    """The component's reply to ``ha_mcp_tools/<command>``, a command whose
+    capability has its name. ``None`` when the component does not advertise
+    it, the command was not sent, or it was refused: the caller then works
+    from Core's own commands."""
+    if not await component_serves(client, command):
+        return None
+    try:
+        reply = await client.send_websocket_message(
+            {"type": f"ha_mcp_tools/{command}", **params}
+        )
+    except HomeAssistantCommandNotSent:
+        return None
+    if not reply.get("success"):
+        if reply.get("error_code") == UNKNOWN_COMMAND_CODE:
+            invalidate_caps(client)
+        return None
+    result = reply.get("result")
+    return result if isinstance(result, dict) else None

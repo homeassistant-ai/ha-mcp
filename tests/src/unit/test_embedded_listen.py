@@ -1,18 +1,31 @@
-"""The in-process server's "Local network" listener serves IPv6 too (issue #2915)."""
+"""The in-process server's "Local network" listener serves IPv6 too (issue #2915).
+
+The worker tests start the server through ``EmbeddedServerManager.async_start``
+on a real ``hass`` with a real server config entry. The package install and
+the access token (this component's own collaborators), the bundled ha-mcp
+server and uvicorn are replaced; the listener and the readiness check are real.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import logging
+import os
 import socket
 import sys
 from contextlib import asynccontextmanager
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import embedded_listen
+from custom_components.ha_mcp_tools import embedded_server as es
 from custom_components.ha_mcp_tools.const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
@@ -20,14 +33,13 @@ from custom_components.ha_mcp_tools.const import (
     OPT_SERVER_PORT,
 )
 
-from .test_embedded_server import (
-    _manager,
-    _no_manifest_pin,  # noqa: F401 - autouse fixture
-    _stub_ha_mcp_surface,
-)
-from .test_embedded_server_stop import _clear_worker_env
-from .test_listen_sockets import _load, _require_ipv6_loopback
-from .test_sidecar_pin_port import _a_free_port
+from ._embedded_server_helpers import _a_free_port as _a_free_port
+from ._embedded_server_helpers import _clear_worker_env as _clear_worker_env
+from ._embedded_server_helpers import _load as _load
+from ._embedded_server_helpers import _no_manifest_pin as _no_manifest_pin
+from ._embedded_server_helpers import _require_ipv6_loopback as _require_ipv6_loopback
+from ._embedded_server_helpers import _stub_ha_mcp_surface as _stub_ha_mcp_surface
+from ._server_entry import add_server_entry
 
 # These tests run their own listener on the loopback interface; Core's test
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
@@ -48,7 +60,12 @@ def helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     _require_ipv6_loopback()
     _install_helpers(monkeypatch)
     config = ModuleType("ha_mcp.config")
-    config.get_global_settings = lambda: SimpleNamespace(ipv6_allowed_networks="")
+    monkeypatch.setattr(
+        config,
+        "get_global_settings",
+        lambda: SimpleNamespace(ipv6_allowed_networks=""),
+        raising=False,
+    )
     monkeypatch.setitem(sys.modules, "ha_mcp.config", config)
 
 
@@ -84,70 +101,125 @@ class _FakeMcp:
         return object()
 
 
-def _serve_worker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, port: int, serve: Any
-) -> tuple[Any, dict[str, Any]]:
-    """Run the worker against stub uvicorn with the helpers in the bundle."""
-    _require_ipv6_loopback()
+class _Uvicorn:
+    """Stub uvicorn recording what the worker serves.
+
+    ``serve`` listens on the sockets it is handed, as uvicorn does, reports
+    itself started when ``starts`` is set, and runs until told to exit.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, starts: bool) -> None:
+        self.app: Any = None
+        self.config: dict[str, Any] = {}
+        self.served: list[socket.socket] = []
+        self.starts = starts
+        self.server = SimpleNamespace(
+            should_exit=False, started=False, serve=self.serve
+        )
+        module = ModuleType("uvicorn")
+        monkeypatch.setattr(module, "Config", self.make_config, raising=False)
+        monkeypatch.setattr(module, "Server", lambda config: self.server, raising=False)
+        monkeypatch.setitem(sys.modules, "uvicorn", module)
+
+    def make_config(self, app: Any, **config: Any) -> SimpleNamespace:
+        self.app = app
+        self.config = config
+        return SimpleNamespace()
+
+    async def serve(self, sockets: list[socket.socket] | None = None) -> None:
+        for sock in sockets or []:
+            sock.listen()
+            self.served.append(sock)
+        self.server.started = self.starts
+        # uvicorn's own main loop polls should_exit the same way.
+        while not self.server.should_exit:  # noqa: ASYNC110
+            await asyncio.sleep(0.01)
+
+
+def _worker(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, Any],
+    *,
+    starts: bool = True,
+) -> tuple[es.EmbeddedServerManager, _Uvicorn]:
+    """A manager whose start runs the real worker on the stubbed server."""
     _clear_worker_env(monkeypatch)
     _install_helpers(monkeypatch)  # before the stub uvicorn: the guard imports it
     _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+    # An imported package has a spec; the post-start version check looks it up.
+    spec = ModuleSpec("ha_mcp", None, is_package=True)
+    monkeypatch.setattr(sys.modules["ha_mcp"], "__spec__", spec)
     sys.modules["ha_mcp.config"].get_global_settings().ipv6_allowed_networks = ""
-    seen: dict[str, Any] = {}
-    uvicorn_mod = ModuleType("uvicorn")
-    uvicorn_mod.Config = lambda app, **kw: seen.update(app=app, config=kw)
-    uvicorn_mod.Server = lambda config: SimpleNamespace(should_exit=False, serve=serve)
-    monkeypatch.setitem(sys.modules, "uvicorn", uvicorn_mod)
-    mgr, _hass, _entry = _manager(
-        tmp_path, options={OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: port}
-    )
-    mgr._thread_main("tok")
-    return mgr, seen
+    uvicorn = _Uvicorn(monkeypatch, starts=starts)
+    manager = es.EmbeddedServerManager(hass, add_server_entry(hass, options=options))
+    monkeypatch.setattr(manager, "_async_ensure_package", AsyncMock(return_value=None))
+    monkeypatch.setattr(manager, "_async_warn_on_dependency_conflicts", AsyncMock())
+    monkeypatch.setattr(manager, "_async_access_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr(manager, "_prepare_config_dir", lambda: None)
+    monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+    return manager, uvicorn
 
 
-def test_worker_serves_guarded_dual_stack_and_releases_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_worker_serves_guarded_dual_stack_and_releases_it(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    served: list[Any] = []
+    _require_ipv6_loopback()
+    options = {OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: _a_free_port()}
+    manager, uvicorn = _worker(hass, monkeypatch, options)
 
-    async def serve(sockets: Any = None) -> None:
-        served.extend(sockets)
+    await manager.async_start()  # raises if the worker failed
+    await manager.async_stop()
 
-    mgr, seen = _serve_worker(tmp_path, monkeypatch, _a_free_port(), serve)
-    assert mgr._thread_exc is None
-    assert type(seen["app"]).__name__ == "IPv6LanGuard"
-    assert seen["config"]["proxy_headers"] is False
-    assert {sock.family for sock in served} == {socket.AF_INET, socket.AF_INET6}
-    assert all(sock.fileno() == -1 for sock in served)
+    assert type(uvicorn.app).__name__ == "IPv6LanGuard"
+    assert uvicorn.config["proxy_headers"] is False
+    assert {sock.family for sock in uvicorn.served} == {socket.AF_INET, socket.AF_INET6}
+    assert all(sock.fileno() == -1 for sock in uvicorn.served)
 
 
-def test_busy_port_reads_as_a_startup_exit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_busy_port_reads_as_a_startup_exit(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def serve(sockets: Any = None) -> None:
-        raise AssertionError("served on a busy port")
-
+    _require_ipv6_loopback()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
-        mgr, _seen = _serve_worker(tmp_path, monkeypatch, taken.getsockname()[1], serve)
-    message = str(mgr._thread_exc)
+        options = {
+            OPT_BIND_HOST: BIND_HOST_ALL,
+            OPT_SERVER_PORT: taken.getsockname()[1],
+        }
+        manager, uvicorn = _worker(hass, monkeypatch, options)
+        with pytest.raises(es.EmbeddedServerError) as exc:
+            await manager.async_start()
+        await manager.async_stop()
+    message = str(exc.value)
     assert "exited during startup" in message
-    assert "Address already in use" in message
+    assert os.strerror(errno.EADDRINUSE) in message
+    assert uvicorn.served == []  # never served on the busy port
 
 
-async def test_readiness_ignores_another_process_on_the_port(tmp_path: Path) -> None:
+async def test_readiness_ignores_another_process_on_the_port(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Another listener on the port answered the loopback probe, so a server
     # that never started was reported as running.
+    monkeypatch.setattr(es, "_READY_POLL_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(es, "_READY_STALL_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(es, "_READY_TOTAL_CAP_SECONDS", 10.0)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
         other.bind(("127.0.0.1", 0))
         other.listen()
-        mgr, _hass, _entry = _manager(
-            tmp_path, options={OPT_SERVER_PORT: other.getsockname()[1]}
-        )
-        mgr._uv_server = None
-        assert await mgr._async_server_ready() is False
-        mgr._uv_server = SimpleNamespace(started=False)
-        assert await mgr._async_server_ready() is False
-        mgr._uv_server = SimpleNamespace(started=True)
-        assert await mgr._async_server_ready() is True
+        options = {
+            OPT_BIND_HOST: BIND_HOST_LOOPBACK,
+            OPT_SERVER_PORT: other.getsockname()[1],
+        }
+
+        never_started, _ = _worker(hass, monkeypatch, options, starts=False)
+        with pytest.raises(es.EmbeddedServerError, match="did not become reachable"):
+            await never_started.async_start()
+        assert never_started.is_running is False
+
+        started, _ = _worker(hass, monkeypatch, options, starts=True)
+        await started.async_start()  # its own server started, and the port answers
+        assert started.is_running is True
+        await started.async_stop()

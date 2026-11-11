@@ -337,7 +337,7 @@ class TestInputBooleanCRUD:
             {
                 "helper_type": "input_boolean",
                 "name": "E2E Initial On Boolean",
-                "initial": "on",
+                "config": {"initial": "on"},
             },
         )
 
@@ -374,7 +374,6 @@ class TestInputNumberCRUD:
 
     async def test_input_number_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete input_number lifecycle with numeric settings."""
-        logger.info("Testing input_number full lifecycle")
 
         helper_name = "E2E Test Number"
 
@@ -384,11 +383,13 @@ class TestInputNumberCRUD:
             {
                 "helper_type": "input_number",
                 "name": helper_name,
-                "min_value": 0,
-                "max_value": 100,
-                "step": 5,
-                "unit_of_measurement": "%",
-                "mode": "slider",
+                "config": {
+                    "min": 0,
+                    "max": 100,
+                    "step": 5,
+                    "unit_of_measurement": "%",
+                    "mode": "slider",
+                },
             },
         )
 
@@ -424,16 +425,13 @@ class TestInputNumberCRUD:
 
     async def test_input_number_box_mode(self, mcp_client, cleanup_tracker):
         """Test creating input_number with box mode."""
-        logger.info("Testing input_number with box mode")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_number",
                 "name": "E2E Box Mode Number",
-                "min_value": -50,
-                "max_value": 50,
-                "mode": "box",
+                "config": {"min": -50, "max": 50, "mode": "box"},
             },
         )
 
@@ -481,8 +479,7 @@ class TestInputSelectCRUD:
             {
                 "helper_type": "input_select",
                 "name": helper_name,
-                "options": options,
-                "initial": "Option B",
+                "config": {"options": options, "initial": "Option B"},
             },
         )
 
@@ -539,7 +536,6 @@ class TestInputTextCRUD:
 
     async def test_input_text_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete input_text lifecycle with text settings."""
-        logger.info("Testing input_text full lifecycle")
 
         helper_name = "E2E Test Text"
 
@@ -549,10 +545,12 @@ class TestInputTextCRUD:
             {
                 "helper_type": "input_text",
                 "name": helper_name,
-                "min_value": 1,  # Min length
-                "max_value": 100,  # Max length
-                "mode": "text",
-                "initial": "Hello E2E",
+                "config": {
+                    "min": 1,
+                    "max": 100,
+                    "mode": "text",
+                    "initial": "Hello E2E",
+                },
             },
         )
 
@@ -575,14 +573,13 @@ class TestInputTextCRUD:
 
     async def test_input_text_password_mode(self, mcp_client, cleanup_tracker):
         """Test creating input_text with password mode."""
-        logger.info("Testing input_text with password mode")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_text",
                 "name": "E2E Password Text",
-                "mode": "password",
+                "config": {"mode": "password"},
             },
         )
 
@@ -619,15 +616,13 @@ class TestInputDatetimeCRUD:
 
     async def test_input_datetime_date_only(self, mcp_client, cleanup_tracker):
         """Test creating input_datetime with date only."""
-        logger.info("Testing input_datetime date only")
 
         result = await mcp_client.call_tool(
             "ha_config_set_helper",
             {
                 "helper_type": "input_datetime",
                 "name": "E2E Date Only",
-                "has_date": True,
-                "has_time": False,
+                "config": {"has_date": True, "has_time": False},
             },
         )
 
@@ -652,8 +647,7 @@ class TestInputDatetimeCRUD:
             {
                 "helper_type": "input_datetime",
                 "name": "E2E Time Only",
-                "has_date": False,
-                "has_time": True,
+                "config": {"has_date": False, "has_time": True},
             },
         )
 
@@ -678,8 +672,7 @@ class TestInputDatetimeCRUD:
             {
                 "helper_type": "input_datetime",
                 "name": "E2E Full Datetime",
-                "has_date": True,
-                "has_time": True,
+                "config": {"has_date": True, "has_time": True},
             },
         )
 
@@ -948,10 +941,7 @@ class TestCounterCRUD:
                 "helper_type": "counter",
                 "name": helper_name,
                 "icon": "mdi:counter",
-                "initial": 5,
-                "min_value": 0,
-                "max_value": 100,
-                "step": 2,
+                "config": {"initial": 5, "minimum": 0, "maximum": 100, "step": 2},
             },
         )
 
@@ -1040,8 +1030,7 @@ class TestTimerCRUD:
                 "helper_type": "timer",
                 "name": helper_name,
                 "icon": "mdi:timer",
-                "duration": "0:05:00",
-                "restore": True,
+                "config": {"duration": "0:05:00", "restore": True},
             },
         )
 
@@ -1131,12 +1120,14 @@ class TestScheduleCRUD:
                 "helper_type": "schedule",
                 "name": helper_name,
                 "icon": "mdi:calendar-clock",
-                "monday": [{"from": "09:00", "to": "17:00"}],
-                "tuesday": [{"from": "09:00", "to": "17:00"}],
-                "wednesday": [
-                    {"from": "09:00", "to": "12:00"},
-                    {"from": "13:00", "to": "17:00"},
-                ],
+                "config": {
+                    "monday": [{"from": "09:00", "to": "17:00"}],
+                    "tuesday": [{"from": "09:00", "to": "17:00"}],
+                    "wednesday": [
+                        {"from": "09:00", "to": "12:00"},
+                        {"from": "13:00", "to": "17:00"},
+                    ],
+                },
             },
         )
 
@@ -1205,13 +1196,15 @@ class TestScheduleCRUD:
                 "helper_type": "schedule",
                 "name": helper_name,
                 "icon": "mdi:calendar-clock",
-                "monday": [
-                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
-                    {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
-                ],
-                "tuesday": [
-                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
-                ],
+                "config": {
+                    "monday": [
+                        {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                        {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
+                    ],
+                    "tuesday": [
+                        {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                    ],
+                },
             },
         )
 
@@ -1296,10 +1289,12 @@ class TestScheduleCRUD:
             {
                 "helper_type": "schedule",
                 "name": helper_name,
-                "monday": [
-                    {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
-                    {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
-                ],
+                "config": {
+                    "monday": [
+                        {"from": "07:00", "to": "22:00", "data": {"mode": "comfort"}},
+                        {"from": "22:00", "to": "23:59", "data": {"mode": "sleep"}},
+                    ]
+                },
             },
         )
 
@@ -1318,10 +1313,12 @@ class TestScheduleCRUD:
                 "helper_type": "schedule",
                 "name": helper_name,
                 "helper_id": entity_id,
-                "monday": [
-                    {"from": "07:00", "to": "22:00", "data": {"mode": "away"}},
-                    {"from": "22:00", "to": "23:59", "data": {"mode": "comfort"}},
-                ],
+                "config": {
+                    "monday": [
+                        {"from": "07:00", "to": "22:00", "data": {"mode": "away"}},
+                        {"from": "22:00", "to": "23:59", "data": {"mode": "comfort"}},
+                    ]
+                },
             },
         )
 
@@ -1395,10 +1392,12 @@ class TestZoneCRUD:
                 "helper_type": "zone",
                 "name": helper_name,
                 "icon": "mdi:map-marker",
-                "latitude": 37.7749,
-                "longitude": -122.4194,
-                "radius": 150,
-                "passive": False,
+                "config": {
+                    "latitude": 37.7749,
+                    "longitude": -122.4194,
+                    "radius": 150,
+                    "passive": False,
+                },
             },
         )
 
@@ -1464,10 +1463,12 @@ class TestZoneCRUD:
             {
                 "helper_type": "zone",
                 "name": "E2E Zone Update Test",
-                "latitude": 40.7128,
-                "longitude": -74.0060,
-                "radius": 200,
-                "passive": False,
+                "config": {
+                    "latitude": 40.7128,
+                    "longitude": -74.0060,
+                    "radius": 200,
+                    "passive": False,
+                },
             },
         )
         create_data = assert_mcp_success(create_result, "Create zone for update test")
@@ -1489,9 +1490,7 @@ class TestZoneCRUD:
                 "helper_type": "zone",
                 "helper_id": entity_id,
                 "name": "E2E Zone Update Test",
-                "latitude": 51.5074,
-                "longitude": -0.1278,
-                "radius": 500,
+                "config": {"latitude": 51.5074, "longitude": -0.1278, "radius": 500},
             },
         )
         update_data = assert_mcp_success(update_result, "Update zone coordinates")
@@ -1687,8 +1686,10 @@ class TestTagCRUD:
             {
                 "helper_type": "tag",
                 "name": helper_name,
-                "tag_id": test_tag_id,
-                "description": "Test tag for E2E testing",
+                "config": {
+                    "tag_id": test_tag_id,
+                    "description": "Test tag for E2E testing",
+                },
             },
         )
 
@@ -1733,8 +1734,7 @@ class TestTagCRUD:
             {
                 "helper_type": "tag",
                 "name": "E2E Tag Update Test",
-                "tag_id": test_tag_id,
-                "description": "Initial description",
+                "config": {"tag_id": test_tag_id, "description": "Initial description"},
             },
         )
         create_data = assert_mcp_success(create_result, "Create tag for update test")
@@ -1750,7 +1750,7 @@ class TestTagCRUD:
                 "helper_type": "tag",
                 "helper_id": tag_id,
                 "name": "E2E Tag Update Test Renamed",
-                "description": "Updated description",
+                "config": {"description": "Updated description"},
             },
         )
         update_data = assert_mcp_success(

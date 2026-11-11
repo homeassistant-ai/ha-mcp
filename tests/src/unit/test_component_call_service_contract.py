@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import component_api, tools_service
@@ -38,7 +39,7 @@ from .test_component_ws_phase2_async import (
 from .test_component_ws_search import FakeState
 
 
-def _real_call_service_ws(hass: Any) -> AsyncMock:
+def _real_call_service_ws(hass: HomeAssistant) -> AsyncMock:
     """A WS mock whose ``call_service`` frame is served by the REAL component prep.
 
     ``info`` returns the real ``_do_info()`` (so the caps probe sees ``call_service``

@@ -100,27 +100,25 @@ def _build_datetime_create_params(
     helper_name: str, has_date: bool, has_time: bool
 ) -> dict[str, Any]:
     """Build the ha_config_set_helper params for an input_datetime helper."""
-    create_params = {
+    config: dict[str, Any] = {}
+    if has_date:
+        config["has_date"] = True
+    if has_time:
+        config["has_time"] = True
+
+    if has_date and has_time:
+        config["initial"] = "2025-01-01 12:00:00"
+    elif has_date:
+        config["initial"] = "2025-01-01"
+    elif has_time:
+        config["initial"] = "12:00:00"
+
+    return {
         "helper_type": "input_datetime",
         "name": helper_name,
         "icon": "mdi:calendar-clock",
+        "config": config,
     }
-
-    # Set explicit date/time parameters (at least one required)
-    if has_date:
-        create_params["has_date"] = True
-    if has_time:
-        create_params["has_time"] = True
-
-    # Add appropriate initial values
-    if has_date and has_time:
-        create_params["initial"] = "2025-01-01 12:00:00"
-    elif has_date:
-        create_params["initial"] = "2025-01-01"
-    elif has_time:
-        create_params["initial"] = "12:00:00"
-
-    return create_params
 
 
 @pytest.mark.helper
@@ -149,7 +147,7 @@ class TestHelperIntegration:
                 "helper_type": "input_boolean",
                 "name": helper_name,
                 "icon": "mdi:toggle-switch",
-                "initial": False,  # Native boolean type
+                "config": {"initial": False},
             },
         )
         assert create_data.get("success"), (
@@ -255,13 +253,15 @@ class TestHelperIntegration:
             {
                 "helper_type": "input_number",
                 "name": helper_name,
-                "min_value": 0,
-                "max_value": 100,
-                "step": 5,
-                "initial": 25,
-                "mode": "slider",
-                "unit_of_measurement": "%",
                 "icon": "mdi:brightness-percent",
+                "config": {
+                    "min": 0,
+                    "max": 100,
+                    "step": 5,
+                    "initial": 25,
+                    "mode": "slider",
+                    "unit_of_measurement": "%",
+                },
             },
         )
 
@@ -418,9 +418,8 @@ class TestHelperIntegration:
             {
                 "helper_type": "input_select",
                 "name": helper_name,
-                "options": options,
-                "initial": "Option 2",
                 "icon": "mdi:format-list-bulleted",
+                "config": {"options": options, "initial": "Option 2"},
             },
         )
 
@@ -534,9 +533,8 @@ class TestHelperIntegration:
             {
                 "helper_type": "input_text",
                 "name": helper_name,
-                "initial": "Test",
-                "mode": "text",
                 "icon": "mdi:text-box",
+                "config": {"initial": "Test", "mode": "text"},
             },
         )
 
@@ -883,7 +881,7 @@ class TestHelperIntegration:
             (
                 "input_number",
                 "bulk_num_1",
-                {"name": "bulk_num_1", "min_value": 0, "max_value": 10, "initial": 5},
+                {"name": "bulk_num_1", "min": 0, "max": 10, "initial": 5},
             ),
             (
                 "input_select",
@@ -902,8 +900,12 @@ class TestHelperIntegration:
         # 1. CREATE: Bulk creation of helpers
         logger.info(f"🚀 Creating {len(helpers_to_create)} helpers...")
         for helper_type, helper_id, config in helpers_to_create:
-            create_params = {"helper_type": helper_type}
-            create_params.update(config)  # Merge config parameters directly
+            fields = dict(config)
+            create_params = {
+                "helper_type": helper_type,
+                "name": fields.pop("name"),
+                "config": fields,
+            }
             create_result = await mcp_client.call_tool(
                 "ha_config_set_helper", create_params
             )
@@ -1094,10 +1096,8 @@ async def test_helper_list_functionality(mcp_client, cleanup_tracker):
         {
             "helper_type": "input_number",
             "name": "test_list_num",
-            "min_value": 0,
-            "max_value": 100,
-            "initial": 50,
             "icon": "mdi:test-tube",
+            "config": {"min": 0, "max": 100, "initial": 50},
         },
     )
     num_data = parse_mcp_result(num_result)

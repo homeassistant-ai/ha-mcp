@@ -9,7 +9,6 @@ needed.
 """
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,8 +18,6 @@ from ha_mcp._vendor.mcp.types import TextContent
 from ha_mcp.errors import create_entity_not_found_error
 from ha_mcp.visibility import enforcement, resolver
 from ha_mcp.visibility.enforcement import (
-    VisibilityInboundEnforcement,
-    VisibilityOutboundEnforcement,
     _build_hidden_regex,
     active_hidden_regex,
     scrub_records,
@@ -28,15 +25,16 @@ from ha_mcp.visibility.enforcement import (
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.resolver import VisibilityDataUnavailable
 
+from ._chained_enforcement import (
+    _ChainedEnforcement,
+    _returns,
+    make_context,
+    text_result,
+)
+
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
-
-
-def make_context(name, arguments=None):
-    return SimpleNamespace(
-        message=SimpleNamespace(name=name, arguments=arguments or {})
-    )
 
 
 def report_context(*, proxied=False):
@@ -48,43 +46,8 @@ def report_context(*, proxied=False):
     return make_context("ha_report_issue", arguments)
 
 
-def text_result(text="ok", structured=None):
-    """A ToolResult stand-in with a text content block + structured content."""
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=text)],
-        structured_content=structured,
-    )
-
-
 async def _unreached_call_next(context):
     raise AssertionError("call_next should not run for a blocked/concealed call")
-
-
-def _returns(result):
-    async def _call_next(context):
-        return result
-
-    return _call_next
-
-
-class _ChainedEnforcement:
-    """Inbound + outbound halves chained in server registration order.
-
-    The server registers the inbound half before read-only/policy and the
-    outbound half innermost; from the enforcement pair's own perspective the
-    composition is inbound-wrapping-outbound, which this reproduces so tests
-    exercise the full conceal/refuse/scan pipeline through one entry point.
-    """
-
-    def __init__(self, get_client):
-        self.inbound = VisibilityInboundEnforcement(get_client=get_client)
-        self.outbound = VisibilityOutboundEnforcement(get_client=get_client)
-
-    async def on_call_tool(self, context, call_next):
-        async def _inner(ctx):
-            return await self.outbound.on_call_tool(ctx, call_next)
-
-        return await self.inbound.on_call_tool(context, _inner)
 
 
 def make_mw(*, get_client):

@@ -8,15 +8,17 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
-from ha_mcp.tools.config_entry_flow_form import _handle_form_step, _ReuseState
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
+from ha_mcp.tools.config_entry_flow_form import form_submission
 
 
 def _step() -> dict[str, Any]:
@@ -56,8 +58,8 @@ def _client(step: dict[str, Any] | None = None) -> SimpleNamespace:
 
 
 async def _restore(client: Any, config: dict[str, Any]) -> dict[str, Any]:
-    return await update_config_entry_options(
-        client, "entry", config, expected_domain="template", keep_current_values=False
+    return await restore_config_entry_options(
+        client, "entry", config, expected_domain="template"
     )
 
 
@@ -79,17 +81,15 @@ async def test_explicit_empty_section_completes_without_false_key_error() -> Non
             {"additional_options": {}},
             {"additional_options": {"availability": "{{ false }}"}},
         ),
-        ({"additional_options": {"availability": None}}, {}),
+        # An emptied section is posted empty, as the HA dialog posts it.
+        (
+            {"additional_options": {"availability": None}},
+            {"additional_options": {}},
+        ),
     ],
 )
-def test_ordinary_edit_section_backfill_and_clear_unchanged(values, expected) -> None:
-    payload = _handle_form_step(
-        _step(),
-        values,
-        reuse_state=_ReuseState(),
-        keep_current_values=True,
-    )
-    assert payload == expected
+def test_ordinary_edit_section_backfill_and_clear(values, expected) -> None:
+    assert form_submission(_step()["data_schema"], values, keep_shown=True) == expected
 
 
 @pytest.mark.parametrize(
@@ -150,26 +150,12 @@ async def test_lost_submit_reply_preserves_unknown_and_does_not_abort(error) -> 
     client.abort_options_flow.assert_not_awaited()
 
 
-async def test_acknowledged_completion_survives_local_response_error() -> None:
-    client = _client()
-    client.submit_options_flow_step.return_value = {
-        "type": "create_entry",
-        "result": [],
-    }
-    with pytest.raises(Exception) as caught:
-        await _restore(client, {"press": []})
-    assert getattr(caught.value, "apply_status", None) == "applied"
-    assert "completed" in str(caught.value)
-    client.abort_options_flow.assert_not_awaited()
-
-
 @pytest.mark.parametrize(
     ("status_code", "apply_status", "error_type"),
     [
         (401, "not_applied", HomeAssistantAuthError),
         (403, "not_applied", HomeAssistantAPIError),
-        # The walker reports a lost answer as possibly applied (a ToolError).
-        (504, "unknown", ToolError),
+        (504, "unknown", HomeAssistantAPIError),
     ],
 )
 async def test_http_submit_failure_preserves_application_knowledge(
@@ -266,11 +252,10 @@ _SNAPSHOT = {"name": "Office", "cold_tolerance": 0.5, "away_temp": 16}
 
 async def test_multi_form_restore_fills_each_form_from_the_snapshot() -> None:
     client = _two_forms()
-    result = await update_config_entry_options(
+    result = await restore_config_entry_options(
         client,
         "entry",
         _SNAPSHOT,
-        keep_current_values=False,
         fixed_options={**_SNAPSHOT, "away_temp": 20},
     )
     assert result["success"] is True
@@ -287,11 +272,10 @@ async def test_option_no_form_offers_must_still_match_or_nothing_applies() -> No
     before the final form is submitted."""
     client = _two_forms()
     with pytest.raises(OptionsFlowError) as caught:
-        await update_config_entry_options(
+        await restore_config_entry_options(
             client,
             "entry",
             _SNAPSHOT,
-            keep_current_values=False,
             fixed_options={**_SNAPSHOT, "name": "Renamed"},
         )
     assert caught.value.reason == "identity_changed"

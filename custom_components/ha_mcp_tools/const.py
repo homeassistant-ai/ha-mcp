@@ -540,7 +540,7 @@ ISSUE_COMPONENT_OUTDATED = "component_outdated"
 # nor unbind an HTTP view without a full Home Assistant restart, so both
 # transitions need one; see oauth_legacy.bind_legacy_views.
 ISSUE_LEGACY_OAUTH_RESTART = "legacy_oauth_restart"
-# Fixable repair issue: two store records (main repository and legacy mirror)
+# Fixable repair issue: two store records (main repository and distribution mirror)
 # are both marked installed for this integration, which the Marketplace
 # refuses to update or uninstall (#2993). Its fix forgets the duplicate.
 ISSUE_STORE_RECORDS_CONFLICT = "store_records_conflict"

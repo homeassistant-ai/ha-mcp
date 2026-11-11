@@ -6,7 +6,6 @@ import os
 import shlex
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -171,17 +170,17 @@ def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
 
 
 def _prepare_testcontainer_config(
-    embedded: bool,
-) -> tuple[Path, str, dict, str | None]:
-    """Stage the fresh HA config dir (custom components, seeds, recorder)."""
+    embedded: bool, config_path: Path
+) -> tuple[Path, dict, str | None]:
+    """Stage the fresh HA config into ``config_path`` (custom components, seeds, recorder).
+
+    The caller creates and owns the directory, so its cleanup can be registered
+    before staging starts and still runs when a step here fails partway.
+    """
     embedded_wheel_name: str | None = None
 
-    # Create temporary directory for this test session
-    temp_dir = tempfile.mkdtemp(prefix="ha_e2e_test_")
-
-    # Copy initial test state to temporary directory
+    # Copy initial test state into the staged directory
     initial_state_path = Path(__file__).parent.parent.parent / "initial_test_state"
-    config_path = Path(temp_dir)
 
     if not initial_state_path.exists():
         pytest.fail(f"Initial test state not found at {initial_state_path}")
@@ -272,7 +271,7 @@ def _prepare_testcontainer_config(
     logger.info(
         f"📁 Fresh HA config prepared at: {config_path} with proper permissions"
     )
-    return config_path, temp_dir, local_blueprint, embedded_wheel_name
+    return config_path, local_blueprint, embedded_wheel_name
 
 
 def _claim_pip_cache_command(container_dir: str) -> str:

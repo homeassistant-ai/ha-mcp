@@ -41,7 +41,7 @@ def recovery(tmp_path, monkeypatch):
                 return deepcopy(row)
         raise AssertionError(message)
 
-    async def create(client, helper_type, options, *, complete_snapshot=False):
+    async def create(client, helper_type, options):
         assert helper_type == "template"
         # The creation flow answers its menu from template_type itself.
         assert options == OPTIONS
@@ -80,8 +80,8 @@ def recovery(tmp_path, monkeypatch):
     manager = bm.get_backup_manager(client, settings)
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
     creator = AsyncMock(side_effect=create)
-    native_create = config_entry_flow.create_flow_helper
-    monkeypatch.setattr(config_entry_flow, "create_flow_helper", creator)
+    native_create = config_entry_flow.recreate_flow_helper
+    monkeypatch.setattr(config_entry_flow, "recreate_flow_helper", creator)
     config = {
         "entry_id": "old-entry",
         "options": deepcopy(OPTIONS),
@@ -315,7 +315,7 @@ async def test_entry_reappearing_after_absence_check_is_never_updated(
     )
     recovery.state.entries = [{"entry_id": "old-entry", "domain": "template"}]
     updater = AsyncMock()
-    monkeypatch.setattr(config_entry_flow, "update_config_entry_options", updater)
+    monkeypatch.setattr(config_entry_flow, "restore_config_entry_options", updater)
     with pytest.raises(bm.BackupRestoreError) as error:
         await recovery.manager.restore_snapshot(recovery.name)
     assert error.value.outcome["reason"] == "entry_still_exists"
@@ -377,7 +377,9 @@ async def test_recreation_drives_native_template_menu_and_form(recovery, monkeyp
 
     client.submit_config_flow_step = AsyncMock(side_effect=submit)
     client.abort_config_flow = AsyncMock()
-    monkeypatch.setattr(config_entry_flow, "create_flow_helper", recovery.native_create)
+    monkeypatch.setattr(
+        config_entry_flow, "recreate_flow_helper", recovery.native_create
+    )
     result = await recovery.manager.restore_snapshot(recovery.name)
     assert result["entity_id"] == "new-entry"
     assert len(submissions) == 2
@@ -418,7 +420,9 @@ def _native_recreation_flow(recovery, monkeypatch, schema, *, submit_error=None)
 
     client.submit_config_flow_step = AsyncMock(side_effect=submit)
     client.abort_config_flow = AsyncMock()
-    monkeypatch.setattr(config_entry_flow, "create_flow_helper", recovery.native_create)
+    monkeypatch.setattr(
+        config_entry_flow, "recreate_flow_helper", recovery.native_create
+    )
     return client
 
 
