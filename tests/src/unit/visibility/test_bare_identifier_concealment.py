@@ -351,6 +351,56 @@ class TestHiddenScriptStorageKeyInContent:
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_trace_listing_with_an_unkeyed_hidden_script_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """The fail-closed domain set covers scripts, not only automations."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["script.front_door"])
+        client = FakeClient(registry=_registry())
+        mw = make_mw(get_client=lambda: client)
+        listing = {
+            "success": True,
+            "result": [{"domain": "script", "item_id": "come_home", "run_id": "1"}],
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_service",
+                    {"ws_command": "trace/list", "data": {"domain": "script"}},
+                ),
+                _returns(text_result(json.dumps(listing), listing)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_keyless_hidden_automation_keeps_the_domain_closed(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A YAML automation with no registry key closes even visible-item reads."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.yaml_one"])
+        client = FakeClient(
+            registry=_registry(_entry("automation.yaml_one", "", "automation"))
+        )
+        mw = make_mw(get_client=lambda: client)
+        listing = {
+            "success": True,
+            "result": [
+                {"domain": "automation", "item_id": "1700000000002", "run_id": "1"}
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces",
+                    {"entity_id": "automation.visible", "run_id": "1"},
+                ),
+                _returns(text_result(json.dumps(listing), listing)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_context_only_trace_with_an_unkeyed_hidden_automation_is_refused(
         self, set_config: Callable[..., Any]
     ) -> None:
@@ -472,6 +522,45 @@ class TestHiddenScriptStorageKeyInContent:
 
         assert client.get_states_calls == 2
         assert result.structured_content == listing
+
+        # The refreshed key must conceal the run the registry now names.
+        hidden_listing = {
+            "success": True,
+            "result": [
+                {"domain": "automation", "item_id": "1700000000001", "run_id": "1"}
+            ],
+        }
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(tool, args),
+                _returns(text_result(json.dumps(hidden_listing), hidden_listing)),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_trace_query_with_a_failed_refresh_fails_closed(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A stale last-known-good snapshot is not safe for a trace query."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(
+            registry=_registry(
+                _entry("automation.private", "1700000000001", "automation")
+            )
+        )
+        mw = make_mw(get_client=lambda: client)
+        await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "sensor.visible"}),
+            _returns(text_result("ok")),
+        )
+        client.fail = True
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_automation_traces", {"domain": "automation"}),
+                _unreached_call_next,
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 class _NotFoundClient(FakeClient):

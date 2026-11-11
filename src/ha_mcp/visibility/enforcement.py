@@ -72,6 +72,7 @@ from ..tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
 from ..tools.helpers import raise_tool_error
 from . import resolver
 from .identifier_aliases import (
+    TRACE_KEY_FAIL_CLOSED_REASON,
     IdentifierAliases,
     build_identifier_aliases,
     hidden_identifier_argument,
@@ -711,7 +712,7 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
                 "hidden item",
                 effective_name,
             )
-            _raise_enforced(effective_name, _outbound_reason(effective_name))
+            _raise_enforced(effective_name, TRACE_KEY_FAIL_CLOSED_REASON)
         self._scan_inbound(effective_name, name, args, matcher)
         return await call_next(context)
 
@@ -889,6 +890,13 @@ class _HiddenSetCache:
             try:
                 matcher = await _refresh_hidden_set(config, client)
             except Exception:
+                if fresh:
+                    logger.warning(
+                        "visibility enforce: forced hidden-set refresh failed; "
+                        "failing closed",
+                        exc_info=True,
+                    )
+                    raise VisibilityDataUnavailable("hidden set unavailable") from None
                 if self._matcher is not None and self._key == key:
                     logger.warning(
                         "visibility enforce: hidden-set refresh failed; using "

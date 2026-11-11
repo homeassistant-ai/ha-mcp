@@ -46,7 +46,13 @@ PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
 
 _SERVICE_TOOL = "ha_call_service"
 _TRACE_TOOL = "ha_get_automation_traces"
-_TRACE_WS_COMMANDS = frozenset({"trace/list", "trace/get", "trace/contexts"})
+
+TRACE_KEY_FAIL_CLOSED_REASON = (
+    "The entity visibility filter cannot identify the owner of this trace "
+    "because a restricted automation or script has no entity registry key, so "
+    "enforce mode fails closed. Reload the entity registry (or remove the stale "
+    "restricted entry) and retry."
+)
 
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
 # The automation tools read a bare ``entity_id`` only as a config ``id``, so an
@@ -66,7 +72,9 @@ class IdentifierAliases:
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
     ``unkeyed_trace_domains`` names trace domains holding a hidden item whose
-    registry key was absent from the snapshot; their trace results fail closed.
+    registry key is unavailable (absent from the snapshot, empty, or a keyless
+    YAML definition); their trace results fail closed until the registry
+    supplies a key.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
@@ -157,12 +165,15 @@ def build_identifier_aliases(
     )
 
 
+def _is_trace_command(command: Any) -> bool:
+    return isinstance(command, str) and command.strip().casefold().startswith("trace/")
+
+
 def is_trace_query(tool_name: str, args: Mapping[str, Any]) -> bool:
     """Whether a call reads stored traces, keyed by hidden storage keys."""
     if tool_name == _TRACE_TOOL:
         return True
-    command = args.get("ws_command")
-    return isinstance(command, str) and command.strip().casefold() in _TRACE_WS_COMMANDS
+    return tool_name == _SERVICE_TOOL and _is_trace_command(args.get("ws_command"))
 
 
 def _trace_query_domain(tool_name: str, args: Mapping[str, Any]) -> str | None:
@@ -176,12 +187,7 @@ def _trace_query_domain(tool_name: str, args: Mapping[str, Any]) -> str | None:
             prefix = entity_id.strip().partition(".")[0].casefold()
             return prefix if prefix in _TRACE_DOMAINS else None
         return None
-    if tool_name != _SERVICE_TOOL:
-        return None
-    command = args.get("ws_command")
-    if not (
-        isinstance(command, str) and command.strip().casefold() in _TRACE_WS_COMMANDS
-    ):
+    if tool_name != _SERVICE_TOOL or not _is_trace_command(args.get("ws_command")):
         return None
     record = _json_mapping(args.get("data"))
     domain = record.get("domain") if record is not None else None
