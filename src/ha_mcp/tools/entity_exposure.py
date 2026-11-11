@@ -45,7 +45,7 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     same entries as Core's ``homeassistant/expose_entity/list`` map. ``None`` on
     capability miss, downgrade (``unknown_command`` → invalidate the cached
     caps), command error/timeout (logged), a connection-establishment failure
-    (logged), or a reply without an ``exposed_entities`` map (logged) — the
+    (logged), or a reply without ``exposed_entities`` — the
     caller falls back to Core's list. A
     ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed (re)connect
     — is caught here and mapped to ``None``: Core's list read rides the
@@ -80,12 +80,7 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
         logger.warning("%s connection error; reading Core's list: %r", WS_EXPOSURE, exc)
         return None
     result = raw.get("result")
-    if not isinstance(result, dict) or not isinstance(
-        result.get("exposed_entities"), dict
-    ):
-        logger.warning(
-            "%s returned no exposed_entities map; reading Core's list", WS_EXPOSURE
-        )
+    if not isinstance(result, dict) or "exposed_entities" not in result:
         return None
     return result
 
@@ -101,7 +96,10 @@ async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     component = await _fetch_exposure_via_component(client)
     if component is not None:
-        return component["exposed_entities"], component.get("entity_info") or {}
+        return (
+            component.get("exposed_entities") or {},
+            component.get("entity_info") or {},
+        )
     result = await client.send_websocket_message(
         {"type": "homeassistant/expose_entity/list"}
     )
