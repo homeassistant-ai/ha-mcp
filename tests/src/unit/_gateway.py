@@ -66,12 +66,17 @@ class Gateway:
         caller = web.WebSocketResponse()
         await caller.prepare(request)
         async with self._session.ws_connect(f"{self._core_url}/api/websocket") as core:
-            # Either side may already be closed when the other relay sends.
-            await asyncio.gather(
+            relays = await asyncio.gather(
                 _relay(caller, core, self.drops),
                 _relay(core, caller, set()),
                 return_exceptions=True,
             )
+        for outcome in relays:
+            # Sending to a side that has already closed is the normal end.
+            if isinstance(outcome, Exception) and not isinstance(
+                outcome, ConnectionError
+            ):
+                raise outcome
         return caller
 
 
@@ -80,13 +85,15 @@ async def _relay(
     target: web.WebSocketResponse | aiohttp.ClientWebSocketResponse,
     drops: set[str],
 ) -> None:
-    async for message in source:
-        if message.type is not aiohttp.WSMsgType.TEXT:
-            break
-        if drops and json.loads(message.data).get("type") in drops:
-            break
-        await target.send_str(message.data)
-    await target.close()
+    try:
+        async for message in source:
+            if message.type is not aiohttp.WSMsgType.TEXT:
+                break
+            if drops and json.loads(message.data).get("type") in drops:
+                break
+            await target.send_str(message.data)
+    finally:
+        await target.close()
 
 
 @pytest.fixture
