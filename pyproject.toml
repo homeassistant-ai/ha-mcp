@@ -179,7 +179,6 @@ disable_error_code = ["import-not-found", "import-untyped"]
 module = [
     "tests.addon.test_addon_startup",
     "tests.addon.test_addon_structure",
-    "tests.addon.test_webhook_proxy",
     "tests.haos_image_build.build_image",
     "tests.haos_image_build.dev_addon_tree",
     "tests.src.e2e._conftest_readiness",
