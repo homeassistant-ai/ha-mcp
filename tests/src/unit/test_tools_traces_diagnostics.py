@@ -1,94 +1,123 @@
-"""Diagnostics tests for empty trace results."""
+"""Diagnostics tests for empty trace results, on real Core.
 
-from unittest.mock import AsyncMock, patch
+The diagnostics read Core's own state, automation config, registry, repair and
+trace answers: each test sets up the automation or script it describes, and the
+server's client talks to the real ``hass``.
+"""
+
+from __future__ import annotations
+
+from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_diagnostics import _gather_diagnostics
 
-from .test_tools_traces import _dispatch, _make_pooled_client
+_TRIGGER = {"platform": "state", "entity_id": "light.trigger"}
+_ACTION = [{"event": "trace_test"}]
 
 
-def _client(state: dict | None, config: dict | None = None) -> AsyncMock:
-    client = AsyncMock()
-    client.get_entity_state.return_value = state
-    client.send_websocket_message.return_value = config or {
-        "success": True,
-        "result": {"config": {"trace": {"stored_traces": 5}}},
+def _automation(automation_id: str, alias: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": automation_id,
+        "alias": alias,
+        "trigger": [_TRIGGER],
+        "action": _ACTION,
+        **extra,
     }
-    return client
 
 
-async def _diagnostics(
-    client: AsyncMock,
-    *,
-    entity: dict | None,
-    loaded: bool | None = True,
-    validation: dict | None = None,
-    domain: str = "automation",
-) -> tuple[dict, list[str]]:
-    lookup = {"found": entity is not None, "loaded": loaded}
-    lookup_mock = AsyncMock(return_value=lookup)
-    details_mock = AsyncMock(return_value=(entity, validation, None))
-    with (
-        patch("ha_mcp.tools.trace_diagnostics.automation_lookup", lookup_mock),
-        patch("ha_mcp.tools.trace_diagnostics.registry_details", details_mock),
-    ):
-        result, warnings = await _gather_diagnostics(client, f"{domain}.test", domain)
+async def _setup(hass: HomeAssistant, component: str, config: Any) -> None:
+    assert await async_setup_component(hass, component, {component: config})
+    await hass.async_block_till_done()
 
-    if domain == "automation":
-        lookup_mock.assert_awaited_once_with(client, entity_id=f"{domain}.test")
-    else:
-        lookup_mock.assert_not_awaited()
-    details_mock.assert_awaited_once()
-    details_args, details_kwargs = details_mock.await_args
-    assert details_args[1] == (lookup if domain == "automation" else None)
-    assert details_args[2] == f"{domain}.test"
-    assert details_kwargs["component_lookup"] is (domain == "automation")
-    assert details_kwargs["related_fallback"] is False
-    client.send_websocket_message.assert_awaited_once_with(
-        {"type": f"{domain}/config", "entity_id": f"{domain}.test"}
-    )
-    return result, warnings
+
+@pytest.fixture(autouse=True)
+async def trace_store(hass: HomeAssistant) -> None:
+    """Core's trace store, which serves ``trace/list`` and the automation store."""
+    assert await async_setup_component(hass, "trace", {})
+
+
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Keep the built-in blueprints Core copies on setup out of the repository."""
+    return hass_tmp_config_dir
+
+
+@pytest.fixture
+async def registry_api(hass: HomeAssistant) -> None:
+    """Core's config component, which serves ``config/entity_registry/get``."""
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+async def repairs_api(hass: HomeAssistant) -> None:
+    """Core's repairs integration, which serves ``repairs/list_issues``."""
+    assert await async_setup_component(hass, "repairs", {})
 
 
 class TestGatherDiagnostics:
     @pytest.mark.asyncio
-    async def test_loaded_automation_with_trace_key(self) -> None:
-        client = _client(
-            {
-                "state": "on",
-                "attributes": {"last_triggered": "2025-11-30T15:00:00Z"},
-            }
-        )
-        result, _warnings = await _diagnostics(
-            client, entity={"unique_id": "uid_1", "disabled_by": None}
+    async def test_loaded_automation_with_trace_key(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        await _setup(hass, "automation", [_automation("test", "Test")])
+        hass.states.async_set("light.trigger", "on")
+        await hass.async_block_till_done()
+        state = hass.states.get("automation.test")
+        assert state is not None
+
+        result, warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
         )
 
         assert result["entity_exists"] is True
         assert result["entity_enabled"] is True
         assert result["trace_key_available"] is True
         assert result["trace_storage_enabled"] is True
-        assert result["last_triggered"] == "2025-11-30T15:00:00Z"
+        assert (
+            result["last_triggered"] == state.attributes["last_triggered"].isoformat()
+        )
         assert "run the automation/script once" in result["suggestion"].lower()
-        assert "warnings" not in result
+        assert warnings == []
 
     @pytest.mark.asyncio
-    async def test_no_unique_id_does_not_claim_a_trace_key(self) -> None:
-        client = _client({"state": "on", "attributes": {}})
-        result, _warnings = await _diagnostics(client, entity={"disabled_by": None})
+    async def test_automation_without_an_id_has_no_trace_key(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        await _setup(
+            hass,
+            "automation",
+            [{"alias": "No Key", "trigger": [_TRIGGER], "action": _ACTION}],
+        )
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.no_key", "automation"
+        )
 
         assert result["trace_key_available"] is False
         assert "unique_id" in result["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_disabled_automation_does_not_say_enable_it(self) -> None:
-        client = _client({"state": "off", "attributes": {}})
-        result, _warnings = await _diagnostics(
-            client,
-            entity={"unique_id": "uid_1", "disabled_by": "user"},
-            loaded=False,
+    async def test_a_disabled_automation_is_not_told_to_enable_it(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        await _setup(hass, "automation", [_automation("test", "Test")])
+        entity_registry.async_update_entity(
+            "automation.test", disabled_by=er.RegistryEntryDisabler.USER
+        )
+        await hass.async_block_till_done()
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
         )
 
         assert result["entity_enabled"] is False
@@ -97,13 +126,18 @@ class TestGatherDiagnostics:
         assert "automation.trigger" in result["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_disabled_but_loaded_automation_mentions_trigger(self) -> None:
+    async def test_a_turned_off_loaded_automation_mentions_trigger(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
         """A turned-off automation is loaded; automation.trigger still runs it."""
-        client = _client({"state": "off", "attributes": {}})
-        result, _warnings = await _diagnostics(
-            client,
-            entity={"unique_id": "uid_1", "disabled_by": "user"},
-            loaded=True,
+        await _setup(
+            hass,
+            "automation",
+            [_automation("test", "Test", initial_state=False)],
+        )
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
         )
 
         assert result["entity_enabled"] is False
@@ -112,13 +146,16 @@ class TestGatherDiagnostics:
         assert "automation.trigger" in result["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_unavailable_automation_is_not_called_disabled(self) -> None:
+    async def test_an_unavailable_automation_is_not_called_disabled(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
         """An unavailable entity cannot be triggered, so say that instead."""
-        client = _client({"state": "unavailable", "attributes": {}})
-        result, _warnings = await _diagnostics(
-            client,
-            entity={"unique_id": "uid_1"},
-            loaded=True,
+        await _setup(hass, "automation", [_automation("test", "Test")])
+        hass.states.async_set("automation.test", "unavailable")
+        await hass.async_block_till_done()
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
         )
 
         assert result["entity_state"] == "unavailable"
@@ -127,89 +164,91 @@ class TestGatherDiagnostics:
         assert "automation.trigger" not in result["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_typo_entity_is_not_found(self) -> None:
-        client = _client(None)
-        result, _warnings = await _diagnostics(client, entity=None, loaded=None)
+    async def test_a_typo_entity_is_not_found(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        await _setup(hass, "automation", [_automation("test", "Test")])
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.typo", "automation"
+        )
 
         assert result["entity_exists"] is False
         assert result["trace_key_available"] is False
         assert "could not find" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
-    async def test_trace_storage_disabled(self) -> None:
-        client = _client(
-            {"state": "on", "attributes": {}},
-            config={
-                "success": True,
-                "result": {"config": {"trace": {"stored_traces": 0}}},
-            },
+    async def test_trace_storage_disabled(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        await _setup(
+            hass,
+            "automation",
+            [_automation("test", "Test", trace={"stored_traces": 0})],
         )
-        result, _warnings = await _diagnostics(client, entity={"unique_id": "uid_1"})
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
+        )
 
         assert result["trace_storage_enabled"] is False
-        assert "stored_traces: 0" in result["suggestion"]
+        assert "stored_traces" in result["suggestion"]
 
     @pytest.mark.asyncio
-    async def test_validation_failure_suggests_core_did_not_load(self) -> None:
-        """A failed validation dict surfaces Core's load failure first."""
-        client = _client({"state": "on", "attributes": {}})
-        result, _warnings = await _diagnostics(
-            client,
-            entity={"unique_id": "uid_1"},
-            loaded=True,
-            validation={"status": "failed", "error": "bad template"},
+    async def test_a_load_failure_leads_with_core_s_verdict(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        """Core's validation repair issue explains why there is no trace."""
+        await _setup(
+            hass,
+            "automation",
+            [
+                {
+                    "id": "bad",
+                    "alias": "Bad",
+                    "trigger": [{"platform": "no_such_platform"}],
+                    "action": [],
+                }
+            ],
         )
 
-        assert result["validation"] == {"status": "failed", "error": "bad template"}
-        assert (
-            "core reports this automation did not load" in result["suggestion"].lower()
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.bad", "automation"
         )
-        assert "warnings" not in result
+
+        assert result["validation"] is not None
+        assert result["validation"]["status"] != "ok"
+        assert "did not load" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
-    async def test_unreadable_config_reports_unknown(self) -> None:
-        client = _client(
-            {"state": "on", "attributes": {}},
-            config={"success": False, "error": "unknown_command"},
+    async def test_an_unreadable_config_reports_unknown(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        hass.states.async_set("automation.test", "on")
+
+        result, _warnings = await _gather_diagnostics(
+            component_core_client, "automation.test", "automation"
         )
-        result, _warnings = await _diagnostics(client, entity={"unique_id": "uid_1"})
 
         assert result["trace_storage_enabled"] is None
 
     @pytest.mark.asyncio
-    async def test_script_uses_registry_fallback(self) -> None:
-        client = _client({"state": "off", "attributes": {}})
-        result, _warnings = await _diagnostics(
-            client, entity={"unique_id": "uid_script"}, domain="script"
+    @pytest.mark.usefixtures("registry_api")
+    async def test_script_reads_the_registry_without_the_automation_component(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        """The automation-only component is not reported missing for scripts."""
+        await _setup(
+            hass,
+            "script",
+            {"test": {"sequence": [{"event": "trace_test"}]}},
+        )
+
+        result, warnings = await _gather_diagnostics(
+            component_core_client, "script.test", "script"
         )
 
         assert result["entity_exists"] is True
-        assert result["trace_key_available"] is True
-        assert "warnings" not in result
-
-    @pytest.mark.asyncio
-    async def test_script_registry_fallback_does_not_claim_missing_component(
-        self,
-    ) -> None:
-        """The automation-only component is not reported missing for scripts."""
-        client = AsyncMock()
-        client.get_entity_state.return_value = {"state": "off", "attributes": {}}
-
-        def _dispatch(message: dict) -> dict:
-            message_type = message["type"]
-            if message_type == "config/entity_registry/get":
-                return {"success": True, "result": {"unique_id": "uid_script"}}
-            if message_type == "script/config":
-                return {
-                    "success": True,
-                    "result": {"config": {"trace": {"stored_traces": 5}}},
-                }
-            return {"success": False, "error": f"unexpected {message_type}"}
-
-        client.send_websocket_message = AsyncMock(side_effect=_dispatch)
-
-        result, warnings = await _gather_diagnostics(client, "script.test", "script")
-
         assert result["trace_key_available"] is True
         assert not any("component" in warning for warning in warnings)
 
@@ -218,79 +257,44 @@ class TestDiagnosticsResponseWarnings:
     """Diagnostics warnings surface at the tool response level."""
 
     @pytest.mark.asyncio
-    async def test_typo_entity_warns_without_not_loaded(self) -> None:
-        """A missing entity emits a response warning and never 'not loaded'."""
-        client = _make_pooled_client(_dispatch())
-        client.get_entity_state.return_value = None
-        with patch(
-            "ha_mcp.tools.trace_diagnostics.automation_lookup",
-            AsyncMock(return_value=None),
-        ):
-            result = await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.typo"
-            )
-
-        assert "warnings" in result
-        assert any("component" in warning for warning in result["warnings"])
-        assert not any(
-            "not loaded" in warning.lower() for warning in result["warnings"]
+    @pytest.mark.usefixtures("registry_api", "repairs_api")
+    async def test_a_missing_component_warns_without_claiming_not_loaded_or_related(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A typo names the omitted References and no load failure Core never said."""
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            entity_id="automation.typo"
         )
 
+        warnings = " ".join(result["warnings"])
+        assert "component" in warnings
+        assert "not loaded" not in warnings.lower()
+        assert "references are omitted" in warnings
+        assert "related holds" not in warnings
+
     @pytest.mark.asyncio
-    async def test_validation_failure_warns_at_response_level(self) -> None:
+    async def test_a_validation_failure_warns_at_response_level(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
         """A non-ok validation status emits a response-level warning."""
-        client = _make_pooled_client(_dispatch())
-        client.get_entity_state.return_value = {"state": "on", "attributes": {}}
-        lookup = {
-            "found": True,
-            "loaded": False,
-            "entity": {"unique_id": "uid_1"},
-            "validation": {"status": "failed", "error": "bad template"},
-            "references": None,
-        }
-        with (
-            patch(
-                "ha_mcp.tools.trace_diagnostics.automation_lookup",
-                AsyncMock(return_value=lookup),
-            ),
-            patch(
-                "ha_mcp.tools.trace_diagnostics.registry_details",
-                AsyncMock(return_value=(lookup["entity"], lookup["validation"], None)),
-            ),
-        ):
-            result = await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test"
-            )
+        await _setup(
+            hass,
+            "automation",
+            [
+                {
+                    "id": "bad",
+                    "alias": "Bad",
+                    "trigger": [{"platform": "no_such_platform"}],
+                    "action": [],
+                }
+            ],
+        )
+
+        result = await TraceTools(component_core_client).ha_get_automation_traces(
+            entity_id="automation.bad"
+        )
 
         assert "warnings" in result
         assert any(
             "validation failed" in warning.lower() for warning in result["warnings"]
         )
-
-    @pytest.mark.asyncio
-    async def test_missing_component_warning_does_not_promise_related(self) -> None:
-        """The trace diagnostics read has no Related set to point at."""
-
-        def _diagnostic_dispatch(mtype: str, message: dict) -> dict:
-            if mtype == "config/entity_registry/get":
-                return {"success": True, "result": {"unique_id": "uid_1"}}
-            if mtype == "repairs/list_issues":
-                return {"success": True, "result": {"issues": []}}
-            if mtype == "automation/config":
-                return {"success": True, "result": {"config": {}}}
-            if mtype == "trace/list":
-                return {"success": True, "result": []}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_diagnostic_dispatch)
-        with patch(
-            "ha_mcp.tools.trace_diagnostics.automation_lookup",
-            AsyncMock(return_value=None),
-        ):
-            result = await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test"
-            )
-
-        warnings = " ".join(result["warnings"])
-        assert "references are omitted" in warnings
-        assert "related holds" not in warnings

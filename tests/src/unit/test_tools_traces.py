@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from typing import Any, Literal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -221,52 +221,6 @@ class TestFormatTraceList:
             "run_oldest",
             "not_triggered_middle",
         ]
-
-
-# Still imported by the trace context, logbook, diagnostics and rename tests;
-# it leaves with them when they move to real Core.
-def _make_pooled_client(dispatch):
-    """Build a mock REST client whose ``send_websocket_message`` dispatches on
-    message type via ``dispatch`` (``(type, message) -> response dict``).
-
-    Mirrors the pooled client tools_traces now drives (issue #1813 item #5):
-    a single ``send_websocket_message`` owns every trace WS command, so there is
-    no dedicated connect/auth/disconnect per call.
-    """
-    client = MagicMock()
-    client.base_url = "http://test.local:8123"
-    client.token = "test-token"
-    client.verify_ssl = True
-
-    async def _send(message):
-        return dispatch(message["type"], message)
-
-    client.send_websocket_message = AsyncMock(side_effect=_send)
-    client.get_entity_state = AsyncMock(return_value={"state": "on", "attributes": {}})
-    return client
-
-
-def _dispatch(*, list_result=None, detail_result=None, context_result=None):
-    """Return a pooled-client dispatcher for trace commands."""
-
-    def _d(mtype, message):
-        if mtype == "config/entity_registry/get":
-            return {"success": True, "result": {"unique_id": "uid_1"}}
-        if mtype == "trace/list":
-            return (
-                list_result
-                if list_result is not None
-                else {"success": True, "result": []}
-            )
-        if mtype == "trace/get":
-            return detail_result
-        if mtype == "trace/contexts":
-            return context_result
-        if mtype in ("automation/config", "script/config"):
-            return {"success": True, "result": {}}
-        return {"success": False, "error": f"unexpected {mtype}"}
-
-    return _d
 
 
 class TestResolveTraceItemId:

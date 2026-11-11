@@ -9,15 +9,27 @@ import json
 import logging
 
 import pytest
+from homeassistant.components.automation.trace import AutomationTrace
+from homeassistant.components.trace import async_store_trace
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.renamed_tools import RENAMED_PARAMETERS
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,
 )
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
+
+
+@pytest.fixture
+async def registry_api(hass: HomeAssistant) -> None:
+    """Core's config component, which serves ``config/entity_registry/get``."""
+    assert await async_setup_component(hass, "config", {})
 
 
 def _make_mcp() -> FastMCP:
@@ -240,30 +252,27 @@ def test_every_tool_that_renamed_identifier_keeps_it_callable():
 
 
 @pytest.mark.asyncio
-async def test_the_registered_trace_tool_resolves_automation_id():
+async def test_the_registered_trace_tool_resolves_automation_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    registry_api: None,
+) -> None:
     """A cached client's automation_id reaches the real trace tool and lists runs."""
     from ha_mcp.tools.tools_traces import register_trace_tools
 
-    from .test_tools_traces import _make_pooled_client
-
-    def _dispatch(mtype, message):
-        if mtype == "config/entity_registry/get":
-            return {"success": True, "result": {"unique_id": "uid_1"}}
-        if mtype == "trace/list":
-            return {
-                "success": True,
-                "result": [
-                    {
-                        "run_id": "r1",
-                        "timestamp": {"start": "2026-11-08T16:00:00+00:00"},
-                    }
-                ],
-            }
-        return {"success": False, "error": f"unexpected {mtype}"}
+    assert await async_setup_component(hass, "trace", {})
+    entity_registry.async_get_or_create(
+        "automation", "test", "uid_1", suggested_object_id="trace"
+    )
+    trace = AutomationTrace("uid_1", {"alias": "Trace capture"}, None, Context())
+    trace.run_id = "r1"
+    trace.finished()
+    async_store_trace(hass, trace, stored_traces=10)
 
     mcp = FastMCP("test")
     mcp.add_middleware(RenamedToolAliasMiddleware())
-    register_trace_tools(mcp, _make_pooled_client(_dispatch))
+    register_trace_tools(mcp, core_client)
 
     result = await mcp.call_tool(
         "ha_get_automation_traces", {"automation_id": "automation.trace"}
