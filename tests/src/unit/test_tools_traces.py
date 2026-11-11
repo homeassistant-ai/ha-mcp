@@ -1,49 +1,105 @@
-"""Unit tests for tools_traces module."""
+"""Unit tests for tools_traces: listing, paging and trace-key resolution.
+
+The rows come from Home Assistant Core itself: real ``AutomationTrace`` runs
+stored through Core's ``async_store_trace``, read back over Core's WebSocket
+``trace/list``, and the server's own client talking to the real ``hass``.
+"""
+
+from __future__ import annotations
 
 import json
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.automation.trace import AutomationTrace
+from homeassistant.components.trace import async_store_trace
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import WebSocketGenerator
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import (
     TraceTools,
     _format_trace_list,
     _resolve_trace_item_id,
 )
+from ha_mcp.tools.trace_lookup import _raise_trace_ws_failure
+
+from ._component_core import ws_result
+
+_STORED_TRACES = 10
+
+# The context each trace command's failure carries into its structured error,
+# as the list, detail and context call sites build it.
+_COMMAND_CONTEXTS: dict[str, dict[str, Any]] = {
+    "trace/list": {
+        "entity_id": "automation.test",
+        "domain": "automation",
+        "item_id": "uid_1",
+    },
+    "trace/get": {
+        "entity_id": "automation.test",
+        "domain": "automation",
+        "item_id": "uid_1",
+        "run_id": "r1",
+    },
+    "trace/contexts": {
+        "context_id": "ctx-1",
+        "domain": "automation",
+        "item_id": "uid_1",
+    },
+}
 
 
-def _cores_traces() -> list[dict]:
-    """Five traces shaped like Core's ``trace/list`` short dicts."""
-    return [
-        {
-            "run_id": f"run_{i}",
-            "timestamp": {
-                "start": f"2025-11-30T15:0{i}:00+00:00",
-                "finish": f"2025-11-30T15:0{i}:01+00:00",
-            },
-            "state": "stopped",
-        }
-        for i in range(5)
-    ]
+@pytest.fixture
+async def registry_api(hass: HomeAssistant) -> None:
+    """Core's config component, which serves ``config/entity_registry/get``."""
+    assert await async_setup_component(hass, "config", {})
+
+
+def _run(run_id: str, *, not_triggered: bool = False) -> AutomationTrace:
+    """One run Core stores for ``automation.uid_1``, created in call order."""
+    trace = AutomationTrace(
+        "uid_1",
+        {"alias": "Trace capture"},
+        None,
+        Context(id=f"ctx-{run_id}"),
+        not_triggered=not_triggered,
+    )
+    # A chosen run id keeps the rows addressable; Core's own would be random.
+    trace.run_id = run_id
+    trace.set_trigger_description("state change")
+    trace.finished()
+    return trace
+
+
+async def _store(hass: HomeAssistant, *traces: AutomationTrace) -> None:
+    """Set up Core's trace store and save ``traces`` through its own helper."""
+    assert await async_setup_component(hass, "trace", {})
+    for trace in traces:
+        async_store_trace(hass, trace, stored_traces=_STORED_TRACES)
+
+
+async def _core_rows(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> list[dict[str, Any]]:
+    """Core's own ``trace/list`` answer for ``automation.uid_1``."""
+    client = await hass_ws_client(hass)
+    rows = await ws_result(client, "trace/list", domain="automation", item_id="uid_1")
+    assert isinstance(rows, list)
+    return rows
 
 
 class TestFormatTraceList:
-    """Test _format_trace_list function."""
+    """The list response Core's rows page into."""
 
-    def test_empty_traces_without_diagnostics(self):
-        """Empty traces without diagnostics return basic structure."""
-        result = _format_trace_list("automation.test", [], 10)
-
-        assert result["success"] is True
-        assert result["entity_id"] == "automation.test"
-        assert result["trace_count"] == 0
-        assert result["total_available"] == 0
-        assert result["traces"] == []
-        assert "diagnostics" not in result
-
-    def test_empty_traces_with_diagnostics(self):
-        """Empty traces with diagnostics include diagnostics in result."""
+    async def test_diagnostics_accompany_only_an_empty_list(
+        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+    ) -> None:
+        """Diagnostics describe an empty list and never a populated one."""
         diagnostics = {
             "entity_exists": True,
             "entity_enabled": True,
@@ -51,41 +107,18 @@ class TestFormatTraceList:
             "last_triggered": "2025-11-30T15:00:00Z",
             "suggestion": "Traces may have been cleared.",
         }
+        await _store(hass, _run("r1"))
+        rows = await _core_rows(hass, hass_ws_client)
 
-        result = _format_trace_list("automation.test", [], 10, diagnostics)
+        empty = _format_trace_list("automation.test", [], 10, diagnostics)
+        no_diagnostics = _format_trace_list("automation.test", [], 10)
+        populated = _format_trace_list("automation.test", rows, 10, diagnostics)
 
-        assert result["success"] is True
-        assert result["trace_count"] == 0
-        assert "diagnostics" in result
-        assert result["diagnostics"]["entity_exists"] is True
-        assert result["diagnostics"]["last_triggered"] == "2025-11-30T15:00:00Z"
-
-    def test_non_empty_traces_ignore_diagnostics(self):
-        """Non-empty traces do not include diagnostics even if provided."""
-        traces = [
-            {
-                "run_id": "123.456",
-                "timestamp": {
-                    "start": "2025-11-30T15:00:00+00:00",
-                    "finish": "2025-11-30T15:00:01+00:00",
-                },
-                "state": "stopped",
-                "trigger": "time pattern",
-            }
-        ]
-        diagnostics = {
-            "entity_exists": True,
-            "entity_enabled": True,
-            "trace_storage_enabled": True,
-            "last_triggered": "2025-11-30T15:00:00Z",
-            "suggestion": "Test suggestion",
-        }
-
-        result = _format_trace_list("automation.test", traces, 10, diagnostics)
-
-        assert result["success"] is True
-        assert result["trace_count"] == 1
-        assert "diagnostics" not in result
+        assert empty["diagnostics"] == diagnostics
+        assert no_diagnostics["trace_count"] == 0
+        assert "diagnostics" not in no_diagnostics
+        assert populated["trace_count"] == 1
+        assert "diagnostics" not in populated
 
     @pytest.mark.parametrize(
         ("limit", "offset", "order", "expected_run_ids", "has_more"),
@@ -111,12 +144,26 @@ class TestFormatTraceList:
             pytest.param(10, 10, "newest", [], False, id="offset-beyond-total"),
         ],
     )
-    def test_pages_traces(
-        self, limit, offset, order, expected_run_ids, has_more
+    async def test_pages_traces(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        limit: int,
+        offset: int,
+        order: Literal["newest", "oldest"],
+        expected_run_ids: list[str],
+        has_more: bool,
     ) -> None:
-        """limit/offset/order select one window of Core's sorted rows."""
+        """limit/offset/order select one window of Core's sorted rows.
+
+        The runs are stored oldest first, so Core's start timestamps order them
+        ``run_0``..``run_4`` regardless of the order ``trace/list`` returns.
+        """
+        await _store(hass, *[_run(f"run_{i}") for i in range(5)])
+        rows = await _core_rows(hass, hass_ws_client)
+
         result = _format_trace_list(
-            "automation.test", _cores_traces(), limit, offset=offset, order=order
+            "automation.test", rows, limit, offset=offset, order=order
         )
 
         assert [trace["run_id"] for trace in result["traces"]] == expected_run_ids
@@ -126,70 +173,44 @@ class TestFormatTraceList:
         assert result["order"] == order
         assert result["has_more"] is has_more
 
-    def test_list_preserves_core_short_dict_fields(self):
+    async def test_list_preserves_core_short_dict_fields(
+        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+    ) -> None:
         """Every field Core's trace/list returns reaches the caller unchanged."""
-        core_trace = {
-            "last_step": "action/0",
-            "run_id": "r1",
-            "state": "stopped",
-            "script_execution": "finished",
-            "timestamp": {
-                "start": "2026-11-08T16:00:04.319026+00:00",
-                "finish": "2026-11-08T16:00:04.319959+00:00",
-            },
-            "domain": "automation",
-            "item_id": "trace_capture",
-            "trigger": None,
-            "not_triggered": True,
-        }
+        await _store(hass, _run("r1"))
+        core_rows = await _core_rows(hass, hass_ws_client)
 
-        result = _format_trace_list("automation.test", [core_trace], 10)
+        result = _format_trace_list("automation.test", core_rows, 10)
 
-        assert result["traces"][0] == core_trace
+        assert result["traces"] == core_rows
 
-    def test_list_orders_mixed_not_triggered_by_core_start_time(self):
+    async def test_list_orders_mixed_not_triggered_by_core_start_time(
+        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+    ) -> None:
         """Run and not-triggered traces page in Core's timestamp order."""
-        traces = [
-            {
-                "run_id": "run_middle",
-                "state": "stopped",
-                "timestamp": {
-                    "start": "2026-11-08T16:00:02+00:00",
-                    "finish": "2026-11-08T16:00:02.100000+00:00",
-                },
-            },
-            {
-                "run_id": "not_triggered_newest",
-                "state": "stopped",
-                "not_triggered": True,
-                "timestamp": {
-                    "start": "2026-11-08T16:00:04+00:00",
-                    "finish": "2026-11-08T16:00:04.100000+00:00",
-                },
-            },
-            {
-                "run_id": "run_oldest",
-                "state": "stopped",
-                "timestamp": {
-                    "start": "2026-11-08T16:00:01+00:00",
-                    "finish": "2026-11-08T16:00:01.100000+00:00",
-                },
-            },
-        ]
+        await _store(
+            hass,
+            _run("run_oldest"),
+            _run("not_triggered_middle", not_triggered=True),
+            _run("run_newest"),
+        )
+        rows = await _core_rows(hass, hass_ws_client)
 
-        newest = _format_trace_list("automation.test", traces, 2)
-        oldest = _format_trace_list("automation.test", traces, 2, order="oldest")
+        newest = _format_trace_list("automation.test", rows, 2)
+        oldest = _format_trace_list("automation.test", rows, 2, order="oldest")
 
         assert [trace["run_id"] for trace in newest["traces"]] == [
-            "not_triggered_newest",
-            "run_middle",
+            "run_newest",
+            "not_triggered_middle",
         ]
         assert [trace["run_id"] for trace in oldest["traces"]] == [
             "run_oldest",
-            "run_middle",
+            "not_triggered_middle",
         ]
 
 
+# Still imported by the trace context, logbook, diagnostics and rename tests;
+# it leaves with them when they move to real Core.
 def _make_pooled_client(dispatch):
     """Build a mock REST client whose ``send_websocket_message`` dispatches on
     message type via ``dispatch`` (``(type, message) -> response dict``).
@@ -234,172 +255,119 @@ def _dispatch(*, list_result=None, detail_result=None, context_result=None):
     return _d
 
 
-class TestResolveTraceItemIdPooled:
-    """``_resolve_trace_item_id`` drives the pooled ``send_websocket_message``
-    (issue #1813 item #5) and keeps its best-effort fall-back semantics."""
+class TestResolveTraceItemId:
+    """``_resolve_trace_item_id`` reads Core's entity registry."""
 
-    @pytest.mark.asyncio
-    async def test_resolves_unique_id_via_pooled_client(self):
-        client = _make_pooled_client(
-            lambda t, m: {"success": True, "result": {"unique_id": "uid_42"}}
-        )
+    async def test_resolves_the_registry_unique_id(
+        self,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        registry_api: None,
+    ) -> None:
+        """Core's registry row holds the unique_id traces are stored under."""
+        entry = entity_registry.async_get_or_create("automation", "test", "uid_42")
 
         item_id = await _resolve_trace_item_id(
-            client, "automation.test", "fallback_obj"
+            core_client, entry.entity_id, "fallback_obj"
         )
 
         assert item_id == "uid_42"
-        client.send_websocket_message.assert_awaited_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "automation.test"}
-        )
 
-    @pytest.mark.asyncio
-    async def test_falls_back_to_object_id_on_pooled_failure(self):
-        """A pooled ``{"success": False}`` (transport drop collapsed to a dict
-        rather than raised) falls back to the object_id — the subsequent trace
-        fetch surfaces the real error."""
-        client = _make_pooled_client(
-            lambda t, m: {"success": False, "error": "failed to connect"}
-        )
-
+    async def test_an_entity_core_does_not_know_falls_back_to_the_object_id(
+        self, core_client: HomeAssistantClient, registry_api: None
+    ) -> None:
+        """A registry miss leaves the object_id so the trace fetch reports it."""
         item_id = await _resolve_trace_item_id(
-            client, "automation.test", "fallback_obj"
-        )
-
-        assert item_id == "fallback_obj"
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_object_id_when_pooled_call_raises(self):
-        """The pooled call may RAISE rather than collapse to ``{success:False}``;
-        the best-effort resolve still falls back to object_id — matching the
-        helper's comment that it works whether the pooled client collapses OR
-        raises."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("pooled connect exploded")
-        )
-
-        item_id = await _resolve_trace_item_id(
-            client, "automation.test", "fallback_obj"
+            core_client, "automation.missing", "fallback_obj"
         )
 
         assert item_id == "fallback_obj"
 
 
-class TestTraceFetchPooledClient:
-    """`ha_get_automation_traces` drives the pooled client end-to-end (issue
-    #1813 item #5): no dedicated socket, structured errors preserved."""
+class TestTraceFetchFailures:
+    """The failures the trace commands surface as structured errors."""
 
-    @pytest.mark.asyncio
-    async def test_unexpected_exception_maps_to_structured_error(self):
-        """An unexpected failure is classified, not leaked as a raw exception."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("pooled connect exploded")
+    async def test_a_dead_transport_maps_to_connection_failed(
+        self,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The client getting no answer is the one failure Core cannot answer."""
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
+            await TraceTools(core_client).ha_get_automation_traces(
                 entity_id="automation.test"
             )
 
         error = json.loads(str(exc_info.value))
         assert error["success"] is False
-        assert "pooled connect exploded" in str(error)
-
-    @pytest.mark.asyncio
-    async def test_connection_error_maps_to_connection_failed(self):
-        """A connection-shaped pooled failure on the fetch surfaces as
-        CONNECTION_FAILED — the same structured error code the removed up-front
-        connect check raised."""
-        list_result = {
-            "success": False,
-            "error": "Failed to connect to Home Assistant",
-        }
-        client = _make_pooled_client(_dispatch(list_result=list_result))
-        tools = TraceTools(client)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(entity_id="automation.test")
-
-        error = json.loads(str(exc_info.value))
-        assert error["success"] is False
         assert error["error"]["code"] == "CONNECTION_FAILED"
 
-    @pytest.mark.asyncio
-    async def test_trace_command_error_maps_to_service_call_failed(self):
-        """A non-connection pooled failure keeps its SERVICE_CALL_FAILED shape."""
-        list_result = {"success": False, "error": "unknown_command"}
-        client = _make_pooled_client(_dispatch(list_result=list_result))
-        tools = TraceTools(client)
+    @pytest.mark.parametrize(
+        ("command", "error", "code"),
+        [
+            pytest.param(
+                "trace/list",
+                "Invalid command",
+                "SERVICE_CALL_FAILED",
+                id="list-command-error",
+            ),
+            pytest.param(
+                "trace/get",
+                "The trace could not be found",
+                "SERVICE_CALL_FAILED",
+                id="detail-not-found",
+            ),
+            pytest.param(
+                "trace/contexts",
+                "Failed to connect to Home Assistant",
+                "CONNECTION_FAILED",
+                id="connection-shaped-answer",
+            ),
+            pytest.param(
+                "trace/contexts",
+                "WebSocket connection to Home Assistant closed while waiting for a response",
+                "CONNECTION_FAILED",
+                id="transport-shaped-answer",
+            ),
+        ],
+    )
+    def test_ws_failure_is_classified_by_its_message(
+        self, command: str, error: str, code: str
+    ) -> None:
+        """A command's error answer keeps its context and picks its error code."""
+        context = _COMMAND_CONTEXTS[command]
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(entity_id="automation.test")
+            _raise_trace_ws_failure(error, context)
 
-        error = json.loads(str(exc_info.value))
-        assert error["success"] is False
-        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        payload = json.loads(str(exc_info.value))
+        assert payload["success"] is False
+        assert payload["error"]["code"] == code
+        assert {key: payload[key] for key in context} == context
 
-    @pytest.mark.asyncio
-    async def test_detail_connection_error_maps_to_connection_failed(self):
-        """The DETAIL path (run_id set) routes a connection-shaped pooled failure
-        through the same ``_raise_trace_ws_failure`` classifier → CONNECTION_FAILED."""
-        detail_result = {
-            "success": False,
-            "error": "Failed to connect to Home Assistant",
-        }
-        client = _make_pooled_client(_dispatch(detail_result=detail_result))
-        tools = TraceTools(client)
-
+    @pytest.mark.parametrize(
+        "options",
+        [
+            pytest.param({"sections": "conditions"}, id="sections"),
+            pytest.param({"detailed": True}, id="detailed"),
+        ],
+    )
+    async def test_detail_options_need_a_resolved_run(
+        self,
+        core_client: HomeAssistantClient,
+        registry_api: None,
+        options: dict[str, Any],
+    ) -> None:
+        """sections and detailed are only meaningful when a run is resolved."""
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(
-                entity_id="automation.test", run_id="r1"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["success"] is False
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-
-    @pytest.mark.asyncio
-    async def test_detail_command_error_maps_to_service_call_failed(self):
-        """The DETAIL path keeps a non-connection pooled failure as
-        SERVICE_CALL_FAILED."""
-        detail_result = {"success": False, "error": "unknown_command"}
-        client = _make_pooled_client(_dispatch(detail_result=detail_result))
-        tools = TraceTools(client)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(
-                entity_id="automation.test", run_id="r1"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["success"] is False
-        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
-
-    @pytest.mark.asyncio
-    async def test_sections_without_run_is_rejected(self):
-        """sections is only meaningful when a run is resolved."""
-        client = _make_pooled_client(_dispatch())
-        tools = TraceTools(client)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(
-                entity_id="automation.test", sections="conditions"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    @pytest.mark.asyncio
-    async def test_detailed_without_run_is_rejected(self):
-        """detailed=True is only meaningful when a run is resolved."""
-        client = _make_pooled_client(_dispatch())
-        tools = TraceTools(client)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_automation_traces(
-                entity_id="automation.test", detailed=True
+            await TraceTools(core_client).ha_get_automation_traces(
+                entity_id="automation.test", **options
             )
 
         error = json.loads(str(exc_info.value))
