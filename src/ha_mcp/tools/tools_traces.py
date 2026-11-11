@@ -32,7 +32,6 @@ from .trace_lookup import (
     ContextTraceMatch,
     _raise_trace_ws_failure,
     _requested_sections,
-    _trace_start,
     resolve_context_trace,
     resolve_global_context,
 )
@@ -257,9 +256,9 @@ class TraceTools:
             Field(
                 description=(
                     "Context id to resolve to its trace. Accepts the trace "
-                    "run's own `context.id` or the context id of the event or "
-                    "service call that triggered it. Mutually exclusive with "
-                    "run_id."
+                    "run's own `context.id` or, with the ha_mcp_tools "
+                    "component, the context id of the event or service call "
+                    "that triggered it. Mutually exclusive with run_id."
                 ),
                 default=None,
             ),
@@ -332,12 +331,14 @@ class TraceTools:
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
            ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
-           selects the newest matching run and reports `context_match` as
+           selects Core's run for that context and reports `context_match` as
            `trace` or `parent`. Additional runs that share the same context
-           id are listed in `context_other_matches`. With entity_id, a parent
-           context can be scanned; without entity_id, the component bridge or
-           bounded public scan still resolves a parent context across all stored
-           runs.
+           id are listed in `context_other_matches`. The ha_mcp_tools component
+           resolves both a run's own context and a triggering parent context
+           across all stored traces; without it only Core's `trace/contexts`
+           map is available, which holds each run's own context. A context
+           Core does not hold is reported as not found with a hint that the
+           component resolves triggering (parent) contexts.
            ha_get_automation_traces(context_id="01J...")
 
         RESPONSE FIELDS:
@@ -347,10 +348,10 @@ class TraceTools:
         - `success`, `run_id`, `domain` and `item_id` identify the run.
           `entity_id` is present when the caller supplied it; a context-only
           lookup returns Core's `domain`/`item_id` instead of inventing one.
-        - `context_match` is `trace` or `parent`; `context_scanned`,
-          `context_scan_truncated` and `context_scan_errors` describe the
-          scan, whether it ran through the component bridge or the public
-          fallback.
+        - `context_match` is `trace` or `parent`; `context_scanned` reports
+          how many stored runs the ha_mcp_tools component inspected while
+          resolving the context id, and is 0 when Core's own-context map
+          answered.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
           `logbook_truncated` describe the run's logbook rows.
         """
@@ -619,18 +620,8 @@ def _add_context_match(
     detail["context_id"] = context_id
     detail["context_match"] = match.match
     detail["context_scanned"] = match.scanned
-    if match.truncated:
-        detail["context_scan_truncated"] = True
-    if match.scan_errors:
-        detail["context_scan_errors"] = list(match.scan_errors)
     if match.other_matches:
         detail["context_other_matches"] = list(match.other_matches)
-    if match.fallback_scan and match.domain and match.item_id:
-        detail.setdefault("warnings", []).append(
-            f"Context matched through the public fallback scan for "
-            f"{match.domain}/{match.item_id}; install the ha_mcp_tools component "
-            "to use the in-process trace context lookup."
-        )
 
 
 async def _resolve_trace_item_id(
@@ -681,6 +672,11 @@ async def _resolve_trace_item_id(
         return fallback_object_id
 
 
+def _trace_start(trace: dict[str, Any]) -> str:
+    """Return Core's start timestamp, the sort key for ``trace/list`` rows."""
+    return str(trace["timestamp"]["start"])
+
+
 def _format_trace_list(
     entity_id: str | None,
     traces: list[dict[str, Any]],
@@ -706,9 +702,7 @@ def _format_trace_list(
     """
     # HA's trace/list returns runs first, then not-triggered traces, so list
     # position is not chronological. Sort by Core's own start timestamp before
-    # picking the newest or oldest window. Drop malformed rows before sorting
-    # so one bad element cannot take down the whole page.
-    traces = [trace for trace in traces if isinstance(trace, dict)]
+    # picking the newest or oldest window.
     ordered = sorted(traces, key=_trace_start)
     if order == "newest":
         end = len(ordered) - offset

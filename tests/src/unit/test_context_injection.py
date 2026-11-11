@@ -253,7 +253,10 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
             "result": [
                 {
                     "run_id": "1.0",
-                    "timestamp": "2025-01-01T00:00:00Z",
+                    "timestamp": {
+                        "start": "2025-01-01T00:00:00+00:00",
+                        "finish": "2025-01-01T00:00:01+00:00",
+                    },
                     "state": "stopped",
                 }
             ],

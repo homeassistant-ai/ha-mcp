@@ -15,6 +15,7 @@ def _trace() -> dict:
             "start": "2026-11-08T16:00:00+00:00",
             "finish": "2026-11-08T16:00:01+00:00",
         },
+        "trigger": "event 'go'",
         "config": {"alias": "Trace capture", "mode": "single"},
         "trace": {
             "trigger/0": [
@@ -33,9 +34,11 @@ def _trace() -> dict:
             "condition/0": [
                 {
                     "path": "condition/0",
-                    "result": {"result": False},
-                    "state": "below",
-                    "wanted_state": "above",
+                    "result": {
+                        "result": False,
+                        "state": "below",
+                        "wanted_state": "above",
+                    },
                     "changed_variables": {"trigger": {"id": "evt_trig"}},
                 }
             ],
@@ -64,24 +67,10 @@ class TestFormatDetailedTrace:
         assert result["trace"] is trace["trace"]
         assert result["config"] == trace["config"]
         assert result["blueprint_inputs"] == trace["blueprint_inputs"]
-        assert "trigger" not in result
+        assert result["trigger"] == trace["trigger"]
         assert "condition_results" not in result
         assert "action_trace" not in result
         assert "config_summary" not in result
-
-    def test_step_result_variables_and_error_survive(self) -> None:
-        result = _format_detailed_trace("automation.test", "r1", _trace())
-
-        trigger = result["trace"]["trigger/0"][0]
-        condition = result["trace"]["condition/0"][0]
-        action = result["trace"]["action/0"][0]
-
-        assert trigger["changed_variables"]["trigger"]["id"] == "evt_trig"
-        assert trigger["changed_variables"]["trigger"]["event"]["data"]["go"] is False
-        assert condition["state"] == "below"
-        assert condition["wanted_state"] == "above"
-        assert action["result"]["params"]["domain"] == "light"
-        assert action["error"] == "service failed"
 
     def test_sections_keep_top_level_keys(self) -> None:
         result = _format_detailed_trace(

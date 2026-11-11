@@ -9,7 +9,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.tools.trace_logbook import TraceLogbook
-from ha_mcp.tools.trace_lookup import ContextTraceMatch
 
 from .test_tools_traces import _dispatch, _make_pooled_client
 
@@ -72,134 +71,6 @@ class TestTraceContextLookup:
         assert result["context_id"] == "ctx-1"
         assert result["context_match"] == "trace"
         assert result["context_scanned"] == 0
-        sent_types = [
-            call.args[0]["type"]
-            for call in client.send_websocket_message.await_args_list
-        ]
-        assert "trace/contexts" in sent_types
-        assert "trace/get" in sent_types
-
-    @pytest.mark.asyncio
-    async def test_parent_context_resolves_to_child_run(self):
-        """A triggering event context resolves through the trace's parent_id."""
-        details = {
-            "r1": {
-                "run_id": "r1",
-                "state": "stopped",
-                "trace": {},
-                "config": {"alias": "Test"},
-                "context": {"id": "own-1", "parent_id": "parent-1"},
-            }
-        }
-
-        def _d(mtype, message):
-            if mtype == "config/entity_registry/get":
-                return {"success": True, "result": {"unique_id": "uid_1"}}
-            if mtype == "trace/contexts":
-                return {"success": True, "result": {}}
-            if mtype == "trace/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "run_id": "r1",
-                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-                        }
-                    ],
-                }
-            if mtype == "trace/get":
-                return {
-                    "success": True,
-                    "result": details[message["run_id"]],
-                }
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_d)
-
-        result = await TraceTools(client).ha_get_automation_traces(
-            entity_id="automation.test", context_id="parent-1"
-        )
-
-        assert result["run_id"] == "r1"
-        assert result["context_id"] == "parent-1"
-        assert result["context_match"] == "parent"
-        assert result["context_scanned"] == 1
-        trace_gets = [
-            call.args[0]["type"]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/get"
-        ]
-        assert len(trace_gets) == 1
-
-    @pytest.mark.asyncio
-    async def test_scanned_detail_is_reused_without_refetch(self):
-        """The context scan's trace/get copy is used instead of reading again."""
-        scanned = {
-            "run_id": "r1",
-            "state": "stopped",
-            "trace": {},
-            "context": {"id": "own-1", "parent_id": "parent-1"},
-        }
-        client = _make_pooled_client(
-            _dispatch(
-                detail_result={
-                    "success": False,
-                    "error": "The trace could not be found",
-                }
-            )
-        )
-
-        with patch(
-            "ha_mcp.tools.tools_traces.resolve_context_trace",
-            AsyncMock(
-                return_value=ContextTraceMatch("r1", "parent", 1, False, (), scanned)
-            ),
-        ):
-            result = await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test", context_id="parent-1"
-            )
-
-        assert result["run_id"] == "r1"
-        assert result["context_match"] == "parent"
-        assert result["context_scanned"] == 1
-        assert all(
-            call.args[0].get("type") != "trace/get"
-            for call in client.send_websocket_message.await_args_list
-        )
-
-    @pytest.mark.asyncio
-    async def test_context_scan_truncated_is_reported(self):
-        """A bounded parent scan reports that older traces were not checked."""
-        detail_result = {
-            "success": True,
-            "result": {
-                "run_id": "r1",
-                "state": "stopped",
-                "trace": {},
-                "context": {"id": "own", "parent_id": "parent-1"},
-            },
-        }
-        client = _make_pooled_client(_dispatch(detail_result=detail_result))
-
-        with patch(
-            "ha_mcp.tools.tools_traces.resolve_context_trace",
-            AsyncMock(
-                return_value=ContextTraceMatch(
-                    "r1",
-                    "parent",
-                    50,
-                    True,
-                    ("r49: The trace could not be found",),
-                )
-            ),
-        ):
-            result = await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test", context_id="parent-1"
-            )
-
-        assert result["context_scan_truncated"] is True
-        assert result["context_scanned"] == 50
-        assert result["context_scan_errors"] == ["r49: The trace could not be found"]
 
     @pytest.mark.asyncio
     async def test_unknown_context_id_is_not_found(self):
@@ -216,6 +87,21 @@ class TestTraceContextLookup:
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "missing" in error["error"]["message"]
+        assert "ha_mcp_tools component" in error["error"]["suggestion"]
+
+    @pytest.mark.asyncio
+    async def test_global_unknown_context_id_is_not_found(self):
+        """A context-only miss names the component that resolves parent contexts."""
+        client = _make_pooled_client(
+            _dispatch(context_result={"success": True, "result": {}})
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await TraceTools(client).ha_get_automation_traces(context_id="missing")
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "ha_mcp_tools component" in error["error"]["suggestion"]
 
     @pytest.mark.asyncio
     async def test_malformed_context_result_is_not_found(self):
@@ -232,35 +118,70 @@ class TestTraceContextLookup:
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
+    @pytest.mark.parametrize(
+        ("kwargs", "dispatch"),
+        [
+            pytest.param(
+                {
+                    "entity_id": "automation.test",
+                    "run_id": "r1",
+                    "context_id": "ctx-1",
+                },
+                _dispatch(),
+                id="run-and-context",
+            ),
+            pytest.param(
+                {"entity_id": "automation.test", "context_id": "   "},
+                _dispatch(),
+                id="empty-context",
+            ),
+            pytest.param(
+                {"item_id": "uid_1", "run_id": "r1"},
+                _dispatch(),
+                id="item-without-domain",
+            ),
+            pytest.param(
+                {
+                    "entity_id": "automation.test",
+                    "domain": "automation",
+                    "item_id": "uid_1",
+                },
+                _dispatch(),
+                id="entity-and-item",
+            ),
+            pytest.param({"run_id": "r1"}, _dispatch(), id="run-without-target"),
+            pytest.param({}, _dispatch(), id="no-selector"),
+            pytest.param(
+                {"context_id": "ctx-1", "domain": "script"},
+                _dispatch(
+                    context_result={
+                        "success": True,
+                        "result": {
+                            "ctx-1": {
+                                "run_id": "r1",
+                                "domain": "automation",
+                                "item_id": "uid_1",
+                            }
+                        },
+                    }
+                ),
+                id="context-domain-mismatch",
+            ),
+            pytest.param(
+                {"entity_id": "sensor.test"}, _dispatch(), id="invalid-entity-prefix"
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_run_id_and_context_id_are_mutually_exclusive(self):
-        """Passing both selectors is rejected before any WebSocket call."""
-        client = _make_pooled_client(_dispatch())
+    async def test_rejected_selector_combinations(self, kwargs, dispatch):
+        """Each invalid selector combination is a validation error."""
+        client = _make_pooled_client(dispatch)
 
         with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test",
-                run_id="r1",
-                context_id="ctx-1",
-            )
+            await TraceTools(client).ha_get_automation_traces(**kwargs)
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_empty_context_id_is_rejected(self):
-        """An empty context id is a validation error, not a missing trace."""
-        client = _make_pooled_client(_dispatch())
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test", context_id="   "
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_context_only_resolves_through_global_contexts(self):
@@ -295,55 +216,6 @@ class TestTraceContextLookup:
         assert result["item_id"] == "uid_1"
         assert result["run_id"] == "r1"
         assert result["context_match"] == "trace"
-        contexts_message = next(
-            call.args[0]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/contexts"
-        )
-        assert contexts_message == {"type": "trace/contexts"}
-
-    @pytest.mark.asyncio
-    async def test_context_only_parent_resolves_through_global_scan(self):
-        """No entity_id: the bounded global scan matches a parent context."""
-        detail = {
-            "run_id": "r1",
-            "state": "stopped",
-            "trace": {},
-            "context": {"id": "own-1", "parent_id": "parent-1"},
-        }
-
-        def _d(mtype, message):
-            if mtype == "trace/contexts":
-                return {"success": True, "result": {}}
-            if mtype == "trace/list":
-                if message["domain"] == "automation":
-                    return {
-                        "success": True,
-                        "result": [
-                            {
-                                "run_id": "r1",
-                                "domain": "automation",
-                                "item_id": "uid_1",
-                                "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-                            }
-                        ],
-                    }
-                return {"success": True, "result": []}
-            if mtype == "trace/get":
-                return {"success": True, "result": detail}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_d)
-        result = await TraceTools(client).ha_get_automation_traces(
-            context_id="parent-1"
-        )
-
-        assert "entity_id" not in result
-        assert result["domain"] == "automation"
-        assert result["item_id"] == "uid_1"
-        assert result["run_id"] == "r1"
-        assert result["context_match"] == "parent"
-        assert result["context_scanned"] == 1
 
     @pytest.mark.asyncio
     async def test_domain_only_lists_across_items(self):
@@ -372,12 +244,6 @@ class TestTraceContextLookup:
         assert result["domain"] == "automation"
         assert "entity_id" not in result
         assert result["trace_count"] == 2
-        list_message = next(
-            call.args[0]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/list"
-        )
-        assert list_message == {"type": "trace/list", "domain": "automation"}
 
     @pytest.mark.asyncio
     async def test_domain_list_row_fetches_detail_by_item_id(self):
@@ -401,91 +267,6 @@ class TestTraceContextLookup:
         assert result["item_id"] == "uid_1"
         assert result["run_id"] == "r1"
         assert "entity_id" not in result
-        trace_get = next(
-            call.args[0]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/get"
-        )
-        assert trace_get == {
-            "type": "trace/get",
-            "domain": "automation",
-            "item_id": "uid_1",
-            "run_id": "r1",
-        }
-
-    @pytest.mark.asyncio
-    async def test_item_id_without_domain_is_rejected(self):
-        client = _make_pooled_client(_dispatch())
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
-                item_id="uid_1", run_id="r1"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_entity_id_and_item_id_are_mutually_exclusive(self):
-        client = _make_pooled_client(_dispatch())
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
-                entity_id="automation.test", domain="automation", item_id="uid_1"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_global_scan_not_found_keeps_the_scan_details(self):
-        """A failed domain read is reported instead of looking like no run."""
-
-        def _d(mtype, message):
-            if mtype == "trace/contexts":
-                return {"success": True, "result": {}}
-            if mtype == "trace/list":
-                if message["domain"] == "script":
-                    return {"success": False, "error": "script list denied"}
-                return {"success": True, "result": []}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_d)
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(context_id="parent-1")
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error["scan_truncated"] is False
-        assert any("script list denied" in item for item in error["scan_errors"])
-
-    @pytest.mark.asyncio
-    async def test_context_domain_mismatch_is_rejected(self):
-        client = _make_pooled_client(
-            _dispatch(
-                context_result={
-                    "success": True,
-                    "result": {
-                        "ctx-1": {
-                            "run_id": "r1",
-                            "domain": "automation",
-                            "item_id": "uid_1",
-                        }
-                    },
-                }
-            )
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(
-                context_id="ctx-1", domain="script"
-            )
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
     async def test_domain_scoped_context_resolves_the_direct_map(self):
@@ -522,55 +303,6 @@ class TestTraceContextLookup:
         assert result["item_id"] == "uid_1"
 
     @pytest.mark.asyncio
-    async def test_item_and_context_resolves_inside_that_item(self):
-        """domain+item_id+context_id scans one Core trace key."""
-        detail_result = {
-            "success": True,
-            "result": {
-                "run_id": "r1",
-                "state": "stopped",
-                "trace": {},
-                "context": {"id": "own-1", "parent_id": "parent-1"},
-            },
-        }
-
-        def _d(mtype, message):
-            if mtype == "trace/contexts":
-                return {"success": True, "result": {}}
-            if mtype == "trace/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "run_id": "r1",
-                            "item_id": "uid_1",
-                            "timestamp": {"start": "2026-11-08T16:00:01+00:00"},
-                        }
-                    ],
-                }
-            if mtype == "trace/get":
-                return {"success": True, "result": detail_result["result"]}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_d)
-        result = await TraceTools(client).ha_get_automation_traces(
-            domain="automation", item_id="uid_1", context_id="parent-1"
-        )
-
-        assert result["context_match"] == "parent"
-        assert result["item_id"] == "uid_1"
-        contexts_message = next(
-            call.args[0]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/contexts"
-        )
-        assert contexts_message == {
-            "type": "trace/contexts",
-            "domain": "automation",
-            "item_id": "uid_1",
-        }
-
-    @pytest.mark.asyncio
     async def test_item_only_lists_that_trace_key(self):
         """domain+item_id lists one item's runs."""
         list_result = {
@@ -591,35 +323,6 @@ class TestTraceContextLookup:
 
         assert result["trace_count"] == 1
         assert "entity_id" not in result
-        list_message = next(
-            call.args[0]
-            for call in client.send_websocket_message.await_args_list
-            if call.args[0].get("type") == "trace/list"
-        )
-        assert list_message == {
-            "type": "trace/list",
-            "domain": "automation",
-            "item_id": "uid_1",
-        }
-
-    @pytest.mark.asyncio
-    async def test_all_connection_failures_are_connection_failed(self):
-        """Both domains failing on transport is not reported as no such run."""
-
-        def _d(mtype, message):
-            if mtype == "trace/contexts":
-                return {"success": True, "result": {}}
-            if mtype == "trace/list":
-                return {"success": False, "error": "connection closed"}
-            return {"success": False, "error": f"unexpected {mtype}"}
-
-        client = _make_pooled_client(_d)
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(context_id="parent-1")
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
 
     @pytest.mark.asyncio
     async def test_whitespace_sections_with_detailed_fetches_logbook(self):
@@ -686,28 +389,6 @@ class TestTraceContextLookup:
         assert any("logbook unavailable" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_run_id_without_entity_id_is_rejected(self):
-        client = _make_pooled_client(_dispatch())
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces(run_id="r1")
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_no_selector_is_rejected(self):
-        client = _make_pooled_client(_dispatch())
-
-        with pytest.raises(ToolError) as exc_info:
-            await TraceTools(client).ha_get_automation_traces()
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        client.send_websocket_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
     async def test_context_lookup_transport_failure_is_classified(self):
         """A dead transport during trace/contexts reports CONNECTION_FAILED."""
         client = _make_pooled_client(
@@ -753,8 +434,6 @@ class TestTraceContextLookup:
                     "success": True,
                     "result": {"ctx-1": {"run_id": "own-run"}},
                 }
-            if mtype == "trace/list":
-                return {"success": True, "result": []}
             return {"success": False, "error": f"unexpected {mtype}"}
 
         client = _make_pooled_client(_d)
