@@ -19,6 +19,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import frame
 from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
@@ -148,6 +149,7 @@ class TestDeviceSeam:
         hass: HomeAssistant,
         component_core_client: HomeAssistantClient,
         socket: HomeAssistantWebSocketClient,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Core's reduced child row reaches the public tools.
 
@@ -155,6 +157,8 @@ class TestDeviceSeam:
         ``config_entry_id``. ``area_id`` stays the child's own empty one in the
         list and the single lookup, ``effective_area_id`` carries Core's
         parent-derived area and ``integration_type`` the owning entry's domain.
+        The component reads the registry without the deprecated mapping use
+        of ``registry.devices``, which Core reports through its frame helper.
         """
         MockConfigEntry(domain="hue", entry_id="cfg-hue").add_to_hass(hass)
         registry = dr.async_get(hass)
@@ -182,6 +186,9 @@ class TestDeviceSeam:
             assert (row["area_id"], row["effective_area_id"]) == (None, "office")
             assert row["parent_device_id"] == parent.id
         assert single["device"]["integration_type"] == "hue"
+        # Core reports a code line once per test, so a report from setup counts too.
+        records = caplog.get_records("setup") + caplog.records
+        assert [r.getMessage() for r in records if r.name == frame.__name__] == []
 
     async def test_remove_device_looks_up_cores_row_without_a_registry_dump(
         self,

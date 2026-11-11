@@ -15,17 +15,13 @@ from ...utilities.assertions import (
     MCPAssertions,
     parse_mcp_result,
 )
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
 
 async def _core_2026_9_child_fixture(ha_client):
-    """Return one real child fixture and whether the component is available."""
-    info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
-    component_available = info.get("success") is True
-    if component_available:
-        assert "device_registry_child_semantics" in info["result"]["capabilities"]
-
+    """Return one real child fixture."""
     device_reply = await ha_client.send_websocket_message(
         {"type": "config/device_registry/list"}
     )
@@ -88,45 +84,7 @@ async def _core_2026_9_child_fixture(ha_client):
         child_id,
         child_entity_id,
         devices_by_id[parent_id].get("area_id"),
-        component_available,
     )
-
-
-async def _error_log_total(mcp_client) -> int:
-    """Return the authoritative current error-log line count."""
-    result = parse_mcp_result(
-        await mcp_client.call_tool("ha_get_logs", {"source": "error_log", "limit": 1})
-    )
-    assert result.get("success") is True, result
-    return result["total_lines"]
-
-
-async def _error_log_lines_since(mcp_client, baseline_total: int) -> list[str]:
-    """Read only the bounded newest window added since a line-count boundary."""
-    current_total = await _error_log_total(mcp_client)
-    assert current_total >= baseline_total, (
-        "Error-log history rotated during the child-device read assertion"
-    )
-    new_line_count = current_total - baseline_total
-    new_log_lines: list[str] = []
-    offset = 0
-    while offset < new_line_count:
-        page = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_get_logs",
-                {
-                    "source": "error_log",
-                    "limit": min(1000, new_line_count - offset),
-                    "offset": offset,
-                },
-            )
-        )
-        assert page.get("success") is True, page
-        assert page["offset"] == offset, page
-        assert page["window_lines"] > 0, page
-        new_log_lines.extend(page["log"].splitlines())
-        offset += page["window_lines"]
-    return new_log_lines
 
 
 @pytest.mark.registry
@@ -407,54 +365,41 @@ class TestDeviceGet:
 async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_client):
     """Exercise the real Core 2026.9 kitchen-sink child-device topology.
 
-    The fixture creates one power-strip parent with multiple child outlets. The
-    test assigns only the parent to ``living_room`` and proves the same inherited
-    placement through search, single-device lookup, and area-filtered device list.
-    The mutation is always restored, and the component must not touch Core's
-    deprecated mapping methods while serving the reads.
+    The fixture finds kitchen_sink's power-strip parent with multiple child
+    outlets. The test assigns only the parent to ``living_room`` and proves the
+    same inherited placement through search, single-device lookup, and
+    area-filtered device list.
+    The mutation is always restored. That the component reads the registry
+    without Core's deprecated mapping use is pinned by
+    ``test_component_device_seam.py`` on real Core.
     """
     (
         parent_id,
         child_id,
         child_entity_id,
         original_parent_area,
-        component_available,
     ) = await _core_2026_9_child_fixture(ha_client)
 
-    body_error: Exception | None = None
-    restore_error: Exception | None = None
+    mcp = MCPAssertions(mcp_client)
     try:
-        update = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
-            )
-        )
-        assert update.get("success") is True, update
-
-        baseline_total_lines = (
-            await _error_log_total(mcp_client) if component_available else None
+        await mcp.call_tool_success(
+            "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
         )
 
-        search = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_search",
-                {
-                    "query": child_entity_id,
-                    "domain_filter": "switch",
-                    "exact_match": True,
-                    "result_fields": ["area"],
-                },
-            )
+        search = await mcp.call_tool_success(
+            "ha_search",
+            {
+                "query": child_entity_id,
+                "domain_filter": "switch",
+                "exact_match": True,
+                "result_fields": ["area"],
+            },
         )
-        assert search.get("success") is True, search
         assert any(row.get("area") == "Living Room" for row in search["entities"]), (
             search
         )
 
-        single = parse_mcp_result(
-            await mcp_client.call_tool("ha_get_device", {"device_id": child_id})
-        )
-        assert single.get("success") is True, single
+        single = await mcp.call_tool_success("ha_get_device", {"device_id": child_id})
         assert single["device"]["id"] == child_id
         # The child keeps no area of its own and sits in its parent's.
         assert single["device"]["area_id"] is None
@@ -462,49 +407,16 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         assert single["device"]["config_entry_id"]
         assert single["device"]["integration_type"] == "kitchen_sink"
 
-        area_list = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_get_device", {"area_id": "living_room", "limit": 200}
-            )
+        area_list = await mcp.call_tool_success(
+            "ha_get_device", {"area_id": "living_room", "limit": 200}
         )
-        assert area_list.get("success") is True, area_list
         assert child_id in {row["id"] for row in area_list["devices"]}
-
-        if baseline_total_lines is not None:
-            deprecated_component_lines = [
-                line
-                for line in await _error_log_lines_since(
-                    mcp_client, baseline_total_lines
-                )
-                if "helpers.frame" in line and "ha_mcp_tools" in line
-            ]
-            assert deprecated_component_lines == []
-    except Exception as err:  # noqa: BLE001
-        body_error = err
     finally:
-        try:
-            restore = parse_mcp_result(
-                await mcp_client.call_tool(
-                    "ha_set_device",
-                    {
-                        "device_id": parent_id,
-                        "area_id": original_parent_area or "",
-                    },
-                )
+        with CleanupSteps() as cleanup, cleanup.step():
+            await mcp.call_tool_success(
+                "ha_set_device",
+                {"device_id": parent_id, "area_id": original_parent_area or ""},
             )
-            assert restore.get("success") is True, restore
-        except Exception as err:  # noqa: BLE001
-            restore_error = err
-
-    if body_error is not None and restore_error is not None:
-        raise ExceptionGroup(
-            "Core 2026.9 child-device read assertions and cleanup both failed",
-            [body_error, restore_error],
-        )
-    if body_error is not None:
-        raise body_error
-    if restore_error is not None:
-        raise restore_error
 
 
 @pytest.mark.registry
@@ -621,43 +533,29 @@ async def test_device_entity_independence(mcp_client):
 
     logger.info(f"Testing with device: {device['name']} ({len(entities)} entities)")
 
-    # Rename the device
-    test_name = "Independence Test Device"
-    update_result = await mcp_client.call_tool(
-        "ha_set_device",
-        {
-            "device_id": device_id,
-            "name": test_name,
-        },
-    )
-    update_data = parse_mcp_result(update_result)
-    assert update_data.get("success"), f"Failed to rename device: {update_data}"
+    mcp = MCPAssertions(mcp_client)
+    try:
+        await mcp.call_tool_success(
+            "ha_set_device",
+            {"device_id": device_id, "name": "Independence Test Device"},
+        )
 
-    # Verify entities still have original entity_ids
-    get_result = await mcp_client.call_tool(
-        "ha_get_device",
-        {"device_id": device_id},
-    )
-    get_data = parse_mcp_result(get_result)
-    assert get_data.get("success"), f"Failed to get device after rename: {get_data}"
-
-    new_entity_ids = [e["entity_id"] for e in get_data["device"]["entities"]]
-    assert set(new_entity_ids) == set(original_entity_ids), (
-        f"Entity IDs should NOT change when device is renamed. "
-        f"Original: {original_entity_ids}, New: {new_entity_ids}"
-    )
-    logger.info("Verified: Entity IDs unchanged after device rename")
-
-    # Restore device name
-    restore_result = await mcp_client.call_tool(
-        "ha_set_device",
-        {
-            "device_id": device_id,
-            "name": "",  # Clear custom name
-        },
-    )
-    restore_data = parse_mcp_result(restore_result)
-    assert restore_data.get("success"), f"Failed to restore device name: {restore_data}"
+        get_data = await mcp.call_tool_success(
+            "ha_get_device", {"device_id": device_id}
+        )
+        new_entity_ids = [e["entity_id"] for e in get_data["device"]["entities"]]
+        assert set(new_entity_ids) == set(original_entity_ids), (
+            f"Entity IDs should NOT change when device is renamed. "
+            f"Original: {original_entity_ids}, New: {new_entity_ids}"
+        )
+        logger.info("Verified: Entity IDs unchanged after device rename")
+    finally:
+        with CleanupSteps() as cleanup, cleanup.step():
+            # Put back the name the device had; '' clears a custom name.
+            await mcp.call_tool_success(
+                "ha_set_device",
+                {"device_id": device_id, "name": device.get("name_by_user") or ""},
+            )
 
     logger.info("Device/entity naming independence test completed")
 
