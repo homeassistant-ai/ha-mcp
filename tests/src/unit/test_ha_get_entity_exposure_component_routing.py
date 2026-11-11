@@ -1,4 +1,4 @@
-"""Routing tests for ``ha_get_entity``'s exposure listing over the ``ha_mcp_tools`` gate.
+"""Routing tests for the exposure listing behind ``ha_get_entity``, over the ``ha_mcp_tools`` gate.
 
 Core's ``expose_entity/list`` returns a bare ``{entity_id: {assistant: bool}}``
 map with no names/areas, forcing a second ha_search to identify an exposed
@@ -29,7 +29,6 @@ from ._component_routing_helpers import (
     patch_ws,
     patch_ws_establish_failure,
 )
-from .test_ha_get_entity_component_routing import _build_get_entity
 
 _CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
@@ -68,13 +67,7 @@ class RoutingClient:
         self._legacy_map = dict(legacy_map)
         self.legacy_calls = 0
 
-    async def send_websocket_message(
-        self, msg: dict[str, Any], expected_error_codes: frozenset[str] = frozenset()
-    ) -> dict[str, Any]:
-        if msg.get("type") == "homeassistant/expose_new_entities/get":
-            return {"success": True, "result": {"expose_new": False}}
-        if msg.get("type") == "config/entity_registry/settings/get":
-            return {"success": True, "result": {"entity_id_parts": None}}
+    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         if msg.get("type") == "homeassistant/expose_entity/list":
             self.legacy_calls += 1
             return {
@@ -91,6 +84,13 @@ def _clear_caps_cache() -> Any:
     yield
     component_api._CAPS_CACHE.clear()
     component_api._CAPS_LOCKS.clear()
+
+
+async def _listing(client: Any, assistant: str | None = None) -> dict[str, Any]:
+    """The exposure listing ``ha_get_entity`` returns without an entity."""
+    return entity_exposure.list_exposures(
+        *await entity_exposure.read_exposure(client), assistant
+    )
 
 
 def _exposure_calls(ws: Any) -> list[Any]:
@@ -113,10 +113,9 @@ async def test_list_mode_served_with_entity_info() -> None:
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert resp["count"] == 2
@@ -139,10 +138,9 @@ async def test_list_mode_entity_info_follows_assistant_filter() -> None:
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure(exposed_to="cloud.alexa")
+        resp = await _listing(client, "cloud.alexa")
 
     # Only light.b is exposed to cloud.alexa.
     assert set(resp["exposed_entities"]) == {"light.b"}
@@ -154,10 +152,9 @@ async def test_no_capability_uses_legacy_list() -> None:
     """Component without exposure → legacy expose_entity/list, no entity_info."""
     ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_NONE)
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
@@ -177,10 +174,9 @@ async def test_pre_child_semantics_exposure_capability_uses_legacy_list() -> Non
         },
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
@@ -198,7 +194,7 @@ async def test_a_reply_without_a_map_falls_back_to_cores_list() -> None:
     client = RoutingClient(_LEGACY_MAP)
 
     with patch_ws(ws, entity_exposure):
-        resp = await _build_get_entity(client)()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert client.legacy_calls == 1
@@ -213,10 +209,9 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
         cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
@@ -233,10 +228,9 @@ async def test_command_error_falls_back_to_legacy() -> None:
         cmd_exc=HomeAssistantCommandTimeout("timeout"),
     )
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws(ws, entity_exposure):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp
@@ -251,14 +245,13 @@ async def test_ws_establish_failure_falls_back_to_legacy() -> None:
     identically on a pooled-WS drop."""
     caps_ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_EXPOSURE)
     client = RoutingClient(_LEGACY_MAP)
-    exposure = _build_get_entity(client)
 
     with patch_ws_establish_failure(
         caps_ws,
         entity_exposure,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
-        resp = await exposure()
+        resp = await _listing(client)
 
     assert resp["exposed_entities"] == _LEGACY_MAP
     assert "entity_info" not in resp

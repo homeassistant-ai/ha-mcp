@@ -213,8 +213,12 @@ async def test_get_entity_serves_cores_full_entry(
     bulk = (await tools.ha_get_entity(entity_id=[lamp, lamp]))["entity_entries"]
     resolved = (await tools.ha_get_entity(unique_id="lamp"))["entity_entries"]
 
+    core = await core_client.send_websocket_message(
+        {"type": "config/entity_registry/get", "entity_id": lamp}
+    )
     for entry in (single, bulk[0], resolved[0]):
-        assert {"capabilities", "entity_category", "id"} <= entry.keys()
+        # Every field of Core's entry, value for value; enrichment is additive.
+        assert entry.items() >= core["result"].items()
         assert entry["aliases"] == ["Desk"]
 
 

@@ -116,7 +116,11 @@ def _after_settings_write(
 
 class TestRegistryWideRead:
     async def test_lists_every_exposed_entity_with_the_settings(
-        self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        tools: EntityTools,
+        sent: AsyncMock,
     ) -> None:
         registry = er.async_get(hass)
         for object_id in ("living_room", "bedroom"):
@@ -135,7 +139,6 @@ class TestRegistryWideRead:
         result = await tools.ha_get_entity()
 
         assert result["success"] is True
-        assert result["settings"] == {"entity_id_parts": None}
         assert result["exposed_entities"] == {
             "light.living_room": {"conversation": True, "cloud.alexa": True},
             "light.bedroom": {"conversation": True},
@@ -149,6 +152,8 @@ class TestRegistryWideRead:
         }
         assert "expose_new_entities" not in result
         assert _types(sent) == [_SETTINGS_GET, _LIST]
+        settings = await core_client.send_websocket_message({"type": _SETTINGS_GET})
+        assert result["settings"] == settings["result"]
 
     async def test_exposed_to_lists_one_assistant_with_its_flag(
         self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
