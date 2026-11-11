@@ -47,10 +47,14 @@ rule:
     # reply (HomeAssistantAPIError, HomeAssistantCommandError) is Core's answer
     # and comes from Core.
     # A spy stays too: wraps= calls through to the real method, so the reply is
-    # still Core's and the test can count or forbid a call.
+    # still Core's and the test can count or forbid a call. A return_value or
+    # side_effect beside it would answer instead of the real method.
     - not:
         any:
-          - regex: '\bwraps\s*=\s*\w+(\.\w+)+\s*[,)]'
+          - all:
+              - regex: '\bwraps\s*=\s*\w+(\.\w+)+\s*[,)]'
+              - not:
+                  regex: '\b(return_value|side_effect)\b'
           - regex: 'side_effect\s*=\s*([\w.]+\.)?(HomeAssistantConnectionError|HomeAssistantCommandNotSent|HomeAssistantCommandTimeout|WebSocketException|ConnectionClosed\w*|TimeoutError|ConnectionError|ConnectionResetError|OSError|ConnectError|ConnectTimeout|ReadTimeout|ReadError|TimeoutException|NetworkError|TransportError|RemoteProtocolError)\b[^\[\]{}]*$'
 files:
   - "tests/src/unit/**"

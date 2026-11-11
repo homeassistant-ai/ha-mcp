@@ -181,6 +181,15 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
             id="spy-that-wraps-a-fake",
         ),
         pytest.param(
+            "client.get_states = AsyncMock(wraps=client.get_states, return_value=[])\n",
+            id="spy-whose-return-value-answers-instead",
+        ),
+        pytest.param(
+            'with patch.object(\n    client, "get_states", wraps=client.get_states, side_effect=replies\n'
+            "):\n    pass\n",
+            id="spy-whose-side-effect-answers-instead",
+        ),
+        pytest.param(
             "client.get_states.return_value = HomeAssistantPayload()\n",
             id="return-value-named-like-the-client",
         ),
