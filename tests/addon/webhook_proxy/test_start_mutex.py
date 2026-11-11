@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from homeassistant.components import persistent_notification
@@ -23,6 +24,7 @@ def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App
 @pytest.fixture
 async def core(
     app: App,
+    component: ModuleType,
     hass: HomeAssistant,
     hass_client: ClientSessionGenerator,
     hass_access_token: str,

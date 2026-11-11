@@ -4,6 +4,7 @@ not ask for."""
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -56,6 +57,7 @@ async def test_stuck_regenerate_toggle_refuses_and_tells_the_user(
     hass_ws_client: WebSocketGenerator,
     monkeypatch: pytest.MonkeyPatch,
     socket_enabled: None,
+    component: ModuleType,
     app: App,
     upstream: Upstream,
     variant: Variant,

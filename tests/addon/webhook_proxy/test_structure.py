@@ -32,7 +32,7 @@ def _options_start_reads(variant: Variant) -> set[str]:
         if isinstance(node, ast.FunctionDef) and node.name == "_read_addon_options"
     )
     return {
-        call.args[0].value
+        str(call.args[0].value)
         for call in ast.walk(reader)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)

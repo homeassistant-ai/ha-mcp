@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -42,6 +43,7 @@ def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App
 @pytest.fixture
 async def core(
     app: App,
+    component: ModuleType,
     hass: HomeAssistant,
     hass_client: ClientSessionGenerator,
     hass_access_token: str,

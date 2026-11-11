@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -39,6 +40,7 @@ def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App
 @pytest.fixture
 async def core(
     app: App,
+    component: ModuleType,
     hass: HomeAssistant,
     hass_client: ClientSessionGenerator,
     hass_access_token: str,
