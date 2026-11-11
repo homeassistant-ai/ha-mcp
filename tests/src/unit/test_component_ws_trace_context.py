@@ -2,20 +2,18 @@
 
 The command reads Core's live trace store in process, matches a run's own
 context or a triggering parent context, and returns Core's extended trace dict.
-Most calls go through ``component_ws``, the WebSocket client of a real ``hass``
-with the ``ha_mcp_tools/*`` commands registered, so the registration, the
-request schema, the admin gate and the restore step are the ones a caller
-reaches. Two tests call ``_trace_context_prep`` directly to pin the restore wait
-and the encoded message it returns. The runs come from ``_trace_fixtures``,
-which builds Core's own trace objects and stores them through
-``async_store_trace``; a frozen clock orders their starts because Core stamps
-``timestamp.start`` in the constructor.
+Every call goes through ``component_ws``, the WebSocket client of a real
+``hass`` with the ``ha_mcp_tools/*`` commands registered, so the registration,
+the request schema, the admin gate, the restore step and the encode are the
+ones a caller reaches. The runs come from ``_trace_fixtures``, which builds
+Core's own trace objects and stores them through ``async_store_trace``; a
+frozen clock orders their starts because Core stamps ``timestamp.start`` in the
+constructor.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import timedelta
 
 import pytest
@@ -33,12 +31,9 @@ from homeassistant.components.websocket_api.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.typing import MockHAClientWebSocket
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
 from custom_components.ha_mcp_tools.websocket_api import trace_context
-from custom_components.ha_mcp_tools.websocket_api.trace_context import (
-    _trace_context_prep,
-)
 
 from ._component_core import ws_call, ws_result
 from ._trace_fixtures import automation_run, script_run, store_runs
@@ -287,23 +282,29 @@ async def test_saved_traces_are_restored_before_the_match(
 
 
 @pytest.mark.usefixtures("trace_store")
-async def test_the_prep_returns_the_encoded_message(
-    hass: HomeAssistant,
+async def test_the_command_replies_with_the_encoded_result(
+    component_ws: MockHAClientWebSocket,
 ) -> None:
-    """The prep returns the finished result message, so the handler only sends it."""
-    result = await _trace_context_prep(hass, {"id": 7, "context_id": "ctx-1"})
+    """The registered command sends Core's result message; the client decodes it."""
+    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
-    payload = result["payload"]
-    assert isinstance(payload, bytes)
-    message = json.loads(payload)
-    assert message["id"] == 7
-    assert message["success"] is True
-    assert message["result"]["match"] is None
+    assert result == {
+        "available": True,
+        "match": None,
+        "run_id": None,
+        "domain": None,
+        "item_id": None,
+        "trace": None,
+        "scanned": 0,
+    }
 
 
 @pytest.mark.usefixtures("trace_store")
 async def test_a_first_request_waits_for_a_restore_in_flight(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    hass_ws_client: WebSocketGenerator,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A second first request waits; Core marks traces restored before loading.
 
@@ -327,13 +328,14 @@ async def test_a_first_request_waits_for_a_restore_in_flight(
         await release.wait()
 
     monkeypatch.setattr(trace_context, "async_restore_traces", slow_restore)
-    # The trace setup left the store empty and the marker unset, like a
-    # restart, so both requests are first requests.
-    msg = {"id": 1, "context_id": "ctx-1"}
+    # The commands are registered on hass, so a second connection reaches the
+    # same handlers. The trace setup left the store empty and the marker unset,
+    # like a restart, so both requests are first requests.
+    second_ws = await hass_ws_client(hass)
 
-    first = asyncio.create_task(_trace_context_prep(hass, msg))
+    first = asyncio.create_task(ws_result(component_ws, _COMMAND, context_id="ctx-1"))
     await started.wait()
-    second = asyncio.create_task(_trace_context_prep(hass, msg))
+    second = asyncio.create_task(ws_result(second_ws, _COMMAND, context_id="ctx-1"))
     # The second request has every chance to finish; a restore is still in
     # flight, so it must not return before that restore does. Without the lock
     # it returns as soon as it sees the marker, well inside this window.
@@ -341,13 +343,13 @@ async def test_a_first_request_waits_for_a_restore_in_flight(
         done, _pending = await asyncio.wait({second}, timeout=0.3)
         assert done == set()
     finally:
-        # Release and drain both tasks even when the assertion fails, so a lock
-        # regression reports the assertion, not a dangling task.
+        # Release and drain both requests even when the assertion fails, so a
+        # lock regression reports the assertion, not a dangling task.
         release.set()
         first_result, second_result = await asyncio.gather(first, second)
 
-    assert isinstance(first_result["payload"], bytes)
-    assert isinstance(second_result["payload"], bytes)
+    assert first_result["match"] is None
+    assert second_result["match"] is None
 
 
 @pytest.mark.usefixtures("trace_store")
