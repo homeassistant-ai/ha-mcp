@@ -329,10 +329,11 @@ class TraceTools:
         3. Resolve a trace by context (provide context_id): the response
            selects Core's run for that context and reports `context_match` as
            `trace` or `parent`. With the ha_mcp_tools component,
-           `context_other_matches` lists the other runs that shared the
-           context id; Core's own `trace/contexts` keeps one run per context
-           id. A context Core does not hold is reported as not found with a
-           hint that the component resolves triggering (parent) contexts.
+           `context_other_matches` lists the other runs that matched the
+           context id (own or triggering parent); Core's own `trace/contexts`
+           keeps one run per context id. A context Core does not hold is
+           reported as not found with a hint that the component resolves
+           triggering (parent) contexts.
            ha_get_automation_traces(context_id="01J...")
 
         RESPONSE FIELDS:
