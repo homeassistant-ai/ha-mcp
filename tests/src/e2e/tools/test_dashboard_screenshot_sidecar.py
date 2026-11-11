@@ -252,7 +252,7 @@ def _extract_png_bytes(result: Any) -> bytes | None:
         if isinstance(data, str):
             try:
                 return base64.b64decode(data)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 continue
         if isinstance(data, (bytes, bytearray)):
             return bytes(data)

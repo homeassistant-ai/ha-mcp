@@ -56,7 +56,7 @@ def coerce_proxy_arguments(arguments: Any) -> dict[str, Any] | None:
     if isinstance(arguments, str):
         try:
             parsed = json.loads(arguments)
-        except (json.JSONDecodeError, ValueError, RecursionError):
+        except json.JSONDecodeError, ValueError, RecursionError:
             return None
         return parsed if isinstance(parsed, dict) else None
     return None

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp import backup_manager as bm
-from ha_mcp.tools.config_entry_flow import CreationFlowError, create_flow_helper
+from ha_mcp.tools.config_entry_flow import CreationFlowError, recreate_flow_helper
 
 _METER = {
     "name": "Energy",
@@ -273,47 +273,12 @@ async def test_recreation_answers_the_menu_from_the_snapshot() -> None:
         },
     )
     options = {"group_type": "light", "name": "Hall", "entities": ["light.a"]}
-    result = await create_flow_helper(client, "group", options, complete_snapshot=True)
+    result = await recreate_flow_helper(client, "group", options)
     assert result["entry_id"] == "new-entry"
     assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
         {"next_step_id": "light"},
         {"name": "Hall", "entities": ["light.a"]},
     ]
-
-
-async def test_recreation_picks_the_branch_key_over_a_matching_option_value() -> None:
-    """A template binary_sensor with device_class "light" holds two values that
-    name template branches; template_type is the branch, not device_class."""
-    client = _creation_client(
-        {
-            "type": "form",
-            "flow_id": "create",
-            "step_id": "binary_sensor",
-            "data_schema": [{"name": n} for n in ("name", "state", "device_class")],
-            "last_step": True,
-        },
-        _CREATED,
-        first={
-            "type": "menu",
-            "flow_id": "create",
-            "menu_options": ["binary_sensor", "light", "sensor"],
-        },
-    )
-    options = {
-        "template_type": "binary_sensor",
-        "device_class": "light",
-        "name": "Hall light",
-        "state": "{{ 1 }}",
-    }
-    result = await create_flow_helper(
-        client, "template", options, complete_snapshot=True
-    )
-    assert result["entry_id"] == "new-entry"
-    assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
-        {"next_step_id": "binary_sensor"},
-        {"device_class": "light", "name": "Hall light", "state": "{{ 1 }}"},
-    ]
-    assert "warnings" not in result
 
 
 async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
@@ -339,9 +304,7 @@ async def test_recreation_fills_every_form_of_a_multi_step_flow() -> None:
         "state_characteristic": "mean",
         "sampling_size": 20,
     }
-    result = await create_flow_helper(
-        client, "statistics", options, complete_snapshot=True
-    )
+    result = await recreate_flow_helper(client, "statistics", options)
     assert result["entry_id"] == "new-entry"
     assert [c.args[1] for c in client.submit_config_flow_step.await_args_list] == [
         {"name": "Mean", "entity_id": "sensor.t"},
@@ -398,9 +361,7 @@ async def test_recreation_refuses_a_snapshot_key_no_form_takes() -> None:
         },
     )
     with pytest.raises(CreationFlowError) as caught:
-        await create_flow_helper(
-            client, "derivative", {"name": "D", "extra": 1}, complete_snapshot=True
-        )
+        await recreate_flow_helper(client, "derivative", {"name": "D", "extra": 1})
     assert caught.value.reason == "unsupported_fields"
     assert caught.value.apply_status == "not_applied"
     client.submit_config_flow_step.assert_not_awaited()

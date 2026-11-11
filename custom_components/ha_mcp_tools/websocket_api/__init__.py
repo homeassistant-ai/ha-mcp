@@ -124,6 +124,16 @@ the info handshake carries no capability entry:
   validated by Core, its references collected by Core's own helpers and
   checked against Core's registries, and each entity target put to Core's
   target lookups (the editor's target pickers). See ``config_references.py``.
+* ``ha_mcp_tools/flow_outline`` — the steps Core declares for a schema-based
+  config or options flow (most helper flows): each form's fields as Core
+  serializes a form it shows, and the step that follows it, read from the
+  loaded flow handler on every call. A form or next step Core computes from
+  earlier answers is marked, not evaluated. See ``flow_outline.py``.
+* ``ha_mcp_tools/flow_record`` — what a config, options or subentry flow in
+  progress was started for (its handler, source and entry anchors), read from
+  the flow manager that holds it. Core's flow endpoints do not report it, and
+  the server binds a ``flow_id`` it did not open itself (it restarted) to a
+  call's target with it. See ``flow_record.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -333,6 +343,8 @@ from .. import (
     core_contract,
     dashboard_cards_ws,
     entity_restore,
+    flow_outline,
+    flow_record,
     helper_collections,
     todo_items,
 )
@@ -512,6 +524,8 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *entity_restore.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *todo_items.command_specs(vol),
+        *flow_record.command_specs(vol),
+        *flow_outline.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),

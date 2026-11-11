@@ -6,111 +6,72 @@ timestamps via ``add_timezone_metadata``, which previously issued a fresh
 ``time_zone``. When the component's (already cached, process-lifetime)
 ``ha_mcp_tools/info`` handshake carries a non-empty ``timezone`` field, that
 value is used directly and the REST call is skipped entirely. These tests pin
-the four routing outcomes the task called out: a component reporting a usable
-timezone serves it with NO REST call; an old component (no ``timezone`` key), a
-component-less install, and a component reporting an empty string all fall back
-to the unchanged legacy ``client.get_config()`` path.
+the routing outcomes: a component reporting a usable timezone serves it with
+NO REST call; a component that reports none (an old component, which predates
+the field) and a component-less install fall back to the unchanged legacy
+``client.get_config()`` path.
+
+Each test runs on the server's own client against a real ``hass``; the
+component's ``info`` command is the real handler.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from unittest.mock import patch
 
-import pytest
+from homeassistant.core import HomeAssistant
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.response_helpers import fetch_ha_timezone
 
-from ._component_routing_helpers import make_ws, patch_ws
 
-# fetch_ha_timezone never sends a second component command — it only consults
-# the cached info probe — so this placeholder is never actually dispatched.
-_UNUSED_COMMAND = "ha_mcp_tools/__unused__"
-
-_CAPS_BASE = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": [],
-    "limits": {},
-}
-
-
-class RoutingClient:
-    """Credentialed HA client spy: tallies legacy ``get_config`` REST fetches."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.get_config_calls = 0
-
-    async def get_config(self) -> dict[str, Any]:
-        self.get_config_calls += 1
-        return {"time_zone": "UTC"}
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-@pytest.mark.asyncio
-async def test_caps_with_timezone_serves_directly_no_rest_call() -> None:
+async def test_caps_with_timezone_serves_directly_no_rest_call(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
     """A component reporting a non-empty timezone is used with NO REST call."""
-    ws = make_ws(
-        _UNUSED_COMMAND,
-        info_result={**_CAPS_BASE, "timezone": "Europe/London"},
-    )
-    client = RoutingClient()
+    await hass.config.async_set_time_zone("Europe/London")
 
-    with patch_ws(ws, component_api):
-        result = await fetch_ha_timezone(client)
+    with patch.object(
+        component_core_client, "get_config", wraps=component_core_client.get_config
+    ) as get_config:
+        result = await fetch_ha_timezone(component_core_client)
 
     assert result == ("Europe/London", False)
-    assert client.get_config_calls == 0
+    get_config.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_caps_without_timezone_field_falls_back_to_legacy() -> None:
-    """An old component (``info`` predates the ``timezone`` field) → legacy fetch."""
-    ws = make_ws(_UNUSED_COMMAND, info_result=dict(_CAPS_BASE))  # no "timezone" key
-    client = RoutingClient()
+async def test_caps_without_timezone_field_falls_back_to_legacy(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A component whose ``info`` carries no timezone (an old component) → legacy fetch."""
+    await hass.config.async_set_time_zone("Asia/Tokyo")
 
-    with patch_ws(ws, component_api):
-        result = await fetch_ha_timezone(client)
+    with (
+        patch(
+            "custom_components.ha_mcp_tools.websocket_api.system._config_time_zone",
+            return_value=None,
+        ),
+        patch.object(
+            component_core_client, "get_config", wraps=component_core_client.get_config
+        ) as get_config,
+    ):
+        result = await fetch_ha_timezone(component_core_client)
 
-    assert result == ("UTC", False)
-    assert client.get_config_calls == 1
+    # The zone is Core's own /api/config answer.
+    assert result == ("Asia/Tokyo", False)
+    get_config.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_no_component_falls_back_to_legacy() -> None:
+async def test_no_component_falls_back_to_legacy(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """A component-less install (``info`` is ``unknown_command``) → legacy fetch."""
-    ws = make_ws(
-        _UNUSED_COMMAND,
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient()
+    await hass.config.async_set_time_zone("America/Chicago")
 
-    with patch_ws(ws, component_api):
-        result = await fetch_ha_timezone(client)
+    with patch.object(
+        core_client, "get_config", wraps=core_client.get_config
+    ) as get_config:
+        result = await fetch_ha_timezone(core_client)
 
-    assert result == ("UTC", False)
-    assert client.get_config_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_empty_string_timezone_falls_back_to_legacy() -> None:
-    """A component reporting an empty (unset) timezone → legacy fetch, not "" ."""
-    ws = make_ws(_UNUSED_COMMAND, info_result={**_CAPS_BASE, "timezone": ""})
-    client = RoutingClient()
-
-    with patch_ws(ws, component_api):
-        result = await fetch_ha_timezone(client)
-
-    assert result == ("UTC", False)
-    assert client.get_config_calls == 1
+    assert result == ("America/Chicago", False)
+    get_config.assert_awaited_once()

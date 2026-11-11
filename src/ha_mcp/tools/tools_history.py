@@ -85,7 +85,7 @@ def parse_relative_time(
         reference_time: Reference datetime for relative values and defaults.
 
     Returns:
-        A datetime in the parsed value's timezone; relative values use ``reference_time``'s.
+        A datetime in the parsed value's timezone (naive if it has no offset); relative values use ``reference_time``'s.
     """
     now = reference_time or datetime.now(UTC)
     if time_str is None:
@@ -105,12 +105,7 @@ def parse_relative_time(
             ) from exc
 
     try:
-        if time_str.endswith("Z"):
-            time_str = time_str[:-1] + "+00:00"
-        dt = datetime.fromisoformat(time_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt
+        return datetime.fromisoformat(time_str)
     except (ValueError, OverflowError) as e:
         raise ValueError(
             f"Invalid time format: {time_str}. Use ISO format or relative (e.g., '30min', '24h', '7d', '2w', '1m' (= 30 days))"
@@ -229,7 +224,7 @@ class HistoryTools:
         start_time: Annotated[
             str | None,
             Field(
-                description="Start time: ISO datetime or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
+                description="Start time: ISO datetime (HA local time without an offset) or a look-back from now with unit min, h, d, w or m (= 30 days), e.g. '30min' = 30 minutes ago. Default: 24h ago for history, 30d ago for statistics",
                 default=None,
             ),
         ] = None,
@@ -416,6 +411,11 @@ class HistoryTools:
             start_dt, end_dt = _parse_time_range(
                 start_time, end_time, default_hours, now
             )
+            if None in (start_dt.tzinfo, end_dt.tzinfo):  # Core: naive = HA local time
+                tz_name, _ = await fetch_ha_timezone(self._client)
+                tz, _ = resolve_local_timezone(tz_name)
+                start_dt = start_dt.replace(tzinfo=start_dt.tzinfo or tz)
+                end_dt = end_dt.replace(tzinfo=end_dt.tzinfo or tz)
             query_settings = get_global_settings()
             statistics_timezone = await _prepare_guardrail_query(
                 self._client,
@@ -678,8 +678,11 @@ def _validate_time_range(
     reject_zero_length: bool = True,
 ) -> None:
     """Reject reversed ranges and, when requested, zero-length ranges."""
-    if end_dt < start_dt or (reject_zero_length and end_dt == start_dt):
-        if not end_time_was_provided and start_dt > end_dt:
+    # Same-zone datetimes compare by wall clock; a start in the spring-forward
+    # gap can be a later instant than an end after the gap.
+    start_ts, end_ts = start_dt.timestamp(), end_dt.timestamp()
+    if end_ts < start_ts or (reject_zero_length and end_ts == start_ts):
+        if not end_time_was_provided and start_ts > end_ts:
             message = "start_time must not be in the future when end_time is omitted"
             suggestions = ["Choose a start_time at or before the current time."]
         else:
@@ -783,9 +786,8 @@ def _history_workload_violation(
     if not minimal_response:
         detail_weight *= 2
     entity_count = len(entity_ids)
-    estimated_entity_hours = (
-        (end_dt - start_dt).total_seconds() / 3600 * entity_count * detail_weight
-    )
+    hours = (end_dt.timestamp() - start_dt.timestamp()) / 3600  # elapsed, DST-safe
+    estimated_entity_hours = hours * entity_count * detail_weight
     if (
         entity_count <= _MAX_HISTORY_ENTITIES
         and estimated_entity_hours <= _MAX_HISTORY_ENTITY_HOURS
@@ -840,10 +842,8 @@ def _statistics_workload_violation(
         else _MAX_LONG_TERM_STATISTICS_ROWS
     )
     entity_count = len(entity_ids)
-    estimated_rows = (
-        math.ceil((scan_end - scan_start).total_seconds() / scan_granularity_seconds)
-        * entity_count
-    )
+    seconds = scan_end.timestamp() - scan_start.timestamp()  # elapsed, DST-safe
+    estimated_rows = math.ceil(seconds / scan_granularity_seconds) * entity_count
     if (
         entity_count <= _MAX_STATISTICS_ENTITIES
         and estimated_rows <= max_statistics_rows

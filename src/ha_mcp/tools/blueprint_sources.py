@@ -142,7 +142,7 @@ def _read_jailed_blueprint(config_dir: str, domain: str, path: str) -> str | Non
         base = Path(config_dir) / "blueprints" / domain
         real = (base / path).resolve()
         base_real = base.resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not (real == base_real or real.is_relative_to(base_real)):
         logger.debug("Blueprint path %r escapes the blueprints jail; not read", path)

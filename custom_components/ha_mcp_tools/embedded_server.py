@@ -2169,7 +2169,7 @@ def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
         # answers False for an unparseable version rather than raising, and
         # False here would invert to "moved" — the unsafe direction.
         Version(installed_version)
-    except (InvalidRequirement, InvalidVersion):
+    except InvalidRequirement, InvalidVersion:
         return False
     if requirement.marker is not None and not requirement.marker.evaluate():
         # The requirement does not apply to this interpreter, so the
@@ -2326,7 +2326,7 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
     try:
         requirement = Requirement(spec)
         Version(installed_version)
-    except (InvalidRequirement, InvalidVersion):
+    except InvalidRequirement, InvalidVersion:
         return False
     if requirement.url:
         return False

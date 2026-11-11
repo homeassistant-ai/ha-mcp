@@ -32,18 +32,18 @@ The simplest method - no installation required, no virtual environments, just ru
 
 ```bash
 # Run dev version directly
-uvx ha-mcp-dev
+uvx --python 3.14 ha-mcp-dev
 ```
 
 **Check version:**
 ```bash
-uvx ha-mcp-dev --version
+uvx --python 3.14 ha-mcp-dev --version
 # Output: ha-mcp 6.3.1.dev140
 ```
 
 **Switch back to stable:**
 ```bash
-uvx ha-mcp
+uvx --python 3.14 ha-mcp
 ```
 
 **Config changes required:** None. Uses the same `HOMEASSISTANT_URL` and `HOMEASSISTANT_TOKEN` environment variables.
@@ -190,7 +190,7 @@ If you're using Claude Desktop, update your `claude_desktop_config.json`:
   "mcpServers": {
     "ha-mcp": {
       "command": "uvx",
-      "args": ["ha-mcp-dev"],
+      "args": ["--python", "3.14", "ha-mcp-dev"],
       "env": {
         "HOMEASSISTANT_URL": "http://your-ha-instance:8123",
         "HOMEASSISTANT_TOKEN": "your_token"
@@ -210,7 +210,7 @@ The easiest way to check your version:
 
 ```bash
 # With uvx
-uvx ha-mcp-dev --version
+uvx --python 3.14 ha-mcp-dev --version
 
 # With pip
 pip show ha-mcp-dev | grep Version

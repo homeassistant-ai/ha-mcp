@@ -7,6 +7,7 @@ from typing import Any
 from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
+from ..component_api import COMPONENT_INSTALL_HINT, ask_component
 from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
 from ..config_write_helpers import apply_entity_category
 from ..helpers import exception_to_structured_error, raise_tool_error
@@ -339,27 +340,15 @@ async def validate_registry_ids(
         )
 
 
-def _slugify_helper_name(name: str) -> str:
-    """Derive the slug HA generates from a helper display name.
-
-    Mirrors HA's collection-storage logic: lowercase the name, replace spaces
-    with underscores, then strip any non-alphanumeric/underscore characters.
-    Used by the Bug 12 collision check so we can compare a caller-supplied
-    `name` against existing helpers' IDs without an extra round trip.
-    """
-    lowered = name.lower().replace(" ", "_")
-    return "".join(c for c in lowered if c.isalnum() or c == "_")
-
-
 async def _find_collision_in_flow_helpers(
-    client: Any, helper_type: str, target_slug: str
+    client: Any, helper_type: str, name: str
 ) -> str | None:
-    """Search config-entry registry for a flow helper whose title slugifies to target_slug."""
+    """The config entry of a flow helper titled ``name``, read from Core."""
     try:
         result = await client.send_websocket_message(
             {"type": "config_entries/get", "domain": helper_type}
         )
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+    except HomeAssistantAPIError, ConnectionError, TimeoutError:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         return None
@@ -370,7 +359,7 @@ async def _find_collision_in_flow_helpers(
         if not isinstance(entry, dict):
             continue
         title = entry.get("title")
-        if isinstance(title, str) and _slugify_helper_name(title) == target_slug:
+        if title == name:
             return entry.get("entry_id") or entry.get("id")
     return None
 
@@ -413,27 +402,22 @@ def _flatten_helper_list_result(result: Any) -> list[Any]:
 
 
 async def _find_collision_in_simple_helpers(
-    client: Any, helper_type: str, target_slug: str
+    client: Any, helper_type: str, name: str
 ) -> str | None:
-    """Search simple-helper {type}/list for an entry whose id or name slug matches target_slug."""
+    """The id of a storage helper whose id or name is ``name``, read from
+    Core's ``{type}/list``."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+    except HomeAssistantAPIError, ConnectionError, TimeoutError:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         return None
     for item in _flatten_helper_list_result(result):
         if not isinstance(item, dict):
             continue
-        existing_slug = item.get("id") or item.get("tag_id")
-        if isinstance(existing_slug, str) and existing_slug == target_slug:
-            return existing_slug
-        existing_name = item.get("name")
-        if (
-            isinstance(existing_name, str)
-            and _slugify_helper_name(existing_name) == target_slug
-        ):
-            return item.get("id") or item.get("tag_id") or target_slug
+        item_id = item.get("id") or item.get("tag_id")
+        if isinstance(item_id, str) and name in (item_id, item.get("name")):
+            return item_id
     return None
 
 
@@ -521,11 +505,19 @@ async def _enrich_helpers_with_current_registry(
     return []
 
 
+_NEAR_DUPLICATES_UNCHECKED = (
+    "Only a helper with exactly this name or id was looked for as a duplicate. "
+    "A name that differs only in case or punctuation is found with the "
+    "ha_mcp_tools component, and without it Home Assistant creates such a "
+    "helper numbered (..._2). " + COMPONENT_INSTALL_HINT
+)
+
+
 async def _check_name_collision(
     client: Any,
     helper_type: str,
     name: str | None,
-) -> None:
+) -> str | None:
     """Reject create requests whose name collides with an existing helper (Bug 12).
 
     HA's create endpoints auto-suffix duplicate names with `_2` / `_3` etc., so
@@ -533,38 +525,49 @@ async def _check_name_collision(
     duplicate entity instead of updating the original. Detect and reject before
     we send the create message, pointing the caller at the existing helper_id.
 
-    Empty / missing / whitespace-only `name` is left to the existing
-    name-required check downstream so the user sees the standard "name is
-    required" error rather than a spurious collision miss (or a wasted WS
-    round-trip on a name the validator is about to reject anyway).
+    Which names collide is Core's rule (its ``slugify``), so the component
+    answers with Core's own function. Without the component only a helper
+    with exactly this name or id is found, and Core numbers a near-duplicate:
+    the returned warning says so, for the caller's response.
+
+    Empty / missing / whitespace-only `name` is left to Core's name check.
     """
     if not name or not name.strip():
-        return
-    target_slug = _slugify_helper_name(name)
-    if not target_slug:
-        # Name normalises to empty (e.g. all punctuation). HA's create call
-        # will reject; let it surface that error rather than guessing.
-        return
-
+        return None
+    slug = None
+    not_stored = False
+    unchecked: str | None = _NEAR_DUPLICATES_UNCHECKED
+    named = await ask_component(client, "helpers_named", domain=helper_type, name=name)
+    if named is not None and isinstance(named.get("ids"), list):
+        unchecked = None
+        existing_id = named["ids"][0] if named["ids"] else None
+        slug = named.get("slug")
+        not_stored = existing_id in (named.get("not_stored") or [])
     # ha_config_set_helper checked the type: not storage means a helper flow.
-    if helper_type not in SIMPLE_HELPER_TYPES:
-        existing_id = await _find_collision_in_flow_helpers(
-            client, helper_type, target_slug
-        )
+    elif helper_type not in SIMPLE_HELPER_TYPES:
+        existing_id = await _find_collision_in_flow_helpers(client, helper_type, name)
     else:
-        existing_id = await _find_collision_in_simple_helpers(
-            client, helper_type, target_slug
-        )
+        existing_id = await _find_collision_in_simple_helpers(client, helper_type, name)
 
     if existing_id is None:
-        return
+        return unchecked
 
+    different_name = "To create a separate helper, pick a different name" + (
+        f" (Home Assistant turns this one into {slug!r})." if slug else "."
+    )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"A {helper_type} helper named {name!r} already exists "
-            f"(id: {existing_id!r}). Pass helper_id={existing_id!r} to update it, "
-            f"or use a different name to create a new helper.",
+            f"(id: {existing_id!r}). "
+            + (
+                "It is not a stored helper (it is defined in YAML or by Home "
+                "Assistant itself), so this tool cannot update it; use a "
+                "different name to create a new helper."
+                if not_stored
+                else f"Pass helper_id={existing_id!r} to update it, "
+                "or use a different name to create a new helper."
+            ),
             context=_simple_helper_error_context(
                 helper_type,
                 name=name,
@@ -576,14 +579,17 @@ async def _check_name_collision(
                 "name": name,
                 "existing_helper_id": existing_id,
             },
-            suggestions=[
+            suggestions=[different_name]
+            if not_stored
+            else [
                 f"To update the existing helper, pass helper_id={existing_id!r} "
                 "(and omit `name`).",
-                "To create a separate helper, pick a name whose slug does not "
-                f"already exist (current collision: {target_slug!r}).",
+                different_name,
             ],
         )
     )
+    # CodeQL (py/mixed-returns) reads raise_tool_error as returning.
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _get_entities_for_config_entry(

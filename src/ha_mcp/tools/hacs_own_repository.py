@@ -71,7 +71,7 @@ async def installed_own_records(
     or None when the store could not be asked."""
     try:
         response = await ws_client.send_command(api.command("list"))
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout):
+    except HomeAssistantCommandError, HomeAssistantCommandTimeout:
         return None
     listed = response.get("result") if isinstance(response, dict) else None
     repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]

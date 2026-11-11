@@ -85,7 +85,7 @@ class TestWholeFileReplace:
             def __init__(self, handle: Any) -> None:
                 self.handle = handle
 
-            def __enter__(self) -> "_FailingWrite":
+            def __enter__(self) -> _FailingWrite:
                 return self
 
             def __exit__(self, *_exc: object) -> None:

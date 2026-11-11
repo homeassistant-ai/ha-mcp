@@ -15,6 +15,7 @@ from ..tools.component_helper_collections import (
     HELPER_CAPABILITIES,
     fetch_helper_schemas,
 )
+from ..tools.config_helpers.describe import MAX_OPTIONS
 from ..tools.config_helpers.schemas import (
     _SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
@@ -27,44 +28,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TOOL = "ha_config_set_helper"
-# Rendering order; input_button has no fields beyond name/icon.
-_ORDER = (
-    "input_select",
-    "input_number",
-    "input_text",
-    "input_datetime",
-    "input_boolean",
-    "counter",
-    "timer",
-    "schedule",
-    "zone",
-    "person",
-    "tag",
-)
-_WEEKDAYS = frozenset(
-    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
-)
-# Semantics Core's schemas don't carry.
-_NOTES = (
-    "On input_* types `initial` — even false/0 — disables last-state restore and "
-    "forces that value on every HA restart; counter `initial` is the starting "
-    "value. input_text min/max are lengths. input_select options is a list. An "
-    "input_datetime created with neither has_date nor has_time gets both. timer "
-    "duration is 'HH:MM:SS' or seconds. Schedule days are lists of "
-    "{'from': 'HH:MM', 'to': 'HH:MM'} with an optional 'data' dict. zone radius "
-    "is in meters; a passive zone doesn't trigger person state changes. person "
-    "device_trackers is a list of device_tracker entity IDs. Omit tag_id on "
-    "create to auto-generate it."
-)
 
 
 def _render_field(field: dict[str, Any]) -> str:
     options = field.get("options")
-    kind = (
-        "|".join(str(o[0] if isinstance(o, list | tuple) else o) for o in options)
-        if options
-        else field.get("type")
-    )
+    if not options:
+        kind = field.get("type")
+    elif len(options) > MAX_OPTIONS:
+        # A long choice list belongs in describe, not in every tool listing.
+        kind = f"one of {len(options)} choices"
+    else:
+        kind = "|".join(
+            str(o[0] if isinstance(o, list | tuple) else o) for o in options
+        )
     parts = [str(kind)] if kind else []
     if field.get("required"):
         parts.append("required")
@@ -74,25 +50,32 @@ def _render_field(field: dict[str, Any]) -> str:
 
 
 def render_core_keys(schemas: dict[str, Any]) -> str:
-    """The SIMPLE-type key list, from Core's create schemas."""
+    """The SIMPLE-type key list, from Core's create schemas alone.
+
+    Types and fields are sorted, required fields first, so the text is the
+    same on every run: Core builds some field lists from a set.
+    """
     lines = []
-    for helper_type in _ORDER:
-        fields = [
-            f
-            for f in schemas[helper_type]["create"]
-            if f.get("name") not in ("name", "icon")
-        ]
-        rendered = [_render_field(f) for f in fields if f.get("name") not in _WEEKDAYS]
-        # Core builds schedule's day keys from a set; one entry keeps this stable.
-        if any(f.get("name") in _WEEKDAYS for f in fields):
-            rendered.append("monday..sunday")
-        if rendered:
-            lines.append(f"{helper_type}: {', '.join(rendered)}.")
-    return f"{' '.join(lines)} {_NOTES}"
+    for helper_type in sorted(schemas):
+        fields = sorted(
+            (
+                field
+                for field in schemas[helper_type]["create"]
+                # The tool's own parameters.
+                if field.get("name") not in ("name", "icon")
+            ),
+            key=lambda field: (not field.get("required"), str(field.get("name"))),
+        )
+        if fields:
+            lines.append(f"{helper_type}: {', '.join(map(_render_field, fields))}.")
+    return (
+        f"{' '.join(lines)} ha_config_list_helpers(helper_type, describe=True) "
+        "lists a type's fields with every choice."
+    )
 
 
 class ComponentHelperSchemaTransform(Transform):
-    """Swap the static helper key list for Core's.
+    """Put Core's helper key list into the ``config`` description.
 
     ``wait`` stays: flow helpers and a write that falls back to Core's
     commands still poll for the entity.

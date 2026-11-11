@@ -43,7 +43,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
         "HOMEASSISTANT_TOKEN": "demo"
@@ -101,7 +101,7 @@ Replace the demo values:
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"
@@ -142,7 +142,7 @@ If the demo server works but your local HA (`192.168.x.x`) doesn't:
 
 3. **http:// vs https://** — HA in container mode (Docker, K3s) uses HTTP by default. Use `http://` unless you configured SSL/TLS.
 
-4. **Python 3.13 required** — ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.13` then `uvx --refresh ha-mcp@latest`. If uvx still picks the old Python, add `"--python", "3.13"` to your config args.
+4. **Python 3.14 required** — ha-mcp requires Python 3.14+. Older versions get outdated ha-mcp with known bugs. Run `brew install python@3.14` then `uvx --python 3.14 --refresh ha-mcp@latest`. If uvx still picks the old Python, add `"--python", "3.14"` to your config args.
 
 See the [FAQ](FAQ.md) for full details.
 

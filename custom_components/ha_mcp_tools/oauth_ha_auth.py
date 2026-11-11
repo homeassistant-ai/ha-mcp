@@ -150,7 +150,7 @@ async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
             ),
             timeout=CIMD_RESOLVE_TIMEOUT,
         )
-    except (OSError, ValueError, TimeoutError):
+    except OSError, ValueError, TimeoutError:
         # ValueError: getaddrinfo raises UnicodeEncodeError (a ValueError) for
         # hostname labels over 63 chars — attacker-reachable on this anonymous
         # view, and NOT an OSError (#2217 review, verified).
@@ -204,7 +204,7 @@ async def _fetch_pinned_cimd(
                 if len(raw) > CIMD_MAX_BYTES:
                     return True, None
             return True, _parse_cimd(bytes(raw), client_id)
-    except (TimeoutError, aiohttp.ClientError):
+    except TimeoutError, aiohttp.ClientError:
         return False, None
 
 
@@ -394,7 +394,7 @@ def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
     """Strict-parse a CIMD body; None unless every MUST holds."""
     try:
         doc = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
-    except (UnicodeDecodeError, ValueError, RecursionError):
+    except UnicodeDecodeError, ValueError, RecursionError:
         # RecursionError: json.loads on ~5000 nested arrays fits inside the
         # 10 KiB cap and is a RuntimeError, not ValueError (#2217, verified).
         return None
@@ -560,7 +560,7 @@ def unwrap_refresh_token(
         if not hmac.compare_digest(_b64url_decode(sig_part), expected):
             return EnvelopeState.INVALID
         payload = json.loads(_b64url_decode(body))
-    except (ValueError, binascii.Error, UnicodeEncodeError):
+    except ValueError, binascii.Error, UnicodeEncodeError:
         return EnvelopeState.INVALID
     if not isinstance(payload, dict) or payload.get("v") != 1:
         return EnvelopeState.INVALID
@@ -629,7 +629,7 @@ def core_token_for_revocation(signing_key: bytes | None, token: str) -> str | No
         return None
     try:
         payload = json.loads(_b64url_decode(body))
-    except (ValueError, binascii.Error, UnicodeEncodeError, RecursionError):
+    except ValueError, binascii.Error, UnicodeEncodeError, RecursionError:
         # RecursionError: json.loads on a deeply nested body (#2218 review),
         # which only this parse can meet — unwrap_refresh_token reaches
         # json.loads only AFTER the MAC verifies.
@@ -660,7 +660,7 @@ def rewrite_token_response_body(
     """
     try:
         parsed = json.loads(body)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         # RecursionError: json.loads on a deeply nested body (#2218 review).
         if body:
             # A 200 from core's token endpoint is always a JSON object; a

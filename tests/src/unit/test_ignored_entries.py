@@ -25,9 +25,13 @@ from pytest_homeassistant.common import (
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.config_entry_flow import update_config_entry_options
+from ha_mcp.tools.config_entry_flow import (
+    OptionsFlowError,
+    restore_config_entry_options,
+)
 from ha_mcp.tools.config_entry_identity import check_reconfigure_identity
 from ha_mcp.tools.ignored_entries import normalize_ignored_entry
+from ha_mcp.tools.integration_flow_steps import options_target
 
 _FLAGS = {"supports_options": True, "supports_reconfigure": True}
 
@@ -100,22 +104,40 @@ async def test_reconfigure_of_an_ignored_entry_is_refused(
 
 @pytest.mark.usefixtures("flow_domain")
 @pytest.mark.parametrize("source", ["ignore", "user"])
-async def test_options_write_starts_a_flow_only_for_an_entry_that_is_not_ignored(
+async def test_options_flow_is_offered_only_for_an_entry_that_is_not_ignored(
     hass: HomeAssistant, core_client: HomeAssistantClient, source: str
 ) -> None:
     entry = _add_entry(hass, source)
 
     if source == "ignore":
         with pytest.raises(ToolError) as exc_info:
-            await update_config_entry_options(
+            await options_target(core_client, entry.entry_id)
+        assert "ignored" in json.loads(str(exc_info.value))["error"]["message"]
+    else:
+        target = await options_target(core_client, entry.entry_id)
+        assert (target.kind, target.domain, target.entry_id) == (
+            "options",
+            _DOMAIN,
+            entry.entry_id,
+        )
+    assert not hass.config_entries.options.async_progress()
+
+
+@pytest.mark.usefixtures("flow_domain")
+@pytest.mark.parametrize("source", ["ignore", "user"])
+async def test_options_restore_writes_only_an_entry_that_is_not_ignored(
+    hass: HomeAssistant, core_client: HomeAssistantClient, source: str
+) -> None:
+    entry = _add_entry(hass, source)
+
+    if source == "ignore":
+        with pytest.raises(OptionsFlowError) as exc_info:
+            await restore_config_entry_options(
                 core_client, entry.entry_id, {"host": "h"}
             )
-        assert "ignored" in json.loads(str(exc_info.value))["error"]["message"]
+        assert exc_info.value.apply_status == "not_applied"
         assert not hass.config_entries.options.async_progress()
         assert entry.options == {}
     else:
-        result = await update_config_entry_options(
-            core_client, entry.entry_id, {"host": "h"}
-        )
-        assert result["updated"] is True
+        await restore_config_entry_options(core_client, entry.entry_id, {"host": "h"})
         assert entry.options == {"host": "h"}

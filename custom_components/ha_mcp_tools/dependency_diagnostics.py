@@ -323,7 +323,7 @@ def _marker_inactive(marker: Marker | None) -> bool:
         return False
     try:
         return not marker.evaluate()
-    except (UndefinedComparison, UndefinedEnvironmentName):
+    except UndefinedComparison, UndefinedEnvironmentName:
         return False
 
 
@@ -540,7 +540,7 @@ def _marker_applies(marker: Marker | None, extras: frozenset[str]) -> bool:
         try:
             if marker.evaluate({"extra": extra}):
                 return True
-        except (UndefinedComparison, UndefinedEnvironmentName):
+        except UndefinedComparison, UndefinedEnvironmentName:
             return True
     return False
 
@@ -595,7 +595,7 @@ def _read_manifest(path: Path) -> dict[str, object] | None:
     """Parse a ``manifest.json``, or None when it cannot be read as an object."""
     try:
         raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
     try:
         manifest = json.loads(raw)

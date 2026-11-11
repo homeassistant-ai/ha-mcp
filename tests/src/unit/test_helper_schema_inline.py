@@ -1,25 +1,13 @@
-"""Unit tests for inline helper-schema attach in ``ha_config_set_helper``.
+"""Unit tests for the helper schema attached to ``ha_config_set_helper`` errors.
 
-Every reachable validation-error path in ``ha_config_set_helper`` attaches
-the helper's ``data_schema`` to the response context so an LLM can
-self-correct from a 4xx without a separate discovery round-trip. For
-menu-rooted helpers (``template``/``group``) where no sub-type has been
-picked yet, the context carries a
-``data_schema_unavailable_reason: "menu_helper_requires_branch"`` marker
-plus the legal sub-types under ``menu_options`` (issue #1186).
+A storage helper's validation error carries the helper's ``data_schema`` so
+an LLM can self-correct without a separate discovery round-trip. A flow
+helper's fields come back with the flow step itself.
 
 Tests in this module:
 
-1. ``SIMPLE_HELPER_SCHEMAS`` invariants — every simple helper type has a
-   schema entry, every entry has a uniform ``{name, required, selector}``
-   shape, ``name`` is required for every simple type, the import-time
-   drift guard matches the ``SIMPLE_HELPER_TYPES`` set.
-2. Flow pre-flow validation gates carry the schema — the gates in
-   ``_handle_flow_helper`` (``name``-required for create, malformed
-   ``config``, etc.) attach the data_schema fetched via the introspection
-   flow, with menu-rooted types surfacing a
-   ``data_schema_unavailable_reason`` marker + ``menu_options`` list when
-   no menu choice can be inferred.
+1. The storage-helper error context: Core's field list when served.
+2. The name-collision error's context for storage and flow helpers.
 """
 
 from __future__ import annotations
@@ -31,19 +19,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.config_helpers.flow import (
-    _extract_menu_choice_from_config,
-    _flow_helper_error_context,
-    _handle_flow_helper,
-)
 from ha_mcp.tools.config_helpers.schemas import (
-    SIMPLE_HELPER_SCHEMAS,
-    SIMPLE_HELPER_TYPES,
+    _CORE_HELPER_SCHEMAS,
     _simple_helper_error_context,
-    get_simple_helper_schema,
 )
-
-from ._core_helper_flows import CORE_HELPER_FLOWS
 
 
 def _parse_tool_error(te: ToolError) -> dict[str, Any]:
@@ -52,603 +31,38 @@ def _parse_tool_error(te: ToolError) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 1. SIMPLE_HELPER_SCHEMAS shape invariants
+# 1. The storage-helper error context
 # ---------------------------------------------------------------------------
 
-
-class TestSimpleHelperSchemasInvariants:
-    """SIMPLE_HELPER_SCHEMAS must stay aligned with SIMPLE_HELPER_TYPES and
-    every entry must carry the same minimum field-spec shape."""
-
-    def test_every_simple_helper_type_has_a_schema(self) -> None:
-        # The module-level assert in config_helpers/schemas.py ensures import-time
-        # alignment; replicate it as a runtime test so a future code change
-        # that breaks the assert fails loudly in CI.
-        assert frozenset(SIMPLE_HELPER_SCHEMAS.keys()) == SIMPLE_HELPER_TYPES
-
-    def test_every_field_spec_has_minimum_keys(self) -> None:
-        for helper_type, schema in SIMPLE_HELPER_SCHEMAS.items():
-            assert isinstance(schema, list), f"{helper_type} schema must be a list"
-            assert schema, f"{helper_type} schema is empty"
-            for field in schema:
-                assert isinstance(field, dict), (
-                    f"{helper_type} field is not a dict: {field!r}"
-                )
-                missing = {"name", "required", "selector"} - field.keys()
-                assert not missing, (
-                    f"{helper_type}.{field.get('name', '?')} is missing keys {missing}"
-                )
-                assert isinstance(field["name"], str)
-                assert isinstance(field["required"], bool)
-                # ``selector`` mirrors HA's flow data_schema shape — it must be
-                # a non-empty dict whose single key names a selector kind
-                # (``text``/``number``/``boolean``/``select``/``object``).
-                selector = field["selector"]
-                assert isinstance(selector, dict) and selector, (
-                    f"{helper_type}.{field['name']} selector must be a "
-                    f"non-empty dict, got {selector!r}"
-                )
-
-    def test_name_field_is_required_for_every_simple_type(self) -> None:
-        # Every simple-helper create branch in ``ha_config_set_helper`` raises
-        # if ``name`` is missing; the schemas must mirror that.
-        for helper_type, schema in SIMPLE_HELPER_SCHEMAS.items():
-            name_field = next(
-                (f for f in schema if f["name"] == "name"),
-                None,
-            )
-            assert name_field is not None, f"{helper_type} schema missing `name`"
-            assert name_field["required"] is True, (
-                f"{helper_type}.name should be required=True"
-            )
-
-    def test_input_select_options_is_required(self) -> None:
-        schema = SIMPLE_HELPER_SCHEMAS["input_select"]
-        options_field = next((f for f in schema if f["name"] == "options"), None)
-        assert options_field is not None
-        assert options_field["required"] is True
-
-    def test_zone_latitude_and_longitude_are_required(self) -> None:
-        schema = SIMPLE_HELPER_SCHEMAS["zone"]
-        required = {f["name"] for f in schema if f["required"]}
-        assert {"name", "latitude", "longitude"}.issubset(required)
-
-    def test_tag_id_is_optional_despite_HA_requiring_it(self) -> None:
-        # The tool auto-generates tag_id when missing, so from the LLM's
-        # perspective the field is optional even though HA's tag/create
-        # rejects without one.
-        schema = SIMPLE_HELPER_SCHEMAS["tag"]
-        tag_id_field = next((f for f in schema if f["name"] == "tag_id"), None)
-        assert tag_id_field is not None
-        assert tag_id_field["required"] is False
-
-    def test_range_params_land_on_the_types_schema_fields(self) -> None:
-        # min_value/max_value are the tool's own names; Core calls the
-        # range min/max, or minimum/maximum for counter. A rename that
-        # misses the type's field makes Core reject the call.
-        from ha_mcp.tools.config_helpers.core_payload import core_fields
-
-        for helper_type in ("counter", "input_number", "input_text"):
-            fields = core_fields(helper_type, {"min_value": 1, "max_value": 2}, {})
-            schema_names = {f["name"] for f in SIMPLE_HELPER_SCHEMAS[helper_type]}
-            assert set(fields) <= schema_names, (helper_type, fields)
-
-
-# ---------------------------------------------------------------------------
-# 2. get_simple_helper_schema and context builders
-# ---------------------------------------------------------------------------
-
-
-class TestGetSimpleHelperSchema:
-    """get_simple_helper_schema is the accessor used by the
-    validation-error-attach path so a 4xx carries the helper's field
-    shape inline."""
-
-    def test_returns_schema_for_each_simple_type(self) -> None:
-        for helper_type in SIMPLE_HELPER_TYPES:
-            schema = get_simple_helper_schema(helper_type)
-            assert schema is not None
-            assert schema is SIMPLE_HELPER_SCHEMAS[helper_type]
-
-    def test_returns_none_for_flow_types(self) -> None:
-        # Flow helpers go through the HA flow API; the static dict has no
-        # entry, and callers branch on the None to fall back.
-        for helper_type in CORE_HELPER_FLOWS:
-            assert get_simple_helper_schema(helper_type) is None
-
-    def test_returns_none_for_unknown_helper_type(self) -> None:
-        assert get_simple_helper_schema("not_a_real_helper") is None
+_CORE_FIELDS = [{"name": "options", "required": True}]
 
 
 class TestSimpleHelperErrorContext:
-    """`_simple_helper_error_context` is the helper called from every
-    simple-helper raise site; it must always include `helper_type` and
-    attach the schema when one is registered."""
+    """Every storage-helper refusal builds its context here: the helper type,
+    Core's field list when the component served it for the call, and the
+    caller's extras. No field list of the tool's own stands in for Core's."""
 
-    def test_context_has_helper_type_and_schema(self) -> None:
-        ctx = _simple_helper_error_context("input_select")
-        assert ctx["helper_type"] == "input_select"
-        assert ctx["data_schema"] == SIMPLE_HELPER_SCHEMAS["input_select"]
-
-    def test_extra_kwargs_are_appended(self) -> None:
-        ctx = _simple_helper_error_context(
-            "input_select",
-            initial="x",
-            options=["a", "b"],
+    def test_cores_field_list_is_attached_when_served(self) -> None:
+        token = _CORE_HELPER_SCHEMAS.set(
+            ({"input_select": {"create": _CORE_FIELDS}}, "create")
         )
+        try:
+            ctx = _simple_helper_error_context("input_select", initial="x")
+        finally:
+            _CORE_HELPER_SCHEMAS.reset(token)
         assert ctx == {
             "helper_type": "input_select",
-            "data_schema": SIMPLE_HELPER_SCHEMAS["input_select"],
+            "data_schema": _CORE_FIELDS,
             "initial": "x",
-            "options": ["a", "b"],
         }
 
-    def test_missing_schema_omits_data_schema(self) -> None:
-        # A helper_type without a registered schema (e.g. a flow helper or
-        # a typo) yields a context dict that contains only what was
-        # supplied — no `data_schema` key, no exception.
-        ctx = _simple_helper_error_context("template")
-        assert "data_schema" not in ctx
-        assert ctx == {"helper_type": "template"}
-
-
-class TestFlowHelperErrorContext:
-    """_flow_helper_error_context wraps the introspection-fetch with
-    best-effort semantics — it must always return a context dict with
-    helper_type even if HA introspection fails."""
-
-    async def test_returns_data_schema_on_success(self) -> None:
-        intro_schema = [
-            {"name": "entity_id", "required": True, "selector": {"entity": {}}},
-        ]
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "f1",
-                "step_id": "user",
-                "data_schema": intro_schema,
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-
-        ctx = await _flow_helper_error_context(client, "filter", extra_field="x")
-
-        assert ctx["helper_type"] == "filter"
-        assert ctx["data_schema"] == intro_schema
-        assert ctx["extra_field"] == "x"
-
-    async def test_returns_helper_type_only_on_introspection_failure(self) -> None:
-        client = AsyncMock()
-        # Introspection raises — fetch helper swallows the exception and
-        # returns None.
-        client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
-
-        ctx = await _flow_helper_error_context(client, "statistics")
-
-        assert ctx == {"helper_type": "statistics"}
-
-    async def test_menu_rooted_without_choice_surfaces_unavailable_reason(
-        self,
-    ) -> None:
-        # A flow whose first step HA reports as a MENU can't be
-        # schema-fetched without picking a branch — surface the marker so
-        # the caller has a non-silent signal, plus the legal sub-types
-        # inline as ``menu_options`` so they can pick a branch on the next
-        # try (issue #1186). ``random`` is menu-rooted too: the menu comes
-        # from HA, not from a list of known types (#2632).
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "menu",
-                "flow_id": "menu-1",
-                "menu_options": ["sensor", "binary_sensor"],
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-
-        ctx = await _flow_helper_error_context(client, "random")
-
-        assert ctx == {
-            "helper_type": "random",
-            "data_schema_unavailable_reason": "menu_helper_requires_branch",
-            "menu_options": ["sensor", "binary_sensor"],
-        }
-
-    async def test_non_menu_helper_returns_helper_type_only_on_no_schema(
-        self,
-    ) -> None:
-        # A schema fetch that fails (transient HA failure, etc.) gives the
-        # "helper_type only" response — the marker needs HA to report a menu.
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
-
-        ctx = await _flow_helper_error_context(client, "filter")
-
-        assert ctx == {"helper_type": "filter"}
+    def test_without_cores_field_list_none_is_made_up(self) -> None:
+        ctx = _simple_helper_error_context("input_select", options=["a", "b"])
+        assert ctx == {"helper_type": "input_select", "options": ["a", "b"]}
 
 
 # ---------------------------------------------------------------------------
-# 3. Flow pre-flow validation gates carry data_schema
-# ---------------------------------------------------------------------------
-
-
-class TestFlowPreFlowGatesAttachSchema:
-    """The pre-flow validation gates inside ``_handle_flow_helper``
-    (``name``-required for create, ``config`` not a JSON object, etc.)
-    fire BEFORE HA itself sees the request, so they need to fetch the
-    schema themselves via the introspection flow."""
-
-    @staticmethod
-    def _make_client_with_intro_schema(
-        intro_schema: list[dict[str, Any]],
-    ) -> AsyncMock:
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "intro-1",
-                "data_schema": intro_schema,
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-        # Registry validation is bypassed for these tests by passing
-        # area_id/labels=None — but stub the message handler in case it's
-        # reached for any reason.
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [],
-            }
-        )
-        return client
-
-    async def test_name_required_for_create_attaches_data_schema(self) -> None:
-        intro_schema = [
-            {"name": "name", "required": True, "selector": {"text": {}}},
-            {"name": "entity_id", "required": True, "selector": {"entity": {}}},
-        ]
-        client = self._make_client_with_intro_schema(intro_schema)
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="filter",
-                name=None,
-                helper_id=None,
-                config={},  # neither top-level nor inline name
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "name is required" in body["error"]["message"]
-        assert body["helper_type"] == "filter"
-        # data_schema attached to the pre-flow gate's error.
-        assert body.get("data_schema") == intro_schema
-
-    async def test_config_not_a_dict_attaches_data_schema(self) -> None:
-        # JSON-parsable but not a dict (e.g. a list) hits the
-        # ``not isinstance(parsed, dict)`` gate in ``_handle_flow_helper``.
-        intro_schema = [
-            {"name": "entity_id", "required": True},
-        ]
-        client = self._make_client_with_intro_schema(intro_schema)
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="statistics",
-                name="My Stats",
-                helper_id=None,
-                config="[1, 2, 3]",  # valid JSON, parses to list, NOT a dict
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "config must" in body["error"]["message"]
-        assert body.get("data_schema") == intro_schema
-
-    async def test_config_wrong_type_attaches_data_schema(self) -> None:
-        # Neither str nor dict nor None — hits the ``else`` branch of
-        # ``_handle_flow_helper``'s config-shape validation.
-        intro_schema = [{"name": "entity_id", "required": True}]
-        client = self._make_client_with_intro_schema(intro_schema)
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="statistics",
-                name="My Stats",
-                helper_id=None,
-                config=42,  # int — neither dict nor JSON string nor None
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "config must be a dict or JSON string" in body["error"]["message"]
-        assert body.get("data_schema") == intro_schema
-
-    async def test_pre_flow_gate_recovers_when_introspection_fails(self) -> None:
-        # If HA itself refuses introspection, the gate must still raise the
-        # original validation error (with helper_type only, no schema). The
-        # alternative — surfacing an introspection error in place of the
-        # validation error — would be worse.
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(side_effect=RuntimeError("offline"))
-        client.abort_config_flow = AsyncMock(return_value={})
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="statistics",
-                name=None,
-                helper_id=None,
-                config={},
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "name is required" in body["error"]["message"]
-        # No data_schema (introspection failed), but the validation error
-        # still surfaces.
-        assert "data_schema" not in body
-        assert body["helper_type"] == "statistics"
-
-
-# ---------------------------------------------------------------------------
-# 5. Menu-choice extraction from config_dict (B1)
-# ---------------------------------------------------------------------------
-
-
-class TestExtractMenuChoiceFromConfig:
-    """``_extract_menu_choice_from_config`` mirrors ``_handle_menu_step``'s
-    selection-key lookup (``group_type`` / ``next_step_id`` / ``menu_option``)
-    so menu-rooted helper types get a real ``data_schema`` attached on
-    pre-flow validation errors instead of the silent menu-without-choice
-    None.
-    """
-
-    @pytest.mark.parametrize(
-        ("config_dict", "expected"),
-        [
-            ({"group_type": "light"}, "light"),
-            ({"next_step_id": "sensor"}, "sensor"),
-            ({"menu_option": "binary_sensor"}, "binary_sensor"),
-            # Multiple keys: first in _MENU_CHOICE_CONFIG_KEYS order wins —
-            # the same canonical order _handle_menu_step consumes by
-            # (_MENU_SELECTION_KEY_ORDER in config_entry_flow_menu.py).
-            (
-                {"group_type": "light", "next_step_id": "sensor"},
-                "light",
-            ),
-            # No menu key.
-            ({"name": "My Helper"}, None),
-            ({}, None),
-            (None, None),
-            # Non-string scalars are stringified — _handle_menu_step consumes
-            # them via str(), so the error context must name the same branch
-            # the walker would take.
-            ({"group_type": 123}, "123"),
-            ({"next_step_id": ""}, None),
-            # A list of successive selections names its first element
-            # (issue #2116); empty lists fall through like missing keys.
-            ({"next_step_id": ["main_params", "all_done"]}, "main_params"),
-            ({"group_type": [123]}, "123"),
-            ({"next_step_id": [], "menu_option": "sensor"}, "sensor"),
-        ],
-    )
-    def test_extracts_first_present_menu_key(
-        self,
-        config_dict: dict[str, Any] | None,
-        expected: str | None,
-    ) -> None:
-        assert _extract_menu_choice_from_config(config_dict) == expected
-
-
-# ---------------------------------------------------------------------------
-# 6. Pre-flow gate threading menu_choice (B1) + marker for menu-rooted types
-# ---------------------------------------------------------------------------
-
-
-class TestPreFlowGateMenuChoiceThreading:
-    """The pre-flow gates at ``invalid labels`` and ``name-required for
-    create`` (which already have ``config_dict``) must extract the menu
-    choice from it so menu-rooted types (``template``, ``group``) get
-    their real ``data_schema`` attached rather than silently falling
-    back to ``menu_choice=None``.
-    """
-
-    @staticmethod
-    def _make_menu_client_with_branch_schema(
-        menu_choice: str,
-        branch_schema: list[dict[str, Any]],
-    ) -> AsyncMock:
-        """Mock client whose top step is a menu and whose ``menu_choice``
-        branch is a form with the supplied schema.
-        """
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "menu",
-                "flow_id": "menu-1",
-                "menu_options": [menu_choice, "other"],
-            }
-        )
-        client.submit_config_flow_step = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "menu-1",
-                "step_id": menu_choice,
-                "data_schema": branch_schema,
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-        return client
-
-    async def test_template_with_next_step_id_threads_menu_choice(self) -> None:
-        # ``template`` is menu-rooted; the caller passed
-        # ``config={"next_step_id": "sensor", ...}`` AND triggered the
-        # name-required gate by omitting ``name``. The gate must extract
-        # ``next_step_id="sensor"`` from config_dict and fetch the real
-        # sensor-branch schema.
-        sensor_branch_schema = [
-            {"name": "state", "required": True},
-            {"name": "unit_of_measurement", "required": False},
-        ]
-        client = self._make_menu_client_with_branch_schema(
-            "sensor",
-            sensor_branch_schema,
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="template",
-                name=None,  # triggers the name-required gate
-                helper_id=None,
-                config={"next_step_id": "sensor", "state": "{{ states('sensor.x') }}"},
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        # Real schema (the sensor branch's) is now attached.
-        assert body.get("data_schema") == sensor_branch_schema
-        # No marker — schema fetch succeeded.
-        assert "data_schema_unavailable_reason" not in body
-
-    async def test_group_with_group_type_threads_menu_choice(self) -> None:
-        # ``group`` is menu-rooted with the ``group_type`` selection key.
-        light_branch_schema = [
-            {"name": "entities", "required": True},
-        ]
-        client = self._make_menu_client_with_branch_schema(
-            "light",
-            light_branch_schema,
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="group",
-                name=None,
-                helper_id=None,
-                config={"group_type": "light", "entities": ["light.a", "light.b"]},
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body.get("data_schema") == light_branch_schema
-        assert "data_schema_unavailable_reason" not in body
-
-    async def test_template_without_menu_key_surfaces_marker(self) -> None:
-        # ``template`` is menu-rooted but the config has no menu key.
-        # The schema can't be fetched without picking a branch; the gate
-        # must surface ``data_schema_unavailable_reason`` plus the legal
-        # sub-types under ``menu_options`` so the caller can pick a branch
-        # on the next try (issue #1186).
-        client = AsyncMock()
-        client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "menu",
-                "flow_id": "menu-1",
-                "menu_options": ["sensor", "binary_sensor"],
-            }
-        )
-        client.abort_config_flow = AsyncMock(return_value={})
-
-        with pytest.raises(ToolError) as exc_info:
-            await _handle_flow_helper(
-                client=client,
-                helper_type="template",
-                name=None,
-                helper_id=None,
-                config={"some_field": "x"},  # no menu key
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action="create",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert "data_schema" not in body
-        assert body.get("data_schema_unavailable_reason") == (
-            "menu_helper_requires_branch"
-        )
-        assert body.get("menu_options") == ["sensor", "binary_sensor"]
-
-    async def test_pre_flow_gate_logs_debug_on_fetch_failure(
-        self,
-        caplog: pytest.LogCaptureFixture,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # B5: the swallow in ``_flow_helper_error_context`` leaves a
-        # DEBUG breadcrumb so a fetch-failure under raised call rate
-        # doesn't disappear silently. ``fetch_helper_flow_info`` has its
-        # own internal swallow (returns ``{}`` on any HA-side error), so
-        # the outer swallow only fires on programming bugs — patch it to
-        # raise so the breadcrumb path is exercised.
-        import logging
-
-        from ha_mcp.tools.config_helpers import flow as helpers_mod
-
-        async def _raises(*_args: Any, **_kwargs: Any) -> Any:
-            raise RuntimeError("simulated fetch-helper bug")
-
-        monkeypatch.setattr(
-            helpers_mod,
-            "fetch_helper_flow_info",
-            _raises,
-        )
-
-        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.config_helpers.flow")
-
-        ctx = await _flow_helper_error_context(AsyncMock(), "filter")
-
-        # Schema attach failed silently; helper_type still surfaces.
-        assert ctx == {"helper_type": "filter"}
-
-        debug_records = [
-            r
-            for r in caplog.records
-            if "flow-info fetch failed" in r.message and r.levelno == logging.DEBUG
-        ]
-        assert debug_records, (
-            "fetch-swallow must log at DEBUG; got "
-            f"{[(r.levelname, r.message) for r in caplog.records]}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# 7. _check_name_collision schema-attach branches (B6)
+# 2. _check_name_collision context branches (B6)
 # ---------------------------------------------------------------------------
 
 
@@ -658,6 +72,13 @@ class TestCheckNameCollisionSchemaAttach:
     or flow (plain ``helper_type``-only dict). Both arms need coverage so a
     regression flipping the if/else doesn't slip through.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_component(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No component answers: the collision is read from Core's listings."""
+        from ha_mcp.tools.config_helpers import registry
+
+        monkeypatch.setattr(registry, "ask_component", AsyncMock(return_value=None))
 
     @staticmethod
     async def _existing_collision_client(
@@ -678,9 +99,9 @@ class TestCheckNameCollisionSchemaAttach:
         )
         return client
 
-    async def test_simple_helper_collision_attaches_data_schema(self) -> None:
-        # ``input_select`` is in ``SIMPLE_HELPER_TYPES`` — the collision
-        # error must attach ``data_schema`` via ``_simple_helper_error_context``.
+    async def test_simple_helper_collision_names_the_existing_helper(self) -> None:
+        # ``input_select`` is a storage helper: its collision error goes
+        # through ``_simple_helper_error_context``.
         from ha_mcp.tools.config_helpers.registry import _check_name_collision
 
         client = await self._existing_collision_client("My Selector")
@@ -697,8 +118,8 @@ class TestCheckNameCollisionSchemaAttach:
         assert body["helper_type"] == "input_select"
         assert body["name"] == "My Selector"
         assert body.get("existing_helper_id") == "My Selector"
-        # Schema attach via the simple branch.
-        assert body.get("data_schema") == SIMPLE_HELPER_SCHEMAS["input_select"]
+        # No component served Core's field list for this call.
+        assert "data_schema" not in body
 
     async def test_flow_helper_collision_uses_plain_context(self) -> None:
         # ``template`` is a flow helper — the else branch builds a plain

@@ -46,7 +46,7 @@ def _options() -> dict:
         with open(_OPTIONS_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
             return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
@@ -98,7 +98,7 @@ def _token_authenticates(base_url: str, token: str) -> bool:
             return resp.status == 200
     except urllib.error.HTTPError:
         return False  # 401 on a bad token, etc.
-    except (urllib.error.URLError, OSError):
+    except urllib.error.URLError, OSError:
         return False  # HA not reachable -> never render under a broken auth state
 
 

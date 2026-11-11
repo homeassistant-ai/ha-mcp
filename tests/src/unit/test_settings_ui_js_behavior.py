@@ -1216,7 +1216,7 @@ class TestPolicyTabFlow:
                 continue
             try:
                 body = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if (
@@ -1288,7 +1288,7 @@ class TestPolicyTabFlow:
                 continue
             try:
                 body = json.loads(f.get("body", ""))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if (
@@ -5407,7 +5407,7 @@ class TestReadOnlyModeToggle:
                 continue
             try:
                 body = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if isinstance(flags, dict) and flags.get("read_only_mode") is True:

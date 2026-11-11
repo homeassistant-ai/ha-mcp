@@ -378,7 +378,7 @@ class _SearchGaps:
         if value is not None:
             self.unread.append(path)
 
-    def extend(self, other: "_SearchGaps", prefix: str) -> None:
+    def extend(self, other: _SearchGaps, prefix: str) -> None:
         self.truncation.extend(prefix + p for p in other.truncation)
         self.uncovered.extend(prefix + p for p in other.uncovered)
         self.unread.extend(prefix + p for p in other.unread)
@@ -400,11 +400,11 @@ class _CardWalkFrame:
 
     def with_indices(
         self, *, section_index: int | None, card_index: int | None
-    ) -> "_CardWalkFrame":
+    ) -> _CardWalkFrame:
         """The frame for another top-level card of the view, at the same depth."""
         return replace(self, section_index=section_index, card_index=card_index)
 
-    def descend(self) -> "_CardWalkFrame":
+    def descend(self) -> _CardWalkFrame:
         """The frame for a card nested one level deeper."""
         return replace(self, depth=self.depth + 1)
 
@@ -1367,7 +1367,7 @@ async def _maybe_attach_screenshot(
     options: _DashboardScreenshotOptions | None = None,
     full_page: bool = False,
     raise_on_failure: bool = False,
-) -> "dict[str, Any] | ToolResult":
+) -> dict[str, Any] | ToolResult:
     """Optionally render a dashboard and attach ordered native image blocks.
 
     Shared by ``ha_config_get_dashboard`` (include_screenshot) and
@@ -1444,7 +1444,7 @@ def _attach_screenshot_tool_error(
     """Preserve a structured capture failure on an already-committed write."""
     try:
         error_payload = json.loads(str(error))
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         error_payload = {}
     if not isinstance(error_payload, dict):
         error_payload = {}
@@ -1656,7 +1656,7 @@ class DashboardConfigTools:
             bool,
             Field(description="Return card_type's fields from HA's card editor"),
         ] = False,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Get Lovelace dashboards: list them, read one config, or search their cards.
 
         Not for a render alone: ha_get_dashboard_screenshot (screenshot beta
@@ -2156,7 +2156,7 @@ class DashboardConfigTools:
         view_path: str | None,
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Get mode: return the full Lovelace config for a single dashboard.
 
         The component ``get`` serves this from one in-process, freshness-safe read
@@ -2259,7 +2259,7 @@ class DashboardConfigTools:
         include_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
         stored_config: bool = True,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Shape + return the get-mode response for an already-fetched config.
 
         Shared by the component fast path and the legacy path so both produce a
@@ -2532,7 +2532,7 @@ class DashboardConfigTools:
                 "Strings in value are preserved literally."
             ),
         ] = None,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Create or update a Home Assistant dashboard.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
@@ -2862,7 +2862,7 @@ class DashboardConfigTools:
         *,
         return_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Execute python_transform mode and return the tool response."""
         if config_hash is None:
             raise_tool_error(
@@ -2945,7 +2945,7 @@ class DashboardConfigTools:
         *,
         return_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Apply structured edits in Core, or use the existing legacy save path."""
         if config_hash is None:
             raise_tool_error(
@@ -3030,7 +3030,7 @@ class DashboardConfigTools:
         return_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
         python_transform: str | None = None,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Preserve public edit fields, authoritative paths, BPS and screenshots."""
         result: dict[str, Any] = {
             "success": True,
@@ -3534,7 +3534,7 @@ class DashboardConfigTools:
         return_screenshot: bool,
         screenshot_options: _DashboardScreenshotOptions,
         MandatoryBPS: bool,
-    ) -> "dict[str, Any] | ToolResult":
+    ) -> dict[str, Any] | ToolResult:
         """Execute config-replacement mode (create-or-update) and return the tool response."""
         reject_malformed_dashboard_config(config, url_path)
         (

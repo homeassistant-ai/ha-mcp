@@ -194,6 +194,12 @@ check or changes what its ast-grep rule matches, because a wider rule matches
 older files. The script also fails a rule that is removed, renamed or made to
 scan fewer files.
 
+A listed file is exempt for what it already holds, not for what is added to
+it. For each file on an ast-grep rule's list that the pull request changes,
+the same script counts what the rule refuses at the base and in the pull
+request, and fails when the count rises. A test added to a listed file goes in
+a new file on real Core, or the file is converted.
+
 Two more checks run on these trees, each with a list under the same rules:
 
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private

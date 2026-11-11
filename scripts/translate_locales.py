@@ -758,7 +758,7 @@ def _describe_unusable(payload: dict[str, Any], exc: Exception, body: str) -> st
     text = ""
     try:
         text = str(candidate["content"]["parts"][0]["text"])
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         pass  # no candidate text at all; the raw body stands in below
     shown = (
         f"text[{len(text)} chars] ends {text[-200:]!r}"

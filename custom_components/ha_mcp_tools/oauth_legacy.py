@@ -545,13 +545,13 @@ class LegacyOAuthProvider:
             expected_sig = hmac.new(
                 self._signing_key, body.encode("ascii"), hashlib.sha256
             ).digest()
-        except (ValueError, binascii.Error, UnicodeEncodeError):
+        except ValueError, binascii.Error, UnicodeEncodeError:
             return False
         if not hmac.compare_digest(actual_sig, expected_sig):
             return False
         try:
             payload = json.loads(_b64url_decode(body))
-        except (ValueError, json.JSONDecodeError):
+        except ValueError, json.JSONDecodeError:
             return False
         if not isinstance(payload, dict):
             return False
@@ -777,7 +777,7 @@ async def read_form(request: web.Request) -> MultiDictProxy[Any] | None:
     """
     try:
         return await request.post()
-    except (ValueError, LookupError):
+    except ValueError, LookupError:
         return None
 
 
@@ -800,7 +800,7 @@ def _extract_client_creds(
             decoded = base64.b64decode(header[6:].strip(), validate=True).decode(
                 "utf-8"
             )
-        except (ValueError, UnicodeDecodeError, binascii.Error):
+        except ValueError, UnicodeDecodeError, binascii.Error:
             return []
         if ":" not in decoded:
             return []

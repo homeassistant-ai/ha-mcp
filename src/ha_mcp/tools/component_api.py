@@ -41,6 +41,7 @@ from ..client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
@@ -360,7 +361,7 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     raw_limits = result.get("limits")
     try:
         schema_version = int(result.get("schema_version", 0) or 0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         schema_version = 0
     raw_timezone = result.get("timezone")
     raw_tools_services = result.get("tools_services")
@@ -617,3 +618,38 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     """
     auth = info.get("webhook_auth") if info else None
     return auth if isinstance(auth, str) else None
+
+
+# Said wherever a response is poorer for want of a component command.
+COMPONENT_INSTALL_HINT = (
+    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
+    "on Home Assistant 2026.11+) and restart Home Assistant."
+)
+
+
+async def component_serves(client: Any, capability: str) -> bool:
+    """Whether the installed component advertises ``capability``."""
+    return component_supports(await get_component_caps(client), capability)
+
+
+async def ask_component(
+    client: Any, command: str, **params: Any
+) -> dict[str, Any] | None:
+    """The component's reply to ``ha_mcp_tools/<command>``, a command whose
+    capability has its name. ``None`` when the component does not advertise
+    it, the command was not sent, or it was refused: the caller then works
+    from Core's own commands."""
+    if not await component_serves(client, command):
+        return None
+    try:
+        reply = await client.send_websocket_message(
+            {"type": f"ha_mcp_tools/{command}", **params}
+        )
+    except HomeAssistantCommandNotSent:
+        return None
+    if not reply.get("success"):
+        if reply.get("error_code") == UNKNOWN_COMMAND_CODE:
+            invalidate_caps(client)
+        return None
+    result = reply.get("result")
+    return result if isinstance(result, dict) else None

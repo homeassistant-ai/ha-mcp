@@ -355,8 +355,6 @@ class TestSetHelperWhitespaceUpgrade:
         # Parametrized across both helper-type families to lock that the
         # dispatch-level guard at ``ha_config_set_helper`` fires uniformly
         # regardless of which helper family the call would have routed to.
-        # The defence-in-depth guard inside ``_handle_flow_helper`` is
-        # exercised separately by ``TestFlowHelperDirectGuard``.
         set_helper = register_tools["ha_config_set_helper"]
         for bad in ("", "   "):
             mock_ws_client.send_websocket_message.reset_mock()
@@ -364,35 +362,6 @@ class TestSetHelperWhitespaceUpgrade:
                 await set_helper(helper_type=helper_type, helper_id=bad, name="X")
             _assert_invalid_param(excinfo)
             mock_ws_client.send_websocket_message.assert_not_called()
-
-    async def test_flow_helper_create_rejects_whitespace_name(
-        self, register_tools, mock_ws_client
-    ):
-        # Flow-helper create gate parity with the simple-helper twin: the
-        # top-level ``name`` arg must be non-whitespace, otherwise the
-        # downstream config-flow build proceeds with a name HA cannot use.
-        set_helper = register_tools["ha_config_set_helper"]
-        with pytest.raises(ToolError) as excinfo:
-            await set_helper(helper_type="utility_meter", action="create", name="   ")
-        _assert_invalid_param(excinfo)
-        # The pre-flow gate runs before any flow start — no WS round-trip.
-        mock_ws_client.send_websocket_message.assert_not_called()
-
-    async def test_flow_helper_create_rejects_whitespace_config_name(
-        self, register_tools, mock_ws_client
-    ):
-        # Coverage for the other half of the name-required gate: when the
-        # top-level ``name`` is None/empty, ``config_dict["name"]`` must also
-        # be non-whitespace.
-        set_helper = register_tools["ha_config_set_helper"]
-        with pytest.raises(ToolError) as excinfo:
-            await set_helper(
-                helper_type="utility_meter",
-                action="create",
-                config={"name": "   "},
-            )
-        _assert_invalid_param(excinfo)
-        mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_flow_explicit_update_rejects_empty_helper_id(
@@ -404,8 +373,8 @@ class TestSetHelperWhitespaceUpgrade:
         # simple-path whitespace twin inside ``elif action == "update":``
         # fires AFTER the FLOW dispatch returns. Without the new guard
         # between the explicit-action raise and the implicit-action
-        # ``else:`` branch, the value would reach ``update_flow_helper``
-        # and HA returns a misleading "entry not found".
+        # ``else:`` branch, the value would reach the options flow and HA
+        # returns a misleading "entry not found".
         set_helper = register_tools["ha_config_set_helper"]
         with pytest.raises(ToolError) as excinfo:
             await set_helper(
@@ -695,7 +664,7 @@ class TestDashboardsIdentifierValidation:
         # the assertion below cannot pass by accident.
         try:
             await ha_config_get_dashboard(list_only=True)
-        except (AttributeError, KeyError, TypeError):
+        except AttributeError, KeyError, TypeError:
             # Expected: the bare MagicMock response makes the list-mode body
             # trip on missing keys/attrs. Swallowed deliberately so the
             # call-count assertion below is the real check.
@@ -803,67 +772,6 @@ class TestGroupsIdentifierValidation:
 # exercises the defence-in-depth guard inside ``_handle_flow_helper`` itself,
 # so a future refactor that drops the dispatch-level guard would still leave
 # this twin as the locked safety net.
-
-
-class TestFlowHelperDirectGuard:
-    @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_handle_flow_helper_implicit_action_rejects_empty_helper_id(
-        self, mock_ws_client, bad
-    ):
-        from ha_mcp.tools.config_helpers.flow import _handle_flow_helper
-
-        with pytest.raises(ToolError) as excinfo:
-            await _handle_flow_helper(
-                client=mock_ws_client,
-                helper_type="utility_meter",
-                name="X",
-                helper_id=bad,
-                config=None,
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action=None,  # implicit-discriminator path
-            )
-        _assert_invalid_param(excinfo)
-        mock_ws_client.send_websocket_message.assert_not_called()
-
-    async def test_handle_flow_helper_with_none_helper_id_does_not_raise_guard(
-        self, mock_ws_client, monkeypatch
-    ):
-        # Control: ``helper_id=None`` is the documented "create-new" sentinel
-        # and must NOT trip the implicit-action guard. The previous
-        # ``"helper_id" not in msg`` assertion would silently pass on any
-        # guard-message rewording; tighten to positive proof — mock the
-        # validator and assert it was not invoked on the None path, which
-        # is independent of any downstream behaviour.
-        from ha_mcp.tools.config_helpers import flow as helper_flow
-
-        validator_mock = MagicMock()
-        monkeypatch.setattr(
-            helper_flow,
-            "validate_identifier_not_empty",
-            validator_mock,
-        )
-
-        try:
-            await helper_flow._handle_flow_helper(
-                client=mock_ws_client,
-                helper_type="utility_meter",
-                name="My Meter",
-                helper_id=None,
-                config=None,
-                area_id=None,
-                labels=None,
-                category=None,
-                wait=False,
-                action=None,
-            )
-        except Exception:  # noqa: BLE001
-            # Downstream may raise (mocked client returns nothing useful);
-            # the guard-not-invoked assertion below is independent of that.
-            pass
-        validator_mock.assert_not_called()
 
 
 # --- tools_integrations.py (Round-4 sibling sweep) -----------------------
