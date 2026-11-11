@@ -249,8 +249,8 @@ async def test_complete_recreation_propagates_cancellation_without_aborting(
         # Cancel while the request waits on Core's answer.
         await run.reached.wait()
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        outcome = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(outcome[0], asyncio.CancelledError)
         run.release.set()
         await run.done.wait()
     abort.assert_not_awaited()

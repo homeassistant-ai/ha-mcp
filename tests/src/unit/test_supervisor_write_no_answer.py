@@ -120,7 +120,7 @@ async def _rejected_after_a_sent_attempt(
 
         revoke = asyncio.create_task(revoke_during_the_retry_delay())
         yield client
-        await revoke
+        await asyncio.gather(revoke)
     assert send.await_count == 1
 
 

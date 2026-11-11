@@ -9,7 +9,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # Standard mock return for a running addon with Ingress support
-_RUNNING_ADDON_INFO = {
+RUNNING_ADDON_INFO = {
     "success": True,
     "addon": {
         "name": "Test Addon",

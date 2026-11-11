@@ -11,7 +11,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws
 
-from ._addon_tool_helpers import _RUNNING_ADDON_INFO as _RUNNING_ADDON_INFO
+from ._addon_tool_helpers import RUNNING_ADDON_INFO
 from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
 
 
@@ -32,7 +32,7 @@ async def test_refused_app_port_explains_listener_setup(
         patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
-            return_value=_RUNNING_ADDON_INFO,
+            return_value=RUNNING_ADDON_INFO,
         ),
         patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         patch("ha_mcp.tools.tools_addons.websockets.connect") as mock_ws_connect,
@@ -83,7 +83,7 @@ async def test_connect_timeout_preserves_route_guidance(
         patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
-            return_value=_RUNNING_ADDON_INFO,
+            return_value=RUNNING_ADDON_INFO,
         ),
         patch(
             "ha_mcp.tools.tools_addons._create_ingress_session",
@@ -125,7 +125,7 @@ async def test_app_timeout_does_not_change_listener_auth(
         patch(
             "ha_mcp.tools.tools_addons.get_addon_info",
             new_callable=AsyncMock,
-            return_value=_RUNNING_ADDON_INFO,
+            return_value=RUNNING_ADDON_INFO,
         ),
         patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         patch("ha_mcp.tools.tools_addons.websockets.connect") as mock_ws_connect,

@@ -30,7 +30,7 @@ from ha_mcp.tools.tools_addons import (
     list_available_addons,
 )
 
-from ._addon_tool_helpers import _RUNNING_ADDON_INFO as _RUNNING_ADDON_INFO
+from ._addon_tool_helpers import RUNNING_ADDON_INFO
 from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
 
 _INGRESS_SESSION_TOKEN = "test-ingress-session"
@@ -289,7 +289,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -321,7 +321,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -368,7 +368,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -421,7 +421,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -452,7 +452,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -483,7 +483,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -515,7 +515,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -550,7 +550,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -597,7 +597,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -644,7 +644,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -719,7 +719,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -766,7 +766,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -808,7 +808,7 @@ class TestCallAddonApiErrors:
         addon_info = {
             "success": True,
             "addon": {
-                **_RUNNING_ADDON_INFO["addon"],
+                **RUNNING_ADDON_INFO["addon"],
                 "options": options,
                 "schema": schema,
                 "ports": {"1880/tcp": 1880},
@@ -875,7 +875,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -912,7 +912,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -948,7 +948,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -998,7 +998,7 @@ class TestCallAddonApiErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.httpx.AsyncClient",
@@ -1034,7 +1034,7 @@ class TestCallAddonApiErrors:
         addon_with_unmapped_port = {
             "success": True,
             "addon": {
-                **_RUNNING_ADDON_INFO["addon"],
+                **RUNNING_ADDON_INFO["addon"],
                 "ports": {"6052/tcp": None, "9999/tcp": 9999},
             },
         }
@@ -1085,7 +1085,7 @@ class TestCallAddonApiErrors:
         addon_info = {
             "success": True,
             "addon": {
-                **_RUNNING_ADDON_INFO["addon"],
+                **RUNNING_ADDON_INFO["addon"],
                 "ports": {"9000/tcp": None, "1880/tcp": None, "5000/tcp": None},
             },
         }
@@ -1132,7 +1132,7 @@ class TestCallAddonApiErrors:
         addon_info = {
             "success": True,
             "addon": {
-                **_RUNNING_ADDON_INFO["addon"],
+                **RUNNING_ADDON_INFO["addon"],
                 "network": {"8080/tcp": None},
                 # No "ports" key at all.
             },
@@ -1180,7 +1180,7 @@ class TestCallAddonApiErrors:
         addon_info = {
             "success": True,
             "addon": {
-                **_RUNNING_ADDON_INFO["addon"],
+                **RUNNING_ADDON_INFO["addon"],
                 "ports": {"not-a-port": None},
             },
         }
@@ -1465,7 +1465,7 @@ class TestCallAddonWsErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.websockets.connect",
@@ -1497,7 +1497,7 @@ class TestCallAddonWsErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.websockets.connect",
@@ -1560,7 +1560,7 @@ class TestCallAddonWsErrors:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch(
                 "ha_mcp.tools.tools_addons.websockets.connect",
@@ -3065,7 +3065,7 @@ class TestCallAddonApiPythonTransform:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         ):
@@ -3100,7 +3100,7 @@ class TestCallAddonApiPythonTransform:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         ):
@@ -3132,7 +3132,7 @@ class TestCallAddonApiPythonTransform:
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
                 new_callable=AsyncMock,
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         ):
@@ -3874,7 +3874,7 @@ class TestManageAddon:
         with (
             patch(
                 "ha_mcp.tools.tools_addons.get_addon_info",
-                return_value=_RUNNING_ADDON_INFO,
+                return_value=RUNNING_ADDON_INFO,
             ),
             pytest.raises(ToolError) as exc_info,
         ):

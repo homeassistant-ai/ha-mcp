@@ -132,7 +132,7 @@ async def _cancel_during_submit(client: HomeAssistantClient, entry_id: str) -> N
         async with asyncio.timeout(10):
             await held["entered"].wait()
         restore.cancel("secret-marker-cancellation")
-        await restore
+        await asyncio.gather(restore)
     finally:
         restore.cancel()
         held["release"].set()

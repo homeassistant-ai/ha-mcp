@@ -8,7 +8,7 @@ the restore waits on its entry's write guard, which the test holds.
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -62,8 +62,7 @@ async def _in_restore(manager: BackupManager, snapshot: Path) -> AsyncIterator[N
             yield
         finally:
             restore.cancel()
-            with suppress(asyncio.CancelledError):
-                await restore
+            await asyncio.gather(restore, return_exceptions=True)
 
 
 @pytest.fixture
