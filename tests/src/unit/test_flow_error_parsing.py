@@ -17,7 +17,6 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools import integration_flow_steps
 from ha_mcp.tools.config_entry_flow_errors import (
     FlowRef,
     _parse_flow_api_error,
@@ -46,16 +45,12 @@ async def _drive(
     target: FlowTarget,
     start: dict[str, Any],
     config: dict[str, Any],
-    *,
-    flow_id: str | None = None,
 ) -> Any:
-    """One step-driver call; with ``flow_id`` the flow counts as opened."""
-    if flow_id is not None:
-        integration_flow_steps._opened_flows[flow_id] = target.anchor
+    """One step-driver call that opens the flow."""
     return await drive_flow(
         client,
         target,
-        flow_id=flow_id,
+        flow_id=None,
         config=config,
         menu_choice=None,
         abort=False,
@@ -124,38 +119,6 @@ class TestRejectedSubmit:
         assert body["data_schema"] == form["data_schema"]
         # The flow stays open to be answered again.
         client.abort_config_flow.assert_not_called()
-
-    async def test_an_unstructured_400_on_a_later_form_shows_that_form(self) -> None:
-        """A statistics flow fails on its second form: the error shows that
-        form's fields, not the first form's again (#2632)."""
-        second = _form(
-            "real-flow",
-            "state_characteristic",
-            {"name": "state_characteristic", "required": True},
-        )
-        client = AsyncMock()
-        client._request.return_value = second
-        client.submit_config_flow_step.side_effect = HomeAssistantAPIError(
-            "API error: 400 - Bad Request",
-            status_code=400,
-            response_data={"message": "Bad Request"},
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await _drive(
-                client,
-                FlowTarget("setup", "statistics"),
-                {},
-                {"state_characteristic": "bogus"},
-                flow_id="real-flow",
-            )
-
-        body = _parse_tool_error(exc_info.value)
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "field_errors" not in body
-        assert body["data_schema"] == second["data_schema"]
-        assert body["step_id"] == "state_characteristic"
-        assert "400" in body["error"]["message"]
 
     async def test_a_rejected_reconfigure_submit_reports_nothing_applied(self) -> None:
         form = _form("rc-flow", "reconfigure", {"name": "host", "required": True})

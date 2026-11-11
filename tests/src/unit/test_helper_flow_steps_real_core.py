@@ -61,13 +61,12 @@ async def tools(
 
 
 @pytest.fixture
-async def component_tools(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> AsyncIterator[HelperConfigTools]:
-    """``tools`` on an install with the ``ha_mcp_tools`` component."""
-    assert await async_setup_component(hass, "config", {})
-    yield HelperConfigTools(component_core_client)
-    await hass.async_block_till_done()
+def component_tools(
+    component_core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> HelperConfigTools:
+    """``tools`` on an install with the ``ha_mcp_tools`` component: its client
+    is the shared one, on a ``hass`` that now answers the component's commands."""
+    return tools
 
 
 def _options(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
@@ -451,6 +450,28 @@ async def test_with_the_component_a_flow_create_carries_no_duplicate_warning(
     )
 
     assert not _says_duplicates_unchecked(created)
+
+
+async def test_a_refusal_on_a_later_form_shows_that_form(
+    tools: HelperConfigTools,
+) -> None:
+    """generic_thermostat is refused on its second form: the error shows
+    that form's fields, not the first form's again (#2632)."""
+    shown = await tools.ha_config_set_helper(
+        helper_type="generic_thermostat", config=dict(_THERMOSTAT)
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="generic_thermostat",
+            flow_id=shown["flow_id"],
+            config={"away_temp": "warm"},
+        )
+
+    error = json.loads(str(exc_info.value))
+    assert error["step_id"] == "presets"
+    names = {field["name"] for field in error["data_schema"]}
+    assert "away_temp" in names and "heater" not in names
 
 
 async def test_a_key_the_form_lacks_is_refused_by_core_and_the_flow_stays_open(
