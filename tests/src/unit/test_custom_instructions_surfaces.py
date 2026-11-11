@@ -9,11 +9,8 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.bug_report_config import collect_config_toggles
 from ha_mcp.tools.tools_dev import DevTools
 
-from ._dev_tool_env import (  # noqa: F401
-    POLICY_ACCESS_FLAG,
-    _isolated_env,
-    _policy_access_on,
-)
+from ._dev_tool_env import _isolated_env as _isolated_env
+from ._dev_tool_env import _policy_access_on as _policy_access_on
 
 
 @pytest.mark.usefixtures("_policy_access_on")

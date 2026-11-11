@@ -15,7 +15,7 @@ from ha_mcp._vendor.fastmcp.tools.base import ToolResult
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-from ._search_mode_connection import search_connection  # noqa: F401
+from ._search_mode_connection import search_connection as search_connection
 
 
 def _make_tool(

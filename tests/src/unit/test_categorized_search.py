@@ -25,7 +25,7 @@ from ha_mcp.transforms.categorized_search import (
     _is_manage_tool,
 )
 
-from ._search_mode_connection import search_connection  # noqa: F401
+from ._search_mode_connection import search_connection as search_connection
 
 
 @pytest.fixture
