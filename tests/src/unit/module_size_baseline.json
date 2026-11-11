@@ -8,7 +8,7 @@
   "src/ha_mcp/__main__.py": 1750,
   "src/ha_mcp/auth/provider.py": 1006,
   "src/ha_mcp/backup_manager.py": 3565,
-  "src/ha_mcp/client/rest_client.py": 2539,
+  "src/ha_mcp/client/rest_client.py": 2538,
   "src/ha_mcp/client/websocket_client.py": 1605,
   "src/ha_mcp/server.py": 1115,
   "src/ha_mcp/stdio_settings_sidecar.py": 1503,
