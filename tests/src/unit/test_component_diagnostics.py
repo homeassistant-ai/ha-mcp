@@ -1,17 +1,21 @@
 """Unit tests for the component's "Download diagnostics" handler (#2584).
 
-Startup errors are filed through the real ``embedded_setup._create_issue`` into a recording issue
-registry, so the handler reads the placeholder shape bring-up actually writes.
+Startup errors are filed through the real ``embedded_setup._create_issue`` into Core's
+issue registry, so the handler reads the placeholder shape bring-up actually writes.
 """
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from pytest_homeassistant.common import MockConfigEntry
 
 import custom_components.ha_mcp_tools.diagnostics as diag
 import custom_components.ha_mcp_tools.embedded_server as eserver
@@ -80,69 +84,38 @@ SECRET_OPTIONS = {
 }
 
 
-class RecordingIssueRegistry:
-    """Keeps what ``ir.async_create_issue`` files; serves it back like Core."""
-
-    def __init__(self) -> None:
-        self.issues: dict[str, Any] = {}
-
-    def async_create_issue(
-        self, hass: HomeAssistant, domain: str, issue_id: str, **kwargs: Any
-    ) -> None:
-        assert domain == DOMAIN
-        self.issues[issue_id] = SimpleNamespace(
-            active=True,
-            is_persistent=kwargs.get("is_persistent", False),
-            data=kwargs.get("data"),
-            translation_placeholders=kwargs.get("translation_placeholders"),
-        )
-
-    def async_get_issue(self, domain: str, issue_id: str) -> Any:
-        assert domain == DOMAIN
-        return self.issues.get(issue_id)
-
-
-class FakeHass:
-    def __init__(self, entries: list[Any], data: dict[str, Any] | None = None):
-        self.data = {DOMAIN: dict(data or {})}
-        self.config_entries = SimpleNamespace(
-            async_entries=lambda domain: list(entries) if domain == DOMAIN else []
-        )
-
-    async def async_add_executor_job(self, func: Any, *args: Any) -> Any:
-        return func(*args)
-
-
-def _entry(data: dict[str, Any], options: dict[str, Any] | None = None) -> Any:
-    return SimpleNamespace(
-        data=data,
+def _add_entry(
+    hass: HomeAssistant,
+    data: dict[str, Any] | None = None,
+    options: dict[str, Any] | None = None,
+    *,
+    entry_id: str = "tools-entry",
+) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id=entry_id,
+        state=ConfigEntryState.LOADED,
+        data=dict(data or {}),
         options=dict(options or {}),
-        state=SimpleNamespace(value="loaded"),
         disabled_by=None,
     )
+    entry.add_to_hass(hass)
+    return entry
 
 
-def _server_entry(
-    options: dict[str, Any] | None = None, data: dict[str, Any] | None = None
-) -> Any:
-    return _entry({CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, **(data or {})}, options)
-
-
-@pytest.fixture(autouse=True)
-def registry(monkeypatch: pytest.MonkeyPatch) -> RecordingIssueRegistry:
-    """One registry behind both the producer and the handler.
-
-    Autouse: the stubbed ``ir`` would otherwise hand back a MagicMock issue.
-    """
-    reg = RecordingIssueRegistry()
-    fake_ir = SimpleNamespace(
-        async_get=lambda hass: reg,
-        async_create_issue=reg.async_create_issue,
-        IssueSeverity=SimpleNamespace(ERROR="error"),
+def _add_server_entry(
+    hass: HomeAssistant,
+    options: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+    *,
+    entry_id: str = "server-entry",
+) -> MockConfigEntry:
+    return _add_entry(
+        hass,
+        data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, **(data or {})},
+        options=options,
+        entry_id=entry_id,
     )
-    monkeypatch.setattr(diag, "ir", fake_ir)
-    monkeypatch.setattr(esetup, "ir", fake_ir)
-    return reg
 
 
 @pytest.fixture(autouse=True)
@@ -169,15 +142,11 @@ def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
     return pin
 
 
-def _fail_bring_up(kind: str, detail: str) -> None:
+def _fail_bring_up(
+    hass: HomeAssistant, entry: MockConfigEntry, kind: str, detail: str
+) -> None:
     """File the repair issue exactly as a failed bring-up does."""
-    entry = SimpleNamespace(entry_id="server-entry")
-    esetup._create_issue(None, entry, kind, detail)  # type: ignore[arg-type]
-
-
-async def _diagnostics(hass: FakeHass) -> dict[str, Any]:
-    # The handler ignores which entry was asked for: both get the same summary.
-    return await diag.async_get_config_entry_diagnostics(hass, None)  # type: ignore[arg-type]
+    esetup._create_issue(hass, entry, kind, detail)
 
 
 def test_reads_every_issue_bring_up_files() -> None:
@@ -187,26 +156,27 @@ def test_reads_every_issue_bring_up_files() -> None:
 
 
 def test_unscrubbed_detail_stays_out_of_cores_issues_field(
-    registry: RecordingIssueRegistry,
+    hass: HomeAssistant, issue_registry: ir.IssueRegistry
 ) -> None:
     """Core's ``issues`` field carries the data and placeholders of a
     persistent issue, which would put the unscrubbed detail beside the
     scrubbed copy."""
+    entry = _add_server_entry(hass)
     for kind in ("package", "start"):
-        _fail_bring_up(kind, "detail")
+        _fail_bring_up(hass, entry, kind, "detail")
 
-    assert not any(issue.is_persistent for issue in registry.issues.values())
+    assert not any(issue.is_persistent for issue in issue_registry.issues.values())
 
 
 @pytest.mark.asyncio
-async def test_no_secret_value_appears_in_the_file() -> None:
+async def test_no_secret_value_appears_in_the_file(hass: HomeAssistant) -> None:
     """Every stored secret is set and echoed in the startup error; none of the
     values may reach the serialized download."""
     every_secret = [*SECRET_DATA.values(), *SECRET_OPTIONS.values()]
-    _fail_bring_up("start", "start failed: " + " | ".join(every_secret))
-    entry = _server_entry(SECRET_OPTIONS, SECRET_DATA)
+    entry = _add_server_entry(hass, SECRET_OPTIONS, SECRET_DATA)
+    _fail_bring_up(hass, entry, "start", "start failed: " + " | ".join(every_secret))
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
     serialized = json.dumps(result)
 
     leaked = [value for value in every_secret if value in serialized]
@@ -217,13 +187,17 @@ async def test_no_secret_value_appears_in_the_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_padded_override_is_scrubbed_in_its_stripped_form() -> None:
+async def test_padded_override_is_scrubbed_in_its_stripped_form(
+    hass: HomeAssistant,
+) -> None:
     """The options keep the override as typed, but the server strips it before
     it reaches the error message."""
-    _fail_bring_up("package", "Could not install the server ('tok-abc.tgz')")
-    entry = _server_entry({OPT_PIP_SPEC: " tok-abc.tgz "})
+    entry = _add_server_entry(hass, {OPT_PIP_SPEC: " tok-abc.tgz "})
+    _fail_bring_up(
+        hass, entry, "package", "Could not install the server ('tok-abc.tgz')"
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert "tok-abc" not in json.dumps(result)
 
@@ -241,31 +215,33 @@ async def test_padded_override_is_scrubbed_in_its_stripped_form() -> None:
 )
 @pytest.mark.asyncio
 async def test_url_credentials_are_scrubbed_even_when_not_stored(
-    url: str, scrubbed: str
+    hass: HomeAssistant, url: str, scrubbed: str
 ) -> None:
     """pip echoes index URLs from its own configuration, which never reach the
     entry. A raw ``@`` or ``?`` in the password must not leave part of it."""
-    _fail_bring_up("package", f"index {url} failed")
+    entry = _add_server_entry(hass)
+    _fail_bring_up(hass, entry, "package", f"index {url} failed")
 
-    result = await _diagnostics(FakeHass([_server_entry()]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"]["detail"] == f"index {scrubbed} failed"
 
 
 @pytest.mark.asyncio
-async def test_secret_containing_another_is_replaced_whole() -> None:
+async def test_secret_containing_another_is_replaced_whole(hass: HomeAssistant) -> None:
     """A value that contains a shorter secret is replaced as one piece, so no
     remainder of the longer secret survives around the shorter one's marker.
 
     Four nested values: replacing in any order but longest first fails here.
     """
-    _fail_bring_up("package", "pip failed for x-tarball-tok-abc.tgz")
-    entry = _server_entry(
+    entry = _add_server_entry(
+        hass,
         {OPT_PIP_SPEC: "x-tarball-tok-abc.tgz", OPT_SERVER_URL: "tarball-tok-abc"},
         {DATA_ACCESS_TOKEN: "tok-abc", DATA_REFRESH_TOKEN_ID: "tok"},
     )
+    _fail_bring_up(hass, entry, "package", "pip failed for x-tarball-tok-abc.tgz")
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"] == {
         "issue_id": ISSUE_PACKAGE_FAILED,
@@ -275,13 +251,13 @@ async def test_secret_containing_another_is_replaced_whole() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spec", ["ha-mcp", "ha-mcp-dev==8.7.0"])
-async def test_plain_server_pin_is_not_scrubbed(spec: str) -> None:
+async def test_plain_server_pin_is_not_scrubbed(hass: HomeAssistant, spec: str) -> None:
     """``last_pip_spec`` holds a plain server pin (bare or ``==``-pinned) when
     no override is set; it is not a secret, so the error keeps it."""
-    _fail_bring_up("package", f"Could not install {spec}")
-    entry = _server_entry(data={DATA_LAST_PIP_SPEC: spec})
+    entry = _add_server_entry(hass, data={DATA_LAST_PIP_SPEC: spec})
+    _fail_bring_up(hass, entry, "package", f"Could not install {spec}")
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"]["detail"] == f"Could not install {spec}"
 
@@ -296,29 +272,36 @@ async def test_plain_server_pin_is_not_scrubbed(spec: str) -> None:
     ids=["trailing-option", "local-version-label"],
 )
 async def test_override_that_starts_like_a_server_pin_is_scrubbed(
+    hass: HomeAssistant,
     override: str,
 ) -> None:
     """Only a whole server pin with a public version is kept: an override
     that merely starts with one carries whatever was typed after it (a local
     version label takes any text), and the install error quotes the spec
     whole."""
-    _fail_bring_up("package", f"Could not install the server ({override!r}): ...")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    _fail_bring_up(
+        hass, entry, "package", f"Could not install the server ({override!r}): ..."
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert "tok.abc" not in json.dumps(result)
 
 
 @pytest.mark.asyncio
-async def test_version_too_long_to_parse_does_not_break_the_download() -> None:
+async def test_version_too_long_to_parse_does_not_break_the_download(
+    hass: HomeAssistant,
+) -> None:
     """A digit run past int()'s limit makes ``Version`` raise ValueError rather
     than InvalidVersion; the override is then scrubbed like any other."""
     override = "ha-mcp==1" + "0" * 5000
-    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    _fail_bring_up(
+        hass, entry, "package", f"Could not install the server ({override!r}): x"
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"]["detail"] == (
         "Could not install the server ('**REDACTED**'): x"
@@ -326,14 +309,16 @@ async def test_version_too_long_to_parse_does_not_break_the_download() -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_is_scrubbed_in_its_quoted_form() -> None:
+async def test_override_is_scrubbed_in_its_quoted_form(hass: HomeAssistant) -> None:
     """The install error quotes the spec with ``repr()``, which doubles a
     backslash, so the stored value no longer appears in the text as typed."""
     override = "https://host/pkg.tgz?sig=tok\\abc"
-    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = _add_server_entry(hass, {OPT_PIP_SPEC: override})
+    _fail_bring_up(
+        hass, entry, "package", f"Could not install the server ({override!r}): x"
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"]["detail"] == (
         "Could not install the server ('**REDACTED**'): x"
@@ -342,21 +327,27 @@ async def test_override_is_scrubbed_in_its_quoted_form() -> None:
 
 @pytest.mark.asyncio
 async def test_issue_restored_after_restart_is_not_reported(
-    registry: RecordingIssueRegistry,
+    hass: HomeAssistant, issue_registry: ir.IssueRegistry
 ) -> None:
     """Core restores a non-persistent issue inactive and without data or
     placeholders; it describes no current attempt."""
-    registry.issues[ISSUE_START_FAILED] = SimpleNamespace(
-        active=False, data=None, translation_placeholders=None
+    entry = _add_server_entry(hass)
+    _fail_bring_up(hass, entry, "start", "start failed: something")
+    issue = issue_registry.async_get_issue(DOMAIN, ISSUE_START_FAILED)
+    assert issue is not None
+    issue_registry.issues[(DOMAIN, ISSUE_START_FAILED)] = dataclasses.replace(
+        issue, active=False, data=None, translation_placeholders=None
     )
 
-    result = await _diagnostics(FakeHass([_server_entry()]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"]["startup_error"] is None
 
 
 @pytest.mark.asyncio
-async def test_server_summary_reports_configured_options() -> None:
+async def test_server_summary_reports_configured_options(
+    hass: HomeAssistant,
+) -> None:
     """Each configured option reaches the file."""
     options = {
         OPT_PIP_SPEC: "ha-mcp==8.6.0",
@@ -365,9 +356,9 @@ async def test_server_summary_reports_configured_options() -> None:
         OPT_EXTERNAL_URL: "https://ha.example.com",
     }
 
-    entry = _server_entry(options, {DATA_ACCESS_ENABLED: False})
+    entry = _add_server_entry(hass, options, {DATA_ACCESS_ENABLED: False})
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result["server"] == {
         "installed_server_version": "8.7.0",
@@ -394,6 +385,7 @@ async def test_server_summary_reports_configured_options() -> None:
 )
 @pytest.mark.asyncio
 async def test_installed_version_reads_the_installing_distribution_first(
+    hass: HomeAssistant,
     installed_version_calls: list[Any],
     paired_spec: list[str | None],
     pin: str | None,
@@ -405,20 +397,25 @@ async def test_installed_version_reads_the_installing_distribution_first(
     The default spec is no override; without a manifest pin ``ha-mcp`` is read
     first."""
     paired_spec[0] = pin
+    entry = _add_server_entry(hass, {OPT_PIP_SPEC: pip_spec})
 
-    await _diagnostics(FakeHass([_server_entry({OPT_PIP_SPEC: pip_spec})]))
+    await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert installed_version_calls == [first]
 
 
 @pytest.mark.parametrize("pip_spec", [None, "", DEFAULT_PIP_SPEC])
 @pytest.mark.asyncio
-async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
+async def test_server_summary_defaults_for_unset_options(
+    hass: HomeAssistant, pip_spec: Any
+) -> None:
     """Unset options read as the defaults bring-up applies; an empty pip spec
     or the default spec in the field is not an override."""
     options = {} if pip_spec is None else {OPT_PIP_SPEC: pip_spec}
+    entry = _add_server_entry(hass, options)
 
-    server = (await _diagnostics(FakeHass([_server_entry(options)])))["server"]
+    server = (await diag.async_get_config_entry_diagnostics(hass, entry))["server"]
+    assert server is not None
 
     assert server["package_override_set"] is False
     assert server["access_enabled"] is True
@@ -432,7 +429,7 @@ async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
 )
 @pytest.mark.asyncio
 async def test_running_and_bring_up_follow_the_live_objects(
-    monkeypatch: pytest.MonkeyPatch, alive: bool, task_done: bool
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, alive: bool, task_done: bool
 ) -> None:
     """The manager and the finished bring-up task stay in ``hass.data`` after
     the server thread dies, so both flags must read their live state."""
@@ -440,22 +437,39 @@ async def test_running_and_bring_up_follow_the_live_objects(
         eserver.EmbeddedServerManager, "is_running", property(lambda self: alive)
     )
     manager = object.__new__(eserver.EmbeddedServerManager)
-    bringup = SimpleNamespace(done=lambda: task_done)
-    hass = FakeHass(
-        [_server_entry()], data={DATA_MANAGER: manager, DATA_BRINGUP_TASK: bringup}
-    )
+    manager._thread = None
+    if task_done:
+        task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(0))
+        await task
+    else:
+        task = asyncio.create_task(asyncio.sleep(3600))
 
-    server = (await _diagnostics(hass))["server"]
+    try:
+        hass.data.setdefault(DOMAIN, {})[DATA_MANAGER] = manager
+        hass.data[DOMAIN][DATA_BRINGUP_TASK] = task
+        entry = _add_server_entry(hass)
 
-    assert server["running"] is alive
-    assert server["bring_up_in_progress"] is not task_done
+        server = (await diag.async_get_config_entry_diagnostics(hass, entry))["server"]
+        assert server is not None
+
+        assert server["running"] is alive
+        assert server["bring_up_in_progress"] is not task_done
+    finally:
+        hass.data.get(DOMAIN, {}).pop(DATA_MANAGER, None)
+        hass.data.get(DOMAIN, {}).pop(DATA_BRINGUP_TASK, None)
+        if not task.done():
+            task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_tools_only_install_lists_entries_without_server() -> None:
+async def test_tools_only_install_lists_entries_without_server(
+    hass: HomeAssistant,
+) -> None:
     """A tools entry predating the marker has no ``entry_type``; it reads as
     the tools entry, and the summary carries no server section."""
-    result = await _diagnostics(FakeHass([_entry({})]))
+    entry = _add_entry(hass, {})
+
+    result = await diag.async_get_config_entry_diagnostics(hass, entry)
 
     assert result == {
         "entries": [{"entry_type": "tools", "state": "loaded", "disabled_by": None}],
@@ -464,9 +478,14 @@ async def test_tools_only_install_lists_entries_without_server() -> None:
 
 
 @pytest.mark.asyncio
-async def test_server_entry_listed_after_the_tools_entry_is_found() -> None:
+async def test_server_entry_listed_after_the_tools_entry_is_found(
+    hass: HomeAssistant,
+) -> None:
     """The tools entry's download describes a server entry listed after it."""
-    result = await _diagnostics(FakeHass([_entry({}), _server_entry()]))
+    tools_entry = _add_entry(hass, {}, entry_id="tools-entry")
+    _add_server_entry(hass, entry_id="server-entry")
+
+    result = await diag.async_get_config_entry_diagnostics(hass, tools_entry)
 
     assert [e["entry_type"] for e in result["entries"]] == ["tools", "server"]
     assert result["server"] is not None
