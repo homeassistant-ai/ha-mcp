@@ -24,7 +24,10 @@ from __future__ import annotations
 import asyncio
 import functools
 from collections.abc import Collection, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 
 class _Unauthorized(Exception):
@@ -90,7 +93,7 @@ class _FakeWSApi:
 
     def require_admin(self, func: Any) -> Any:
         @functools.wraps(func)
-        def wrapper(hass: Any, connection: Any, msg: dict[str, Any]) -> Any:
+        def wrapper(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> Any:
             user = connection.user
             if user is None or not user.is_admin:
                 raise _Unauthorized()
@@ -100,14 +103,14 @@ class _FakeWSApi:
 
     def async_response(self, func: Any) -> Any:
         @functools.wraps(func)
-        def wrapper(hass: Any, connection: Any, msg: dict[str, Any]) -> None:
+        def wrapper(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
             # The handler is a coroutine (it awaits the search prep's executor
             # offload); drive it to completion the way the WS layer would.
             asyncio.run(func(hass, connection, msg))
 
         return wrapper
 
-    def async_register_command(self, hass: Any, handler: Any) -> None:
+    def async_register_command(self, hass: HomeAssistant, handler: Any) -> None:
         self.registered[handler._ws_command] = handler
 
 

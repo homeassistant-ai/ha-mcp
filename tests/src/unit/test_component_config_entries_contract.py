@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.tools import component_api, component_config_entries
 from ha_mcp.tools.tools_integrations import options_from_form_flow
@@ -348,7 +349,9 @@ def _stub_core_type_matcher(
     """Stand in for Core's ``?type=`` matcher; returns the calls it receives."""
     calls: list[tuple[list[str], str | None]] = []
 
-    async def _match(hass: Any, type_filter: list[str], domain: str | None) -> Any:
+    async def _match(
+        hass: HomeAssistant, type_filter: list[str], domain: str | None
+    ) -> Any:
         calls.append((type_filter, domain))
         return [
             e.as_json_fragment

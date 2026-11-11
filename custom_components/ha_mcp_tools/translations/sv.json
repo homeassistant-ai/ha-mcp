@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Behåll HA-MCP på en butikspost?",
-            "description": "HA-MCP är markerat som installerat från både {records}. De innehåller samma integration (den andra är den äldre distributionsspegeln). Marketplace i Home Assistant 2026.11 tillåter endast att en post äger en integration, så där kan ingen av dem uppdatera HA-MCP; HACS uppdaterar fortfarande, men uppgraderingen till 2026.11 skulle göra att HA-MCP fastnar.\n\nGenom att skicka in behålls **{keep}**, posten i standardkatalogen som inte behöver något anpassat förråd, och den andra posten markeras som ej installerad. Ingenting raderas: dina HA-MCP-poster, inställningar och filer förblir exakt som de är, och från och med nu visas uppdateringar under {keep} som vanligt."
+            "description": "HA-MCP är markerad som installerad från båda {records}. De innehåller samma integration (den andra är distributionsspegeln som tidigare installationer kom från). Marketplace i Home Assistant 2026.11 låter endast en post äga en integration, så där kan ingen av dem uppdatera HA-MCP; HACS uppdaterar fortfarande, men uppgraderingen till 2026.11 skulle lämna HA-MCP fast.\n\nGenom att skicka in behålls **{keep}**, posten i standardkatalogen som inte behöver ett eget förråd, och den andra posten markeras som ej installerad. Ingenting raderas: dina HA-MCP-poster, inställningar och filer förblir exakt som de är, och från och med nu visas uppdateringar under {keep} som vanligt."
           }
         },
         "abort": {

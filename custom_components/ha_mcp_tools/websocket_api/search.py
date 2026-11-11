@@ -28,6 +28,7 @@ from .constants import (
 from .flow_domains import HELPER_FLOWS_DEGRADED_WARNING, _flow_helper_domains
 from .registry import (
     _area_name,
+    _composed_entity_name,
     _device_dict_repr,
     _effective_area_for_entry,
     _floor_name_for_area,
@@ -380,7 +381,7 @@ def _search_entities(
             match_type = _entity_match_type(
                 query_lower,
                 rec["entity_id"],
-                rec["friendly_name"],
+                (rec["name"], rec["friendly_name"]),
                 rec["domain"],
                 rec["aliases"],
                 exact=exact,
@@ -394,7 +395,7 @@ def _search_entities(
 def _entity_match_type(
     query_lower: str,
     entity_id: str,
-    friendly: str,
+    names: tuple[str, ...],
     domain: str,
     aliases: list[str],
     *,
@@ -402,8 +403,11 @@ def _entity_match_type(
 ) -> str:
     """Classify an entity hit into the server's match_type taxonomy.
 
-    The server labels matches two ways and the component must be
-    indistinguishable from it:
+    ``names`` are the entity's composed name and its legacy ``friendly_name``;
+    a hit on either is a name match.
+
+    The component uses the server's two labelings, and counts a hit on the
+    composed name, which the server cannot see, as a name match:
 
     - **exact mode** — the server's ``_match_exact_search_entity`` stamps a flat
       ``"exact_match"`` on every hit, so mirror that constant.
@@ -416,24 +420,27 @@ def _entity_match_type(
     """
     if exact:
         return "exact_match"
-    if _is_alias_driven(query_lower, entity_id, friendly, aliases):
+    if _is_alias_driven(query_lower, entity_id, names, aliases):
         return "alias_match"
-    return _get_match_type_tier(query_lower, entity_id, friendly, domain)
+    return _get_match_type_tier(query_lower, entity_id, names, domain)
 
 
 def _is_alias_driven(
-    query_lower: str, entity_id: str, friendly: str, aliases: list[str]
+    query_lower: str, entity_id: str, names: tuple[str, ...], aliases: list[str]
 ) -> bool:
     """Whether a query token lands only on an alias, mirroring the engine's alias_hit.
 
     Collects the alias tokens (and each alias's separator-stripped concat form)
     that are NOT already present in the id/name token set; a query token in that
-    set means the friendly_name / id alone would not have surfaced this entity.
+    set means the names / id alone would not have surfaced this entity.
     """
     id_tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
-    id_name_tokens = set(_tokenize(entity_id)) | set(_tokenize(str(friendly)))
+    id_name_tokens = set(_tokenize(entity_id))
     id_name_tokens.add(_SPLIT_RE.sub("", id_tail.lower()))
-    id_name_tokens.add(_SPLIT_RE.sub("", str(friendly).lower()))
+    for name in names:
+        text = str(name)
+        id_name_tokens.update(_tokenize(text))
+        id_name_tokens.add(_SPLIT_RE.sub("", text.lower()))
     alias_only: set[str] = set()
     for alias in aliases:
         a_lower = str(alias).lower()
@@ -447,20 +454,20 @@ def _is_alias_driven(
 
 
 def _get_match_type_tier(
-    query_lower: str, entity_id: str, friendly: str, domain: str
+    query_lower: str, entity_id: str, names: tuple[str, ...], domain: str
 ) -> str:
     """The server's ``_get_match_type`` id/name/domain tiers (non-alias hits)."""
     eid = entity_id.lower()
-    fname = str(friendly).lower()
+    lowered = [str(name).lower() for name in names]
     if query_lower == eid:
         return "exact_id"
-    if query_lower == fname:
+    if query_lower in lowered:
         return "exact_name"
     if query_lower == domain.lower():
         return "exact_domain"
     if query_lower in eid:
         return "partial_id"
-    if query_lower in fname:
+    if any(query_lower in name for name in lowered):
         return "partial_name"
     return "fuzzy_match"
 
@@ -482,8 +489,9 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     # sentinel (entity_registry.ComputedNameType._singleton, "the computed
     # entity name is an alias"). Blind str() published it as a literal
     # "ComputedNameType._singleton" alias on every carrying entity — fake data
-    # in results AND a scored match_text. The name it stands for is already
-    # matched via ``friendly``, so dropping the sentinel loses nothing.
+    # in results AND a scored match_text. The name it stands for is the
+    # composed name ``_entity_record`` scores, so dropping the sentinel loses
+    # nothing.
     aliases = (
         sorted(a for a in (getattr(reg, "aliases", None) or []) if isinstance(a, str))
         if reg
@@ -530,17 +538,26 @@ def _entity_record(
     members = _normalize_member_entity_ids(attrs) if include_membership else None
 
     join = _registry_enrichment(view, entity_id)
+    # An entity outside the registry has no composed name, only the legacy one.
+    name = _composed_entity_name(view, _reg_entity(view, entity_id)) or friendly
     area_name = join["area"]
     floor_name = join["floor"]
     label_names = join["labels"]
     aliases = join["aliases"]
 
-    # Scored texts extend the server's id + friendly-name pair with the specific
+    # Scored texts extend the server's id + name texts with the specific
     # joined identifiers (alias / area / floor / label / device). The bare domain
     # is deliberately excluded: matching it would score every entity of a domain
     # at the exact tier (a "light" query flooding all lights), which the server
     # does not do — domain is a filter dimension, not a scored text.
-    match_texts = [entity_id, friendly, *aliases, *label_names, *join["_dev_texts"]]
+    match_texts = [
+        entity_id,
+        name,
+        friendly,
+        *aliases,
+        *label_names,
+        *join["_dev_texts"],
+    ]
     if area_name:
         match_texts.append(area_name)
     if floor_name:
@@ -548,6 +565,7 @@ def _entity_record(
 
     return {
         "entity_id": entity_id,
+        "name": name,
         "friendly_name": friendly,
         "domain": domain,
         "state": getattr(state, "state", "unknown"),
@@ -575,6 +593,7 @@ def _project_entity(
     """Strip internal ``_``-prefixed keys for the wire response."""
     return {
         "entity_id": rec["entity_id"],
+        "name": rec["name"],
         "friendly_name": rec["friendly_name"],
         "domain": rec["domain"],
         "state": rec["state"],

@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Wil je HA-MCP op één winkelvermelding behouden?",
-            "description": "HA-MCP staat als geïnstalleerd gemarkeerd vanuit zowel {records}. Ze bevatten dezelfde integratie (de tweede is de ouderwetse distributiespiegel). De Marketplace in Home Assistant 2026.11 zorgt ervoor dat slechts één vermelding eigenaar kan zijn van een integratie, waardoor geen van beide HA-MCP daar kan bijwerken; HACS blijft updaten, maar de upgrade naar 2026.11 zou HA-MCP laten vastlopen.\n\nDoor op verzenden te drukken behoud je **{keep}**, de vermelding in de standaardcatalogus die geen aangepaste repository nodig heeft, en wordt de andere vermelding gemarkeerd als niet-geïnstalleerd. Er wordt niets verwijderd: je HA-MCP-vermeldingen, instellingen en bestanden blijven exact zoals ze zijn, en vanaf nu verschijnen updates gewoon onder {keep}."
+            "description": "HA-MCP staat als geïnstalleerd gemarkeerd vanuit beide {records}. Ze bevatten dezelfde integratie (de tweede is de distributiespiegel waarvan eerdere installaties afkomstig zijn). De Marketplace in Home Assistant 2026.11 zorgt ervoor dat slechts één vermelding eigenaar kan zijn van een integratie, waardoor geen van beide daar HA-MCP kan bijwerken; HACS blijft updaten, maar de upgrade naar 2026.11 zou HA-MCP laten vastlopen.\n\nIndienen behoudt **{keep}**, de vermelding in de standaardcatalogus die geen aangepaste repository nodig heeft, en markeert de andere vermelding als niet geïnstalleerd. Er wordt niets verwijderd: je HA-MCP-vermeldingen, instellingen en bestanden blijven precies zoals ze zijn, en vanaf nu verschijnen updates zoals gebruikelijk onder {keep}."
           }
         },
         "abort": {

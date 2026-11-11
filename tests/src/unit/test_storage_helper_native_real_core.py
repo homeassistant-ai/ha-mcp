@@ -18,24 +18,19 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
-
-from ._core_client import core_backed_client
 
 
 @pytest.fixture
 async def tools(
-    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> AsyncIterator[HelperConfigTools]:
-    async with core_backed_client(
-        hass,
-        hass_ws_client,
-        hass_client,
-        domains=("input_boolean", "input_datetime", "tag"),
-        component=True,
-    ) as client:
-        yield HelperConfigTools(client)
-        await hass.async_block_till_done()
+    # ``config`` serves the registry commands.
+    for domain in ("config", "input_boolean", "input_datetime", "tag"):
+        assert await async_setup_component(hass, domain, {})
+    yield HelperConfigTools(component_core_client)
+    await hass.async_block_till_done()
 
 
 async def test_a_tag_created_without_an_id_gets_the_id_core_generates(
@@ -138,8 +133,7 @@ async def test_a_name_core_would_number_after_an_existing_helper_is_refused(
 )
 async def test_a_helper_that_is_not_stored_is_found_as_a_duplicate(
     hass: HomeAssistant,
-    hass_ws_client: Any,
-    hass_client: Any,
+    component_core_client: HomeAssistantClient,
     domain: str,
     yaml: Any,
     name: str,
@@ -150,13 +144,10 @@ async def test_a_helper_that_is_not_stored_is_found_as_a_duplicate(
     assert await async_setup_component(hass, domain, {domain: yaml})
     before = hass.states.async_entity_ids(domain)
 
-    async with core_backed_client(
-        hass, hass_ws_client, hass_client, component=True
-    ) as client:
-        with pytest.raises(ToolError) as exc_info:
-            await HelperConfigTools(client).ha_config_set_helper(
-                helper_type=domain, name=name
-            )
+    with pytest.raises(ToolError) as exc_info:
+        await HelperConfigTools(component_core_client).ha_config_set_helper(
+            helper_type=domain, name=name
+        )
 
     message = json.loads(str(exc_info.value))["error"]["message"]
     assert "already exists" in message and "not a stored helper" in message
@@ -164,7 +155,7 @@ async def test_a_helper_that_is_not_stored_is_found_as_a_duplicate(
 
 
 async def test_an_id_core_has_reserved_is_found_after_its_entity_was_renamed(
-    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     """A YAML helper keeps its id in the id manager Core generates a new
     helper's id with, whatever its entity is called now: Core would store
@@ -177,30 +168,27 @@ async def test_an_id_core_has_reserved_is_found_after_its_entity_was_renamed(
     )
     await hass.async_block_till_done()
 
-    async with core_backed_client(
-        hass, hass_ws_client, hass_client, component=True
-    ) as client:
-        with pytest.raises(ToolError) as exc_info:
-            await HelperConfigTools(client).ha_config_set_helper(
-                helper_type="input_boolean", name="Yaml Flag"
-            )
+    with pytest.raises(ToolError) as exc_info:
+        await HelperConfigTools(component_core_client).ha_config_set_helper(
+            helper_type="input_boolean", name="Yaml Flag"
+        )
 
     assert "not a stored helper" in json.loads(str(exc_info.value))["error"]["message"]
     assert hass.states.async_entity_ids("input_boolean") == ["input_boolean.renamed"]
 
 
 async def test_without_the_component_a_create_says_what_went_unchecked(
-    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Which names Core numbers is Core's slugify, read through the component.
     Without it only an exact name is refused, and the response says so."""
-    async with core_backed_client(
-        hass, hass_ws_client, hass_client, domains=("input_boolean",)
-    ) as client:
-        created = await HelperConfigTools(client).ha_config_set_helper(
-            helper_type="input_boolean", name="Night Mode"
-        )
-        await hass.async_block_till_done()
+    for domain in ("config", "input_boolean"):
+        assert await async_setup_component(hass, domain, {})
+
+    created = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type="input_boolean", name="Night Mode"
+    )
+    await hass.async_block_till_done()
 
     (warning,) = created["warnings"]
     assert "differs only in case or punctuation" in warning

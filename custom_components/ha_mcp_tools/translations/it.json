@@ -192,7 +192,7 @@
         "step": {
           "confirm": {
             "title": "Mantieni HA-MCP su un solo elenco dello store?",
-            "description": "HA-MCP risulta installato da entrambi i seguenti {records}. Contengono la stessa integrazione (il secondo è il mirror di distribuzione precedente). Il Marketplace in Home Assistant 2026.11 consente a un solo elenco di gestire un'integrazione, quindi nessuno dei due può aggiornare HA-MCP in quel modo; HACS continua ad aggiornare, ma l'aggiornamento a 2026.11 lascerebbe HA-MCP bloccato.\n\nInviando mantieni **{keep}**, l'elenco nel catalogo predefinito che non richiede un repository personalizzato, e contrassegna l'altro elenco come non installato. Non viene eliminato nulla: le tue voci, impostazioni e file di HA-MCP rimangono esattamente come sono e d'ora in poi gli aggiornamenti verranno visualizzati in {keep} come di consueto."
+            "description": "HA-MCP risulta installato da entrambi i {records}. Contengono la stessa integrazione (il secondo è il mirror di distribuzione da cui provenivano le installazioni precedenti). Il Marketplace in Home Assistant 2026.11 consente a un solo elenco di gestire un'integrazione, quindi nessuno dei due potrà aggiornare HA-MCP; HACS continuerà ad aggiornare, ma l'aggiornamento a 2026.11 lascerebbe HA-MCP bloccato.\n\nInvia conserva **{keep}**, l'elenco nel catalogo predefinito che non richiede un repository personalizzato, e contrassegna l'altro elenco come non installato. Non viene eliminato nulla: le tue voci, impostazioni e file di HA-MCP rimangono esattamente come sono e d'ora in poi gli aggiornamenti verranno visualizzati in {keep} come al solito."
           }
         },
         "abort": {

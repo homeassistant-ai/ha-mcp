@@ -21,6 +21,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
@@ -30,14 +31,13 @@ from pytest_homeassistant.common import (
 )
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_entry_flow import (
     CreationFlowError,
     recreate_flow_helper,
     restore_config_entry_options,
 )
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
-
-from ._core_client import core_backed_client
 
 _SOURCES = ["sensor.a", "sensor.b"]
 _MIN_MAX = {"name": "Lowest", "entity_ids": _SOURCES, "type": "min"}
@@ -51,24 +51,23 @@ _THERMOSTAT = {
 
 @pytest.fixture
 async def tools(
-    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> AsyncIterator[HelperConfigTools]:
-    async with core_backed_client(hass, hass_ws_client, hass_client) as client:
-        yield HelperConfigTools(client)
-        # An entry's setup or reload outlives the call that caused it.
-        await hass.async_block_till_done()
+    # ``config`` serves the registry and flow endpoints.
+    assert await async_setup_component(hass, "config", {})
+    yield HelperConfigTools(core_client)
+    # An entry's setup or reload outlives the call that caused it.
+    await hass.async_block_till_done()
 
 
 @pytest.fixture
 async def component_tools(
-    hass: HomeAssistant, hass_ws_client: Any, hass_client: Any
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> AsyncIterator[HelperConfigTools]:
     """``tools`` on an install with the ``ha_mcp_tools`` component."""
-    async with core_backed_client(
-        hass, hass_ws_client, hass_client, component=True
-    ) as client:
-        yield HelperConfigTools(client)
-        await hass.async_block_till_done()
+    assert await async_setup_component(hass, "config", {})
+    yield HelperConfigTools(component_core_client)
+    await hass.async_block_till_done()
 
 
 def _options(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
@@ -550,7 +549,7 @@ async def test_the_area_is_applied_by_the_call_that_finishes_the_flow(
 
 
 async def test_an_options_snapshot_is_restored_through_cores_options_flow(
-    hass: HomeAssistant, tools: HelperConfigTools
+    hass: HomeAssistant, tools: HelperConfigTools, core_client: HomeAssistantClient
 ) -> None:
     """A backup restore puts back what the snapshot holds and clears what it
     lacks, as the options form does."""
@@ -564,7 +563,7 @@ async def test_an_options_snapshot_is_restored_through_cores_options_flow(
     current = _options(hass, entry_id)
 
     await restore_config_entry_options(
-        tools._client,
+        core_client,
         entry_id,
         snapshot,
         expected_domain="template",
@@ -575,14 +574,14 @@ async def test_an_options_snapshot_is_restored_through_cores_options_flow(
 
 
 async def test_a_deleted_menu_helper_is_recreated_from_its_options(
-    hass: HomeAssistant, tools: HelperConfigTools
+    hass: HomeAssistant, tools: HelperConfigTools, core_client: HomeAssistantClient
 ) -> None:
     """The snapshot's template_type picks the creation menu's branch."""
     entry_id = await _template_sensor(tools, unit_of_measurement="W")
     snapshot = _options(hass, entry_id)
     await hass.config_entries.async_remove(entry_id)
 
-    recreated = await recreate_flow_helper(tools._client, "template", snapshot)
+    recreated = await recreate_flow_helper(core_client, "template", snapshot)
 
     assert recreated["entry_id"] != entry_id
     assert _options(hass, recreated["entry_id"]) == snapshot
@@ -591,7 +590,9 @@ async def test_a_deleted_menu_helper_is_recreated_from_its_options(
 _HALL_LIGHT = {"name": "Hall Light", "state": "{{ true }}", "device_class": "light"}
 
 
-async def _deleted_hall_light(hass: HomeAssistant, tools: HelperConfigTools) -> dict:
+async def _deleted_hall_light(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> dict[str, Any]:
     """The options of a deleted template binary_sensor whose device_class is
     also the name of another template sub-type."""
     created = await tools.ha_config_set_helper(
@@ -603,29 +604,29 @@ async def _deleted_hall_light(hass: HomeAssistant, tools: HelperConfigTools) -> 
 
 
 async def test_a_snapshot_naming_two_menu_branches_is_recreated_on_the_right_one(
-    hass: HomeAssistant, component_tools: HelperConfigTools
+    hass: HomeAssistant,
+    component_tools: HelperConfigTools,
+    component_core_client: HomeAssistantClient,
 ) -> None:
     """template_type "binary_sensor" and device_class "light" both name a
     template sub-type. Core's declaration of the flow says which is the
     branch: the one whose form takes the snapshot's other options."""
     snapshot = await _deleted_hall_light(hass, component_tools)
 
-    recreated = await recreate_flow_helper(
-        component_tools._client, "template", snapshot
-    )
+    recreated = await recreate_flow_helper(component_core_client, "template", snapshot)
 
     assert _options(hass, recreated["entry_id"]) == snapshot
 
 
 async def test_without_the_component_two_possible_branches_are_refused(
-    hass: HomeAssistant, tools: HelperConfigTools
+    hass: HomeAssistant, tools: HelperConfigTools, core_client: HomeAssistantClient
 ) -> None:
     """Nothing but Core's declaration tells the two apart, so no branch is
     guessed and no helper of the wrong sub-type is created."""
     snapshot = await _deleted_hall_light(hass, tools)
 
     with pytest.raises(CreationFlowError):
-        await recreate_flow_helper(tools._client, "template", snapshot)
+        await recreate_flow_helper(core_client, "template", snapshot)
 
     assert hass.config_entries.async_entries("template") == []
 

@@ -1,92 +1,66 @@
-"""The server's own HA client, answered by a real ``hass``.
+"""``core_client``: the server's Home Assistant client on a real ``hass``.
 
-Its REST transport reaches Core's REST API through ``hass_client`` and its
-WebSocket client reaches Core's WebSocket API through ``hass_ws_client``, so
-every reply, error and stored object in a test that uses it is Core's own.
+Kept out of ``conftest.py``, which predates the private-access check and is
+listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
+``conftest.py`` loads this module as a pytest plugin.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from collections.abc import AsyncIterator
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from typing import TYPE_CHECKING, Any
 
-import httpx
-from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
+import pytest
 
-from ha_mcp.client import websocket_client
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
-from ._component_core import ws_call
+    from ha_mcp.client.rest_client import HomeAssistantClient
 
 
-class CoreWebSocket:
-    """The server's WebSocket client, answered by Core's WebSocket API."""
-
-    def __init__(self, ws: Any) -> None:
-        self._ws = ws
-        # One reply per command: the test socket has no request multiplexing.
-        self._lock = asyncio.Lock()
-
-    async def send_command(self, command_type: str, **params: Any) -> dict[str, Any]:
-        async with self._lock:
-            reply = await ws_call(self._ws, command_type, **params)
-        if not reply["success"]:
-            message, code = websocket_client._extract_ws_error(reply["error"])
-            raise HomeAssistantCommandError(f"Command failed: {message}", code)
-        return {"success": True, "result": reply["result"]}
-
-
-class CoreTransport(httpx.AsyncBaseTransport):
-    """The server's REST transport, answered by Core's REST API."""
-
-    def __init__(self, rest: Any) -> None:
-        self._rest = rest
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        response = await self._rest.request(
-            request.method,
-            request.url.raw_path.decode(),
-            data=request.content or None,
-            headers={"Content-Type": "application/json"},
-        )
-        return httpx.Response(response.status, content=await response.read())
-
-
-@contextlib.asynccontextmanager
-async def core_backed_client(
+@pytest.fixture
+async def core_client(
     hass: HomeAssistant,
-    hass_ws_client: Any,
-    hass_client: Any,
-    *,
-    domains: tuple[str, ...] = (),
-    component: bool = False,
+    aiohttp_client: Any,
+    hass_access_token: str,
+    socket_enabled: None,
 ) -> AsyncIterator[HomeAssistantClient]:
-    """The server's HA client on ``hass``, with ``domains`` set up.
+    """The server's own Home Assistant client, connected to the real ``hass``.
 
-    ``component`` registers the ``ha_mcp_tools/*`` commands; without it the
-    install has no component, as the commands are then unknown to Core.
+    A tool test passes this where a tool takes its client, so every REST and
+    WebSocket reply is Core's own. The caller is an admin. The component's
+    commands are not registered, as on an install without the component;
+    ``component_core_client`` adds them.
     """
-    # ``config`` serves the registry and flow endpoints, ``api`` the REST API.
-    for domain in ("api", "config", *domains):
-        assert await async_setup_component(hass, domain, {})
-    if component:
-        from custom_components.ha_mcp_tools import websocket_api
+    from homeassistant.setup import async_setup_component
 
-        websocket_api.async_register_commands(hass)
-    socket = CoreWebSocket(await hass_ws_client(hass))
-    client = HomeAssistantClient(base_url="http://core.test", token="token")
-    client.httpx_client = httpx.AsyncClient(
-        base_url="http://core.test/api", transport=CoreTransport(await hass_client())
+    from ha_mcp.client.rest_client import HomeAssistantClient
+    from ha_mcp.client.websocket_client import websocket_manager
+
+    assert await async_setup_component(hass, "api", {})
+    assert await async_setup_component(hass, "websocket_api", {})
+    server = await aiohttp_client(hass.http.app)
+    client = HomeAssistantClient(
+        base_url=str(server.make_url("")).rstrip("/"),
+        token=hass_access_token,
+        verify_ssl=False,
     )
-    # Every module's get_websocket_client resolves through the manager.
-    with patch.object(
-        websocket_client.websocket_manager,
-        "get_client",
-        AsyncMock(return_value=socket),
-    ):
+    try:
         yield client
-    await client.httpx_client.aclose()
+    finally:
+        # Nested, so a failed disconnect cannot leave the HTTP client open.
+        try:
+            await websocket_manager.disconnect()
+        finally:
+            await client.close()
+
+
+@pytest.fixture
+async def component_core_client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` on a ``hass`` that also answers ``ha_mcp_tools/*``."""
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    return core_client

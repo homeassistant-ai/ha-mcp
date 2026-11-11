@@ -145,12 +145,6 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::normalized_origin",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::normalized_origin"
   ],
-  "30487fa10c15": [
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigDashboards.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPackagesGate.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPathTraversal.hass",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigSingleKey.hass"
-  ],
   "308b86361f5c": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetScriptAcceptsEntityIdForm.tools",
     "tests/src/unit/test_error_code_consistency_1297.py::TestGetScriptMissingSurfacesAvailableIds.tools",
@@ -540,13 +534,6 @@
   "9061fe948c8f": [
     "tests/src/unit/visibility/test_overview_filter.py::_OverviewClient.send_websocket_message",
     "tests/src/unit/visibility/test_warnings_surface.py::_OverviewClient.send_websocket_message"
-  ],
-  "90d0c53c21fb": [
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigDashboards.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPackagesGate.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigPathTraversal.call_factory",
-    "tests/src/unit/test_yaml_dashboards.py::TestHandleEditYamlConfigSingleKey.call_factory",
-    "tests/src/unit/test_yaml_whole_file_replace.py::TestReplaceFileAction.call_factory"
   ],
   "914a91fa6556": [
     "tests/src/unit/test_component_call_service_contract.py::_build_call_service",

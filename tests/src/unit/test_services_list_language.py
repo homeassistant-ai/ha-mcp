@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 
 from .test_component_ws_search import FakeHass, wsapi
 
@@ -37,10 +38,10 @@ def test_omitted_language_requests_the_configured_language(
     """The prep asks Core for the instance's language, not English."""
     seen: list[str] = []
 
-    async def _fake_desc(hass):
+    async def _fake_desc(hass: HomeAssistant):
         return {}
 
-    async def _fake_trans(hass, language):
+    async def _fake_trans(hass: HomeAssistant, language):
         seen.append(language)
         return {}
 
