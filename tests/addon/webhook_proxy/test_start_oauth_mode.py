@@ -24,8 +24,10 @@ from ._variants import Variant
 
 LEGACY = "legacy"
 HA_AUTH = "ha_auth"
-CONFIGURED_ID = {"oauth_client_id": "cid-1234567890ABCDEF"}
-CONFIGURED_SECRET = {"oauth_client_secret": "sec"}
+# The two halves of a legacy client a user may have configured: the id, and
+# the client secret.
+ID_OPTION = {"oauth_client_id": "cid-1234567890ABCDEF"}
+OTHER_HALF_OPTION = {"oauth_client_secret": "sec"}
 
 
 @pytest.fixture
@@ -68,7 +70,7 @@ async def test_explicit_ha_auth_wins_over_legacy_traces(
     _store_legacy_creds(app)
 
     mode = await _mode(
-        hass, app, upstream, oauth_mode=HA_AUTH, **CONFIGURED_ID, **CONFIGURED_SECRET
+        hass, app, upstream, oauth_mode=HA_AUTH, **ID_OPTION, **OTHER_HALF_OPTION
     )
 
     assert mode == HA_AUTH
@@ -89,21 +91,21 @@ async def test_stored_legacy_credentials_keep_legacy(
 
 
 @pytest.mark.parametrize(
-    "credential", [CONFIGURED_ID, CONFIGURED_SECRET], ids=["client-id", "client-secret"]
+    "given", [ID_OPTION, OTHER_HALF_OPTION], ids=["client-id", "client-secret"]
 )
 async def test_a_configured_legacy_credential_keeps_legacy(
     hass: HomeAssistant,
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    credential: dict[str, str],
+    given: dict[str, str],
 ) -> None:
-    assert await _mode(hass, app, upstream, **credential) == LEGACY
+    assert await _mode(hass, app, upstream, **given) == LEGACY
 
 
 @pytest.mark.parametrize(
-    ("credentials", "expected"),
-    [({}, HA_AUTH), ({**CONFIGURED_ID, **CONFIGURED_SECRET}, LEGACY)],
+    ("given", "expected"),
+    [({}, HA_AUTH), ({**ID_OPTION, **OTHER_HALF_OPTION}, LEGACY)],
     ids=["first-enable", "legacy-credentials"],
 )
 async def test_unknown_mode_falls_back_to_detection(
@@ -111,11 +113,9 @@ async def test_unknown_mode_falls_back_to_detection(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    credentials: dict[str, str],
+    given: dict[str, str],
     expected: str,
 ) -> None:
     """The Supervisor's enum check normally blocks it; if one gets through,
     the app must still start, in the mode detection picks."""
-    assert await _mode(hass, app, upstream, oauth_mode="bogus", **credentials) == (
-        expected
-    )
+    assert await _mode(hass, app, upstream, oauth_mode="bogus", **given) == (expected)

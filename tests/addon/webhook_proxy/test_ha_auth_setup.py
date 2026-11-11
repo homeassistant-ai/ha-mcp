@@ -89,8 +89,8 @@ async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
             mcp_server_url=upstream.target_url(),
             enable_oauth=True,
             oauth_mode=option,
-            oauth_client_id=LEGACY["client_id"],
-            oauth_client_secret=LEGACY["client_secret"],
+            oauth_client_id="client-1234567890ABCDEF",
+            oauth_client_secret="secret-much-secret",
             remote_url="https://myhome.example",
         )
         app.clock.while_running = lambda: seen.append(

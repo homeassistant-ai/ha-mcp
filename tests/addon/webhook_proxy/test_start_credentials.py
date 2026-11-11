@@ -31,6 +31,8 @@ from ._start import (
 )
 from ._variants import Variant
 
+OLD_CREDS = {"client_id": "old-id-1234567890", "client_secret": "old-secret"}
+
 
 @pytest.fixture
 def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App:
@@ -74,10 +76,9 @@ async def _plain_start(hass: HomeAssistant, app: App, upstream: Upstream) -> str
     return webhook_id
 
 
-def _store_creds(app: App, client_id: str, secret: str) -> None:
-    app.path("/data/oauth_creds.json").write_text(
-        json.dumps({"client_id": client_id, "client_secret": secret})
-    )
+def _store_old_creds(app: App) -> None:
+    """The credentials an earlier start left in /data."""
+    app.path("/data/oauth_creds.json").write_text(json.dumps(OLD_CREDS))
 
 
 async def test_configured_credentials_are_used_trimmed(
@@ -119,19 +120,17 @@ async def test_configured_credentials_replace_the_stored_ones(
     hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
 ) -> None:
     await _legacy_start(hass, app, upstream)
-    user_creds = ("user-id-1234567890123", "user-secret")
-
     configured = await _legacy_start(
         hass,
         app,
         upstream,
-        oauth_client_id=user_creds[0],
-        oauth_client_secret=user_creds[1],
+        oauth_client_id="user-id-1234567890123",
+        oauth_client_secret="user-chosen",
     )
 
-    assert configured == user_creds
+    assert configured == ("user-id-1234567890123", "user-chosen")
     # A later start with the fields cleared keeps what the user last set.
-    assert await _legacy_start(hass, app, upstream) == user_creds
+    assert await _legacy_start(hass, app, upstream) == configured
 
 
 async def test_rotating_only_the_secret_keeps_the_stored_client_id(
@@ -192,14 +191,14 @@ async def test_credentials_persist_with_a_warning_where_0600_is_unavailable(
 async def test_regenerate_gives_new_credentials(
     hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
 ) -> None:
-    _store_creds(app, "old-id-1234567890", "old-secret")
+    _store_old_creds(app)
 
     client_id, secret = await _legacy_start(
         hass, app, upstream, regenerate_oauth_creds=True
     )
 
-    assert client_id != "old-id-1234567890"
-    assert secret != "old-secret"
+    assert client_id != OLD_CREDS["client_id"]
+    assert secret != OLD_CREDS["client_secret"]
 
 
 async def test_regenerate_without_stored_credentials_is_harmless(

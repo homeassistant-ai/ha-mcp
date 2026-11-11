@@ -50,6 +50,10 @@ async def core(
     return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
 
 
+def _write(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
+
+
 def _append(path: Path, data: bytes) -> None:
     with path.open("ab") as fh:
         fh.write(data)
@@ -95,9 +99,9 @@ async def test_mirror_tail_echoes_whole_lines_once_and_follows_rotation(
     the file."""
     mirror = app.path(variant.inbound_log)
     app.clock.polls = [
-        lambda: mirror.write_bytes(b"line A\nline B\npartial"),
+        lambda: _write(mirror, b"line A\nline B\npartial"),
         lambda: _append(mirror, b" done\n"),
-        lambda: mirror.write_bytes(b"fresh\n"),
+        lambda: _write(mirror, b"fresh\n"),
     ]
 
     assert await _mirrored_lines(hass, app, upstream, capsys) == [
@@ -131,7 +135,7 @@ async def test_stop_signal_runs_the_cleanup_and_logs_why(
 
     assert running == [["loaded"]]
     assert entry_states(hass, variant) == []
-    assert f"Shutting down (reason: {stop.name})" in info_lines(capsys.readouterr().out)
+    assert f"Shutting down (reason: {stop.name})" in capsys.readouterr().out
 
 
 async def test_stop_takes_oauth_dark_before_removing_the_entry(
@@ -149,7 +153,7 @@ async def test_stop_takes_oauth_dark_before_removing_the_entry(
         mcp_server_url=upstream.target_url(), enable_oauth=True, debug_logging=True
     )
     mirror = app.path(variant.inbound_log)
-    app.clock.while_running = lambda: mirror.write_bytes(b"x\n")
+    app.clock.while_running = lambda: _write(mirror, b"x\n")
     document = f"{variant.oauth_base}/authorization-server"
     served_at_removal: list[int] = []
 
