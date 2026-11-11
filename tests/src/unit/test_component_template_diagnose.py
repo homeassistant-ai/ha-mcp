@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import template_diagnose
 
@@ -108,7 +109,7 @@ class _FakeTemplate:
     calls: list[str]
     log_fns: list[Any]
 
-    def __init__(self, template: str, hass: Any) -> None:
+    def __init__(self, template: str, hass: HomeAssistant) -> None:
         self.template = template
         type(self).calls = []
         type(self).log_fns = []

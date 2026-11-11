@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import dashboard_card_describe as describe_mod
@@ -570,7 +571,7 @@ async def test_a_slow_describe_of_a_loaded_index_is_a_timeout_not_unavailable(
     monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
     monkeypatch.setattr(cd, "_definitions", MagicMock())
 
-    async def slow(hass: Any, msg: dict[str, Any]) -> dict[str, Any]:
+    async def slow(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         await asyncio.Event().wait()
         return {}
 
@@ -603,7 +604,7 @@ async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> No
     )
     monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.01, raising=False)
 
-    async def slow(hass, timeout=None):
+    async def slow(hass: HomeAssistant, timeout=None):
         if timeout is None:
             await asyncio.Event().wait()
 

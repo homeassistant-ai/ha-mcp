@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components import network as ha_adapters
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import network as ha_network
 
 import custom_components.ha_mcp_tools.embedded_setup as esetup
@@ -93,7 +94,7 @@ def make_fake_manager(monkeypatch: pytest.MonkeyPatch) -> type:
         async_stop = AsyncMock()
         async_revoke_credentials = AsyncMock()
 
-        def __init__(self, hass, entry):
+        def __init__(self, hass: HomeAssistant, entry):
             self.hass = hass
             self.entry = entry
 
@@ -332,7 +333,7 @@ def _install_network_cloud(*, cloud_url=None, local_url=None):
     is replaced at the component's ``_cloud_remote_url``.
     """
 
-    def get_url(hass, *, allow_external=False, prefer_external=False):
+    def get_url(hass: HomeAssistant, *, allow_external=False, prefer_external=False):
         if local_url is None:
             raise ha_network.NoURLAvailableError
         return local_url
@@ -347,7 +348,7 @@ def _install_adapters(adapters=None, *, error=None):
     ``error`` set ⇒ the lookup raises it (the degrade-to-empty branch).
     """
 
-    async def async_get_adapters(hass):
+    async def async_get_adapters(hass: HomeAssistant):
         if error is not None:
             raise error
         return adapters or []
@@ -371,7 +372,7 @@ class TestSurfaceConnectUrls:
         )
 
     @staticmethod
-    def _urls(hass, entry, **kwargs) -> list[str]:
+    def _urls(hass: HomeAssistant, entry, **kwargs) -> list[str]:
         # The Configure screen's source of truth for the connect URLs.
         return esetup.build_connect_urls(hass, entry, **kwargs)
 

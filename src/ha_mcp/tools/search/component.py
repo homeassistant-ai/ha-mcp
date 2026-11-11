@@ -28,6 +28,7 @@ from ..component_api import (
 from ..smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
 from ..util_helpers import merge_visibility_warnings
 from .entities import (
+    _COMPOSED_NAME_FIELD,
     _ENTITY_RECORD_KEYS,
     _requested_enrichment,
     _requested_membership,
@@ -578,19 +579,22 @@ def _shape_component_search_response(
 
     if req.registry_eligible:
         parsed_result_fields = _parse_component_result_fields(req.result_fields)
-        # Base records contain the six documented keys. Requested enrichment
-        # fields retain the component's area/floor/labels/aliases registry join;
-        # requested membership fields append its opt-in state-derived metadata.
-        # With neither class requested, the default six-key shape is unchanged.
+        # Base records contain the six documented keys plus Core's composed
+        # name where the component sends one (an older component does not).
+        # Requested enrichment fields retain the component's
+        # area/floor/labels/aliases registry join; requested membership fields
+        # append its opt-in state-derived metadata.
+        membership = _requested_membership(parsed_result_fields)
         record_keys = (
             *_ENTITY_RECORD_KEYS,
+            _COMPOSED_NAME_FIELD,
             *_requested_enrichment(parsed_result_fields),
-            *_requested_membership(parsed_result_fields),
+            *membership,
         )
-        conditional_keys = set(_requested_membership(parsed_result_fields))
+        conditional_keys = {_COMPOSED_NAME_FIELD, *membership}
         entities = [
             {
-                key: rec[key] if key in conditional_keys else rec.get(key)
+                key: rec.get(key)
                 for key in record_keys
                 if key not in conditional_keys or key in rec
             }
@@ -715,8 +719,11 @@ class ComponentSearchMixin(LegacySearchMixin):
         *,
         visibility: VisibilityWire | None = None,
         caps: Any = None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, bool]:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
+
+        The flag says whether the component answered: it is false for a
+        response the failure fallback took from the legacy path.
 
         ``visibility`` is the serialized hide config passed to a
         ``search_visibility``-capable component so it applies the entity-
@@ -733,17 +740,17 @@ class ComponentSearchMixin(LegacySearchMixin):
         """
         if _dashboard_split_requested(req):
             if not _dashboard_split_serviceable(req, caps):
-                return None
+                return None, False
             return await self._component_search_with_dashboards(
                 req, ctx, visibility=visibility
             )
         try:
             raw = await self._send_component_search(req, visibility)
         except Exception as exc:  # noqa: BLE001
-            return await self._component_search_fallback(req, ctx, exc)
+            return await self._component_search_fallback(req, ctx, exc), False
         response = _shape_component_search_response(req, raw.get("result") or {})
         await _scrub_component_config_buckets(response, self._client)
-        return response
+        return response, True
 
     async def _component_search_fallback(
         self, req: _ResolvedSearch, ctx: Context | None, exc: Exception
@@ -795,7 +802,7 @@ class ComponentSearchMixin(LegacySearchMixin):
         ctx: Context | None,
         *,
         visibility: VisibilityWire | None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, bool]:
         """Serve a ``dashboard``-including request from both legs (issue #2289).
 
         The two legs run concurrently: the dashboards leg is a second frame on
@@ -825,7 +832,7 @@ class ComponentSearchMixin(LegacySearchMixin):
             # search uncancellably.
             dashboard_task.cancel()
             await asyncio.wait([dashboard_task])
-            return await self._component_search_fallback(req, ctx, exc)
+            return await self._component_search_fallback(req, ctx, exc), False
         except BaseException:
             # Cancellation / shutdown of THIS coroutine: settle the leg before
             # propagating, so no cancelled task outlives the call, then
@@ -858,7 +865,7 @@ class ComponentSearchMixin(LegacySearchMixin):
             ),
         )
         await _scrub_component_config_buckets(response, self._client)
-        return response
+        return response, True
 
     async def _search_dashboards_leg(self, req: _ResolvedSearch) -> _DashboardLeg:
         """The dashboards bucket for a merged component search.

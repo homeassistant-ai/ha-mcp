@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 import custom_components.ha_mcp_tools.diagnostics as diag
 import custom_components.ha_mcp_tools.embedded_server as eserver
@@ -86,7 +87,7 @@ class RecordingIssueRegistry:
         self.issues: dict[str, Any] = {}
 
     def async_create_issue(
-        self, hass: Any, domain: str, issue_id: str, **kwargs: Any
+        self, hass: HomeAssistant, domain: str, issue_id: str, **kwargs: Any
     ) -> None:
         assert domain == DOMAIN
         self.issues[issue_id] = SimpleNamespace(
@@ -161,7 +162,7 @@ def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
     """The manifest pin the effective spec falls back to; set ``[0]``."""
     pin: list[str | None] = ["ha-mcp==8.7.0"]
 
-    async def _paired(hass: Any) -> str | None:
+    async def _paired(hass: HomeAssistant) -> str | None:
         return pin[0]
 
     monkeypatch.setattr(eserver, "_async_paired_server_requirement", _paired)
