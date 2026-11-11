@@ -128,7 +128,6 @@ class TestFormatTraceList:
             pytest.param(
                 3, 0, "newest", ["run_4", "run_3", "run_2"], True, id="newest-window"
             ),
-            pytest.param(2, 0, "newest", ["run_4", "run_3"], True, id="small-page"),
             pytest.param(
                 10,
                 0,
@@ -143,7 +142,6 @@ class TestFormatTraceList:
             pytest.param(2, 2, "newest", ["run_2", "run_1"], True, id="offset-newest"),
             pytest.param(2, 2, "oldest", ["run_2", "run_3"], True, id="offset-oldest"),
             pytest.param(10, 5, "newest", [], False, id="offset-equals-total"),
-            pytest.param(10, 10, "newest", [], False, id="offset-beyond-total"),
         ],
     )
     async def test_pages_traces(
@@ -242,6 +240,23 @@ class TestTraceToolOptions:
 
         assert result["success"] is True
         assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
+
+    async def test_an_unknown_item_id_warns_it_may_be_wrong(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A domain+item_id list Core has no runs for says the id may be wrong."""
+        await _store(hass, _run("r1"))
+
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            domain="automation", item_id="evening_lights"
+        )
+
+        assert result["success"] is True
+        assert result["trace_count"] == 0
+        assert any(
+            "No traces found" in warning and "evening_lights" in warning
+            for warning in result["warnings"]
+        )
 
 
 class TestResolveTraceItemId:

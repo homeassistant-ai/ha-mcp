@@ -63,9 +63,11 @@ async def repairs_api(hass: HomeAssistant) -> None:
 
 class TestGatherDiagnostics:
     @pytest.mark.asyncio
-    async def test_loaded_automation_with_trace_key(
+    async def test_a_loaded_automation_that_never_ran_is_told_to_run_it(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
+        """With nothing stored, an enabled automation is told to run it once
+        rather than that its trace storage is off."""
         await _setup(hass, "automation", [_automation("test", "Test")])
         hass.states.async_set("light.trigger", "on")
         await hass.async_block_till_done()
@@ -178,9 +180,11 @@ class TestGatherDiagnostics:
         assert "could not find" in result["suggestion"].lower()
 
     @pytest.mark.asyncio
-    async def test_trace_storage_disabled(
+    async def test_stored_traces_zero_is_reported_as_storage_disabled(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
+        """An automation with stored_traces=0 must say its trace storage is
+        off, so an empty list is not read as a missing run."""
         await _setup(
             hass,
             "automation",

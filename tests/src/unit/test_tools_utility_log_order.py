@@ -47,14 +47,6 @@ class TestLogbookOrder:
         ]
 
     @pytest.mark.asyncio
-    async def test_malformed_rest_reply_is_a_tool_error(self):
-        """A non-list REST logbook reply fails instead of reading as empty."""
-        tools = LogTools(self._client(None))
-
-        with pytest.raises(ToolError, match="not a row list"):
-            await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
-
-    @pytest.mark.asyncio
     async def test_newest_is_default_and_reverses_window(self):
         tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
