@@ -117,13 +117,12 @@ async def test_refuses_to_start_without_a_server_app(
     hass: HomeAssistant,
     app: App,
     core: CoreLink,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app.supervisor.addons = [{"slug": "some_other_addon"}]
 
     await _start_without_a_server(hass, app)
 
-    assert "No running MCP addon found" in capsys.readouterr().err
+    assert "No running MCP addon found" in app.err()
 
 
 async def test_host_network_server_is_reached_on_loopback(
@@ -223,7 +222,6 @@ async def test_refuses_to_start_without_a_secret_path(
     hass: HomeAssistant,
     app: App,
     core: CoreLink,
-    capsys: pytest.CaptureFixture[str],
     log: str | None,
 ) -> None:
     """No ``secret_path`` option and no log line naming one."""
@@ -235,7 +233,7 @@ async def test_refuses_to_start_without_a_secret_path(
 
     await _start_without_a_server(hass, app)
 
-    assert "Could not discover secret path" in capsys.readouterr().err
+    assert "Could not discover secret path" in app.err()
 
 
 async def test_configured_server_url_skips_discovery(

@@ -23,7 +23,6 @@ from ._start import (
     connect_core,
     entry_states,
     in_core,
-    info_lines,
     make_app,
     run_main,
 )
@@ -63,12 +62,11 @@ async def _mirrored_lines(
     hass: HomeAssistant,
     app: App,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> list[str]:
     """Run the app with "Log inbound requests" on; the mirror lines it echoed."""
     app.set_options(mcp_server_url=upstream.target_url(), debug_logging=True)
     assert await run_main(hass, app) == 0
-    return [line for line in info_lines(capsys.readouterr().out) if line in MIRRORED]
+    return [line for line in app.info_lines() if line in MIRRORED]
 
 
 async def test_restart_does_not_replay_old_mirror_lines(
@@ -77,13 +75,12 @@ async def test_restart_does_not_replay_old_mirror_lines(
     core: CoreLink,
     upstream: Upstream,
     variant: Variant,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     mirror = app.path(variant.inbound_log)
     mirror.write_bytes(b"old line\n")
     app.clock.polls = [lambda: _append(mirror, b"line A\n")]
 
-    assert await _mirrored_lines(hass, app, upstream, capsys) == ["line A"]
+    assert await _mirrored_lines(hass, app, upstream) == ["line A"]
 
 
 async def test_mirror_tail_echoes_whole_lines_once_and_follows_rotation(
@@ -92,7 +89,6 @@ async def test_mirror_tail_echoes_whole_lines_once_and_follows_rotation(
     core: CoreLink,
     upstream: Upstream,
     variant: Variant,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The app echoes only complete lines, holds a partial one for the next
     poll, never repeats a line, and starts over when the component truncates
@@ -104,7 +100,7 @@ async def test_mirror_tail_echoes_whole_lines_once_and_follows_rotation(
         lambda: _write(mirror, b"fresh\n"),
     ]
 
-    assert await _mirrored_lines(hass, app, upstream, capsys) == [
+    assert await _mirrored_lines(hass, app, upstream) == [
         "line A",
         "line B",
         "partial done",
@@ -119,7 +115,6 @@ async def test_stop_signal_runs_the_cleanup_and_logs_why(
     core: CoreLink,
     upstream: Upstream,
     variant: Variant,
-    capsys: pytest.CaptureFixture[str],
     stop: signal.Signals,
 ) -> None:
     """Without a handler a Supervisor stop killed the process mid-loop, so the
@@ -135,7 +130,7 @@ async def test_stop_signal_runs_the_cleanup_and_logs_why(
 
     assert running == [["loaded"]]
     assert entry_states(hass, variant) == []
-    assert f"Shutting down (reason: {stop.name})" in capsys.readouterr().out
+    assert f"Shutting down (reason: {stop.name})" in app.out()
 
 
 async def test_stop_takes_oauth_dark_before_removing_the_entry(

@@ -141,7 +141,6 @@ async def test_check_without_the_bundled_manifest_reports_missing_oauth(
     fs_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without the manifest the app cannot tell which document to ask for, so
     it fails closed rather than serve a webhook that may be unauthenticated."""
@@ -152,4 +151,4 @@ async def test_check_without_the_bundled_manifest_reports_missing_oauth(
 
     assert _document_requests(core, variant) == 0
     assert await _webhook_taken_down(hass_ws_client, app, variant)
-    assert "Could not read integration manifest" in capsys.readouterr().err
+    assert "Could not read integration manifest" in app.err()

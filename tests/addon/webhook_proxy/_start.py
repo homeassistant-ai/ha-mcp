@@ -164,9 +164,25 @@ class App:
     clock: Clock
     restarts_awaited: int = 0
     on_restart: Callable[[], None] | None = None
+    # (level, message) of every line start.py logged. start.py prints from
+    # main()'s thread while Core's runs, and pytest's capture buffer is not
+    # thread-safe: it drops lines, so tests read this record instead.
+    logged: list[tuple[str, str]] = field(default_factory=list)
 
     def path(self, absolute: str) -> Path:
         return redirect(self.fs_root, absolute)
+
+    def info_lines(self) -> list[str]:
+        """What start.py logged at INFO, in order."""
+        return [message for level, message in self.logged if level == "INFO"]
+
+    def out(self) -> str:
+        """start.py's INFO log, as its stdout reads."""
+        return "\n".join(self.info_lines())
+
+    def err(self) -> str:
+        """start.py's WARNING and ERROR log, as its stderr reads."""
+        return "\n".join(message for level, message in self.logged if level != "INFO")
 
     def set_options(self, **options: Any) -> None:
         """The add-on options the Supervisor writes to /data/options.json."""
@@ -198,6 +214,16 @@ class App:
         self.restarts_awaited += 1
         if self.on_restart is not None:
             self.on_restart()
+
+
+def _recording(
+    app: App, level: str, log: Callable[[str], None]
+) -> Callable[[str], None]:
+    def record(message: str) -> None:
+        app.logged.append((level, message))
+        log(message)
+
+    return record
 
 
 def make_app(
@@ -236,6 +262,12 @@ def make_app(
     monkeypatch.setattr(start, "_wait_for_ha_restart", app.wait_for_ha_restart)
     monkeypatch.setattr(start, "time", app.clock.module())
     monkeypatch.setattr(start, "signal", signals.module())
+    for level, name in (
+        ("INFO", "log_info"),
+        ("WARNING", "log_warning"),
+        ("ERROR", "log_error"),
+    ):
+        monkeypatch.setattr(start, name, _recording(app, level, getattr(start, name)))
     if ships_component:
         source = app.path(f"/opt/{variant.component}")
         source.parent.mkdir(parents=True, exist_ok=True)
@@ -382,13 +414,6 @@ async def notifications(hass_ws_client: WebSocketGenerator) -> dict[str, Any]:
 def entry_states(hass: HomeAssistant, variant: Variant) -> list[str]:
     return [
         entry.state.value for entry in hass.config_entries.async_entries(variant.domain)
-    ]
-
-
-def info_lines(out: str) -> list[str]:
-    """The messages ``start.py`` logged at INFO, from its captured stdout."""
-    return [
-        line.split(" [INFO] ", 1)[1] for line in out.splitlines() if " [INFO] " in line
     ]
 
 

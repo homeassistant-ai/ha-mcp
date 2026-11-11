@@ -20,9 +20,7 @@ def app(variant: Variant, fs_root: Path, monkeypatch: pytest.MonkeyPatch) -> App
     return make_app(variant, fs_root, monkeypatch)
 
 
-def test_unreadable_options_refuse_to_start(
-    app: App, variant: Variant, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_unreadable_options_refuse_to_start(app: App, variant: Variant) -> None:
     """With the options unreadable the app cannot tell whether OAuth is on;
     falling back to the defaults would serve the webhook unauthenticated."""
     app.path("/data/options.json").write_text("{ this is not valid json ")
@@ -30,14 +28,12 @@ def test_unreadable_options_refuse_to_start(
     assert app.start.main() == 1
 
     assert not app.path(variant.config_file).exists()
-    err = capsys.readouterr().err
+    err = app.err()
     assert "refusing to start" in err
     assert "Could not read the add-on configuration" in err
 
 
-def test_too_short_client_id_refuses_to_start(
-    app: App, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_too_short_client_id_refuses_to_start(app: App) -> None:
     app.set_options(
         mcp_server_url="http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
         enable_oauth=True,
@@ -47,7 +43,7 @@ def test_too_short_client_id_refuses_to_start(
 
     assert app.start.main() == 1
 
-    assert "OAuth Client ID is too short" in capsys.readouterr().err
+    assert "OAuth Client ID is too short" in app.err()
 
 
 async def test_stuck_regenerate_toggle_refuses_and_tells_the_user(

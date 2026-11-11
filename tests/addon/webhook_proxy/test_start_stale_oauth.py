@@ -119,7 +119,6 @@ async def test_webhook_comes_back_once_core_runs_the_new_code(
     core: CoreLink,
     upstream: Upstream,
     variant: Variant,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """After the restart the webhook is set up again, and the "restart
     required" notification and marker do not outlive the problem."""
@@ -141,4 +140,4 @@ async def test_webhook_comes_back_once_core_runs_the_new_code(
     assert running == [["loaded"]]
     assert f"{variant.domain}_oauth_stale" not in await notifications(hass_ws_client)
     assert not app.path(variant.oauth_marker).exists()
-    assert "webhook re-enabled" in capsys.readouterr().out
+    assert "webhook re-enabled" in app.out()

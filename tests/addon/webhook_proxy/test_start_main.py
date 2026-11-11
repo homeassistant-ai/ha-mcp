@@ -135,7 +135,6 @@ async def test_ha_auth_start_needs_no_app_credentials(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A first OAuth enable signs in with the Home Assistant login: no client
     credentials are generated or handed over, and the log says to leave the
@@ -147,7 +146,7 @@ async def test_ha_auth_start_needs_no_app_credentials(
 
     assert app.proxy_config()["oauth"] == {"mode": "ha_auth"}
     assert not app.path("/data/oauth_creds.json").exists()
-    out = capsys.readouterr().out
+    out = app.out()
     assert "Home Assistant login" in out
     assert "BLANK" in out
     # Users act on these exact lines.
@@ -160,7 +159,6 @@ async def test_legacy_start_hands_over_and_prints_the_credentials(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app.set_options(
         mcp_server_url=upstream.target_url(),
@@ -178,7 +176,7 @@ async def test_legacy_start_hands_over_and_prints_the_credentials(
         "client_secret": "secret-much-secret",
     }
     # The lines the user copies into the connector.
-    out = capsys.readouterr().out
+    out = app.out()
     assert "OAuth Client ID:     client-1234567890ABCDEF" in out
     assert "OAuth Client Secret: secret-much-secret" in out
 
@@ -188,7 +186,6 @@ async def test_ha_auth_ignores_the_external_url_and_says_so(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """ha_auth discovery is derived from the request's host, so a configured
     External URL is not pinned into the config."""
@@ -204,7 +201,7 @@ async def test_ha_auth_ignores_the_external_url_and_says_so(
     config = app.proxy_config()
     assert config["oauth"] == {"mode": "ha_auth"}
     assert "public_base_url" not in config
-    assert "External URL is ignored in ha_auth mode" in capsys.readouterr().out
+    assert "External URL is ignored in ha_auth mode" in app.out()
 
 
 async def test_updated_component_raises_the_restart_repair(

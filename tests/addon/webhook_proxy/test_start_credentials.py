@@ -150,7 +150,6 @@ async def test_unreadable_stored_credentials_are_replaced_with_a_warning(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app.path("/data/oauth_creds.json").write_text("not valid json{{{")
 
@@ -158,7 +157,7 @@ async def test_unreadable_stored_credentials_are_replaced_with_a_warning(
 
     assert len(client_id) >= 16
     assert len(secret) >= 43
-    assert "Could not read existing OAuth creds" in capsys.readouterr().err
+    assert "Could not read existing OAuth creds" in app.err()
 
 
 async def test_stored_credentials_file_is_private(
@@ -174,7 +173,6 @@ async def test_credentials_persist_with_a_warning_where_0600_is_unavailable(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """tmpfs or a non-POSIX filesystem cannot honour a restricted create; the
     credentials are still kept, and the wider permissions are reported."""
@@ -183,8 +181,7 @@ async def test_credentials_persist_with_a_warning_where_0600_is_unavailable(
 
     assert await _legacy_start(hass, app, upstream) == creds
     assert (
-        "Could not create the OAuth creds file with restricted permissions"
-        in capsys.readouterr().err
+        "Could not create the OAuth creds file with restricted permissions" in app.err()
     )
 
 
@@ -206,7 +203,6 @@ async def test_regenerate_without_stored_credentials_is_harmless(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Nothing to wipe is no error: the app starts with fresh credentials."""
     client_id, secret = await _legacy_start(
@@ -215,7 +211,7 @@ async def test_regenerate_without_stored_credentials_is_harmless(
 
     stored = json.loads(app.path("/data/oauth_creds.json").read_text())
     assert stored == {"client_id": client_id, "client_secret": secret}
-    assert "Failed to wipe" not in capsys.readouterr().err
+    assert "Failed to wipe" not in app.err()
 
 
 async def test_regenerate_toggle_is_switched_off_keeping_other_options(
@@ -284,7 +280,6 @@ async def test_proxy_config_is_written_with_a_warning_where_0600_is_unavailable(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     with no_restricted_create_under(app.path("/config")):
         webhook_id = await _plain_start(hass, app, upstream)
@@ -293,7 +288,7 @@ async def test_proxy_config_is_written_with_a_warning_where_0600_is_unavailable(
         "target_url": upstream.target_url(),
         "webhook_id": webhook_id,
     }
-    assert "Could not create the proxy config file" in capsys.readouterr().err
+    assert "Could not create the proxy config file" in app.err()
 
 
 def _oauth(component: ModuleType) -> ModuleType:

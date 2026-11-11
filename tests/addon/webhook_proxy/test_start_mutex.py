@@ -80,7 +80,6 @@ async def test_starts_loudly_when_the_supervisor_cannot_say(
     app: App,
     core: CoreLink,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The check retries a few times, spaced out, then starts anyway (the
     integration's route-owner guard is the backstop) but says so in the log."""
@@ -93,7 +92,7 @@ async def test_starts_loudly_when_the_supervisor_cannot_say(
 
     assert app.supervisor.gets == ["/addons"] * 3
     assert len(waits) == 2
-    assert "Could not query the Supervisor /addons list" in capsys.readouterr().err
+    assert "Could not query the Supervisor /addons list" in app.err()
     assert await notifications(hass_ws_client) == {}
 
 

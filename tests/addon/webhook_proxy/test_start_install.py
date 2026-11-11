@@ -46,7 +46,6 @@ async def _start(
     hass: HomeAssistant,
     app: App,
     upstream: Upstream,
-    capsys: pytest.CaptureFixture[str],
 ) -> bool:
     """Start the app; whether it told the user the component was updated.
 
@@ -56,7 +55,7 @@ async def _start(
     """
     app.set_options(mcp_server_url=upstream.target_url())
     assert await run_main(hass, app) == 0
-    return "INTEGRATION UPDATED" in capsys.readouterr().out
+    return "INTEGRATION UPDATED" in app.out()
 
 
 def _manifest(component_dir: Path) -> Any:
@@ -65,14 +64,13 @@ def _manifest(component_dir: Path) -> Any:
 
 async def test_first_install_copies_the_component_and_awaits_a_restart(
     hass: HomeAssistant,
-    capsys: pytest.CaptureFixture[str],
     app: App,
     core: CoreLink,
     upstream: Upstream,
     variant: Variant,
 ) -> None:
     """Core loads a new custom integration only at boot."""
-    updated = await _start(hass, app, upstream, capsys)
+    updated = await _start(hass, app, upstream)
 
     assert _manifest(app.deployed_component) == _manifest(variant.component_dir)
     assert app.restarts_awaited == 1
@@ -81,7 +79,6 @@ async def test_first_install_copies_the_component_and_awaits_a_restart(
 
 async def test_same_version_is_left_alone(
     hass: HomeAssistant,
-    capsys: pytest.CaptureFixture[str],
     app: App,
     core: CoreLink,
     upstream: Upstream,
@@ -90,7 +87,7 @@ async def test_same_version_is_left_alone(
     untouched = app.deployed_component / "left_in_place.txt"
     untouched.write_text("")
 
-    updated = await _start(hass, app, upstream, capsys)
+    updated = await _start(hass, app, upstream)
 
     assert untouched.exists()
     assert updated is False
@@ -99,7 +96,6 @@ async def test_same_version_is_left_alone(
 
 async def test_corrupt_deployed_manifest_is_repaired_without_a_restart_prompt(
     hass: HomeAssistant,
-    capsys: pytest.CaptureFixture[str],
     app: App,
     core: CoreLink,
     upstream: Upstream,
@@ -110,7 +106,7 @@ async def test_corrupt_deployed_manifest_is_repaired_without_a_restart_prompt(
     app.deploy_component()
     (app.deployed_component / "manifest.json").write_text("not json{{{")
 
-    updated = await _start(hass, app, upstream, capsys)
+    updated = await _start(hass, app, upstream)
 
     assert _manifest(app.deployed_component) == _manifest(variant.component_dir)
     assert updated is False
