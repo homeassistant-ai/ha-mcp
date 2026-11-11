@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ._js_harness import extract_script_body, run_script
+from ._js_harness import run_script
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 _EDITOR = (
@@ -15,12 +15,12 @@ _EDITOR = (
 
 
 @pytest.mark.parametrize("status", [502, 200])
-def test_save_names_the_status_of_a_proxy_error_page(status: int) -> None:
+def test_save_names_the_status_of_a_proxy_error_page(
+    status: int, settings_script: str
+) -> None:
     """A proxy replaces the body of a 502, so there is no JSON to parse."""
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
     result = run_script(
-        extract_script_body(_SETTINGS_HTML),
+        settings_script,
         initial_html=MIN_DOM + _EDITOR,
         fetch_map={
             **DEFAULT_FETCHES,

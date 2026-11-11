@@ -27,11 +27,11 @@ from ha_mcp.settings_ui import (
     _get_config_path,
     _get_tool_metadata,
     _ingress_only,
-    _render_settings_html,
     apply_tool_visibility,
     get_http_settings_prefix,
     load_tool_config,
     register_settings_routes,
+    render_settings_html,
     save_tool_config,
 )
 
@@ -737,7 +737,7 @@ class TestSettingsJsExtraction:
         for token in render_tokens:
             template_without_tokens = template_without_tokens.replace(token, "")
         assert "__HA_MCP_" not in template_without_tokens
-        assert "__HA_MCP_" not in _render_settings_html()
+        assert "__HA_MCP_" not in render_settings_html()
 
     def test_injected_constant_lists_have_expected_values(self) -> None:
         """Each sentinel must be replaced with the *correct* value, not just

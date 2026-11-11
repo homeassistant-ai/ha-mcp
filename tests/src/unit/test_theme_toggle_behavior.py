@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from ._js_harness import run_script
+from ._js_harness import extract_script_body, run_script
 
 
 def _extract_theme_toggle_body() -> str:
@@ -371,7 +371,9 @@ def test_font_size_clamp_parity(
         / "Layout.astro"
     )
     layout_source = layout_path.read_text(encoding="utf-8")
-    from ha_mcp.settings_ui import _settings_js_template as settings_source
+    from ha_mcp.settings_ui import render_settings_html
+
+    settings_source = extract_script_body(render_settings_html())
 
     # Extract anti-FOUC body from Layout.astro.
     anti_fouc_match = re.search(

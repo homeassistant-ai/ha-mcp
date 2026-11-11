@@ -51,7 +51,8 @@ def ensure_rich_handler_compat() -> bool:
     Returns ``True`` when a shim is in place (freshly applied or already
     applied), ``False`` when none is needed or none could be applied — an
     unimportable ``rich``, an uninspectable ``__init__``, or a signature that
-    already absorbs ``**kwargs``.
+    already absorbs ``**kwargs``. Importing ``ha_mcp`` applies it once; a
+    public module so tests can re-apply it to a stand-in ``RichHandler``.
     """
     try:
         from rich.logging import RichHandler

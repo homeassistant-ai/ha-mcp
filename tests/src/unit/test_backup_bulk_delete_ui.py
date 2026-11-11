@@ -12,9 +12,9 @@ from .test_settings_ui_js_behavior import DEFAULT_FETCHES
 def _delete_backups(
     reply: dict, *, locale: str = "en", messages=None, response=None
 ) -> HarnessResult:
-    from ha_mcp.settings_ui import _render_settings_html
+    from ha_mcp.settings_ui import render_settings_html
 
-    page = _render_settings_html(
+    page = render_settings_html(
         Request(
             {
                 "type": "http",
@@ -156,10 +156,10 @@ def test_bulk_delete_response_failure_shows_toast_and_refreshes_inventory(respon
 
 @pytest.mark.parametrize("translated", [False, True])
 def test_single_delete_in_use_renders_retry_guidance(translated):
-    from ha_mcp.settings_ui import _render_settings_html
+    from ha_mcp.settings_ui import render_settings_html
 
     name = "automation.example.20260909_000000.yaml"
-    page = _render_settings_html(
+    page = render_settings_html(
         Request({"type": "http", "query_string": b"", "headers": []})
     )
     messages = {"backup.delete.in_use": "busy; retry when idle"} if translated else {}

@@ -25,7 +25,7 @@ if sys.version_info < (3, 14):
 # Must be imported before anything that reaches fastmcp (``.auth`` below does),
 # because fastmcp configures rich logging at import time and dies on a rich
 # older than 13.9.4. Importing this module applies the shim. See #2186.
-from . import _rich_compat as _rich_compat
+from . import rich_compat as rich_compat
 from ._version import get_version
 
 __version__ = get_version()
