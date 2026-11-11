@@ -25,11 +25,16 @@ from ._legacy_oauth import (
     oauth_routes_added,
     obtain_tokens,
     post_webhook,
-    record_sessions,
     reload_with,
     set_up_legacy,
 )
-from ._proxy import Upstream, set_up_proxy, state_path, write_proxy_config
+from ._proxy import (
+    Upstream,
+    record_client_sessions,
+    set_up_proxy,
+    state_path,
+    write_proxy_config,
+)
 from ._variants import VARIANTS, Variant
 
 ROTATED_WEBHOOK_ID = "mcp_webhook_id_bbbb"
@@ -107,7 +112,7 @@ async def test_unloadable_signing_key_refuses_to_start_without_the_webhook(
 ) -> None:
     """The user asked for OAuth; when it cannot be enforced the entry fails
     instead of leaving the webhook open without it, and closes its session."""
-    sessions = record_sessions(monkeypatch)
+    sessions = record_client_sessions(monkeypatch)
     component.oauth.SECRET_FILE.mkdir(parents=True)
 
     entry = await set_up_legacy(hass, variant, fs_root)
@@ -135,7 +140,7 @@ async def test_sibling_flavor_owning_the_root_routes_is_refused_loudly(
     hass.data[component.OAUTH_ROUTE_OWNER_KEY] = sibling
     assert await async_setup_component(hass, "webhook", {})
     before = bound_routes(hass)
-    sessions = record_sessions(monkeypatch)
+    sessions = record_client_sessions(monkeypatch)
 
     entry = await set_up_legacy(hass, variant, fs_root)
 
@@ -171,7 +176,7 @@ async def test_sibling_claiming_the_routes_during_key_load_is_refused(
     )
     assert await async_setup_component(hass, "webhook", {})
     before = bound_routes(hass)
-    sessions = record_sessions(monkeypatch)
+    sessions = record_client_sessions(monkeypatch)
 
     entry = await set_up_legacy(hass, variant, fs_root)
 

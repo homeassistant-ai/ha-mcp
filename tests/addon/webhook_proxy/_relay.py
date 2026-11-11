@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
-import aiohttp
 from aiohttp import web
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
@@ -44,25 +40,6 @@ async def start_proxy(
     """Write ``config`` as the app would and let Core set the entry up."""
     write_proxy_config(fs_root, variant, config)
     return await set_up_proxy(hass, variant)
-
-
-@contextmanager
-def client_sessions_opened() -> Iterator[list[aiohttp.ClientSession]]:
-    """Every aiohttp session opened inside the block, still fully real.
-
-    The relay session is created inside the component and never handed out,
-    so this is the one way to see whether a failed setup closed it.
-    """
-    real_session = aiohttp.ClientSession
-    opened: list[aiohttp.ClientSession] = []
-
-    def open_session(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
-        session = real_session(*args, **kwargs)
-        opened.append(session)
-        return session
-
-    with patch.object(aiohttp, "ClientSession", side_effect=open_session):
-        yield opened
 
 
 def restart_issue(

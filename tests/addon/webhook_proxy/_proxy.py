@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any
 
+import aiohttp
+import pytest
 from aiohttp import web
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
@@ -71,3 +73,24 @@ class Upstream:
     def target_url(self, secret: str = "private_zctpwlX7ZkIAr7oqdfLPxw") -> str:
         """A target URL whose secret path passes the component's validation."""
         return f"{self.base_url}/{secret}"
+
+
+def record_client_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[aiohttp.ClientSession]:
+    """Every ``aiohttp.ClientSession`` the component opens from here on.
+
+    The sessions stay fully real. The component creates its relay session
+    internally and never hands it out, so this is the one way a test can see
+    whether a failed setup or an unload closed it.
+    """
+    created: list[aiohttp.ClientSession] = []
+    real = aiohttp.ClientSession
+
+    def opened(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
+        session = real(*args, **kwargs)
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(aiohttp, "ClientSession", opened)
+    return created

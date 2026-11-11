@@ -11,11 +11,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import ClientSessionGenerator
 
-from ._proxy import Upstream, proxy_config_path, set_up_proxy
+from ._proxy import Upstream, proxy_config_path, record_client_sessions, set_up_proxy
 from ._relay import (
     WEBHOOK_ID,
     WEBHOOK_PATH,
-    client_sessions_opened,
     existing_webhook_handler,
     relay_config,
     start_proxy,
@@ -85,12 +84,13 @@ async def test_truncated_secret_path_registers_no_webhook(
     variant: Variant,
     fs_root: Path,
     upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A truncated secret (the failure seen in the wild) leaves no webhook
     relaying to it and no session open."""
     config = relay_config(upstream, target_url=upstream.target_url("private_ZZZZZZZ"))
-    with client_sessions_opened() as sessions:
-        entry = await start_proxy(hass, variant, fs_root, config)
+    sessions = record_client_sessions(monkeypatch)
+    entry = await start_proxy(hass, variant, fs_root, config)
     client = await hass_client_no_auth()
 
     await client.post(WEBHOOK_PATH, data=b"{}")
@@ -142,15 +142,19 @@ async def test_config_missing_a_required_value_fails_setup(
 
 
 async def test_webhook_id_already_taken_fails_setup_and_closes_session(
-    hass: HomeAssistant, variant: Variant, fs_root: Path, upstream: Upstream
+    hass: HomeAssistant,
+    variant: Variant,
+    fs_root: Path,
+    upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When Core refuses the webhook (its id is already registered), setup
     fails with the reason and does not leak the relay session."""
     assert await async_setup_component(hass, webhook.DOMAIN, {})
     webhook.async_register(hass, "other", "Other", WEBHOOK_ID, existing_webhook_handler)
 
-    with client_sessions_opened() as sessions:
-        entry = await start_proxy(hass, variant, fs_root, relay_config(upstream))
+    sessions = record_client_sessions(monkeypatch)
+    entry = await start_proxy(hass, variant, fs_root, relay_config(upstream))
 
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert entry.reason is not None
@@ -237,11 +241,12 @@ async def test_unload_stops_relaying_and_closes_the_session(
     variant: Variant,
     fs_root: Path,
     upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After the app stops, its webhook and read-only alias forward nothing
     and the relay session is released."""
-    with client_sessions_opened() as sessions:
-        entry = await start_proxy(hass, variant, fs_root, relay_config(upstream))
+    sessions = record_client_sessions(monkeypatch)
+    entry = await start_proxy(hass, variant, fs_root, relay_config(upstream))
     client = await hass_client_no_auth()
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -255,26 +260,34 @@ async def test_unload_stops_relaying_and_closes_the_session(
 
 
 async def test_relay_session_has_no_wall_clock_bound(
-    hass: HomeAssistant, variant: Variant, fs_root: Path, upstream: Upstream
+    hass: HomeAssistant,
+    variant: Variant,
+    fs_root: Path,
+    upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An MCP response stream may stay open indefinitely (the spec's
     ``subscriptions/listen``); a total time bound would cut a healthy stream
     and force the client to re-subscribe."""
-    with client_sessions_opened() as sessions:
-        await start_proxy(hass, variant, fs_root, relay_config(upstream))
+    sessions = record_client_sessions(monkeypatch)
+    await start_proxy(hass, variant, fs_root, relay_config(upstream))
 
     (relay,) = sessions
     assert relay.timeout.total is None
 
 
 async def test_relay_session_still_bounds_dead_streams_and_connects(
-    hass: HomeAssistant, variant: Variant, fs_root: Path, upstream: Upstream
+    hass: HomeAssistant,
+    variant: Variant,
+    fs_root: Path,
+    upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without a total bound, an idle-read bound is what ends a dead stream,
     and a pool-acquisition bound is what stops a pool exhausted by long-lived
     streams from hanging every new request."""
-    with client_sessions_opened() as sessions:
-        await start_proxy(hass, variant, fs_root, relay_config(upstream))
+    sessions = record_client_sessions(monkeypatch)
+    await start_proxy(hass, variant, fs_root, relay_config(upstream))
 
     (relay,) = sessions
     assert relay.timeout.sock_read is not None

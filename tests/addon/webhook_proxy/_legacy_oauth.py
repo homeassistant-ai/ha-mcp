@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import aiohttp
-import pytest
 from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient
 from homeassistant.core import CoreState, HomeAssistant
@@ -110,20 +108,6 @@ def oauth_routes_added(hass: HomeAssistant, before: set[str]) -> set[str]:
         for route in bound_routes(hass) - before
         if not route.startswith(f"{WEBHOOK_ROUTE}/")
     }
-
-
-def record_sessions(monkeypatch: pytest.MonkeyPatch) -> list[aiohttp.ClientSession]:
-    """Record every ``aiohttp.ClientSession`` the component opens."""
-    created: list[aiohttp.ClientSession] = []
-    real = aiohttp.ClientSession
-
-    def opened(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
-        session = real(*args, **kwargs)
-        created.append(session)
-        return session
-
-    monkeypatch.setattr(aiohttp, "ClientSession", opened)
-    return created
 
 
 def b64url(raw: bytes) -> str:
