@@ -286,14 +286,17 @@ def _raise_global_context_not_found(
     component_checked: bool = False,
 ) -> NoReturn:
     """Raise the structured not-found for an unresolvable global context id."""
-    suggestions = [
-        (
-            "The ha_mcp_tools component found no match in its trace store"
-            if component_checked
-            else "Install the ha_mcp_tools component to resolve triggering (parent) contexts"
-        ),
-        "Pass the trace's own `context.id` to resolve a run without the component",
-    ]
+    if component_checked:
+        suggestions = [
+            "The ha_mcp_tools component checked the run's own and triggering "
+            "(parent) contexts in its trace store and found no match",
+            "Verify the context id is the one you copied from the run",
+        ]
+    else:
+        suggestions = [
+            "Install the ha_mcp_tools component to resolve triggering (parent) contexts",
+            "Pass the trace's own `context.id` to resolve a run without the component",
+        ]
     if domain is not None:
         suggestions.append("Omit domain to resolve the context across both domains")
     suggestions.append("Use ha_get_automation_traces(domain=...) to list recent runs")
@@ -316,16 +319,19 @@ def _raise_context_not_found(
     component_checked: bool = False,
 ) -> NoReturn:
     """Raise the structured not-found for an unresolvable context id."""
-    suggestions = [
-        (
-            "The ha_mcp_tools component found no match in its trace store under "
-            "those selectors"
-            if component_checked
-            else "Install the ha_mcp_tools component to resolve triggering (parent) contexts"
-        ),
-        "Pass the trace's own `context.id` to resolve a run without the component",
-        "Use ha_get_automation_traces(entity_id=...) without context_id to list recent traces",
-    ]
+    if component_checked:
+        suggestions = [
+            "The ha_mcp_tools component checked the run's own and triggering "
+            "(parent) contexts under those selectors and found no match",
+            "Verify the context id is the one you copied from the run",
+            "Use ha_get_automation_traces(entity_id=...) without context_id to list recent traces",
+        ]
+    else:
+        suggestions = [
+            "Install the ha_mcp_tools component to resolve triggering (parent) contexts",
+            "Pass the trace's own `context.id` to resolve a run without the component",
+            "Use ha_get_automation_traces(entity_id=...) without context_id to list recent traces",
+        ]
     raise_tool_error(
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,

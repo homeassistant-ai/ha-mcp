@@ -39,7 +39,7 @@ class TestComponentContextLookup:
         hass: HomeAssistant,
         component_core_client: HomeAssistantClient,
     ) -> None:
-        """A parent context resolves from the live store, newest match first."""
+        """A parent context resolves from the live store, earliest match first."""
         # The stores run under a frozen clock so Core's own start timestamps
         # order the two runs; the tool call runs on real time because the
         # server's WebSocket client needs a live clock for its handshake.
@@ -63,19 +63,19 @@ class TestComponentContextLookup:
         assert result["context_id"] == "parent-1"
         assert result["context_scanned"] == 2
         assert (result["domain"], result["item_id"], result["run_id"]) == (
-            "script",
-            "uid_2",
-            "script-run",
+            "automation",
+            "uid_1",
+            "auto-run",
         )
         assert result["context_other_matches"] == [
             {
-                "domain": "automation",
-                "item_id": "uid_1",
-                "run_id": "auto-run",
+                "domain": "script",
+                "item_id": "uid_2",
+                "run_id": "script-run",
                 "match": "parent",
             }
         ]
-        assert result["trace"]["sequence/0"][0]["path"] == "sequence/0"
+        assert result["trace"]["action/0"][0]["path"] == "action/0"
         assert "entity_id" not in result
 
     async def test_component_own_context_returns_a_trace_match(

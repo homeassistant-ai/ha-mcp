@@ -223,6 +223,27 @@ class TestFormatTraceList:
         ]
 
 
+class TestTraceToolOptions:
+    """Tool-level option handling that does not change Core's answers."""
+
+    @pytest.mark.parametrize("sections", ["", "   "])
+    async def test_an_empty_sections_string_lists_normally(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        sections: str,
+    ) -> None:
+        """A blank sections string is omitted, not a detail-only option."""
+        await _store(hass, _run("r1"))
+
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            domain="automation", sections=sections
+        )
+
+        assert result["success"] is True
+        assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
+
+
 class TestResolveTraceItemId:
     """``_resolve_trace_item_id`` reads Core's entity registry."""
 

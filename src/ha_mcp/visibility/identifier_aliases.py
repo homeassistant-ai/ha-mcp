@@ -47,13 +47,6 @@ PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
 _SERVICE_TOOL = "ha_call_service"
 _TRACE_TOOL = "ha_get_automation_traces"
 
-TRACE_KEY_FAIL_CLOSED_REASON = (
-    "The entity visibility filter cannot identify the owner of this trace "
-    "because a restricted automation or script has no entity registry key, so "
-    "enforce mode fails closed. Give a restricted YAML automation an id, or "
-    "remove a restricted entry that no longer exists, then retry."
-)
-
 _ALIASED_DOMAINS = frozenset(domain for _arg, domain in BARE_IDENTIFIER_ARGS.values())
 # The automation tools read a bare ``entity_id`` only as a config ``id``, so an
 # automation's object ID would only ever match a visible automation.
@@ -71,16 +64,11 @@ class IdentifierAliases:
     registry ``unique_id``) match exactly, like the tools' registry lookup, so a
     visible ``door`` is not concealed by a hidden ``Door``. ``script_services``
     are the casefolded service names (storage keys) of hidden scripts.
-    ``unkeyed_trace_domains`` names trace domains holding a hidden item whose
-    registry key is unavailable (absent from the snapshot, empty, or a keyless
-    YAML definition); their trace results fail closed until the registry
-    supplies a key.
     """
 
     object_ids: Mapping[str, frozenset[str]] = field(default_factory=dict)
     storage_keys: Mapping[str, frozenset[str]] = field(default_factory=dict)
     script_services: frozenset[str] = frozenset()
-    unkeyed_trace_domains: frozenset[str] = frozenset()
 
     def embedded_terms(self) -> frozenset[str]:
         """Strings that run a hidden script without naming its entity_id."""
@@ -94,27 +82,13 @@ class IdentifierAliases:
         return folded in self.object_ids.get(domain, frozenset())
 
     def addresses_hidden_trace_item(self, domain: str, value: str) -> bool:
-        """Whether a trace's ``item_id`` may belong to a hidden entity.
+        """Whether a trace's ``item_id`` is the registry key of a hidden entity.
 
         Traces are keyed by the registry ``unique_id``; an object ID is not a
         trace key, so a visible script whose storage key matches a hidden
-        script's object ID must not be concealed. When a hidden item in this
-        trace domain has no cached key, no ``item_id`` can be cleared: the
-        result may be that item's trace, so the domain fails closed.
+        script's object ID must not be concealed.
         """
-        key = value.strip()
-        if key in self.storage_keys.get(domain, frozenset()):
-            return True
-        return domain in self.unkeyed_trace_domains
-
-    def refuses_unkeyed_trace_query(
-        self, tool_name: str, args: Mapping[str, Any]
-    ) -> bool:
-        """Whether a trace result cannot be cleared because its domain lacks keys."""
-        if not self.unkeyed_trace_domains or not is_trace_query(tool_name, args):
-            return False
-        domain = _trace_query_domain(tool_name, args)
-        return domain is None or domain in self.unkeyed_trace_domains
+        return value.strip() in self.storage_keys.get(domain, frozenset())
 
 
 def build_identifier_aliases(
@@ -124,7 +98,6 @@ def build_identifier_aliases(
     object_ids: dict[str, set[str]] = {}
     storage_keys: dict[str, set[str]] = {}
     hidden_scripts: dict[str, str] = {}
-    keyed_ids: set[str] = set()
     for hidden_id in hidden:
         domain, _, object_id = hidden_id.partition(".")
         if domain in _ALIASED_DOMAINS and object_id:
@@ -149,7 +122,6 @@ def build_identifier_aliases(
             continue
         domain = entity_id.partition(".")[0]
         if domain in _ALIASED_DOMAINS:
-            keyed_ids.add(entity_id)
             storage_keys.setdefault(domain, set()).add(unique_id)
             if domain == "script":
                 hidden_scripts[entity_id] = unique_id
@@ -157,13 +129,6 @@ def build_identifier_aliases(
         object_ids={d: frozenset(v) for d, v in object_ids.items()},
         storage_keys={d: frozenset(v) for d, v in storage_keys.items()},
         script_services=frozenset(key.casefold() for key in hidden_scripts.values()),
-        unkeyed_trace_domains=frozenset(
-            domain
-            for hidden_id in hidden
-            if hidden_id not in keyed_ids
-            for domain, _, object_id in [hidden_id.partition(".")]
-            if domain in _TRACE_DOMAINS and object_id
-        ),
     )
 
 
@@ -176,24 +141,6 @@ def is_trace_query(tool_name: str, args: Mapping[str, Any]) -> bool:
     if tool_name == _TRACE_TOOL:
         return True
     return tool_name == _SERVICE_TOOL and _is_trace_command(args.get("ws_command"))
-
-
-def _trace_query_domain(tool_name: str, args: Mapping[str, Any]) -> str | None:
-    """The trace domain a call targets, or ``None`` when it is not scoped to one."""
-    if tool_name == _TRACE_TOOL:
-        domain = args.get("domain")
-        if isinstance(domain, str):
-            return domain.strip().casefold()
-        entity_id = args.get("entity_id")
-        if isinstance(entity_id, str):
-            prefix = entity_id.strip().partition(".")[0].casefold()
-            return prefix if prefix in _TRACE_DOMAINS else None
-        return None
-    if tool_name != _SERVICE_TOOL or not _is_trace_command(args.get("ws_command")):
-        return None
-    record = _json_mapping(args.get("data"))
-    domain = record.get("domain") if record is not None else None
-    return domain.strip().casefold() if isinstance(domain, str) else None
 
 
 def hidden_identifier_argument(

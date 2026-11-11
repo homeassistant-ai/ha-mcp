@@ -17,7 +17,6 @@ from homeassistant.helpers.trace import TraceElement
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import WebSocketGenerator
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_traces import _format_detailed_trace
 from ha_mcp.tools.trace_logbook import TraceLogbook
 
@@ -99,22 +98,46 @@ class TestFormatDetailedTrace:
             "config",
         }
 
-    async def test_unknown_section_is_rejected(self, trace: dict[str, Any]) -> None:
-        with pytest.raises(ToolError, match="Unknown trace section"):
-            _format_detailed_trace(
-                "automation.test", trace["run_id"], trace, sections="action"
-            )
+    async def test_a_section_the_run_lacks_is_a_warning(
+        self, trace: dict[str, Any]
+    ) -> None:
+        """A requested name this run does not have is reported, not rejected."""
+        result = _format_detailed_trace(
+            "automation.test", trace["run_id"], trace, sections="unique_id"
+        )
 
-    async def test_metadata_sections_are_rejected(self, trace: dict[str, Any]) -> None:
-        """success and unique_id are not valid section requests."""
-        with pytest.raises(ToolError, match="Unknown trace section"):
-            _format_detailed_trace(
-                "automation.test", trace["run_id"], trace, sections="success"
-            )
-        with pytest.raises(ToolError, match="Unknown trace section"):
-            _format_detailed_trace(
-                "automation.test", trace["run_id"], trace, sections="unique_id"
-            )
+        assert "unique_id" not in result
+        assert len(result["warnings"]) == 1
+        warning = result["warnings"][0]
+        assert "unique_id" in warning
+        for key in ("trace", "config", "context"):
+            assert key in warning
+
+    async def test_a_present_metadata_key_is_not_a_warning(
+        self, trace: dict[str, Any]
+    ) -> None:
+        """Core and tool keys the run carries satisfy their own section request."""
+        result = _format_detailed_trace(
+            "automation.test", trace["run_id"], trace, sections="success,run_id"
+        )
+
+        assert result["success"] is True
+        assert result["run_id"] == trace["run_id"]
+        assert "warnings" not in result
+
+    async def test_a_conditional_core_key_the_run_lacks_is_a_warning(
+        self, trace: dict[str, Any]
+    ) -> None:
+        """Core adds ``error`` only to a failed run; a successful run warns."""
+        assert "error" not in trace
+
+        result = _format_detailed_trace(
+            "automation.test", trace["run_id"], trace, sections="trace,error"
+        )
+
+        assert result["trace"] is trace["trace"]
+        assert "error" not in result
+        assert "error" in result["warnings"][0]
 
     async def test_logbook_section_adds_logbook_fields(
         self, trace: dict[str, Any]
@@ -140,16 +163,18 @@ class TestFormatDetailedTrace:
         assert result["logbook_total"] == 1
         assert result["logbook_truncated"] is False
 
+    @pytest.mark.parametrize("sections", ["", "   "])
     async def test_whitespace_sections_returns_the_full_dict(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], sections: str
     ) -> None:
         result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections="   "
+            "automation.test", trace["run_id"], trace, sections=sections
         )
 
         assert result["trace"] is trace["trace"]
         assert result["config"] == trace["config"]
         assert result["blueprint_inputs"] == trace["blueprint_inputs"]
+        assert "warnings" not in result
 
     async def test_sections_keep_domain_and_item_metadata(
         self, trace: dict[str, Any]

@@ -131,13 +131,13 @@ async def test_real_run_beats_a_newer_not_triggered_diagnostic(
     result = await ws_result(component_ws, _COMMAND, context_id="parent-1")
 
     assert result["match"] == "parent"
-    assert result["run_id"] == "newer"
+    assert result["run_id"] == "older"
     assert result["scanned"] == 3
     assert result["other_matches"] == [
         {
             "domain": "automation",
             "item_id": "uid_1",
-            "run_id": "older",
+            "run_id": "newer",
             "match": "parent",
         },
         {
@@ -254,10 +254,10 @@ async def test_saved_traces_are_restored_before_the_match(
 
 
 @pytest.mark.usefixtures("trace_store")
-async def test_the_newest_run_wins_and_the_rest_are_listed(
+async def test_the_own_context_wins_and_the_rest_are_listed(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """Selection is by start: an older own context loses to a newer parent run."""
+    """The run that owns the context wins; a newer parent run does not displace it."""
     shared = "shared-context"
     with freeze_time(_FROZEN_START) as clock:
         own = automation_run("own-match", item_id="uid_a", context_id=shared)
@@ -279,24 +279,24 @@ async def test_the_newest_run_wins_and_the_rest_are_listed(
 
     result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
-    assert result["match"] == "parent"
+    assert result["match"] == "trace"
     assert (result["domain"], result["item_id"], result["run_id"]) == (
-        "script",
-        "uid_c",
-        "newest-script",
+        "automation",
+        "uid_a",
+        "own-match",
     )
     assert result["scanned"] == 3
     assert result["other_matches"] == [
         {
             "domain": "automation",
-            "item_id": "uid_a",
-            "run_id": "own-match",
-            "match": "trace",
-        },
-        {
-            "domain": "automation",
             "item_id": "uid_b",
             "run_id": "older-parent",
+            "match": "parent",
+        },
+        {
+            "domain": "script",
+            "item_id": "uid_c",
+            "run_id": "newest-script",
             "match": "parent",
         },
     ]

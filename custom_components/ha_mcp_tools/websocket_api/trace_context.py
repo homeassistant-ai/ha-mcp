@@ -3,8 +3,11 @@
 The trace store is a Core object held in ``hass.data``. Reading it in process
 matches a run's own context or a triggering parent context across every stored
 automation and script in one pass, instead of one public ``trace/get`` per
-stored run. The returned ``trace`` is Core's ``as_extended_dict()`` used by the
-frontend's trace view and Download action.
+stored run. A run that owns the context is the run the caller asked about, so
+it is selected before any run the context merely triggered; within that rank a
+real run beats a not-triggered diagnostic, and the earliest start wins. The
+returned ``trace`` is Core's ``as_extended_dict()`` used by the frontend's trace
+view and Download action.
 """
 
 from __future__ import annotations
@@ -65,14 +68,19 @@ def _trace_start(trace: Any) -> str:
     return "" if start is None else str(start)
 
 
-def _tie_break_key(
+def _selection_key(
     candidate: tuple[Any, str, str, str],
-) -> tuple[int, int, str]:
-    """Tie-break within the newest-start group: own before parent, auto before script."""
-    _trace, domain, item_id, match = candidate
-    match_order = 0 if match == "trace" else 1
+) -> tuple[int, int, str, int, str]:
+    """Rank one candidate: own context, real run, earliest start, then ties.
+
+    ``timestamp.start`` is an ISO string, so its natural order is chronological.
+    Remaining ties break toward automations, then ascending ``item_id``.
+    """
+    trace, domain, item_id, match = candidate
+    own_order = 0 if match == "trace" else 1
+    real_order = 0 if _trace_is_real(trace) else 1
     domain_order = 0 if domain == "automation" else 1
-    return (match_order, domain_order, item_id)
+    return (own_order, real_order, _trace_start(trace), domain_order, item_id)
 
 
 def _trace_is_real(trace: Any) -> bool:
@@ -90,10 +98,11 @@ def _trace_context_payload(
 
     One context id can match several runs (for example, an automation and the
     script it calls share ``context.id``/``parent_id``). All matches are
-    collected. A real run is preferred over a not-triggered diagnostic; among
-    traces of the same kind the newest ``timestamp.start`` wins. Ties break
-    toward own-context matches, then automations, then ascending ``item_id``.
-    The unselected matches are returned as ``other_matches``.
+    collected. A run that owns the context is the one the caller asked about, so
+    an own-context match wins over a run the context merely triggered. Within
+    that rank a real run wins over a not-triggered diagnostic, then the earliest
+    ``timestamp.start`` wins, then ties break toward automations and ascending
+    ``item_id``. The unselected matches are returned as ``other_matches``.
     """
     if not available:
         return _empty_result(scanned=0, available=False)
@@ -117,11 +126,7 @@ def _trace_context_payload(
     if not matches:
         return _empty_result(scanned=scanned)
 
-    real_matches = [m for m in matches if _trace_is_real(m[0])]
-    pool = real_matches if real_matches else matches
-    newest_start = max(_trace_start(t) for t, _, _, _ in pool)
-    candidates = [m for m in pool if _trace_start(m[0]) == newest_start]
-    selected = min(candidates, key=_tie_break_key)
+    selected = min(matches, key=_selection_key)
     trace, domain, item_id, match = selected
     other_matches = [
         {"domain": d, "item_id": i, "run_id": t.run_id, "match": m}

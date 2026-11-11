@@ -285,9 +285,10 @@ class TraceTools:
                 description=(
                     "Comma-separated top-level keys from Core's extended trace "
                     "dict to return, plus 'logbook' for the run's logbook. "
-                    "Valid keys depend on the run; examples: 'trace', 'config', "
-                    "'context', 'error', 'logbook'. Unknown names are rejected. "
-                    "Omit to return Core's full extended dict."
+                    "Available keys depend on the run; examples: 'trace', "
+                    "'config', 'context', 'error', 'logbook'. A requested name "
+                    "this run lacks is reported in 'warnings'. Omit, or pass an "
+                    "empty string, to return Core's full extended dict."
                 ),
                 default=None,
             ),
@@ -327,7 +328,10 @@ class TraceTools:
            ha_get_automation_traces(domain="automation")
         2. Get a detailed trace (provide run_id): returns Core's extended trace
            dict unchanged, including config, raw step trace, context, errors
-           and variables.
+           and variables. Pass `sections` to keep only named top-level keys
+           (plus 'logbook' for the run's logbook); a requested name the run
+           lacks is reported in `warnings` and the run's own keys are listed.
+           An empty `sections` string means omitted.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
            ha_get_automation_traces(domain="automation", item_id="uid", run_id="...")
         3. Resolve a trace by context (provide context_id): the response
@@ -388,7 +392,7 @@ class TraceTools:
             ) = await _resolve_trace_target(
                 self._client, entity_id, domain, item_id, context_id, run_id
             )
-            if resolved_run_id is None and (sections is not None or detailed):
+            if resolved_run_id is None and (_requested_sections(sections) or detailed):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -542,7 +546,6 @@ class TraceTools:
         offset: int,
         order: Literal["newest", "oldest"],
         ctx: Context | None,
-        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         """List recent traces, attaching diagnostics when none are stored."""
         message: dict[str, Any] = {"type": "trace/list", "domain": domain}
@@ -557,7 +560,7 @@ class TraceTools:
             )
 
         traces_data = result.get("result", [])
-        list_warnings = list(warnings) if warnings is not None else []
+        list_warnings: list[str] = []
         if not traces_data and item_id is not None and entity_id is None:
             list_warnings.append(
                 f"No traces found for {domain}/{item_id}; "
@@ -791,23 +794,25 @@ def _format_detailed_trace(
 
 
 def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, Any]:
-    """Keep requested top-level Core keys; reject names Core does not define."""
+    """Keep requested top-level Core keys; warn about names this run lacks."""
     requested = _requested_sections(sections)
     if not requested:
         return result
-    known = (set(result) - _TRACE_METADATA_KEYS) | {"logbook"}
-    unknown = sorted(requested - known)
-    if unknown:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Unknown trace section(s): " + ", ".join(unknown),
-                context={"sections": sections, "unknown": unknown},
-                suggestions=[
-                    "Use top-level Core extended-dict keys such as trace, config, context, error",
-                    "Add 'logbook' to request the run's logbook",
-                ],
-            )
+    # ``logbook`` is the tool's name for the fetched ``logbook_*`` fields, which
+    # Core's extended dict does not contain.
+    available = set(result)
+    if "logbook_entries" in result:
+        available.add("logbook")
+    missing = sorted(requested - available)
+    if missing:
+        run_keys = sorted(set(result) - _TRACE_METADATA_KEYS)
+        if "logbook" in available:
+            run_keys.append("logbook")
+        result.setdefault("warnings", []).append(
+            "Trace section(s) not in this run: "
+            + ", ".join(missing)
+            + ". This run has: "
+            + ", ".join(run_keys)
         )
     keep = requested | _TRACE_METADATA_KEYS
     return {key: value for key, value in result.items() if key in keep}
