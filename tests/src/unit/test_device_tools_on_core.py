@@ -4,25 +4,34 @@
 registries and its config entries through the server's own client, so every
 row, list and refusal here is Core's. Where a test needs an answer this Core
 cannot give (Core before 2026.9 without ``remove``, a composite device that
-2026.8's migration split, a refused read), it changes one thing on Core and
-Core still writes the reply.
+2026.8's migration split, a refused read), it patches one Core function or
+pops the ``remove`` command, and Core still writes the reply.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable
 from typing import Any
+from unittest.mock import AsyncMock
 
 import attr
 import pytest
 from homeassistant.components import websocket_api
 from homeassistant.components.config import config_entries as config_entries_ws
+from homeassistant.config_entries import ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -43,6 +52,14 @@ def _device(hass: HomeAssistant, domain: str, **kwargs: Any) -> dr.DeviceEntry:
     return dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, **kwargs
     )
+
+
+async def _tool_error(call: Awaitable[Any]) -> dict[str, Any]:
+    """The error payload of a tool call that must fail."""
+    with pytest.raises(ToolError) as excinfo:
+        _ = await call
+    error: dict[str, Any] = json.loads(str(excinfo.value))
+    return error
 
 
 async def test_summary_list_is_compact_and_full_keeps_cores_row(
@@ -114,10 +131,7 @@ async def test_refused_linked_devices_read_fails_the_lookup(
     dev = _device(hass, "hue", identifiers={("hue", "0xAABB")})
     monkeypatch.setattr(dr.DeviceRegistry, "async_get", lambda self, device_id: None)
 
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_get_device(device_id=dev.id)
-
-    error = json.loads(str(excinfo.value))
+    error = await _tool_error(tools.ha_get_device(device_id=dev.id))
     assert (
         error["error"]["message"] == "Failed to read linked devices: Device not found"
     )
@@ -198,10 +212,9 @@ async def test_refused_config_entries_read_fails_the_call(
         config_entries_ws, "_async_matching_config_entries_json_fragments", refuse
     )
 
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_get_device(integration="hue")
+    error = await _tool_error(tools.ha_get_device(integration="hue"))
 
-    assert json.loads(str(excinfo.value))["error"]["message"] == (
+    assert error["error"]["message"] == (
         "Failed to read config entries: entries unavailable"
     )
 
@@ -227,17 +240,13 @@ async def test_split_composite_id_names_the_devices_that_replaced_it(
         lambda self: {"composite": [primary, matter]},
     )
 
-    with pytest.raises(ToolError) as excinfo:
-        await getattr(tools, tool)(device_id="composite")
-    error = json.loads(str(excinfo.value))
+    error = await _tool_error(getattr(tools, tool)(device_id="composite"))
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert (error["split_ids"], error["primary_id"]) == ([hue.id, matter.id], hue.id)
     assert "split_ids" in error["error"]["suggestion"]
 
-    with pytest.raises(ToolError) as excinfo:
-        await getattr(tools, tool)(device_id="ghost")
-    error = json.loads(str(excinfo.value))
-    assert "split_ids" not in error
+    error = await _tool_error(getattr(tools, tool)(device_id="ghost"))
+    assert not {"split_ids", "primary_id"} & set(error)
     assert "split_ids" not in error["error"]["suggestion"]
 
 
@@ -252,10 +261,7 @@ async def test_refused_split_read_fails_the_not_found(
 
     monkeypatch.setattr(dr.ActiveDeviceRegistryItems, "get_composite_splits", refuse)
 
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_get_device(device_id="composite")
-
-    error = json.loads(str(excinfo.value))
+    error = await _tool_error(tools.ha_get_device(device_id="composite"))
     assert error["error"]["code"] == "SERVICE_CALL_FAILED"
     assert error["error"]["message"] == (
         "Failed to read composite device splits: splits unavailable"
@@ -263,37 +269,21 @@ async def test_refused_split_read_fails_the_not_found(
     assert "split_ids" not in error
 
 
-async def test_remove_refusal_reaches_the_caller_in_cores_words(
-    hass: HomeAssistant, tools: RegistryTools
-) -> None:
-    """An integration that does not support removing devices refuses through
-    Core, and the caller reads Core's message with Core's code."""
-    dev = _device(hass, "hue", identifiers={("hue", "0xAABB")})
-
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_remove_device(device_id=dev.id)
-
-    error = json.loads(str(excinfo.value))
-    assert error["error"]["message"] == (
-        "Failed to remove device: Config entry does not support device removal"
-    )
-    assert error["ha_error_code"] == "home_assistant_error"
-
-
 async def test_core_without_remove_passes_the_fallbacks_refusal_on(
     hass: HomeAssistant, tools: RegistryTools
 ) -> None:
     """On Core without ``remove``, a refused ``remove_config_entry`` fails the
-    call in Core's words and the device stays."""
+    call in Core's words, with Core's code, and the device stays."""
     dev = _device(hass, "hue", identifiers={("hue", "0xAABB")})
     hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
 
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_remove_device(device_id=dev.id)
+    error = await _tool_error(tools.ha_remove_device(device_id=dev.id))
 
-    assert json.loads(str(excinfo.value))["error"]["message"] == (
+    assert error["error"]["message"] == (
         "Failed to remove device: Config entry does not support device removal"
     )
+    assert error["ha_error_code"] == "home_assistant_error"
+    assert "disabled_by='user'" in error["error"]["suggestion"]
     assert dr.async_get(hass).async_get(dev.id) is not None
 
 
@@ -304,26 +294,24 @@ async def test_core_without_remove_detaches_the_devices_entry(
     detaches the device's config entry with ``remove_config_entry`` instead,
     which removes the device. This Core is given no ``remove`` command."""
 
-    async def allow_removal(*_args: Any) -> bool:
-        return True
-
     mock_integration(
-        hass, MockModule("removable", async_remove_config_entry_device=allow_removal)
+        hass,
+        MockModule(
+            "removable",
+            async_setup_entry=AsyncMock(return_value=None),
+            async_remove_config_entry_device=AsyncMock(return_value=True),
+        ),
     )
-    entry = MockConfigEntry(domain="removable")
-    entry.add_to_hass(hass)
-    # Setting the entry up sets this from the module above.
-    entry.supports_remove_device = True
-    registry = dr.async_get(hass)
-    dev = registry.async_get_or_create(
-        config_entry_id=entry.entry_id, identifiers={("removable", "1")}
-    )
+    mock_platform(hass, "removable.config_flow", None)
+    dev = _device(hass, "removable", identifiers={("removable", "1")})
+    with mock_config_flow("removable", ConfigFlow):
+        assert await hass.config_entries.async_setup(dev.config_entry_id)
     hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
 
     result = await tools.ha_remove_device(device_id=dev.id)
 
     assert result["success"] is True
-    assert registry.async_get(dev.id) is None
+    assert dr.async_get(hass).async_get(dev.id) is None
 
 
 @pytest.mark.parametrize(
@@ -349,3 +337,6 @@ async def test_radio_refusal_warns_in_cores_words(
     result = await tools.ha_get_device(device_id=dev.id)
 
     assert f"{warning}: Unknown command." in result["warnings"], result
+    assert not {"radio_metrics", "node_status", "node_diagnostics"} & set(
+        result["device"]
+    )

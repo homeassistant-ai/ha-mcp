@@ -390,9 +390,6 @@ async def _single_device_and_entities(
     return all_devices, device_to_entities
 
 
-_UNKNOWN_COMMAND = frozenset({UNKNOWN_COMMAND_CODE})
-
-
 async def _raise_device_not_found(
     client: Any, device_id: str, all_rows: list[dict[str, Any]]
 ) -> NoReturn:
@@ -410,7 +407,7 @@ async def _raise_device_not_found(
     )
     if not splits.get("success"):
         raise_core_refusal("Failed to read composite device splits", splits, context)
-    if split := (splits.get("result") or {}).get(device_id):
+    if split := splits["result"].get(device_id):
         context.update(split)
         suggestions = [
             "Home Assistant split this device into one device per config entry: "
@@ -1015,7 +1012,7 @@ class RegistryTools:
             device = await _lookup_device_for_remove(self._client, device_id)
             result = await self._client.send_websocket_message(
                 {"type": "config/device_registry/remove", "device_id": device_id},
-                expected_error_codes=_UNKNOWN_COMMAND,
+                expected_error_codes=frozenset({UNKNOWN_COMMAND_CODE}),
             )
             if result.get("error_code") == UNKNOWN_COMMAND_CODE:
                 # Core before 2026.9 has no ``remove``; its predecessor detaches

@@ -105,7 +105,7 @@ async def _error_log_lines_since(mcp_client, baseline_total: int) -> list[str]:
     """Read only the bounded newest window added since a line-count boundary."""
     current_total = await _error_log_total(mcp_client)
     assert current_total >= baseline_total, (
-        "Error-log history rotated while the test read it"
+        "Error-log history rotated during the child-device read assertion"
     )
     new_line_count = current_total - baseline_total
     new_log_lines: list[str] = []
@@ -401,20 +401,6 @@ class TestDeviceGet:
         if device.get("entities"):
             for entity in device["entities"][:3]:
                 logger.info(f"  - Entity: {entity.get('entity_id')}")
-
-    async def test_get_device_nonexistent(self, mcp_client):
-        """
-        Test: Getting a non-existent device should fail gracefully
-        """
-        logger.info("Testing get non-existent device")
-
-        async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
-                "ha_get_device",
-                {"device_id": "definitely_not_a_real_device_id_12345"},
-                expected_error="not found",
-            )
-        logger.info("Non-existent device correctly rejected")
 
 
 @pytest.mark.registry

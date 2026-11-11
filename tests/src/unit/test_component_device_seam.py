@@ -208,6 +208,8 @@ class TestDeviceSeam:
             if call.args[0] == "config/device_registry/remove"
         ]
         assert removals == [dev.id]
+        # A refusal of ``remove`` is Core's answer, not a cue for its alias.
+        assert "config/device_registry/remove_config_entry" not in _types(spy)
         assert not REGISTRY_DUMPS & _types(spy)
 
     async def test_zha_action_targets_the_ieee_of_cores_identifier(

@@ -37,8 +37,8 @@ _CAPS_DEVICES = {
 }
 
 
-def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
+def _raw_device(device_id: str) -> dict[str, Any]:
+    return {
         "id": device_id,
         "name": f"Device {device_id}",
         "name_by_user": "Orphan",
@@ -50,8 +50,6 @@ def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
         "identifiers": [["hue", "0xAABB"]],
         "disabled_by": None,
     }
-    base.update(overrides)
-    return base
 
 
 class RoutingClient:
