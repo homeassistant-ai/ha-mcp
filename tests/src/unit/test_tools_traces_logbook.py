@@ -124,8 +124,9 @@ class TestFetchTraceLogbook:
         hass_ws_client: WebSocketGenerator,
         core_client: HomeAssistantClient,
     ) -> None:
-        """The REST fallback keeps the run's context filter, not just its window."""
+        """The REST fallback keeps the run's context and start filters."""
         context = Context()
+        await _record(hass, [("light.before", "on", context)])
         trace = await _trace(hass, hass_ws_client, context=context)
         await _record(
             hass,
