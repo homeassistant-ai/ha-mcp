@@ -218,6 +218,8 @@ class TestZHAIeeeAddressParsing:
         assert "radio_metrics" in dev
         assert dev["radio_metrics"]["lqi"] == 200
         assert dev["radio_metrics"]["rssi"] == -45
+        # A radio read that succeeded leaves the answer without warnings.
+        assert "warnings" not in result
 
 
 class TestEnrichmentGracefulDegradation:

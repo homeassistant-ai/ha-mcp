@@ -37,6 +37,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_registry import RegistryTools
 
+from ._client_spies import sent_messages
+
 
 @pytest.fixture
 async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> RegistryTools:
@@ -119,7 +121,10 @@ async def test_single_lookup_lists_cores_linked_devices(
 
     result = await tools.ha_get_device(device_id=shelly.id)
 
+    assert result["success"] is True
     assert result["device"]["linked_devices"] == [unifi.id]
+    # A device without a radio read gets no warnings.
+    assert "warnings" not in result
 
 
 async def test_refused_linked_devices_read_fails_the_lookup(
@@ -315,18 +320,35 @@ async def test_core_without_remove_detaches_the_devices_entry(
 
 
 @pytest.mark.parametrize(
-    ("domain", "identifier", "warning"),
+    ("domain", "identifier", "command", "warning"),
     [
-        ("zha", "00:11:22:33:44:55:66:77", "ZHA radio metrics unavailable"),
-        ("zwave_js", "3232323232-5", "Z-Wave node status unavailable"),
-        ("matter", "deadbeef-1", "Matter node diagnostics unavailable"),
+        (
+            "zha",
+            "00:11:22:33:44:55:66:77",
+            "zha/devices",
+            "ZHA radio metrics unavailable",
+        ),
+        (
+            "zwave_js",
+            "3232323232-5",
+            "zwave_js/node_status",
+            "Z-Wave node status unavailable",
+        ),
+        (
+            "matter",
+            "deadbeef-1",
+            "matter/node_diagnostics",
+            "Matter node diagnostics unavailable",
+        ),
     ],
 )
 async def test_radio_refusal_warns_in_cores_words(
     hass: HomeAssistant,
+    core_client: HomeAssistantClient,
     tools: RegistryTools,
     domain: str,
     identifier: str,
+    command: str,
     warning: str,
 ) -> None:
     """A radio read Core refuses (the radio integration is not loaded) leaves
@@ -334,9 +356,33 @@ async def test_radio_refusal_warns_in_cores_words(
     without the client's ``Command failed:`` prefix."""
     dev = _device(hass, domain, identifiers={(domain, identifier)})
 
-    result = await tools.ha_get_device(device_id=dev.id)
+    with sent_messages(core_client) as spy:
+        result = await tools.ha_get_device(device_id=dev.id)
 
-    assert f"{warning}: Unknown command." in result["warnings"], result
+    # ZHA's command lists every device; the other two ask for this one.
+    expected: dict[str, Any] = {"type": command}
+    if domain != "zha":
+        expected["device_id"] = dev.id
+    assert expected in [c.args[0] for c in spy.call_args_list]
+
+    # Contract: top-level list[str], never nested under ``device``.
+    assert result["warnings"] == [f"{warning}: Unknown command."], result
+    assert "warnings" not in result["device"]
     assert not {"radio_metrics", "node_status", "node_diagnostics"} & set(
         result["device"]
     )
+
+
+@pytest.mark.parametrize("domain", ["zha", "zwave_js"])
+async def test_radio_device_without_its_radio_id_is_not_read(
+    hass: HomeAssistant, tools: RegistryTools, domain: str
+) -> None:
+    """A ZHA device without an IEEE address, or a Z-Wave device without a
+    node id, gives the radio read nothing to ask for: none is made, so Core
+    refuses nothing and the answer carries no warnings."""
+    dev = _device(hass, domain, identifiers={("other", "1")})
+
+    result = await tools.ha_get_device(device_id=dev.id)
+
+    assert result["device"]["integration_type"] == domain
+    assert "warnings" not in result
