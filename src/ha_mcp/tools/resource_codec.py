@@ -129,7 +129,7 @@ def _is_data_url(url: str) -> bool:
 
     ``urlsplit`` applies WHATWG's leading C0-control-or-space strip and
     ASCII tab/newline/CR removal before reading the scheme (the
-    CVE-2023-24329 hardening; this package requires Python >=3.13), and
+    CVE-2023-24329 hardening; this package requires Python >=3.14), and
     lowercases it. A raw ``url[:5]`` check would miss ``" data:..."`` and
     ``"da\\tta:..."``, which browsers still load.
     """

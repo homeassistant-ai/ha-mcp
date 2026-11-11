@@ -110,7 +110,7 @@ async def async_probe_loopback(port: int, timeout: float) -> bool:
         _reader, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", port), timeout=timeout
         )
-    except (TimeoutError, OSError):
+    except TimeoutError, OSError:
         return False
     writer.close()
     with suppress(OSError, TimeoutError):

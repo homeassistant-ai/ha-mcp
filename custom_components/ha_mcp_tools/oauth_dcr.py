@@ -80,7 +80,7 @@ def client_redirect_uris(signing_key: bytes, client_id: str) -> list[str] | None
         if not hmac.compare_digest(_b64url_decode(sig_part), expected):
             return None
         payload = json.loads(_b64url_decode(body))
-    except (ValueError, binascii.Error, UnicodeEncodeError):
+    except ValueError, binascii.Error, UnicodeEncodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -264,7 +264,7 @@ class DcrRegisterView(HomeAssistantView):
             return _dcr_error("invalid_client_metadata", "body is too large")
         try:
             body: Any = json.loads(raw)
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             # RecursionError: json.loads on a deeply nested body (#2218
             # review) — malformed metadata, not a server error. Reading the
             # bytes ourselves also sidesteps request.json()'s charset lookup,

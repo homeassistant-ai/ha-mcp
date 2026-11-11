@@ -227,7 +227,7 @@ async def _save_tools(
 ) -> JSONResponse:
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_JSON,

@@ -194,6 +194,10 @@ jobs:
       # commit must carry the component stamped with this build's version and
       # its ha-mcp-dev pin (#2763). The stamp goes on a commit of its own that
       # only the tag references; master is untouched.
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.14"
       - name: Wait for the build on PyPI
         env:
           VERSION: ${{ needs.prepare.outputs.dev_version }}

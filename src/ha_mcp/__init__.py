@@ -5,6 +5,23 @@ A Model Context Protocol server that provides complete control over Home Assista
 through REST API and WebSocket integration.
 """
 
+import sys
+
+if sys.version_info < (3, 14):
+    # uvx and pip can be forced past requires-python. This runs before any
+    # submodule is imported, so an older Python stops here instead of at a
+    # SyntaxError in one; pyproject.toml keeps ruff on 3.13 syntax for this
+    # file. stderr directly: logging is not set up yet.
+    sys.stderr.write(
+        f"ERROR: ha-mcp requires Python 3.14+, but you are running Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}.\n"
+        "If using uvx, add '--python 3.14' to your config args:\n"
+        '  "args": ["--python", "3.14", "--refresh", "ha-mcp@latest"]\n'
+        "Or install Python 3.14: brew install python@3.14 (macOS) / "
+        "sudo apt install python3.14 (Linux)\n"
+    )
+    sys.exit(1)
+
 # Must be imported before anything that reaches fastmcp (``.auth`` below does),
 # because fastmcp configures rich logging at import time and dies on a rich
 # older than 13.9.4. Importing this module applies the shim. See #2186.

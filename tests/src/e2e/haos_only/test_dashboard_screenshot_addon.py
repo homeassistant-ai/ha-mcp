@@ -109,7 +109,7 @@ def _extract_png_bytes(result: Any) -> bytes | None:
             if isinstance(data, str):
                 try:
                     return base64.b64decode(data)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
             if isinstance(data, (bytes, bytearray)):
                 return bytes(data)
@@ -536,7 +536,7 @@ async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:
         except ToolError as exc:
             try:
                 payload = json.loads(str(exc))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 payload = None
             error = payload.get("error") if isinstance(payload, dict) else None
             code = error.get("code") if isinstance(error, dict) else None

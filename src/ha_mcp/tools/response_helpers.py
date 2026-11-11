@@ -382,7 +382,7 @@ def _convert_timestamp_fields(obj: Any, local_tz: _TZInfo) -> Any:
                     if parsed.tzinfo is None:
                         parsed = parsed.replace(tzinfo=UTC)
                     out[k] = parsed.astimezone(local_tz).isoformat()
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     out[k] = v
             else:
                 out[k] = _convert_timestamp_fields(v, local_tz)

@@ -78,10 +78,10 @@ jobs:
 
           ```bash
           # Run dev version
-          uvx ha-mcp-dev
+          uvx --python 3.14 ha-mcp-dev
 
           # Check version
-          uvx ha-mcp-dev --version
+          uvx --python 3.14 ha-mcp-dev --version
           ```
 
           **Docker:**
@@ -122,10 +122,10 @@ jobs:
 
           \`\`\`bash
           # Run dev version
-          uvx ha-mcp-dev
+          uvx --python 3.14 ha-mcp-dev
 
           # Check version
-          uvx ha-mcp-dev --version
+          uvx --python 3.14 ha-mcp-dev --version
           \`\`\`
 
           **Docker:**

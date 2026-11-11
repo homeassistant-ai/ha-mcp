@@ -74,7 +74,7 @@ async def async_flow_outline(
     try:
         integration = await loader.async_get_integration(hass, domain)
         await integration.async_get_platform("config_flow")
-    except (loader.IntegrationNotFound, ImportError):
+    except loader.IntegrationNotFound, ImportError:
         return {"supported": False}
     handler = config_entries.HANDLERS.get(domain)
     if handler is None or not issubclass(handler, scf.SchemaConfigFlowHandler):

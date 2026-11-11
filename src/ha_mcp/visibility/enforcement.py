@@ -981,7 +981,7 @@ def scrub_records(
     for record in records:
         try:
             blob = json.dumps(record, default=str)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             blob = str(record)
         if not regex.search(blob):
             kept.append(record)

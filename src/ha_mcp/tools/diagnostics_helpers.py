@@ -282,7 +282,7 @@ def _apply_truncation_cap(
         return
     try:
         serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return
     bytes_total = len(serialized.encode("utf-8"))
     if bytes_total > truncate_at_bytes:

@@ -242,7 +242,7 @@ def _schedule_supervisor_self_restart(
                     resp.status_code,
                     resp.text[:500],
                 )
-        except (httpx.ReadError, httpx.RemoteProtocolError):
+        except httpx.ReadError, httpx.RemoteProtocolError:
             # Supervisor killed us mid-call — expected; no action needed.
             pass
         except RuntimeError:

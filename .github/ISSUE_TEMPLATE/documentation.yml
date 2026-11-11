@@ -40,7 +40,7 @@ body:
       label: "What's wrong or unclear?"
       description: "Describe the issue with the documentation."
       placeholder: |
-        Example: "The setup guide says to run 'uvx ha-mcp' but doesn't mention that you need Python 3.13+"
+        Example: "The setup guide says to run 'uvx ha-mcp' but doesn't mention that you need Python 3.14+"
     validations:
       required: true
 
@@ -50,7 +50,7 @@ body:
       label: "How should it be fixed?"
       description: "Optional: suggest what the docs should say instead."
       placeholder: |
-        Example: "Add a note that Python 3.13+ is required before running uvx"
+        Example: "Add a note that Python 3.14+ is required before running uvx"
     validations:
       required: false
 
