@@ -41,13 +41,10 @@ async def _start_ha_auth(
     *,
     debug_logging: bool = False,
 ) -> None:
-    extra = {"debug_logging": True} if debug_logging else {}
-    await start_proxy(
-        hass,
-        fs_root,
-        variant,
-        proxy_config(target_url=upstream.target_url(), oauth=HA_AUTH, **extra),
-    )
+    config = proxy_config(target_url=upstream.target_url(), oauth=HA_AUTH)
+    if debug_logging:
+        config["debug_logging"] = True
+    await start_proxy(hass, fs_root, variant, config)
 
 
 @pytest.mark.parametrize("scheme", ["Bearer", "bEaReR"])

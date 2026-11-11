@@ -19,6 +19,7 @@ import pytest
 import yaml
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import CoreState, HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import ClientSessionGenerator
 
 from ._auth_modes import (
@@ -75,8 +76,7 @@ async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
     start = load_start(variant)
     resolve = script_function(start, "_resolve_oauth_mode")
     build = script_function(start, "_build_proxy_config")
-    client = await hass_client_no_auth()
-    entry = None
+    entry: MockConfigEntry | None = None
     for option in offered:
         mode = resolve(option, "", "", state_path(fs_root, "/data"))
         config, _ = build(
@@ -94,6 +94,7 @@ async def test_every_offered_oauth_mode_sets_the_integration_up_in_that_mode(
         else:
             assert await reload_proxy(hass, fs_root, variant, entry, config)
         assert entry.state is ConfigEntryState.LOADED, option
+        client = await hass_client_no_auth()
         status, doc = await fetch_json(client, as_document_urls(variant)[0])
         assert status == 200, option
         assert doc["token_endpoint_auth_methods_supported"] == client_auth[option]
