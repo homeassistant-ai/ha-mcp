@@ -296,9 +296,9 @@ def _raise_global_context_not_found(
 ) -> NoReturn:
     """Raise the structured not-found for an unresolvable global context id."""
     if component_checked:
+        checked_scope = "the run's own and triggering (parent) contexts"
         suggestions = [
-            "The ha_mcp_tools component checked the run's own and triggering "
-            "(parent) contexts in its trace store and found no match",
+            f"The ha_mcp_tools component checked {checked_scope} in its trace store and found no match",
             "Verify the context id is the one you copied from the run",
         ]
     else:
@@ -329,9 +329,9 @@ def _raise_context_not_found(
 ) -> NoReturn:
     """Raise the structured not-found for an unresolvable context id."""
     if component_checked:
+        checked_scope = "the run's own and triggering (parent) contexts"
         suggestions = [
-            "The ha_mcp_tools component checked the run's own and triggering "
-            "(parent) contexts under those selectors and found no match",
+            f"The ha_mcp_tools component checked {checked_scope} under those selectors and found no match",
             "Verify the context id is the one you copied from the run",
             "Use ha_get_automation_traces(entity_id=...) without context_id to list recent traces",
         ]
