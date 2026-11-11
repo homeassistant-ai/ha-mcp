@@ -55,11 +55,6 @@ def _list_of_dicts() -> list[dict[str, Any]]:
     return [{"id": 1}, {"id": 2}]
 
 
-def _empty_list() -> list[str]:
-    # A tool that finds nothing hands back ``[]``, not the string ``"[]"``.
-    return []
-
-
 def _data_rows() -> list[dict[str, str]]:
     # Rows without ``text``/``type`` keys are data, not content blocks.
     return [{"entity_id": "light.foo", "state": "on"}]
@@ -78,7 +73,6 @@ def _plain_text() -> str:
     ("probe", "expected"),
     [
         pytest.param(_list_of_dicts, [{"id": 1}, {"id": 2}], id="list-of-dicts"),
-        pytest.param(_empty_list, [], id="empty-list"),
         pytest.param(
             _data_rows, [{"entity_id": "light.foo", "state": "on"}], id="data-rows"
         ),

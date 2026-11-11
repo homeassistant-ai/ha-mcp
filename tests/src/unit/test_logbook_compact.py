@@ -29,7 +29,8 @@ async def _logbook(client: HomeAssistantClient, *, compact: bool) -> dict[str, A
             "ha_get_logs", {"source": "logbook", "compact": compact}
         )
     assert isinstance(result.structured_content, dict)
-    return result.structured_content
+    data: dict[str, Any] = result.structured_content["data"]
+    return data
 
 
 async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
