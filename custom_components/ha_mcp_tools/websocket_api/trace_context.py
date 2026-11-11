@@ -43,12 +43,13 @@ async def _trace_context_prep(
         )
         return {"payload": payload}
     # Core sets DATA_TRACES_RESTORED before awaiting the store load, so a
-    # second first-request would see the marker and scan an empty store. The
-    # lock makes it wait for the restore that is already running.
+    # second caller would see the marker and scan an empty store. The lock makes
+    # it wait for a restore this command started; Core's own trace commands
+    # restore outside it.
     lock = hass.data.setdefault(_TRACE_RESTORE_LOCK, asyncio.Lock())
     async with lock:
         await async_restore_traces(hass)
-    result = _trace_context_payload(hass, msg, available=True)
+    result = _trace_context_payload(hass, msg)
     payload = await hass.async_add_executor_job(_encode_result, msg["id"], result)
     return {"payload": payload}
 
@@ -112,8 +113,6 @@ def _trace_is_real(trace: Any) -> bool:
 def _trace_context_payload(
     hass: HomeAssistant,
     msg: dict[str, Any],
-    *,
-    available: bool,
 ) -> dict[str, Any]:
     """Find the trace whose own or parent context matches ``context_id``.
 
@@ -126,9 +125,6 @@ def _trace_context_payload(
     ``item_id`` and ascending ``run_id``. The unselected matches are returned as
     ``other_matches``.
     """
-    if not available:
-        return _empty_result(scanned=0, available=False)
-
     context_id = msg["context_id"]
     scanned = 0
     matches: list[tuple[Any, str, str, str]] = []
@@ -171,7 +167,7 @@ def _do_trace_context(
     return PreSerializedResult(payload=payload)
 
 
-def _encode_result(msg_id: Any, result: dict[str, Any]) -> bytes:
+def _encode_result(msg_id: int, result: dict[str, Any]) -> bytes:
     """Encode one result message; runs in the executor."""
     message = websocket_api.messages.result_message(msg_id, result)
     return json.dumps(

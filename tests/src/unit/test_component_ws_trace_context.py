@@ -2,12 +2,14 @@
 
 The command reads Core's live trace store in process, matches a run's own
 context or a triggering parent context, and returns Core's extended trace dict.
-Every call goes through ``component_ws``, the WebSocket client of a real
-``hass`` with the ``ha_mcp_tools/*`` commands registered, so the registration,
-the request schema, the admin gate and the restore step are the ones a caller
-reaches. The runs come from ``_trace_fixtures``, which builds Core's own trace
-objects and stores them through ``async_store_trace``; a frozen clock orders
-their starts because Core stamps ``timestamp.start`` in the constructor.
+Most calls go through ``component_ws``, the WebSocket client of a real ``hass``
+with the ``ha_mcp_tools/*`` commands registered, so the registration, the
+request schema, the admin gate and the restore step are the ones a caller
+reaches. Two tests call ``_trace_context_prep`` directly to pin the restore wait
+and the encoded message it returns. The runs come from ``_trace_fixtures``,
+which builds Core's own trace objects and stores them through
+``async_store_trace``; a frozen clock orders their starts because Core stamps
+``timestamp.start`` in the constructor.
 """
 
 from __future__ import annotations
@@ -313,8 +315,11 @@ async def test_a_first_request_waits_for_a_restore_in_flight(
     release = asyncio.Event()
 
     async def slow_restore(inner_hass: HomeAssistant) -> None:
-        # Core's own guard: the marker is set first, so a later call returns
-        # without loading, even while the first load is still running.
+        """Core's restore: mark traces restored before awaiting the load.
+
+        The marker is set first, so a later call returns without loading even
+        while the first load is still running.
+        """
         if DATA_TRACES_RESTORED in inner_hass.data:
             return
         inner_hass.data[DATA_TRACES_RESTORED] = True
@@ -332,12 +337,14 @@ async def test_a_first_request_waits_for_a_restore_in_flight(
     # The second request has every chance to finish; a restore is still in
     # flight, so it must not return before that restore does. Without the lock
     # it returns as soon as it sees the marker, well inside this window.
-    done, _pending = await asyncio.wait({second}, timeout=0.3)
-    assert done == set()
-
-    release.set()
-    first_result = await first
-    second_result = await second
+    try:
+        done, _pending = await asyncio.wait({second}, timeout=0.3)
+        assert done == set()
+    finally:
+        # Release and drain both tasks even when the assertion fails, so a lock
+        # regression reports the assertion, not a dangling task.
+        release.set()
+        first_result, second_result = await asyncio.gather(first, second)
 
     assert isinstance(first_result["payload"], bytes)
     assert isinstance(second_result["payload"], bytes)
