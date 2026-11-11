@@ -347,9 +347,12 @@ async def _handle_set_config_subentry(
     flow_id: str | None = None,
     menu_choice: str | None = None,
     abort: bool = False,
+    show_advanced_options: bool = False,
 ) -> dict[str, Any]:
     """One step of a config subentry's flow: its create flow, or with
-    ``subentry_id`` its reconfigure flow."""
+    ``subentry_id`` its reconfigure flow. ``show_advanced_options`` goes to
+    the call that starts the flow; only Home Assistant before 2026.6 reads
+    it."""
     action = _subentry_action(action, subentry_id)
     context = {"helper_type": "config_subentry", "action": action}
     entry_id = validate_identifier_not_empty(
@@ -390,6 +393,7 @@ async def _handle_set_config_subentry(
         entry_id,
         subentry_type,
         subentry_id=subentry_id,
+        show_advanced_options=show_advanced_options,
     )
 
     async def advance() -> tuple[str, dict[str, Any], int]:
