@@ -103,12 +103,13 @@ class TestRuntimeErrorBucket:
     async def test_type_error(
         self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        code, _message, suggestions = await _failure(
+        code, message, _suggestions = await _failure(
             core_client, monkeypatch, "next([1, 2])"
         )
         assert code == ErrorCode.SANDBOX_RUNTIME_ERROR
-        # Default-bucket suggestions name the actual exception type.
-        assert "TypeError" in suggestions
+        # Monty wraps the failure in MontyRuntimeError; the message keeps the
+        # inner exception the agent has to fix.
+        assert "TypeError" in message
 
     async def test_lookup_error_for_missing_builtin(
         self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
