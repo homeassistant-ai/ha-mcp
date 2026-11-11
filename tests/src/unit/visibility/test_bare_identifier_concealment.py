@@ -522,6 +522,74 @@ class TestHiddenScriptStorageKeyInContent:
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_context_only_trace_with_a_keyed_hidden_item_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A keyed hidden item is caught by the outbound trace-record scan."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(
+            registry=_registry(
+                _entry("automation.private", "1700000000001", "automation")
+            )
+        )
+        mw = make_mw(get_client=lambda: client)
+        detail = {
+            "success": True,
+            "domain": "automation",
+            "item_id": "1700000000001",
+            "trace": {"trigger": []},
+            "context": {"id": "01J00000000000000000000000"},
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces",
+                    {"context_id": "01J00000000000000000000000"},
+                ),
+                _returns(text_result(json.dumps(detail), detail)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_context_other_matches_naming_a_keyed_hidden_item_is_refused(
+        self, set_config: Callable[..., Any]
+    ) -> None:
+        """A nested context match is scanned, not only the selected run."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["automation.private"])
+        client = FakeClient(
+            registry=_registry(
+                _entry("automation.private", "1700000000001", "automation")
+            )
+        )
+        mw = make_mw(get_client=lambda: client)
+        detail = {
+            "success": True,
+            "domain": "automation",
+            "item_id": "1700000000002",
+            "trace": {"trigger": []},
+            "context": {"id": "01J00000000000000000000000"},
+            "context_other_matches": [
+                {
+                    "domain": "automation",
+                    "item_id": "1700000000001",
+                    "run_id": "hidden-run",
+                    "match": "parent",
+                }
+            ],
+        }
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_get_automation_traces",
+                    {"context_id": "01J00000000000000000000000"},
+                ),
+                _returns(text_result(json.dumps(detail), detail)),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_unkeyed_hidden_automation_does_not_conceal_script_traces(
         self, set_config: Callable[..., Any]
     ) -> None:
