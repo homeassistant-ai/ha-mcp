@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 from haos_runtime import HA_MCP_DEV_ADDON_SLUG
@@ -92,85 +92,14 @@ class TestGetLogsSystemServiceReal:
         )
 
 
-def _entry_times(log_text: str) -> list[datetime]:
-    """Timestamps of the verbose entries (``<date> <time+offset> <host> ...``)."""
-    stamps = []
-    for line in log_text.splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) < 3:
-            continue
-        try:
-            stamps.append(datetime.fromisoformat(f"{parts[0]} {parts[1]}"))
-        except ValueError:
-            continue  # a continuation line of a multi-line entry
-    return stamps
-
-
 @pytest.mark.system
 class TestGetLogsHoursBackReal:
-    """hours_back sends the journal a realtime= Range through Supervisor."""
+    """hours_back sends the journal a time Range through Supervisor.
 
-    async def test_host_entries_all_fall_inside_the_window(self, mcp_client) -> None:
-        """The first page of a 1-hour window starts inside it.
-
-        Supervisor formats host logs verbosely, so each entry's time is
-        checkable. This checks the window's start only; that the page comes
-        from the journal and not Supervisor's tail is the next test's job.
-        """
-        async with MCPAssertions(mcp_client) as mcp:
-            result = await mcp.call_tool_success(
-                "ha_get_logs",
-                {
-                    "source": "system_service",
-                    "slug": "host",
-                    "hours_back": 1,
-                    "limit": 500,
-                    "order": "oldest",
-                },
-            )
-
-        stamps = _entry_times(result["log"])
-        assert stamps, f"Expected timestamped entries, got {result['log'][:200]!r}"
-        assert min(stamps) >= datetime.fromisoformat(result["window_start"])
-        # The window runs to the journal's end, so entries logged while the
-        # read was in flight may follow read_at by a moment.
-        assert max(stamps) <= datetime.fromisoformat(result["read_at"]) + timedelta(
-            minutes=1
-        )
-
-    async def test_oldest_first_pages_reach_behind_the_newest_lines(
-        self, mcp_client
-    ) -> None:
-        """Pages of a whole-journal window start where only the journal can serve.
-
-        A dropped Range would return Supervisor's default tail of 100 lines; the
-                first page of a whole-journal window starts at the journal's oldest
-                entry instead, older than any of the newest 500 lines.
-        """
-        window = {
-            "source": "system_service",
-            "slug": "host",
-            "hours_back": 24 * 365,
-            "limit": 50,
-            "order": "oldest",
-        }
-        async with MCPAssertions(mcp_client) as mcp:
-            first = await mcp.call_tool_success("ha_get_logs", window)
-            second = await mcp.call_tool_success(
-                "ha_get_logs", {**window, "offset": first["next_offset"]}
-            )
-            tail = await mcp.call_tool_success(
-                "ha_get_logs",
-                {"source": "system_service", "slug": "host", "limit": 500},
-            )
-
-        assert first["has_more"] is True, first
-        assert first["next_offset"] == 50
-        assert second["log"] and second["log"] != first["log"]
-        first_stamps = _entry_times(first["log"])
-        tail_stamps = _entry_times(tail["log"])
-        assert first_stamps and tail_stamps
-        assert min(first_stamps) < min(tail_stamps)
+    The page reads themselves run on every HAOS lane, in
+    ``haos_only/test_supervisor_log_window.py``; the dev app's own log is
+    only certain to have entries here, where it is the server under test.
+    """
 
     @pytest.mark.parametrize(
         ("source", "slug"),
@@ -179,7 +108,7 @@ class TestGetLogsHoursBackReal:
             ("supervisor", HA_MCP_DEV_ADDON_SLUG),
         ],
     )
-    async def test_a_recent_window_is_read_whole(
+    async def test_a_recent_window_has_entries(
         self, mcp_client, source: str, slug: str
     ) -> None:
         """Supervisor and the dev app both log within the hour the lane started."""
@@ -190,7 +119,6 @@ class TestGetLogsHoursBackReal:
             )
 
         assert result["log"], "Expected entries logged in the last hour"
-        assert result["window_complete"] is True, result.get("warnings")
         assert datetime.fromisoformat(result["window_start"]) < datetime.fromisoformat(
             result["read_at"]
         )

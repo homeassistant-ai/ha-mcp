@@ -9,12 +9,14 @@ Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
 Consolidation and Module Size.
 """
 
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from .._vendor.fastmcp.exceptions import ToolError
 from ..client.error_log_journald import is_cursor_token, parse_cursor_token
+from ..client.journal_window import parse_window_token
 from ..errors import TOOL_ERROR_LOG_LEVEL
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
@@ -31,46 +33,48 @@ from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .tool_hints import read_only_hints
 
 
-def _validate_log_offset(source: str, offset: int | str) -> int | str:
-    """Validate a paging anchor: an integer, or an error-log cursor token."""
-    if isinstance(offset, str):
-        text = offset.strip()
-        if not text:
-            # An empty string means "no anchor"; MCP clients stringify 0.
-            return 0
-        if text.lstrip("-").isdigit():
-            # Clients that stringify integers used to reach the integer schema;
-            # keep that working now that the union admits strings.
-            numeric = int(text)
-            if numeric < 0:
-                raise ToolError(
-                    f"'offset' must not be negative, got {numeric}",
-                    log_level=TOOL_ERROR_LOG_LEVEL,
-                )
-            return numeric
-        offset = text
-    if isinstance(offset, str):
-        if source != "error_log":
-            raise ToolError(
-                "Cursor tokens only apply to source='error_log'; "
-                f"source='{source}' takes a non-negative integer offset",
-                log_level=TOOL_ERROR_LOG_LEVEL,
-            )
-        if not is_cursor_token(offset):
+def _validate_offset_token(source: str, token: str) -> str:
+    """Check ``token`` is a ``next_offset`` value ``source`` itself returns."""
+    if source in ("supervisor", "system_service"):
+        parse: Callable[[str], object] = parse_window_token
+    elif source == "error_log":
+        if not is_cursor_token(token):
             raise ToolError(
                 "Invalid 'offset' token for source='error_log'; pass the "
                 "'next_offset' value a previous response returned",
                 log_level=TOOL_ERROR_LOG_LEVEL,
             )
-        try:
-            parse_cursor_token(offset)
-        except ValueError as e:
-            raise ToolError(
-                f"Invalid 'offset' token for source='error_log' ({e}); pass the "
-                "'next_offset' value a previous response returned",
-                log_level=TOOL_ERROR_LOG_LEVEL,
-            ) from e
-        return offset
+        parse = parse_cursor_token
+    else:
+        raise ToolError(
+            "Cursor tokens only apply to source='error_log', 'supervisor' "
+            f"and 'system_service'; source='{source}' takes a non-negative "
+            "integer offset",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
+    try:
+        parse(token)
+    except ValueError as e:
+        raise ToolError(
+            f"Invalid 'offset' token for source='{source}' ({e}); pass the "
+            "'next_offset' value a previous response returned",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        ) from e
+    return token
+
+
+def _validate_log_offset(source: str, offset: int | str) -> int | str:
+    """Validate a paging anchor: an integer, or a cursor token a page returned."""
+    if isinstance(offset, str):
+        text = offset.strip()
+        if not text:
+            # An empty string means "no anchor"; MCP clients stringify 0.
+            return 0
+        if not text.lstrip("-").isdigit():
+            return _validate_offset_token(source, text)
+        # Clients that stringify integers used to reach the integer schema;
+        # keep that working now that the union admits strings.
+        offset = int(text)
     if offset < 0:
         raise ToolError(
             f"'offset' must not be negative, got {offset}",
@@ -152,7 +156,7 @@ class LogTools(
                 search=search,
                 order=order,
                 hours_back=hours_back,
-                offset=numeric_offset,
+                offset=offset,
             )
         assert slug is not None  # guaranteed by _validate_log_slug
         return await self._get_supervisor_log(
@@ -161,7 +165,7 @@ class LogTools(
             search=search,
             order=order,
             hours_back=hours_back,
-            offset=numeric_offset,
+            offset=offset,
         )
 
     async def get_logs(
@@ -324,9 +328,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "supervisor, system_service, fault_log): 'newest' returns "
                     "most-recent first; 'oldest' returns chronological-first. For "
                     "error_log, supervisor and system_service it sets the read "
-                    "direction of the newest lines read, except on a "
-                    "supervisor/system_service page read (see offset), which "
-                    "starts at the window's first entry. fault_log orders whole crash blocks; error_log orders "
+                    "direction of the newest lines read; a supervisor/"
+                    "system_service page read (see offset) starts at the "
+                    "window's first entry ('oldest') or the journal's newest "
+                    "('newest'). fault_log orders whole crash blocks; error_log orders "
                     "whole records and keeps each record's lines in place. Ignored "
                     "for source='logger', and for source='error_log' with "
                     "structured=True."
@@ -341,10 +346,14 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "How many hours back to read. Logbook (default 1), "
                     "supervisor and system_service. For the last two, only "
-                    "when given: the journal serves that window. limit still "
-                    "bounds one response; has_more says more of the window "
-                    "remains, window_complete whether the read reached its "
-                    "end, and offset pages through it (see offset)."
+                    "when given: the journal serves that window, from its "
+                    "start to the journal's end, one page at a time (see "
+                    "offset); has_more says more of it remains. With search "
+                    "the whole window is read at once, up to 10,000 entries: "
+                    "window_complete says whether every entry of the window "
+                    "was searched, and when false only the newest were. "
+                    "Entries stamped out of order by a clock step can move "
+                    "where a newest-first read ends."
                 ),
             ),
         ] = None,
@@ -388,10 +397,13 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
-                    "read: hours_back with order='oldest' and no search "
-                    "(ignored otherwise). A page read counts journal entries "
-                    "from the window's first entry, and its total_lines is "
-                    "the page's line count. On error_log it "
+                    "read: hours_back and no search (ignored otherwise). "
+                    "There it is the opaque token a previous page returned "
+                    "in 'next_offset', which continues from an exact journal "
+                    "entry in the same window; pass it with the same order. "
+                    "With order='oldest' "
+                    "an integer skips that many entries from the window's "
+                    "first. A page's total_lines is its line count. On error_log it "
                     "counts raw log lines back from the newest entry, or is the "
                     "opaque token a previous page returned in 'next_offset' on "
                     "Supervisor/journald installs, which keeps paging exact "
