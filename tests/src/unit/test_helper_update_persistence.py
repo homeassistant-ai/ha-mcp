@@ -109,7 +109,7 @@ class TestInputSelectUpdatePersistence:
                 helper_type="input_select",
                 name="My Dropdown",
                 helper_id="input_select.my_dropdown",
-                options=["Option A", "Option B", "Option C"],
+                config={"options": ["Option A", "Option B", "Option C"]},
             )
 
         assert result["success"] is True
@@ -143,8 +143,7 @@ class TestInputSelectUpdatePersistence:
                 helper_type="input_select",
                 name="My Dropdown",
                 helper_id="input_select.my_dropdown",
-                options=["A", "B"],
-                initial="B",
+                config={"options": ["A", "B"], "initial": "B"},
             )
 
         assert result["success"] is True
@@ -173,11 +172,13 @@ class TestInputNumberUpdatePersistence:
                 helper_type="input_number",
                 name="My Number",
                 helper_id="input_number.my_number",
-                min_value=0,
-                max_value=200,
-                step=5,
-                unit_of_measurement="W",
-                mode="slider",
+                config={
+                    "min": 0,
+                    "max": 200,
+                    "step": 5,
+                    "unit_of_measurement": "W",
+                    "mode": "slider",
+                },
             )
 
         assert result["success"] is True
@@ -214,9 +215,7 @@ class TestInputTextUpdatePersistence:
                 helper_type="input_text",
                 name="My Text",
                 helper_id="input_text.my_text",
-                min_value=1,
-                max_value=50,
-                mode="password",
+                config={"min": 1, "max": 50, "mode": "password"},
             )
 
         assert result["success"] is True
@@ -282,8 +281,7 @@ class TestInputDatetimeUpdatePersistence:
                 helper_type="input_datetime",
                 name="My Datetime",
                 helper_id="input_datetime.my_datetime",
-                has_date=True,
-                has_time=False,
+                config={"has_date": True, "has_time": False},
             )
 
         assert result["success"] is True
@@ -316,11 +314,13 @@ class TestCounterUpdatePersistence:
                 helper_type="counter",
                 name="My Counter",
                 helper_id="counter.my_counter",
-                initial=10,
-                min_value=0,
-                max_value=100,
-                step=2,
-                restore=True,
+                config={
+                    "initial": 10,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "step": 2,
+                    "restore": True,
+                },
             )
 
         assert result["success"] is True
@@ -356,8 +356,7 @@ class TestTimerUpdatePersistence:
                 helper_type="timer",
                 name="My Timer",
                 helper_id="timer.my_timer",
-                duration="00:30:00",
-                restore=False,
+                config={"duration": "00:30:00", "restore": False},
             )
 
         assert result["success"] is True
@@ -410,9 +409,9 @@ class TestFlowHelperRouting:
     to the Config Entry Flow API, not to the WebSocket {type}/create path.
 
     Covers the unified-tool routing added in #967: helper flow types
-    (template, group, utility_meter, ...) are delegated to create_flow_helper /
-    update_flow_helper; entity resolution and registry updates then run against
-    all entities of the resulting config entry.
+    (template, group, utility_meter, ...) run their config or options flow;
+    entity resolution and registry updates then run against all entities of
+    the resulting config entry.
     """
 
     async def test_flow_helper_create_routes_via_config_flow(
@@ -455,11 +454,7 @@ class TestFlowHelperRouting:
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-1"
         assert result["entity_ids"] == ["sensor.avg_temp"]
-        # start_config_flow is awaited twice for create: once for schema
-        # introspection (to decide whether to inject `name`), once for the
-        # real flow. Both calls pass the same helper_type.
-        for call in mock_client.start_config_flow.await_args_list:
-            assert call.args == ("min_max",)
+        mock_client.start_config_flow.assert_awaited_once_with("min_max")
 
     async def test_flow_helper_update_routes_via_options_flow(
         self, register_tools, mock_client
@@ -960,41 +955,6 @@ class TestFlowHelperRouting:
                 wait=False,
             )
 
-    async def test_flow_helper_name_param_folded_into_config(
-        self, register_tools, mock_client
-    ):
-        """Top-level name param is injected into config dict when not already present."""
-        captured_config: dict = {}
-
-        async def capture_submit(flow_id, data):
-            captured_config.update(data)
-            return {
-                "type": "create_entry",
-                "result": {"entry_id": "entry-c", "title": "t", "domain": "min_max"},
-            }
-
-        mock_client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "flow-c",
-                "step_id": "user",
-            }
-        )
-        mock_client.submit_config_flow_step = AsyncMock(side_effect=capture_submit)
-        mock_client.abort_config_flow = AsyncMock(return_value={})
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-
-        await register_tools["ha_config_set_helper"](
-            helper_type="min_max",
-            name="my_helper_name",
-            config={"entity_ids": ["sensor.x"], "type": "mean"},
-            wait=False,
-        )
-
-        assert captured_config.get("name") == "my_helper_name"
-
     async def test_simple_type_accepts_an_empty_config(
         self, register_tools, mock_client
     ):
@@ -1272,16 +1232,3 @@ class TestOptionalNameOnUpdate:
         ]
         assert reg_updates, f"no registry update: {ws_calls}"
         assert reg_updates[0].get("area_id") is None, reg_updates[0]
-
-    async def test_simple_helper_create_still_requires_name(
-        self, register_tools, mock_client
-    ):
-        """Creating a helper without name still fails (but at the tool logic, not Pydantic)."""
-        # No mocking needed: create path raises ToolError before any WS call
-        # when name is missing.
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError, match="name is required for create"):
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-            )

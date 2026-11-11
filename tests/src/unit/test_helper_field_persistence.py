@@ -124,9 +124,7 @@ class TestInputNumberInitialPersistence:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="Thermostat",
-                min_value=60,
-                max_value=85,
-                initial=72,
+                config={"min": 60, "max": 85, "initial": 72},
             )
 
         create_msg = _find_msg(mock_client, "input_number/create")
@@ -162,7 +160,7 @@ class TestInputNumberInitialPersistence:
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 helper_id="abc123",
-                initial=80,
+                config={"initial": 80},
             )
 
         update_msg = _find_msg(mock_client, "input_number/update")

@@ -14,15 +14,11 @@ import pytest
 from ha_mcp import stdio_settings_sidecar as sidecar
 from ha_mcp.config import Settings
 
+from ._embedded_server_helpers import _a_free_port as _a_free_port
+
 # These tests run their own listener on the loopback interface; Core's test
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
 pytestmark = pytest.mark.usefixtures("socket_enabled")
-
-
-def _a_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
 
 
 class TestBindListener:

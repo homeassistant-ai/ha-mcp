@@ -20,7 +20,8 @@ async def _create_template(mcp, template_type, name, state):
         {
             "helper_type": "template",
             "name": name,
-            "config": {"next_step_id": template_type, "state": state},
+            "menu_choice": template_type,
+            "config": {"state": state},
         },
     )
 

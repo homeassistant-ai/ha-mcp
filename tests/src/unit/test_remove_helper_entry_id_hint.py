@@ -1,22 +1,26 @@
 """ha_remove_helpers_integrations guidance for an entry_id passed with helper_type."""
 
+from __future__ import annotations
+
 import json
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
-@pytest.mark.asyncio
-async def test_flow_helper_entry_id_with_helper_type_error_says_to_omit_it():
+async def test_flow_helper_entry_id_with_helper_type_error_says_to_omit_it(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """An agent that passes a flow helper's entry_id with its helper_type is
     told to omit helper_type, not only to search for an entity_id.
     """
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock()
-    tools = IntegrationTools(client)
+    assert await async_setup_component(hass, "config", {})
+    tools = IntegrationTools(core_client)
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_remove_helpers_integrations(

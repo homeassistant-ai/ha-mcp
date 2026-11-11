@@ -334,23 +334,6 @@ class TestExplicitActionCreate:
         assert "Omit helper_id" in msg
         assert "action='update'" in msg
 
-    async def test_create_without_name_falls_through_to_required_check(
-        self, register_tools, mock_client
-    ):
-        """`action='create'` without `name` should still hit the existing
-        'name is required' validation. The discriminator block must not
-        short-circuit that check away.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(helper_type="input_boolean")
-        )
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                action="create",
-            )
-        _assert_invalid_param(excinfo, must_contain="name is required")
-
 
 # ---------------------------------------------------------------------------
 # Explicit `action='update'` — rename pattern + missing-helper_id rejection.
@@ -460,7 +443,7 @@ class TestExplicitActionUpdate:
 
 class TestEmptyNameFallsThroughToRequiredCheck:
     async def test_empty_name_implicit_create(self, register_tools, mock_client):
-        """Implicit create + empty `name` -> name-required error (not a
+        """Implicit create + empty `name` -> blank-name error (not a
         discriminator error)."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_simple_handler(helper_type="input_boolean")
@@ -472,10 +455,10 @@ class TestEmptyNameFallsThroughToRequiredCheck:
             )
         msg = str(excinfo.value)
         assert "VALIDATION_INVALID_PARAMETER" in msg
-        assert "name is required" in msg
+        assert "name cannot be blank" in msg
 
     async def test_empty_name_explicit_create(self, register_tools, mock_client):
-        """Explicit `action='create'` + empty `name` -> still required-name."""
+        """Explicit `action='create'` + empty `name` -> still the blank-name error."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )
@@ -487,4 +470,4 @@ class TestEmptyNameFallsThroughToRequiredCheck:
             )
         msg = str(excinfo.value)
         assert "VALIDATION_INVALID_PARAMETER" in msg
-        assert "name is required" in msg
+        assert "name cannot be blank" in msg

@@ -1,21 +1,17 @@
 """Zone and helper icons on a real ``hass``, through the server's own client.
 
-The server's REST client reaches Core's REST API through ``hass_client`` and
-its WebSocket client reaches Core's WebSocket API through ``hass_ws_client``,
-so every reply, error and registry entry below is Core's own. The component
+The shared ``core_client`` fixture connects the server's client to the test
+``hass``, so every reply, error and registry entry below is Core's own. The component
 path registers the ``ha_mcp_tools/*`` commands; the core path leaves them
 out, as an install without the component has none.
 """
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 from homeassistant.components.device_tracker import ATTR_IN_ZONES
 from homeassistant.components.zone.const import DATA_ZONE
@@ -24,82 +20,33 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
-    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
 from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
 from ha_mcp.tools.tools_zones import ZoneTools
 
-from ._component_core import ws_call
-
 _PATHS = ["component", "core"]
-
-
-class _CoreWebSocket:
-    """The server's WebSocket client, answered by Core's WebSocket API."""
-
-    def __init__(self, ws: Any) -> None:
-        self._ws = ws
-        # One reply per command: the test socket has no request multiplexing.
-        self._lock = asyncio.Lock()
-
-    async def send_command(self, command_type: str, **params: Any) -> dict[str, Any]:
-        async with self._lock:
-            reply = await ws_call(self._ws, command_type, **params)
-        if not reply["success"]:
-            message, code = websocket_client._extract_ws_error(reply["error"])
-            raise HomeAssistantCommandError(f"Command failed: {message}", code)
-        return {"success": True, "result": reply["result"]}
-
-
-class _CoreTransport(httpx.AsyncBaseTransport):
-    """The server's REST transport, answered by Core's REST API."""
-
-    def __init__(self, rest: Any) -> None:
-        self._rest = rest
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        response = await self._rest.request(
-            request.method,
-            request.url.raw_path.decode(),
-            data=request.content or None,
-            headers={"Content-Type": "application/json"},
-        )
-        return httpx.Response(response.status, content=await response.read())
 
 
 @pytest.fixture(params=_PATHS)
 async def core_client(
     request: pytest.FixtureRequest,
     hass: HomeAssistant,
-    hass_ws_client: Any,
-    hass_client: Any,
-) -> AsyncIterator[HomeAssistantClient]:
-    """The server's HA client on a real ``hass`` with zones and input_boolean."""
-    # ``config`` serves the registry commands, ``api`` the REST API.
-    for domain in ("api", "config", "zone", "input_boolean"):
+    core_client: HomeAssistantClient,
+) -> HomeAssistantClient:
+    """The shared ``core_client`` on a ``hass`` with zones and input_boolean."""
+    # ``config`` serves the registry commands.
+    for domain in ("config", "zone", "input_boolean"):
         assert await async_setup_component(hass, domain, {})
     if request.param == "component":
         from custom_components.ha_mcp_tools import websocket_api
 
         websocket_api.async_register_commands(hass)
-    socket = _CoreWebSocket(await hass_ws_client(hass))
-    client = HomeAssistantClient(base_url="http://core.test", token="token")
-    client.httpx_client = httpx.AsyncClient(
-        base_url="http://core.test/api", transport=_CoreTransport(await hass_client())
-    )
-    # Every module's get_websocket_client resolves through the manager.
-    with patch.object(
-        websocket_client.websocket_manager,
-        "get_client",
-        AsyncMock(return_value=socket),
-    ):
-        yield client
-    await client.httpx_client.aclose()
+    return core_client
 
 
 def _stored_zone(hass: HomeAssistant, entity_id: str) -> dict[str, Any]:
@@ -281,16 +228,16 @@ async def test_a_dropped_state_read_still_lists_who_is_in_each_zone(
     every state instead of failing a listing that was already complete."""
     tools = ZoneTools(core_client)
     await _create(tools)
-    send = _CoreWebSocket.send_command
+    send = HomeAssistantWebSocketClient.send_command
 
     async def reset_on_states(
-        self: _CoreWebSocket, command_type: str, **params: Any
+        self: HomeAssistantWebSocketClient, command_type: str, **params: Any
     ) -> dict[str, Any]:
         if command_type == "ha_mcp_tools/states":
             raise ConnectionResetError("connection reset by peer")
         return await send(self, command_type, **params)
 
-    monkeypatch.setattr(_CoreWebSocket, "send_command", reset_on_states)
+    monkeypatch.setattr(HomeAssistantWebSocketClient, "send_command", reset_on_states)
 
     result = await tools.ha_get_zone()
 

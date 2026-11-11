@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
 from custom_components.ha_mcp_tools import llm_api
@@ -36,7 +37,7 @@ def llm_context() -> llm.LLMContext:
     )
 
 
-def registered_apis(hass: Any) -> dict[str, Any]:
+def registered_apis(hass: HomeAssistant) -> dict[str, Any]:
     """The LLM APIs registered in Core's registry for ``hass``, by id."""
     return {api.id: api for api in llm.async_get_apis(hass)}
 
@@ -106,7 +107,7 @@ def fake_session(
     return session
 
 
-def make_api(hass, mode: str = EXPOSURE_FULL) -> Any:
+def make_api(hass: HomeAssistant, mode: str = EXPOSURE_FULL) -> Any:
     return llm_api.HaMcpLlmApi(
         hass=hass,
         id=FULL_ID,

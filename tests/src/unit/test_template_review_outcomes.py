@@ -128,7 +128,9 @@ async def test_applied_options_refusal_preserves_safe_details(monkeypatch):
         fields=("availability",),
     )
     monkeypatch.setattr(
-        config_entry_flow, "update_config_entry_options", AsyncMock(side_effect=failure)
+        config_entry_flow,
+        "restore_config_entry_options",
+        AsyncMock(side_effect=failure),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:
         await bm._restore_flow_helper(object(), "old-entry", snapshot, "template")

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -61,7 +62,9 @@ class FakeCollectionWs:
         self.create_schema = {"name": str}
         self.update_schema = {"name": str}
 
-    async def ws_create_item(self, hass, connection, msg):  # pragma: no cover
+    async def ws_create_item(
+        self, hass: HomeAssistant, connection, msg
+    ):  # pragma: no cover
         raise AssertionError("never invoked")
 
 

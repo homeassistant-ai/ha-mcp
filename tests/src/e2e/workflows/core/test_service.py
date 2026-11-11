@@ -376,7 +376,7 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
         {
             "helper_type": "input_boolean",
             "name": "Service Test Boolean",
-            "initial": "off",
+            "config": {"initial": "off"},
         },
     )
     create_data = parse_mcp_result(create_result)

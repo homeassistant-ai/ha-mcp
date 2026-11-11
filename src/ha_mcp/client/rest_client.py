@@ -873,23 +873,6 @@ class HomeAssistantClient:
         payload = data or {}
         return await self._request("POST", f"/events/{event_type}", json=payload)
 
-    async def render_template(self, template: str) -> str:
-        """
-        Render Home Assistant template.
-
-        Args:
-            template: Template string
-
-        Returns:
-            Rendered template
-        """
-        logger.debug("Rendering template")
-
-        payload = {"template": template}
-        response = await self._request("POST", "/template", json=payload)
-        result = response.get("result")
-        return str(result) if result is not None else ""
-
     async def check_config(self) -> dict[str, Any]:
         """Check Home Assistant configuration."""
         logger.debug("Checking configuration")

@@ -49,11 +49,13 @@ async def wait_for_progress(
 ) -> dict[str, Any]:
     """Poll the flow until it leaves its progress step; return the step it reaches.
 
-    ``poll(url, step)`` sends the GET; the walkers pass one that classifies a
-    lost answer like a lost submit, since the GET can finish the flow.
+    ``poll(url, step)`` sends the GET; the step driver passes one that
+    classifies a lost answer like a lost submit, since the GET can finish the
+    flow.
     Raises ``TIMEOUT_OPERATION`` with the step's ``progress_action`` and Core's
     text for it when the step is still in progress after
-    ``PROGRESS_BUDGET_S``. The flow is left open; the walkers' callers abort it.
+    ``PROGRESS_BUDGET_S``. The flow is left open, and the error carries the
+    ``flow_id`` to ask again with.
     """
     resource = _FLOW_RESOURCES[flow.path.split(".")[0]]
     url = f"/config/config_entries/{resource}/{flow_id}"

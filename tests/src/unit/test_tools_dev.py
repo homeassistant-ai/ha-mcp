@@ -20,43 +20,9 @@ from ha_mcp.tools.tools_dev import (
 )
 from ha_mcp.utils.data_paths import get_data_dir
 
-POLICY_ACCESS_FLAG = "HAMCP_DEV_SECURITY_POLICY_ACCESS"
-
-
-@pytest.fixture(autouse=True)
-def _isolated_env(tmp_path, monkeypatch):
-    """Isolate the data dir and the Settings singleton per test.
-
-    ``is_dev_mode_enabled()`` and the settings tool read through
-    ``get_global_settings()`` (cached) and persist to
-    ``feature_flags.json`` under ``get_data_dir()`` (memoized) — both
-    must be reset so tests can't see each other's state or the real
-    user data dir.
-    """
-    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv(FEATURE_FLAG, raising=False)
-    monkeypatch.delenv(POLICY_ACCESS_FLAG, raising=False)
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    get_data_dir.cache_clear()
-    reset_global_settings()
-    yield
-    get_data_dir.cache_clear()
-    reset_global_settings()
-
-
-@pytest.fixture
-def _policy_access_on(monkeypatch):
-    """Grant the dev tools security-policy access for a whole class (#2141).
-
-    ``dev_tools_security_policy_access`` defaults to OFF, so every test
-    that calls set_policy / set_tool(gated=) / approve / deny has to turn
-    it on first. Ordered after the autouse ``_isolated_env`` (which
-    deletes the var and resets the singleton), so this reset is the one
-    the settings object is built from.
-    """
-    monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
-    reset_global_settings()
+from ._dev_tool_env import POLICY_ACCESS_FLAG
+from ._dev_tool_env import _isolated_env as _isolated_env
+from ._dev_tool_env import _policy_access_on as _policy_access_on
 
 
 def _override_file_path():

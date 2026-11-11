@@ -71,7 +71,7 @@ class TestBulkControl:
                         {
                             "helper_type": "input_boolean",
                             "name": f"Bulk selector {label} {suffix}",
-                            "initial": False,
+                            "config": {"initial": False},
                         },
                     )
                     entity_id = _extract_bulk_boolean_entity_id(create_data)
@@ -150,7 +150,7 @@ class TestBulkControl:
                         {
                             "helper_type": "input_boolean",
                             "name": f"Bulk dispatch {label} {suffix}",
-                            "initial": True,
+                            "config": {"initial": True},
                         },
                     )
                     entity_id = _extract_bulk_boolean_entity_id(create_data)
@@ -648,7 +648,7 @@ async def test_bulk_control_with_input_booleans(mcp_client, cleanup_tracker):
             {
                 "helper_type": "input_boolean",
                 "name": f"Bulk Test Boolean {i + 1}",
-                "initial": "off",
+                "config": {"initial": "off"},
             },
         )
         create_data = parse_mcp_result(create_result)

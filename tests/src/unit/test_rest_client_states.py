@@ -1,22 +1,25 @@
 """Unit tests for ``HomeAssistantClient.get_states()``'s response-shape contract.
 
 Every ``/states`` reply Home Assistant itself produces on success is a JSON
-array — even a fresh install has built-in entities (``sun.sun``,
-``persistent_notification``, ...), so a genuinely empty instance is not a
-real-world possibility. A non-list reply (including ``_request``'s own
-``{}`` fallback for an empty body) can therefore only mean the fetch
-itself failed, not "this instance has zero entities" — callers that verify
-something against the live entity set (e.g. ``bulk_selector.py``'s topology
-load, or ``tools_service.py``'s operations-mode group-safety check) need
-that distinction to fail closed instead of silently treating an
-unverifiable batch as a verified-safe one.
+array, so ``get_states`` hands it through unchanged. A non-list reply
+(including ``_request``'s own ``{}`` fallback for an empty body) can only come
+from something in front of Home Assistant and means the fetch itself failed,
+not "this instance has zero entities". Callers that verify something against
+the live entity set (e.g. ``bulk_selector.py``'s topology load, or
+``tools_service.py``'s operations-mode group-safety check) need that
+distinction to fail closed instead of treating an unverifiable batch as a
+verified-safe one.
+
+The list replies are real Core's. The others are a gateway's, answering in
+front of real Core.
 """
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
-import httpx
+import json
+
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
@@ -24,82 +27,59 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 
-
-@pytest.fixture
-def client():
-    """``HomeAssistantClient`` with stubbed internals — no real network."""
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        c = HomeAssistantClient()
-        c.base_url = "http://test.local:8123"
-        c.token = "test-token"
-        c.timeout = 30
-        c.verify_ssl = True
-        c.httpx_client = MagicMock()
-        c._supervised_detected = None
-        return c
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
 
 
-def _response(status_code: int, *, json_body: Any) -> MagicMock:
-    resp = MagicMock(spec=httpx.Response)
-    resp.status_code = status_code
-    resp.reason_phrase = "OK"
-    resp.text = ""
-    resp.json = MagicMock(return_value=json_body)
-    return resp
-
-
-@pytest.mark.asyncio
-async def test_get_states_passes_through_a_real_list(client):
+async def test_get_states_passes_through_a_real_list(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """The overwhelmingly common, correct case: unchanged."""
-    states = [{"entity_id": "light.one", "state": "on"}]
-    client.httpx_client.request = AsyncMock(
-        return_value=_response(200, json_body=states)
-    )
+    hass.states.async_set("light.one", "on")
 
-    result = await client.get_states()
+    result = await core_client.get_states()
 
-    assert result == states
+    assert [state["entity_id"] for state in result] == ["light.one"]
+    assert result == [json.loads(s.as_dict_json) for s in hass.states.async_all()]
 
 
-@pytest.mark.asyncio
-async def test_get_states_passes_through_a_genuinely_empty_list(client):
+async def test_get_states_passes_through_a_genuinely_empty_list(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """An empty list IS a list -- isinstance(result, list) accepts it as-is.
 
-    Distinct from the non-list cases below: this is what Home Assistant
-    would send back if the check ever needed to allow for zero entities;
-    the raise below is specifically about the shape being wrong, not the
-    count being zero.
+    The raise in ``get_states`` is about the shape being wrong, not the count
+    being zero: a ``hass`` with no entities answers ``[]``.
     """
-    client.httpx_client.request = AsyncMock(return_value=_response(200, json_body=[]))
+    assert hass.states.async_all() == []
 
-    result = await client.get_states()
+    result = await core_client.get_states()
 
     assert result == []
 
 
-@pytest.mark.asyncio
-async def test_get_states_raises_on_a_dict_response(client):
-    """A dict-shaped body (an error envelope Home Assistant might send
-    instead of the expected array) must raise, not silently become []."""
-    client.httpx_client.request = AsyncMock(
-        return_value=_response(200, json_body={"error": "something went wrong"})
-    )
+async def test_get_states_raises_on_a_dict_response(
+    gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """A dict-shaped body (a gateway's error envelope instead of the expected
+    array) must raise, not silently become []."""
+    gateway.pages = [b'{"error": "something went wrong"}']
 
     with pytest.raises(HomeAssistantConnectionError):
-        await client.get_states()
+        await gateway_client.get_states()
 
 
-@pytest.mark.asyncio
-async def test_get_states_raises_on_an_empty_body(client):
+async def test_get_states_raises_on_an_empty_body(
+    gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
     """``_request``'s own ``{}`` fallback for an empty body must not read as
     "zero entities" either -- it is the same non-list shape, reached through
     a different path inside ``_request``."""
-    client.httpx_client.request = AsyncMock(
-        return_value=httpx.Response(200, content=b"")
-    )
+    gateway.pages = [b""]
 
     with pytest.raises(HomeAssistantConnectionError):
-        await client.get_states()
+        await gateway_client.get_states()
 
 
 _UNREADABLE_BODIES = pytest.mark.parametrize(
@@ -107,29 +87,26 @@ _UNREADABLE_BODIES = pytest.mark.parametrize(
 )
 
 
-@pytest.mark.asyncio
 @_UNREADABLE_BODIES
 async def test_a_read_reply_that_is_not_json_is_an_error_not_an_empty_result(
-    client: HomeAssistantClient, body: bytes
+    gateway: Gateway, gateway_client: HomeAssistantClient, body: bytes
 ) -> None:
     """``{}`` would pass as an entity's config, e.g. in a pre-write backup."""
-    client.httpx_client.request = AsyncMock(
-        return_value=httpx.Response(200, content=body)
-    )
+    gateway.pages = [body]
 
     with pytest.raises(HomeAssistantAPIError):
-        await client._request("GET", "/states")
+        await gateway_client.get_entity_state("light.one")
+
+    assert gateway.requests == ["GET /api/states/light.one"]
 
 
-@pytest.mark.asyncio
 @_UNREADABLE_BODIES
 async def test_a_write_reply_that_is_not_json_counts_as_accepted(
-    client: HomeAssistantClient, body: bytes
+    gateway: Gateway, gateway_client: HomeAssistantClient, body: bytes
 ) -> None:
     """The write may have run; reporting it as failed invites a retry that
     repeats it, so the caller gets the empty result and verifies state."""
-    client.httpx_client.request = AsyncMock(
-        return_value=httpx.Response(200, content=body)
-    )
+    gateway.pages = [body]
 
-    assert await client._request("POST", "/services/light/turn_on") == {}
+    assert await gateway_client.fire_event("ha_mcp_probe") == {}
+    assert gateway.requests == ["POST /api/events/ha_mcp_probe"]

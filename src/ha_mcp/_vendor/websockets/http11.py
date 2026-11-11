@@ -80,6 +80,19 @@ _token_re = re.compile(rb"[-!#$%&\'*+.^_`|~0-9a-zA-Z]+")
 
 _value_re = re.compile(rb"[\x09\x20-\x7e\x80-\xff]*")
 
+# Regexes for validating status codes and numeric header values.
+# Set a lower limit than default_max_str_digits; 1 EB is plenty.
+
+# Content-Length = 1*DIGIT
+# See https://datatracker.ietf.org/doc/html/rfc9110#section-8.6
+
+_digits_re = re.compile(rb"[0-9]{1,18}")
+
+# chunk-size = 1*HEXDIG
+# See https://datatracker.ietf.org/doc/html/rfc9112#section-7.1
+
+_hexdigits_re = re.compile(rb"[0-9a-fA-F]{1,15}")
+
 
 @dataclasses.dataclass
 class Request:
@@ -147,6 +160,7 @@ class Request:
             TooManyHeaders: If there are too many headers.
             UnicodeDecodeError: If the request method or path isn't ASCII.
             ValueError: If the request isn't well formatted.
+            NotImplementedError: If the request uses Transfer-Encoding.
 
         """
         # https://datatracker.ietf.org/doc/html/rfc7230#section-3.1.1
@@ -183,11 +197,11 @@ class Request:
         if "Transfer-Encoding" in headers:
             raise NotImplementedError("transfer codings aren't supported")
 
-        if "Content-Length" in headers:
-            # Some devices send a Content-Length header with a value of 0.
-            # This raises ValueError if Content-Length isn't an integer too.
-            if int(headers["Content-Length"]) != 0:
-                raise ValueError("unsupported request body")
+        # Some devices send a Content-Length header with a value of 0.
+        # Reject any other value. For technical correctness, accept
+        # multiple Content-Length headers, all with a value of 0.
+        if not set(headers.get_all("Content-Length")) <= {"0"}:
+            raise ValueError("unsupported request body")
 
         return cls(path, headers, method, protocol)
 
@@ -274,6 +288,8 @@ class Response:
             SecurityError: If the response body exceeds a security limit.
             LookupError: If the response isn't well formatted.
             ValueError: If the response isn't well formatted.
+            NotImplementedError: If the response uses Transfer-Encoding, and
+                it isn't "chunked".
 
         """
         # https://datatracker.ietf.org/doc/html/rfc7230#section-3.1.2
@@ -298,12 +314,11 @@ class Response:
                 raise ValueError(
                     f"unsupported protocol; expected HTTP/1.1: {d(status_line)}"
                 )
-        try:
-            status_code = int(raw_status_code)
-        except ValueError:  # invalid literal for int() with base 10
+        if not _digits_re.fullmatch(raw_status_code):
             raise ValueError(
                 f"invalid status code; expected integer; got {d(raw_status_code)}"
-            ) from None
+            )
+        status_code = int(raw_status_code)
         if not 100 <= status_code < 600:
             raise ValueError(
                 f"invalid status code; expected 100–599; got {d(raw_status_code)}"
@@ -452,7 +467,7 @@ def read_body(
     # MultipleValuesError is sufficiently unlikely that we don't attempt to
     # handle it when accessing headers. Instead we document that its parent
     # class, LookupError, may be raised.
-    # Conversions from str to int are protected by sys.set_int_max_str_digits..
+    # Conversions from str to int are protected by sys.set_int_max_str_digits.
 
     elif (coding := headers.get("Transfer-Encoding")) is not None:
         if coding != "chunked":
@@ -462,10 +477,8 @@ def read_body(
         while True:
             chunk_size_line = yield from parse_line(read_line, SecurityError)
             raw_chunk_size = chunk_size_line.split(b";", 1)[0]
-            # Set a lower limit than default_max_str_digits; 1 EB is plenty.
-            if len(raw_chunk_size) > 15:
-                str_chunk_size = raw_chunk_size.decode(errors="backslashreplace")
-                raise SecurityError(f"chunk too large: 0x{str_chunk_size} bytes")
+            if not _hexdigits_re.fullmatch(raw_chunk_size):
+                raise SecurityError(f"invalid chunk size: {d(raw_chunk_size)}")
             chunk_size = int(raw_chunk_size, 16)
             if chunk_size == 0:
                 break
@@ -481,9 +494,8 @@ def read_body(
         return body
 
     elif (raw_content_length := headers.get("Content-Length")) is not None:
-        # Set a lower limit than default_max_str_digits; 1 EiB is plenty.
-        if len(raw_content_length) > 18:
-            raise SecurityError(f"body too large: {raw_content_length} bytes")
+        if not _digits_re.fullmatch(raw_content_length.encode("iso-8859-1")):
+            raise SecurityError(f"invalid content length: {raw_content_length}")
         content_length = int(raw_content_length)
         if content_length > MAX_BODY_SIZE:
             raise SecurityError(f"body too large: {content_length} bytes")

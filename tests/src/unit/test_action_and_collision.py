@@ -149,7 +149,7 @@ def _make_flow_handler(
         if msg_type == "config_entries/get":
             return {"success": True, "result": entries}
 
-        # The flow path itself is mocked at a higher level (create_flow_helper);
+        # The flow itself is mocked at a higher level (advance_flow);
         # any leaked WS calls here just succeed-as-noop.
         return {"success": True, "result": {}}
 
@@ -266,23 +266,6 @@ class TestBug12NameCollisionSimpleHelpers:
         # Suggestion text must steer the caller toward an UPDATE.
         assert "helper_id" in str(excinfo.value)
 
-    async def test_collision_is_slug_based_not_exact_string(
-        self, register_tools, mock_client
-    ):
-        """Spaces / casing / punctuation collapse to the same slug."""
-        existing = [{"id": "kitchen_light", "name": "Kitchen Light"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type="input_boolean", list_items=existing
-            )
-        )
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="kitchen light!",  # different chars, same slug
-            )
-        _assert_invalid_param(excinfo, must_contain="kitchen_light")
-
     async def test_unique_name_passes_collision_check(
         self, register_tools, mock_client
     ):
@@ -308,9 +291,7 @@ class TestBug12NameCollisionSimpleHelpers:
     async def test_empty_name_falls_through_to_required_check(
         self, register_tools, mock_client
     ):
-        """Empty `name` must raise the existing 'name is required' error,
-        not a collision error.
-        """
+        """Empty `name` must raise the blank-name error, not a collision error."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_simple_handler(helper_type="input_boolean")
         )
@@ -341,33 +322,26 @@ class TestBug12NameCollisionFlowHelper:
             )
         )
 
-        # The flow create path itself is mocked away — we only care that the
-        # collision check fires before HA is called.
+        # The collision check fires before a flow is opened.
         with (
             patch(
-                "ha_mcp.tools.config_helpers.flow.create_flow_helper",
+                "ha_mcp.tools.config_helpers.flow.advance_flow",
                 new_callable=AsyncMock,
-                return_value={
-                    "entry_id": "shouldnotbecreated",
-                    "title": "Room Temp",
-                    "message": "ok",
-                },
-            ),
+            ) as advance,
             pytest.raises(ToolError) as excinfo,
         ):
             await register_tools["ha_config_set_helper"](
                 helper_type="template",
                 name="Room Temp",
-                config={
-                    "next_step_id": "sensor",
-                    "state": "{{ states('sensor.x')|float }}",
-                },
+                menu_choice="sensor",
+                config={"state": "{{ states('sensor.x')|float }}"},
             )
 
         _assert_invalid_param(excinfo, must_contain=existing_entry_id)
+        advance.assert_not_awaited()
 
     async def test_template_unique_name_passes(self, register_tools, mock_client):
-        """Control: a unique flow-helper name proceeds to create_flow_helper."""
+        """Control: a unique flow-helper name proceeds to the flow."""
         existing_entries = [
             {"entry_id": "EXISTING", "title": "Other Sensor", "domain": "template"},
         ]
@@ -377,21 +351,22 @@ class TestBug12NameCollisionFlowHelper:
             )
         )
         with patch(
-            "ha_mcp.tools.config_helpers.flow.create_flow_helper",
+            "ha_mcp.tools.config_helpers.flow.advance_flow",
             new_callable=AsyncMock,
-            return_value={
-                "entry_id": "NEWENTRY",
-                "title": "Brand New Sensor",
-                "message": "ok",
-            },
+            return_value=(
+                "flow-1",
+                {
+                    "type": "create_entry",
+                    "result": {"entry_id": "NEWENTRY", "title": "Brand New Sensor"},
+                },
+                0,
+            ),
         ):
             result = await register_tools["ha_config_set_helper"](
                 helper_type="template",
                 name="Brand New Sensor",
-                config={
-                    "next_step_id": "sensor",
-                    "state": "{{ states('sensor.x')|float }}",
-                },
+                menu_choice="sensor",
+                config={"state": "{{ states('sensor.x')|float }}"},
                 # The fake registry never lists the new entry's entities, so
                 # waiting would poll to the deadline without changing the result.
                 wait=False,

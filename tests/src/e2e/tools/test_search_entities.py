@@ -812,9 +812,7 @@ async def area_with_mixed_domains(mcp_client):
             "helper_type": "input_number",
             "name": f"e2e 1162 num {suffix}",
             "area_id": area_id,
-            "min_value": 0,
-            "max_value": 10,
-            "step": 1,
+            "config": {"min": 0, "max": 10, "step": 1},
         },
     )
     number_data = assert_mcp_success(number_result, "Create input_number")

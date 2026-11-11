@@ -10,10 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
-from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.routing import Route
-from starlette.testclient import TestClient
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -21,12 +18,12 @@ from ha_mcp.backup_manager import BackupRestoreError, MandatoryBackupError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.settings_ui import _handlers_backups as ui
 
-from ._js_harness import extract_script_body, run_script
+from ._backup_restore_helpers import NAME as NAME
+from ._backup_restore_helpers import response_for as response_for
+from ._backup_restore_helpers import run_restore as run_restore
 from .test_backup_diff_error_mapping import _backup_settings, _dispatcher
 from .test_backup_manager import _mk_handler, _mk_manager
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM, _assert_clean_init
 
-NAME = "helper_template.sensor.example.20260909_000000.yaml"
 SAFETY = "helper_template.original-entry.20260909_000001.yaml"
 
 
@@ -137,16 +134,6 @@ async def test_typed_restore_outcome_survives_consumer(
     assert SAFETY in str(payload)
 
 
-def response_for(monkeypatch, manager, name=NAME):
-    monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
-    handler = ui.build_backups_handlers(None)["restore_backup"]
-    app = Starlette(
-        routes=[Route("/backups/{name}/restore", handler, methods=["POST"])]
-    )
-    with TestClient(app, raise_server_exceptions=False) as client:
-        return client.post(f"/backups/{name}/restore")
-
-
 def test_settings_mandatory_capture_failure_is_json_and_does_not_echo_details(
     monkeypatch,
 ):
@@ -251,32 +238,6 @@ async def test_settings_diff_uses_stable_snapshot_comparison(monkeypatch):
     assert "replacement live" not in payload["diff"]
     manager.snapshot_comparison.assert_awaited_once_with(NAME)
     manager.read_snapshot.assert_not_called()
-
-
-@pytest.fixture(scope="module")
-def settings_script():
-    from ha_mcp.settings_ui import _SETTINGS_HTML
-
-    return extract_script_body(_SETTINGS_HTML)
-
-
-def run_restore(settings_script, reply, name=NAME):
-    result = run_script(
-        settings_script,
-        initial_html=MIN_DOM,
-        settle_ms=300,
-        fetch_map={
-            **DEFAULT_FETCHES,
-            "/restore": reply,
-            "/backups?": {"status": 200, "json": {"success": True, "backups": []}},
-        },
-        invoke=(
-            "await new Promise(resolve => setTimeout(resolve, 100));\n"
-            f"await window.backupAction('restore', {json.dumps(name)});"
-        ),
-    )
-    _assert_clean_init(result)
-    return result
 
 
 @pytest.mark.parametrize(

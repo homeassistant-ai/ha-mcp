@@ -42,6 +42,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools.const import (
@@ -121,7 +122,7 @@ def tools_env(monkeypatch, store_backing):
     """
 
     class _FakeStore:
-        def __init__(self, hass: Any, version: int, key: str) -> None:
+        def __init__(self, hass: HomeAssistant, version: int, key: str) -> None:
             self._key = key
 
         async def async_load(self) -> Any:

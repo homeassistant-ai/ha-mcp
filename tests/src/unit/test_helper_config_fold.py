@@ -1,11 +1,11 @@
-"""ha_config_set_helper: SIMPLE-type fields in ``config``, Core-sourced schemas,
-component-routed writes, and the component-aware catalog (issue #2479)."""
+"""ha_config_set_helper: a storage helper's ``config`` sent to Core as written,
+Core-sourced schemas, component-routed writes, and the component-aware catalog."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from copy import deepcopy
-from typing import Annotated, Any
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,20 +21,11 @@ from ha_mcp.tools.config_helpers import create as hc_create
 from ha_mcp.tools.config_helpers import schemas as hc_schemas
 from ha_mcp.tools.config_helpers import typed_config as hc_typed
 from ha_mcp.tools.config_helpers import update as hc_update
-from ha_mcp.tools.helpers import HIDDEN_PARAM, hidden_param_names
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 
 from .test_updates_repairs import _client as _ws
 
 pytestmark = pytest.mark.asyncio
-
-_HIDDEN = {
-    "min_value", "max_value", "step", "unit_of_measurement", "options", "initial",
-    "mode", "has_date", "has_time", "restore", "duration", "monday", "tuesday",
-    "wednesday", "thursday", "friday", "saturday", "sunday", "latitude",
-    "longitude", "radius", "passive", "user_id", "device_trackers", "picture",
-    "tag_id", "description", "pattern",
-}  # fmt: skip
 
 _CORE_SCHEMAS: dict[str, Any] = {
     t: {"create": [{"name": "name", "required": True, "type": "string"}], "update": []}
@@ -59,25 +50,16 @@ async def _registered_tool() -> Any:
     return mcp, await mcp.get_tool("ha_config_set_helper")
 
 
-async def test_schema_publishes_config_but_not_flat_fields() -> None:
+async def test_a_storage_field_is_not_a_tool_parameter() -> None:
+    """A helper's own fields are Core's to name: they go in ``config``, and
+    the tool declares none of them."""
     _, tool = await _registered_tool()
     properties = tool.parameters["properties"]
-    assert not _HIDDEN & properties.keys()
     assert {"helper_type", "name", "icon", "config", "wait"} <= properties.keys()
-    # Every hidden field is still documented in the config description.
-    description = properties["config"]["description"]
-    for field in _HIDDEN - {"min_value", "max_value"}:
-        if field not in {"monday", "tuesday", "wednesday", "thursday", "friday",
-                         "saturday", "sunday"}:  # fmt: skip
-            assert field in description, field
-    assert "monday..sunday" in description
-
-
-async def test_hidden_param_names_reads_the_marker() -> None:
-    def fn(a: int, b: Annotated[int | None, HIDDEN_PARAM] = None) -> None:
-        """Signature only."""
-
-    assert hidden_param_names(fn) == frozenset({"b"})
+    assert not {"min", "min_value", "options", "has_date"} & properties.keys()
+    mcp, _ = await _registered_tool()
+    with pytest.raises(ToolError, match="min_value"):
+        await _call(mcp, helper_type="input_number", name="T", min_value=1)
 
 
 class _Captured:
@@ -96,7 +78,7 @@ def capture_create() -> Iterator[_Captured]:
     captured = _Captured()
     with (
         patch.object(tch, "_execute_create_simple_helper", captured),
-        patch.object(tch, "_check_name_collision", AsyncMock()),
+        patch.object(tch, "_check_name_collision", AsyncMock(return_value=None)),
         patch.object(tch, "validate_registry_ids", AsyncMock()),
         patch.object(hc_typed, "fetch_helper_schemas", AsyncMock(return_value=None)),
     ):
@@ -113,17 +95,6 @@ def _fields(captured: _Captured, call: int = 0) -> dict[str, Any]:
     return captured.args[call][-1]  # type: ignore[no-any-return]
 
 
-async def test_flat_and_config_fields_reach_create_identically(
-    capture_create: _Captured,
-) -> None:
-    mcp, _ = await _registered_tool()
-    base = {"helper_type": "input_number", "name": "Target", "action": "create"}
-    await _call(mcp, **base, min_value=1, max_value="9", step=2)
-    await _call(mcp, **base, config={"min": 1, "max": 9, "step": 2})
-    assert _fields(capture_create, 0) == _fields(capture_create, 1)
-    assert _fields(capture_create, 1) == {"min": 1, "max": 9, "step": 2}
-
-
 async def test_config_accepts_core_names_and_name(capture_create: _Captured) -> None:
     mcp, _ = await _registered_tool()
     await _call(
@@ -132,18 +103,10 @@ async def test_config_accepts_core_names_and_name(capture_create: _Captured) -> 
         action="create",
         config={"name": "Laps", "minimum": 0, "maximum": "5", "icon": "mdi:run"},
     )
-    assert _fields(capture_create) == {"minimum": 0, "maximum": 5}
+    # As written: Core coerces the string, not the tool.
+    assert _fields(capture_create) == {"minimum": 0, "maximum": "5"}
     # positional: client, helper_type, name, icon
     assert capture_create.args[0][2:4] == ("Laps", "mdi:run")
-
-
-async def test_counter_range_params_use_counters_core_names(
-    capture_create: _Captured,
-) -> None:
-    """Core's counter calls the range minimum/maximum, not min/max."""
-    mcp, _ = await _registered_tool()
-    await _call(mcp, helper_type="counter", name="C", min_value=0, max_value=5)
-    assert _fields(capture_create) == {"minimum": 0, "maximum": 5}
 
 
 async def test_core_value_types_pass_through(capture_create: _Captured) -> None:
@@ -151,8 +114,8 @@ async def test_core_value_types_pass_through(capture_create: _Captured) -> None:
     mcp, _ = await _registered_tool()
     base = {"action": "create", "name": "T"}
     await _call(mcp, helper_type="timer", **base, config={"duration": 300})
-    await _call(mcp, helper_type="input_number", **base, initial=2.5,
-                min_value=0, max_value=5)  # fmt: skip
+    await _call(mcp, helper_type="input_number", **base,
+                config={"initial": 2.5, "min": 0, "max": 5})  # fmt: skip
     await _call(mcp, helper_type="input_boolean", **base, config={"initial": True})
     timer, number, boolean = (_fields(capture_create, i) for i in range(3))
     assert (timer["duration"], number["initial"]) == (300, 2.5)
@@ -214,21 +177,11 @@ async def test_one_field_passed_twice_with_different_values_is_rejected(
 ) -> None:
     mcp, _ = await _registered_tool()
     base = {"helper_type": "input_number", "name": "T", "action": "create"}
-    for flat, folded in ({"step": 1}, {"step": 2}), ({"min_value": 1}, {"min": 2}):
-        with pytest.raises(ToolError, match="both as a parameter and in config"):
-            await _call(mcp, **base, **flat, config=folded)
+    with pytest.raises(ToolError, match="both as a parameter and in config"):
+        await _call(mcp, **base, config={"name": "U", "min": 1})
     assert capture_create.args == []
-    await _call(mcp, **base, min_value=1, config={"min": 1})  # agreeing is fine
+    await _call(mcp, **base, config={"name": "T", "min": 1})  # agreeing is fine
     assert _fields(capture_create) == {"min": 1}
-
-
-async def test_flow_helper_rejects_storage_params_passed_top_level() -> None:
-    mcp, _ = await _registered_tool()
-    with (
-        patch.object(hc_typed, "fetch_helper_schemas", AsyncMock(return_value=None)),
-        pytest.raises(ToolError, match="not applicable"),
-    ):
-        await _call(mcp, helper_type="derivative", name="D", min_value=1)
 
 
 async def test_error_context_lists_cores_fields_when_served() -> None:
@@ -238,10 +191,7 @@ async def test_error_context_lists_cores_fields_when_served() -> None:
     finally:
         hc_schemas._CORE_HELPER_SCHEMAS.reset(token)
     assert context["data_schema"] == _CORE_SCHEMAS["input_number"]["create"]
-    assert (
-        hc_schemas._simple_helper_error_context("input_number")["data_schema"]
-        == (hc_schemas.SIMPLE_HELPER_SCHEMAS["input_number"])
-    )
+    assert "data_schema" not in hc_schemas._simple_helper_error_context("input_number")
 
 
 async def test_create_routes_through_component() -> None:
@@ -696,6 +646,23 @@ async def test_write_falls_back_to_websocket_when_component_unavailable() -> Non
     assert result["entity_id"] == "input_boolean.b"
 
 
+async def test_a_long_choice_list_is_counted_not_spelled_out_in_the_description() -> (
+    None
+):
+    """Core's device_class field has dozens of choices; spelled out, they
+    would sit in every tool listing. describe lists them."""
+    from ha_mcp.transforms.component_helpers import render_core_keys
+
+    choices = [[f"choice_{n}", f"Choice {n}"] for n in range(40)]
+    rendered = render_core_keys(
+        {"input_number": {"create": [{"name": "device_class", "options": choices}]}}
+    )
+
+    assert "choice_7" not in rendered
+    assert "40" in rendered
+    assert "describe=True" in rendered
+
+
 class TestCatalogTransform:
     @pytest.fixture
     def available(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -720,8 +687,8 @@ class TestCatalogTransform:
         description = properties["config"]["description"]
         assert hc_schemas._SIMPLE_CONFIG_KEYS_DESCRIPTION not in description
         assert (
-            "input_number: min (float, required), max (float, required), "
-            "step (float, default 1), mode (box|slider)." in description
+            "input_number: max (float, required), min (float, required), "
+            "mode (box|slider), step (float, default 1)." in description
         )
 
     async def test_static_contract_without_component(

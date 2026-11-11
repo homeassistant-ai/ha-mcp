@@ -1,92 +1,111 @@
 """Prove alias deletion captures a fresh, restorable Template snapshot."""
 
-from copy import deepcopy
-from unittest.mock import AsyncMock
+from __future__ import annotations
 
-from ha_mcp.tools import auto_backup
-from ha_mcp.tools.config_helpers import registry as helper_registry
+from pathlib import Path
+
+import pytest
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+
+from ha_mcp import backup_manager as bm
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import _reset_global_settings, get_global_settings
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from .test_template_deleted_recovery import ENTITY, OPTIONS
-from .test_template_deleted_recovery import recovery as recovery
+RENAMED = "sensor.renamed_example"
+CUSTOM_NAME = "Custom name"
+
+
+async def _create_renamed_template(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> ConfigEntry:
+    """A real Template helper from Core's config flow, its entity renamed."""
+    flow = await hass.config_entries.flow.async_init(
+        "template", context={"source": "user"}
+    )
+    flow = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "sensor"}
+    )
+    flow = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"name": "Example", "state": "{{ 12 }}"}
+    )
+    assert flow["type"] == FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    entry: ConfigEntry = flow["result"]
+    entity = entity_registry.async_get_or_create("sensor", "template", entry.entry_id)
+    entity_registry.async_update_entity(
+        entity.entity_id, new_entity_id=RENAMED, name=CUSTOM_NAME
+    )
+    await hass.async_block_till_done()
+    assert entity_registry.async_get(RENAMED) is not None
+    return entry
 
 
 async def test_alias_deletion_captures_before_remove_and_restores_exact_snapshot(
-    recovery, monkeypatch
-):
-    manager = recovery.manager
-    client = manager._client
-    manager._settings.auto_backup_retain_per_entity = 5
-    recovery.state.entries.append({"entry_id": "old-entry", "domain": "template"})
-    recovery.state.records.append(
-        {
-            "entry_id": "old-entry",
-            "entity_id": ENTITY["entity_id"],
-            "kind": "flow",
-            "helper_type": "template",
-            "options": deepcopy(OPTIONS),
-        }
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    monkeypatch.setenv("AUTO_BACKUP_RETAIN_PER_ENTITY", "5")
+    monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
+    _reset_global_settings()
+    manager = bm.get_backup_manager(component_core_client, get_global_settings())
+    assert await async_setup_component(hass, "config", {})
+
+    old_entry = await _create_renamed_template(hass, entity_registry)
+    options = dict(old_entry.options)
+
+    # An earlier snapshot must not be mistaken for the one deletion captures.
+    stale = await manager.maybe_snapshot(
+        "helper_template", old_entry.entry_id, force=True
     )
-    recovery.state.registry.append(
-        {**ENTITY, "config_entry_id": "old-entry", "platform": "template"}
-    )
+    assert stale is not None
     before = {row["name"] for row in manager.list_snapshots()}
 
-    def fresh_snapshot():
-        names = {row["name"] for row in manager.list_snapshots()} - before
-        assert len(names) == 1, "Alias deletion must capture its own fresh snapshot"
-        (name,) = names
-        snapshot = manager.read_snapshot(name)
-        assert snapshot["entity_id"] == "old-entry"
-        assert snapshot["config"] == recovery.config
-        return name, snapshot
-
-    async def send(message):
-        if message["type"] == "config/entity_registry/get":
-            assert message["entity_id"] == ENTITY["entity_id"]
-            return {"success": True, "result": deepcopy(recovery.state.registry[0])}
-        assert message["type"] == "config/entity_registry/list"
-        return {"success": True, "result": deepcopy(recovery.state.registry)}
-
-    async def delete(entry_id):
-        assert entry_id == "old-entry"
-        # This check runs before destruction, so a post-delete capture cannot pass.
-        fresh_snapshot()
-        recovery.state.entries.clear()
-        recovery.state.records.clear()
-        recovery.state.registry.clear()
-        return {}
-
-    client.send_websocket_message = AsyncMock(side_effect=send)
-    client.delete_config_entry = AsyncMock(side_effect=delete)
-    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: manager._settings)
-    monkeypatch.setattr(auto_backup, "get_backup_manager", lambda *_: manager)
-    monkeypatch.setattr(
-        helper_registry,
-        "fetch_entities_for_config_entry_via_component",
-        AsyncMock(return_value=None),
-    )
-
-    removed = await IntegrationTools(client).ha_remove_helpers_integrations(
-        target=ENTITY["entity_id"], helper_type="template", confirm=True, wait=False
+    removed = await IntegrationTools(
+        component_core_client
+    ).ha_remove_helpers_integrations(
+        target=RENAMED, helper_type="template", confirm=True, wait=False
     )
     assert removed["success"] is True
-    assert removed["entry_id"] == "old-entry"
-    assert removed["entity_ids"] == [ENTITY["entity_id"]]
-    client.delete_config_entry.assert_awaited_once_with("old-entry")
-    name, snapshot = fresh_snapshot()
-    assert name != recovery.name
+    assert removed["entry_id"] == old_entry.entry_id
+    assert removed["entity_ids"] == [RENAMED]
+    assert hass.config_entries.async_get_entry(old_entry.entry_id) is None
+    assert entity_registry.async_get(RENAMED) is None
+
+    # Capture reads the live entry, so a snapshot of the full config can only
+    # have been taken before the entry was removed.
+    names = {row["name"] for row in manager.list_snapshots()} - before
+    assert len(names) == 1, "Alias deletion must capture its own fresh snapshot"
+    (name,) = names
+    assert name != stale.name
+    snapshot = manager.read_snapshot(name)
+    assert snapshot["entity_id"] == old_entry.entry_id
+    assert snapshot["config"]["entry_id"] == old_entry.entry_id
+    assert snapshot["config"]["options"] == options
+    assert [row["entity_id"] for row in snapshot["config"]["entities"]] == [RENAMED]
 
     restored = await manager.restore_snapshot(name)
     replacement = restored["result"]["entry_id"]
-    assert replacement == "new-entry"
-    assert restored["original_entry_id"] == "old-entry"
+    assert replacement != old_entry.entry_id
+    assert restored["original_entry_id"] == old_entry.entry_id
     assert restored["restore_mode"] == "recreated"
     assert restored["apply_status"] == "applied"
     assert restored["verification_status"] == "matched"
-    assert recovery.state.records[0]["options"] == OPTIONS
-    assert recovery.state.registry[0]["entity_id"] == ENTITY["entity_id"]
-    assert recovery.state.registry[0]["name"] == ENTITY["name"]
-    assert recovery.state.registry[0]["config_entry_id"] == replacement
+    await hass.async_block_till_done()
+    new_entry = hass.config_entries.async_get_entry(replacement)
+    assert new_entry is not None
+    assert dict(new_entry.options) == options
+    row = entity_registry.async_get(RENAMED)
+    assert row is not None
+    assert row.name == CUSTOM_NAME
+    assert row.config_entry_id == replacement
     assert manager.read_snapshot(name) == snapshot
-    recovery.create.assert_awaited_once()
+    assert len(hass.config_entries.async_entries("template")) == 1
