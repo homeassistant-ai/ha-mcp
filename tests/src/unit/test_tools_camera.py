@@ -100,13 +100,15 @@ class TestHaGetCameraImage:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
-    async def test_non_camera_domain_raises_error(self, camera_tools):
-        """Non-camera entity raises a structured validation error."""
+    async def test_non_camera_domain_raises_error(self, camera_tools, mock_client):
+        """Non-camera/image entity is rejected before any request is made."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="light.living_room")
         error = _error_body(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "not a camera or image entity" in error["message"]
+        mock_client.httpx_client.get.assert_not_called()
+        mock_client.httpx_client.stream.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_camera_domain_sensor(self, camera_tools):
@@ -115,7 +117,7 @@ class TestHaGetCameraImage:
             await camera_tools.ha_get_camera_image(entity_id="sensor.temperature")
         error = _error_body(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "Domain is 'sensor', expected 'camera'" in error["message"]
+        assert "Domain is 'sensor', expected 'camera' or 'image'" in error["message"]
 
     @pytest.mark.asyncio
     async def test_successful_image_retrieval(self, mock_client):
@@ -607,19 +609,6 @@ class TestHaGetCameraImageForImageEntities:
         error = _error_body(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "empty image" in error["message"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("entity_id", ["sensor.temperature", "light.kitchen"])
-    async def test_other_domains_still_rejected(self, entity_id):
-        tools, requests = self._tools(lambda _request: httpx.Response(200))
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id=entity_id)
-
-        error = _error_body(exc_info)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "'camera' or 'image'" in error["message"]
-        assert requests == []
 
 
 class _AsyncBytes(httpx.AsyncByteStream):
