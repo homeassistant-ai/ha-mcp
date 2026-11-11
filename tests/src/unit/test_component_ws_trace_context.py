@@ -2,18 +2,21 @@
 
 The command reads Core's live trace store in process, matches a run's own
 context or a triggering parent context, and returns Core's extended trace dict.
-These tests use the real Home Assistant fixture and Core's own trace objects so
-selection, ordering and JSON encoding match what the command serves live.
+Every call goes through ``component_ws``, the WebSocket client of a real
+``hass`` with the ``ha_mcp_tools/*`` commands registered, so the registration,
+the request schema, the admin gate and the restore step are the ones a caller
+reaches. Core's own trace objects are stored through ``async_store_trace``; a
+frozen clock orders their starts because Core stamps ``timestamp.start`` in the
+trace's constructor.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 import pytest
-import voluptuous as vol
+from freezegun import freeze_time
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.script.trace import ScriptTrace
 from homeassistant.components.trace import async_store_trace
@@ -22,393 +25,408 @@ from homeassistant.components.trace.const import (
     DATA_TRACE_STORE,
     DATA_TRACES_RESTORED,
 )
+from homeassistant.components.websocket_api.const import (
+    ERR_INVALID_FORMAT,
+    ERR_UNAUTHORIZED,
+)
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.trace import TraceElement
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from custom_components.ha_mcp_tools.websocket_api import trace_context
-from custom_components.ha_mcp_tools.websocket_api.schemas import (
-    _trace_context_schema,
-)
+from ._component_core import ws_call, ws_result
 
-_START = datetime(2026, 11, 8, 16, 0, tzinfo=UTC)
+_COMMAND = "ha_mcp_tools/trace_context"
+_FROZEN_START = "2026-11-08T16:00:00+00:00"
+
+type Trace = AutomationTrace | ScriptTrace
 
 
-def _trace(
-    *,
+def _finish(trace: Trace, changed_variables: dict[str, Any] | None) -> None:
+    """Give the run one trigger step, then Core's own stopped state."""
+    trace.set_trace({"trigger/0": [TraceElement(changed_variables, "trigger/0")]})
+    trace.finished()
+
+
+def _automation(
     run_id: str,
+    *,
+    item_id: str = "uid_1",
     context_id: str,
     parent_id: str | None = None,
     not_triggered: bool = False,
-    start: datetime = _START,
-    trigger_variables: dict[str, Any] | None = None,
-    cls: type[AutomationTrace] = AutomationTrace,
+    changed_variables: dict[str, Any] | None = None,
 ) -> AutomationTrace:
-    trace = cls("uid", {}, None, Context(id=context_id, parent_id=parent_id))
+    """One automation run, built as Core's own trace object."""
+    trace = AutomationTrace(
+        item_id,
+        {},
+        None,
+        Context(id=context_id, parent_id=parent_id),
+        not_triggered=not_triggered,
+    )
     trace.run_id = run_id
-    trace.not_triggered = not_triggered
-    trace._timestamp_start = start
-    if trigger_variables is not None:
-        trace.set_trace({"trigger/0": [TraceElement(trigger_variables, "trigger/0")]})
-    trace.finished()
+    _finish(trace, changed_variables)
     return trace
 
 
-def _store(hass: HomeAssistant, key: str, *traces: AutomationTrace) -> None:
+def _script(
+    run_id: str,
+    *,
+    item_id: str = "uid_2",
+    context_id: str,
+    parent_id: str | None = None,
+    changed_variables: dict[str, Any] | None = None,
+) -> ScriptTrace:
+    """One script run, built as Core's own trace object."""
+    trace = ScriptTrace(item_id, {}, None, Context(id=context_id, parent_id=parent_id))
+    trace.run_id = run_id
+    _finish(trace, changed_variables)
+    return trace
+
+
+def _store(hass: HomeAssistant, key: str, *traces: Trace) -> None:
     """Store traces through Core's real trace helper keyed by ``key``."""
-    hass.data.setdefault(DATA_TRACE, {})
     for trace in traces:
         trace.key = key
         async_store_trace(hass, trace, stored_traces=5)
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_finds_trace_by_its_own_context(
-    hass: HomeAssistant,
-) -> None:
-    _store(hass, "automation.uid_1", _trace(run_id="r1", context_id="ctx-1"))
+@pytest.fixture
+async def trace_store(hass: HomeAssistant) -> None:
+    """Set up Core's trace integration, whose buckets the command reads."""
+    assert await async_setup_component(hass, "trace", {})
 
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "ctx-1"}, available=True
-    )
+
+async def test_command_is_advertised_as_a_capability(
+    component_ws: MockHAClientWebSocket,
+) -> None:
+    """The server sends this lookup only to a component that advertises it."""
+    info = await ws_result(component_ws, "ha_mcp_tools/info")
+
+    assert "trace_context" in info["capabilities"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param({"context_id": "ctx-1", "domain": "scene"}, id="unknown-domain"),
+        pytest.param({"domain": "automation"}, id="missing-context-id"),
+    ],
+)
+async def test_a_malformed_request_is_refused(
+    component_ws: MockHAClientWebSocket, message: dict[str, str]
+) -> None:
+    """Core's schema refuses both the wrong domain and a missing context id."""
+    reply = await ws_call(component_ws, _COMMAND, **message)
+
+    assert reply["success"] is False
+    assert reply["error"]["code"] == ERR_INVALID_FORMAT
+
+
+@pytest.mark.usefixtures("trace_store")
+async def test_a_non_admin_caller_is_refused(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    component_ws_read_only: MockHAClientWebSocket,
+) -> None:
+    """The lookup is admin-only; the same message answers for an admin."""
+    _store(hass, "automation.uid_1", _automation("r1", context_id="ctx-1"))
+
+    refused = await ws_call(component_ws_read_only, _COMMAND, context_id="ctx-1")
+
+    assert refused["success"] is False
+    assert refused["error"]["code"] == ERR_UNAUTHORIZED
+    admin = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
+    assert admin["run_id"] == "r1"
+
+
+@pytest.mark.usefixtures("trace_store")
+async def test_own_context_resolves_to_the_run(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """A run's own context is a ``trace`` match; a lone match lists no others."""
+    _store(hass, "automation.uid_1", _automation("r1", context_id="ctx-1"))
+
+    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
     assert result["match"] == "trace"
-    assert result["run_id"] == "r1"
-    assert result["domain"] == "automation"
-    assert result["item_id"] == "uid_1"
+    assert (result["domain"], result["item_id"], result["run_id"]) == (
+        "automation",
+        "uid_1",
+        "r1",
+    )
     assert result["trace"]["run_id"] == "r1"
     assert result["scanned"] == 1
+    assert "other_matches" not in result
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_prefers_real_run_over_newer_diagnostic(
-    hass: HomeAssistant,
+@pytest.mark.usefixtures("trace_store")
+async def test_real_run_beats_a_newer_not_triggered_diagnostic(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    older = _trace(
-        run_id="older",
-        context_id="own-older",
-        parent_id="parent-1",
-        start=_START,
-    )
-    newer = _trace(
-        run_id="newer",
-        context_id="own-newer",
-        parent_id="parent-1",
-        start=_START + timedelta(minutes=1),
-    )
-    diagnostic = _trace(
-        run_id="diag",
-        context_id="own-diag",
-        parent_id="parent-1",
-        not_triggered=True,
-        start=_START + timedelta(minutes=2),
-    )
-    _store(hass, "script.uid_1", older, newer, diagnostic)
+    """A trigger that did not fire never displaces the run that did."""
+    with freeze_time(_FROZEN_START) as clock:
+        older = _automation("older", context_id="own-older", parent_id="parent-1")
+        clock.tick(timedelta(minutes=1))
+        newer = _automation("newer", context_id="own-newer", parent_id="parent-1")
+        clock.tick(timedelta(minutes=1))
+        diagnostic = _automation(
+            "diag",
+            item_id="uid_2",
+            context_id="own-diag",
+            parent_id="parent-1",
+            not_triggered=True,
+        )
+    _store(hass, "automation.uid_1", older, newer)
+    _store(hass, "automation.uid_2", diagnostic)
 
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "parent-1"}, available=True
-    )
+    result = await ws_result(component_ws, _COMMAND, context_id="parent-1")
 
     assert result["match"] == "parent"
     assert result["run_id"] == "newer"
     assert result["scanned"] == 3
     assert result["other_matches"] == [
-        {"domain": "script", "item_id": "uid_1", "run_id": "older", "match": "parent"},
-        {"domain": "script", "item_id": "uid_1", "run_id": "diag", "match": "parent"},
+        {
+            "domain": "automation",
+            "item_id": "uid_1",
+            "run_id": "older",
+            "match": "parent",
+        },
+        {
+            "domain": "automation",
+            "item_id": "uid_2",
+            "run_id": "diag",
+            "match": "parent",
+        },
     ]
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_treats_missing_start_as_oldest(
+@pytest.mark.parametrize(
+    ("selector", "expected_item_id"),
+    [
+        pytest.param({"domain": "script"}, "uid_2", id="domain"),
+        pytest.param({"item_id": "uid_a"}, "uid_a", id="item-id"),
+    ],
+)
+@pytest.mark.usefixtures("trace_store")
+async def test_each_selector_narrows_the_scan(
     hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    selector: dict[str, str],
+    expected_item_id: str,
 ) -> None:
-    missing = _trace(run_id="missing", context_id="own-missing", parent_id="parent-1")
-    missing._timestamp_start = None
-    valid = _trace(
-        run_id="valid",
-        context_id="own-valid",
-        parent_id="parent-1",
-        start=_START,
-    )
-    _store(hass, "automation.uid_1", missing, valid)
-
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "parent-1"}, available=True
-    )
-
-    assert result["run_id"] == "valid"
-
-
-@pytest.mark.asyncio
-async def test_context_lookup_honors_domain_and_item_filters(
-    hass: HomeAssistant,
-) -> None:
-    automation = _trace(run_id="auto", context_id="own-auto", parent_id="parent-1")
-    script = _trace(run_id="script", context_id="own-script", parent_id="parent-1")
-    _store(hass, "automation.uid_1", automation)
-    _store(hass, "script.uid_2", script)
-
-    result = trace_context._trace_context_payload(
+    """Either selector alone leaves only the buckets it names in the scan."""
+    _store(
         hass,
-        {
-            "id": 1,
-            "context_id": "parent-1",
-            "domain": "script",
-            "item_id": "uid_2",
-        },
-        available=True,
+        "automation.uid_a",
+        _automation(
+            "auto-a", item_id="uid_a", context_id="own-auto-a", parent_id="parent-1"
+        ),
+    )
+    _store(
+        hass,
+        "automation.uid_b",
+        _automation(
+            "auto-b", item_id="uid_b", context_id="own-auto-b", parent_id="parent-1"
+        ),
+    )
+    _store(
+        hass,
+        "script.uid_2",
+        _script("script", context_id="own-script", parent_id="parent-1"),
     )
 
-    assert result["run_id"] == "script"
-    assert result["domain"] == "script"
-    assert result["item_id"] == "uid_2"
+    result = await ws_result(component_ws, _COMMAND, context_id="parent-1", **selector)
+
+    # Every run above has a distinct run id, so the winner names the bucket the
+    # selector kept; the scan count proves the others were left out.
+    assert result["item_id"] == expected_item_id
     assert result["scanned"] == 1
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_reports_no_match_with_scan_count(
-    hass: HomeAssistant,
+@pytest.mark.usefixtures("trace_store")
+async def test_a_missed_context_reports_the_scan_and_no_match(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
+    """A context no stored run carries is a miss that still counts the scan."""
     _store(
         hass,
         "automation.uid_1",
-        _trace(run_id="r1", context_id="own-1", parent_id="parent-x"),
+        _automation("r1", context_id="own-1", parent_id="parent-x"),
     )
 
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "missing"}, available=True
-    )
+    result = await ws_result(component_ws, _COMMAND, context_id="missing")
 
     assert result["match"] is None
     assert result["trace"] is None
     assert result["scanned"] == 1
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_reports_unavailable_when_store_is_not_set_up(
-    hass: HomeAssistant,
+async def test_command_reports_unavailable_without_the_trace_store(
+    component_ws: MockHAClientWebSocket,
 ) -> None:
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "ctx-1"}, available=False
-    )
+    """A Home Assistant with tracing off answers that it is unavailable."""
+    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
-    assert result["match"] is None
     assert result["available"] is False
+    assert result["match"] is None
     assert result["scanned"] == 0
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_encodes_trace_with_cores_extended_json_encoder(
-    hass: HomeAssistant,
+@pytest.mark.usefixtures("trace_store")
+async def test_extended_trace_keeps_cores_json_types(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """A timedelta in a trigger's ``for`` survives; Core encodes it in trace/get."""
+    """A timedelta in a trigger's ``for`` survives, as Core's trace view sends it."""
     _store(
         hass,
         "automation.uid_1",
-        _trace(
-            run_id="r1",
+        _automation(
+            "r1",
             context_id="ctx-1",
-            trigger_variables={"trigger": {"for": timedelta(minutes=5)}},
+            changed_variables={"trigger": {"for": timedelta(minutes=5)}},
         ),
     )
 
-    result = trace_context._do_trace_context(
-        hass, {"id": 7, "context_id": "ctx-1"}, available=True
-    )
-    message = json.loads(result.payload)
+    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
-    assert message["id"] == 7
-    trigger = message["result"]["trace"]["trace"]["trigger/0"][0]
+    trigger = result["trace"]["trace"]["trigger/0"][0]
     assert trigger["changed_variables"]["trigger"]["for"]["total_seconds"] == 300.0
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_reports_unavailable_when_trace_storage_is_off(
-    hass: HomeAssistant,
+@pytest.mark.usefixtures("trace_store")
+async def test_saved_traces_are_restored_before_the_match(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    result = await trace_context._trace_context_prep(hass, {})
-
-    assert result == {"available": False}
-
-
-@pytest.mark.asyncio
-async def test_context_lookup_restores_saved_traces(hass: HomeAssistant) -> None:
-    await async_setup_component(hass, "trace", {})
-    saved = _trace(run_id="r1", context_id="ctx-1")
-    async_store_trace(hass, saved, stored_traces=5)
-
-    # Persist through Core's real store, then wipe the live buckets so prep
-    # must restore the trace instead of finding it already in memory.
+    """A restart leaves traces on disk only; the command restores them first."""
+    saved = _automation("r1", context_id="ctx-1")
+    _store(hass, "automation.uid_1", saved)
     store = hass.data[DATA_TRACE_STORE]
     await store.async_save(
         {saved.key: list(hass.data[DATA_TRACE][saved.key].all_traces())}
     )
+    # Core's setup after a restart leaves the in-memory buckets empty and the
+    # restore marker unset, so the saved trace must come back from the store.
     hass.data[DATA_TRACE] = {}
     hass.data.pop(DATA_TRACES_RESTORED, None)
 
-    result = await trace_context._trace_context_prep(hass, {})
+    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
 
-    assert result == {"available": True}
-    payload = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "ctx-1"}, available=True
-    )
-    assert payload["match"] == "trace"
-    assert payload["run_id"] == "r1"
+    assert result["match"] == "trace"
+    assert result["run_id"] == "r1"
 
 
-def test_schema_rejects_an_unknown_trace_domain() -> None:
-    schema = vol.Schema(_trace_context_schema())
-
-    assert schema(
-        {
-            "type": "ha_mcp_tools/trace_context",
-            "context_id": "ctx-1",
-            "domain": "script",
-            "item_id": "uid_1",
-        }
-    )
-    with pytest.raises(vol.Invalid):
-        schema(
-            {
-                "type": "ha_mcp_tools/trace_context",
-                "context_id": "ctx-1",
-                "domain": "scene",
-            }
+@pytest.mark.usefixtures("trace_store")
+async def test_the_newest_run_wins_and_the_rest_are_listed(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """Selection is by start: an older own context loses to a newer parent run."""
+    shared = "shared-context"
+    with freeze_time(_FROZEN_START) as clock:
+        own = _automation("own-match", item_id="uid_a", context_id=shared)
+        clock.tick(timedelta(minutes=1))
+        older_parent = _automation(
+            "older-parent",
+            item_id="uid_b",
+            context_id="own-older-parent",
+            parent_id=shared,
         )
+        clock.tick(timedelta(minutes=1))
+        newest = _script(
+            "newest-script",
+            item_id="uid_c",
+            context_id="own-newest-script",
+            parent_id=shared,
+        )
+    _store(hass, "automation.uid_a", own)
+    _store(hass, "automation.uid_b", older_parent)
+    _store(hass, "script.uid_c", newest)
 
-
-@pytest.mark.asyncio
-async def test_context_lookup_selects_newest_match_and_lists_others(
-    hass: HomeAssistant,
-) -> None:
-    """One context can match several runs; the newest is selected and rest listed."""
-    shared = "shared-context"
-    older_auto = _trace(
-        run_id="older-auto",
-        context_id="own-older-auto",
-        parent_id=shared,
-        start=_START,
-    )
-    newer_script = _trace(
-        run_id="newer-script",
-        context_id="own-newer-script",
-        parent_id=shared,
-        start=_START + timedelta(minutes=1),
-        cls=ScriptTrace,
-    )
-    _store(hass, "automation.uid_a", older_auto)
-    _store(hass, "script.uid_b", newer_script)
-
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": shared}, available=True
-    )
+    result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
     assert result["match"] == "parent"
-    assert result["run_id"] == "newer-script"
-    assert result["domain"] == "script"
-    assert result["item_id"] == "uid_b"
-    assert result["scanned"] == 2
-    assert result["other_matches"] == [
-        {
-            "domain": "automation",
-            "item_id": "uid_a",
-            "run_id": "older-auto",
-            "match": "parent",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_context_lookup_prefers_newest_across_own_and_parent_matches(
-    hass: HomeAssistant,
-) -> None:
-    """The selected run is the newest across own-context and parent matches."""
-    shared = "shared-context"
-    own_match = _trace(
-        run_id="own-match",
-        context_id=shared,
-        start=_START,
+    assert (result["domain"], result["item_id"], result["run_id"]) == (
+        "script",
+        "uid_c",
+        "newest-script",
     )
-    parent_match = _trace(
-        run_id="parent-match",
-        context_id="own-parent",
-        parent_id=shared,
-        start=_START + timedelta(minutes=1),
-        cls=ScriptTrace,
-    )
-    _store(hass, "automation.uid_a", own_match)
-    _store(hass, "script.uid_b", parent_match)
-
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": shared}, available=True
-    )
-
-    assert result["match"] == "parent"
-    assert result["run_id"] == "parent-match"
+    assert result["scanned"] == 3
     assert result["other_matches"] == [
         {
             "domain": "automation",
             "item_id": "uid_a",
             "run_id": "own-match",
             "match": "trace",
-        }
+        },
+        {
+            "domain": "automation",
+            "item_id": "uid_b",
+            "run_id": "older-parent",
+            "match": "parent",
+        },
     ]
 
 
-@pytest.mark.asyncio
-async def test_context_lookup_omits_other_matches_for_a_single_match(
+@pytest.mark.parametrize(
+    ("runs", "expected_run_id"),
+    [
+        pytest.param(
+            [
+                ("script", "own-script", "uid_a", False),
+                ("automation", "parent-auto", "uid_b", True),
+            ],
+            "own-script",
+            id="own-context-before-parent",
+        ),
+        pytest.param(
+            [
+                ("script", "own-script", "uid_a", False),
+                ("automation", "own-auto", "uid_b", False),
+            ],
+            "own-auto",
+            id="automation-before-script",
+        ),
+        pytest.param(
+            [
+                ("automation", "own-auto-b", "uid_b", False),
+                ("automation", "own-auto-a", "uid_a", False),
+            ],
+            "own-auto-a",
+            id="item-id-ascending",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("trace_store")
+async def test_ties_break_own_then_automation_then_item_id(
     hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    runs: list[tuple[str, str, str, bool]],
+    expected_run_id: str,
 ) -> None:
-    """A single match has no other_matches field."""
-    _store(hass, "automation.uid_1", _trace(run_id="r1", context_id="ctx-1"))
-
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": "ctx-1"}, available=True
-    )
-
-    assert result["run_id"] == "r1"
-    assert "other_matches" not in result
-
-
-@pytest.mark.asyncio
-async def test_tie_break_prefers_own_then_automation_then_item_id(
-    hass: HomeAssistant,
-) -> None:
-    """The selection tie-break is own > parent, automation > script, item_id asc."""
+    """Same-start matches order own over parent, automation over script, id asc."""
     shared = "shared-context"
-    parent_auto = _trace(
-        run_id="parent-auto",
-        context_id="own-parent-auto",
-        parent_id=shared,
-        start=_START,
-    )
-    own_script = _trace(
-        run_id="own-script",
-        context_id=shared,
-        start=_START,
-        cls=ScriptTrace,
-    )
-    own_auto_b = _trace(
-        run_id="own-auto-b",
-        context_id=shared,
-        start=_START,
-    )
-    own_auto_a = _trace(
-        run_id="own-auto-a",
-        context_id=shared,
-        start=_START,
-    )
-    _store(hass, "automation.uid_b", parent_auto, own_auto_b)
-    _store(hass, "script.uid_1", own_script)
-    _store(hass, "automation.uid_a", own_auto_a)
+    with freeze_time(_FROZEN_START):
+        for domain, run_id, item_id, is_parent in runs:
+            context_id = "own-" + run_id if is_parent else shared
+            parent_id = shared if is_parent else None
+            trace: Trace
+            if domain == "automation":
+                trace = _automation(
+                    run_id,
+                    item_id=item_id,
+                    context_id=context_id,
+                    parent_id=parent_id,
+                )
+            else:
+                trace = _script(
+                    run_id,
+                    item_id=item_id,
+                    context_id=context_id,
+                    parent_id=parent_id,
+                )
+            _store(hass, trace.key, trace)
 
-    result = trace_context._trace_context_payload(
-        hass, {"id": 1, "context_id": shared}, available=True
-    )
+    result = await ws_result(component_ws, _COMMAND, context_id=shared)
 
-    assert result["match"] == "trace"
-    assert result["domain"] == "automation"
-    assert result["item_id"] == "uid_a"
-    assert result["run_id"] == "own-auto-a"
-    assert result["scanned"] == 4
-    assert len(result["other_matches"]) == 3
+    assert result["run_id"] == expected_run_id
