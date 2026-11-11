@@ -12,7 +12,6 @@ available.
 """
 
 import json
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -28,8 +27,6 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_code import _SandboxBridge
 from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.util_helpers import is_credential_ws_command
-
-from ._client_spies import sent_messages
 
 
 def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
@@ -66,13 +63,6 @@ async def supervisor_calls(
 
     websocket_api.async_register_command(hass, _record)
     return calls
-
-
-@pytest.fixture
-def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
-    """A spy on the client's WebSocket send; Core still answers."""
-    with sent_messages(core_client) as spy:
-        yield spy
 
 
 def _tools(client: HomeAssistantClient) -> ServiceTools:
