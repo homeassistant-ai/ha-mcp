@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_backup_tools(
-    mcp: "FastMCP", client: HomeAssistantClient, **kwargs: Any
+    mcp: FastMCP, client: HomeAssistantClient, **kwargs: Any
 ) -> None:
     """Register the polymorphic ``ha_manage_backup`` tool.
 

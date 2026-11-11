@@ -118,7 +118,7 @@ def extract_tool_error_message(te: ToolError | str) -> str:
         error_data = json.loads(str(te))
         msg = error_data.get("error", {}).get("message", str(te))
         return str(msg)
-    except (json.JSONDecodeError, TypeError, AttributeError):
+    except json.JSONDecodeError, TypeError, AttributeError:
         return str(te)
 
 
@@ -136,7 +136,7 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
     """
     try:
         payload = json.loads(str(exc))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(payload, dict):
         return None

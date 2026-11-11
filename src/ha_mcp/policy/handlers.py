@@ -173,7 +173,7 @@ async def _get_pending(queue: ApprovalQueue) -> JSONResponse:
 async def _post_approve(queue: ApprovalQueue, request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
@@ -201,7 +201,7 @@ async def _post_approve(queue: ApprovalQueue, request: Request) -> JSONResponse:
 async def _post_deny(queue: ApprovalQueue, request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
@@ -227,7 +227,7 @@ async def _get_decision_pin(data_dir: Path) -> JSONResponse:
 async def _post_decision_pin(data_dir: Path, request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)

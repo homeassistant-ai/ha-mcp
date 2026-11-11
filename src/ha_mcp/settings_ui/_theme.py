@@ -117,7 +117,7 @@ def _load_theme_prefs() -> dict[str, str]:
         raw = json.loads(path.read_text())
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         logger.warning("Cannot read theme prefs at %s", path, exc_info=True)
         return {}
     sanitized = _sanitize_theme_prefs(raw) or {}

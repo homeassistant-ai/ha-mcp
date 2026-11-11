@@ -140,7 +140,7 @@ def raise_dashboard_edit_fetch_error(
     """Only Core's explicit config_not_found means an absent dashboard/config."""
     try:
         data = json.loads(str(exc))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         data = None
     reason = (
         "not_found"

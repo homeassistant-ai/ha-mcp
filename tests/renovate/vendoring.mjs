@@ -38,7 +38,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encodi
 // Keep this fixture credential-free: install a published, compatible exact
 // version through the real executor. The live scanner retains its range and
 // authenticated lookup; this fixture does not test that external lookup.
-const fixturePython = '3.13.7';
+const fixturePython = '3.14.2';
 
 async function exercise({ script, depName, pins, bumped, vendorDirs, extraFiles, check }) {
   const dependency = {

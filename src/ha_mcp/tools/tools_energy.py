@@ -857,7 +857,7 @@ class EnergyTools:
         """
         try:
             parsed = json.loads(str(exc))
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except json.JSONDecodeError, TypeError, ValueError:
             return False
         if not isinstance(parsed, dict):
             return False

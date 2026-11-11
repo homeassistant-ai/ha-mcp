@@ -71,7 +71,7 @@ async def _read_registry_entry(
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
-    except (HomeAssistantConnectionError, HomeAssistantAuthError):
+    except HomeAssistantConnectionError, HomeAssistantAuthError:
         # Typed errors must reach the outer handler — do not swallow.
         raise
     except (OSError, TimeoutError) as e:

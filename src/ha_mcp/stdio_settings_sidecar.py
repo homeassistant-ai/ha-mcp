@@ -253,7 +253,7 @@ def _read_recorded_pid() -> int | None:
     """Return the PID recorded in ``ui.pid``, or None if absent/garbage."""
     try:
         return int(_pid_file().read_text().strip())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

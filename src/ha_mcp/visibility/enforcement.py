@@ -303,7 +303,7 @@ def _serialize_result(result: ToolResult) -> str:
     if structured is not None:
         try:
             parts.append(json.dumps(structured, default=str))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             parts.append(str(structured))
     return "\n".join(parts)
 
@@ -991,7 +991,7 @@ def scrub_records(
     for record in records:
         try:
             blob = json.dumps(record, default=str)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             blob = str(record)
         if not regex.search(blob):
             kept.append(record)

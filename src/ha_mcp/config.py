@@ -75,7 +75,7 @@ __all__ = [
 ]
 
 
-def parse_extra_yaml_write_keys(settings: "Settings") -> list[str]:
+def parse_extra_yaml_write_keys(settings: Settings) -> list[str]:
     """Parse ``extra_yaml_write_keys`` into a clean key list (#1887).
 
     Whitespace and empty entries are dropped and the result is deduplicated
@@ -212,7 +212,7 @@ def _reset_embedded_connection() -> None:
     _EMBEDDED_CONNECTION.clear()
 
 
-def _apply_embedded_connection(settings: "Settings") -> None:
+def _apply_embedded_connection(settings: Settings) -> None:
     """Apply the in-process embedded HA connection (url/token/verify_ssl) if registered.
 
     No-op outside embedded mode. Plain ``setattr`` (``validate_assignment`` is off

@@ -25,7 +25,7 @@ def _local_timestamp(value: Any, timezone: tzinfo) -> Any:
         else:
             return value
         return parsed.astimezone(timezone).isoformat()
-    except (ValueError, OverflowError, OSError):
+    except ValueError, OverflowError, OSError:
         return value
 
 

@@ -411,7 +411,7 @@ def _coerce_int_field(field_name: str, raw: Any) -> tuple[Any, str | None]:
         return None, f"Invalid integer for {field_name}: {raw!r}"
     try:
         value = int(raw)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None, f"Invalid integer for {field_name}: {raw!r}"
     bounds = SETTING_BOUNDS.get(field_name)
     if bounds is not None and not (bounds[0] <= value <= bounds[1]):
@@ -600,7 +600,7 @@ async def _save_backup_config(
     """
     try:
         payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
+    except ValueError, json.JSONDecodeError:
         return _bad_request("Invalid JSON body")
     clean, err = _validate_backup_payload(payload)
     if err is not None:

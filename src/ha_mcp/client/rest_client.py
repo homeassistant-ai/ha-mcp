@@ -268,7 +268,7 @@ def _pick_render_error(first: str, queue: asyncio.Queue[dict[str, Any]]) -> str:
     while True:
         try:
             event = queue.get_nowait().get("event") or {}
-        except (asyncio.QueueEmpty, asyncio.QueueShutDown):
+        except asyncio.QueueEmpty, asyncio.QueueShutDown:
             break
         error = event.get("error")
         if event.get("level") == "ERROR" and isinstance(error, str):
@@ -406,7 +406,7 @@ class HomeAssistantClient:
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
-    async def __aenter__(self) -> "HomeAssistantClient":
+    async def __aenter__(self) -> HomeAssistantClient:
         """Async context manager entry."""
         return self
 

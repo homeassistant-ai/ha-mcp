@@ -76,7 +76,7 @@ async def _locate_calendar_event(
         days = int(
             getattr(get_global_settings(), "auto_backup_calendar_lookahead_days", 7)
         )
-    except (AttributeError, ImportError, ValueError, TypeError):
+    except AttributeError, ImportError, ValueError, TypeError:
         days = 7
     days = max(1, min(365, days))
     now = datetime.now(UTC)

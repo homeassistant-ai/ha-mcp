@@ -770,7 +770,7 @@ async def _ws_wait_for_predicate(
     finally:
         try:
             await ws.close()
-        except (websockets.exceptions.WebSocketException, OSError):
+        except websockets.exceptions.WebSocketException, OSError:
             pass
 
 
@@ -868,7 +868,7 @@ async def wait_for_ha_event(
     finally:
         try:
             await ws.close()
-        except (websockets.exceptions.WebSocketException, OSError):
+        except websockets.exceptions.WebSocketException, OSError:
             # Close errors on an already-broken socket — don't mask the
             # caller's outcome with them.
             pass

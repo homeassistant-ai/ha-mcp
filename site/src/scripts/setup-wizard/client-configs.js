@@ -30,7 +30,7 @@ export function buildClientConfig(ctx, instructions) {
   // uvx config for local stdio
   const uvxConfig = {
     command: "uvx",
-    args: ["ha-mcp@latest"],
+    args: ["--python", "3.14", "ha-mcp@latest"],
     env: {
       HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
       HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"
@@ -78,7 +78,7 @@ export function buildClientConfig(ctx, instructions) {
             }
           : {
               type: "local",
-              command: ["uvx", "ha-mcp@latest"],
+              command: ["uvx", "--python", "3.14", "ha-mcp@latest"],
               enabled: true,
               environment: {
                 HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}",
@@ -274,7 +274,7 @@ export function buildClientConfig(ctx, instructions) {
     "servers": {
       "home-assistant": {
         "command": "uvx",
-        "args": ["ha-mcp@latest"],
+        "args": ["--python", "3.14", "ha-mcp@latest"],
         "env": {
           "HOMEASSISTANT_URL": "\${input:ha-url}",
           "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
@@ -314,7 +314,7 @@ export function buildClientConfig(ctx, instructions) {
   "servers": {
     "home-assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "\${input:ha-url}",
         "HOMEASSISTANT_TOKEN": "\${input:ha-token}"
@@ -400,6 +400,8 @@ export function buildClientConfig(ctx, instructions) {
   home-assistant:
     command: "uvx"
     args:
+      - "--python"
+      - "3.14"
       - "ha-mcp@latest"
     env:
       HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}"
@@ -462,6 +464,8 @@ mcpServers:
   - name: home-assistant
     command: uvx
     args:
+      - "--python"
+      - "3.14"
       - "ha-mcp@latest"
     env:
       HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}"
@@ -510,7 +514,7 @@ mcpServers:
             'gemini mcp add --scope user home-assistant',
             '-e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
             '-e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
-            'uvx -- ha-mcp@latest',
+            'uvx -- --python 3.14 ha-mcp@latest',
           ], platformId);
         }
       } else {
@@ -550,7 +554,7 @@ mcpServers:
         if (isDocker) {
           config = `codex mcp add home-assistant -- docker run --rm -i -v ha-mcp-data:/home/mcpuser/.ha-mcp -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} ghcr.io/homeassistant-ai/ha-mcp:latest`;
         } else {
-          config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
+          config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx --python 3.14 ha-mcp@latest`;
         }
       } else {
         config = `codex mcp add home-assistant --url ${mcpUrl}`;
@@ -563,7 +567,7 @@ mcpServers:
             <div><code class="bg-slate-800 px-1 rounded">codex mcp get home-assistant</code> <span class="text-slate-400">— show server config</span></div>
             <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
             <div class="mt-2 text-slate-400">Codex stores config in TOML at <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> — shared between the CLI and the Codex Desktop app.</div>
-            <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex Desktop UI:</strong> Go to <strong>Settings</strong> → <strong>MCP</strong> → <strong>Add Server</strong>, then choose type <strong>STDIO</strong> for local setup (or <strong>HTTP</strong> for remote). Fill in Name (<code class="bg-slate-800 px-1 rounded">home-assistant</code>), Command (<code class="bg-slate-800 px-1 rounded">uvx</code>), Args (<code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code>), and Env vars (<code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>) — or paste the URL for HTTP. The desktop UI writes the same TOML as the CLI.</div>
+            <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex Desktop UI:</strong> Go to <strong>Settings</strong> → <strong>MCP</strong> → <strong>Add Server</strong>, then choose type <strong>STDIO</strong> for local setup (or <strong>HTTP</strong> for remote). Fill in Name (<code class="bg-slate-800 px-1 rounded">home-assistant</code>), Command (<code class="bg-slate-800 px-1 rounded">uvx</code>), Args (<code class="bg-slate-800 px-1 rounded">--python 3.14 ha-mcp@latest</code>), and Env vars (<code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>) — or paste the URL for HTTP. The desktop UI writes the same TOML as the CLI.</div>
             <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex cloud tasks with a firewalled server:</strong> local Codex reaches ha-mcp over your LAN, but OpenAI's cloud surfaces (Codex web/cloud tasks, ChatGPT connectors) need the server reachable from OpenAI. Instead of exposing a public URL, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel (outbound-only). See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</div>
             ${!isStdio ? `<div class="mt-2 text-slate-400">OAuth 2.0 authentication is available for remote (HTTP) servers.</div>` : ''}
           </div>
@@ -598,7 +602,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             'claude mcp add home-assistant',
             '--env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}',
             '--env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}',
-            '-- uvx ha-mcp@latest',
+            '-- uvx --python 3.14 ha-mcp@latest',
           ], platformId);
         }
       } else {

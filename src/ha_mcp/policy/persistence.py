@@ -118,7 +118,7 @@ def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return False
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         logger.warning("policy migration: cannot read %s; leaving as-is", path)
         return False
     if not isinstance(raw, dict) or raw.get("schema_version") is not None:
