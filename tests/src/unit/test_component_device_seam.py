@@ -1,56 +1,73 @@
 """Cross-seam contract tests for the component's ``device_get`` / ``device_list``.
 
-The devices and entities live in Core's own registries. The REAL component
-functions read them and serve the result through the mocked WS transport to the
-REAL server tools, so a key a consumer reads that Core stops emitting fails here
-as well as a consumer that misreads the component's output.
+The tools run on the server's own client against a real ``hass`` that also
+answers ``ha_mcp_tools/*``: Core's registries, the component's handlers and the
+tools that read their rows are all real, so a key a consumer reads that Core or
+the component stops emitting fails here, as does a consumer that misreads the
+component's output.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import MagicMock
+import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from operator import itemgetter
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp.tools import component_devices
-from ha_mcp.tools.radio.zigbee import _resolve_ieee
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
+from ha_mcp.tools.tools_radio import RadioTools
+from ha_mcp.tools.tools_registry import RegistryTools
 
-from ._component_routing_helpers import patch_ws
-from ._component_ws_api import wsapi
-from .test_component_readapi_contract import _real_component_ws
-from .test_ha_get_device_component_routing import (
-    RoutingClient as GetDeviceRoutingClient,
-)
-from .test_ha_get_device_component_routing import (
-    _build_get_device,
-)
-from .test_ha_remove_device_component_routing import (
-    RoutingClient as RemoveDeviceRoutingClient,
-)
-from .test_ha_remove_device_component_routing import (
-    _build_remove_device,
-)
-from .test_radio_zigbee_component_routing import (
-    RoutingClient as ZigbeeRoutingClient,
-)
+# The whole-registry reads a single-device consumer must not fall back to.
+REGISTRY_DUMPS = {"config/device_registry/list", "config/entity_registry/list"}
+
+
+@pytest.fixture
+async def socket(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantWebSocketClient:
+    """The pooled WebSocket client every tool command goes through, Core's and
+    the component's; sets up Core's ``config`` commands first."""
+    assert await async_setup_component(hass, "config", {})
+    return await websocket_manager.get_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
+    )
+
+
+@contextmanager
+def _sent(socket: HomeAssistantWebSocketClient) -> Iterator[AsyncMock]:
+    """Spies on every command the tools send; it calls through."""
+    with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
+        yield spy
+
+
+def _types(spy: AsyncMock) -> set[str]:
+    return {call.args[0] for call in spy.call_args_list}
 
 
 class TestDeviceSeam:
-    """Core's device and entity rows reconcile every consumer.
+    """Core's device and entity rows reach every consumer of ``device_get``.
 
-    One REAL ``_do_device_get`` output drives consumer sites through their real
-    server code: ``ha_get_device`` (its device transform AND its per-device entity
-    join via ``include_entities``), ``ha_remove_device`` (its device lookup), and
-    ``_resolve_ieee`` (its ``identifiers`` read). Each consumer is served the
-    device in one in-process ``device_get`` frame, never the whole-registry dump;
-    the entity join carries ``config/entity_registry/list``-shaped rows so the
-    device's entity list needs no separate entity-registry dump either.
+    ``ha_get_device`` (its device row and its entity join through
+    ``include_entities``), ``ha_remove_device`` (its device lookup) and
+    ``ha_manage_radio``'s ZHA actions (their ``identifiers`` read) each get
+    the device from ``device_get``, never from a whole-registry read.
     """
 
     @pytest.fixture
@@ -74,9 +91,12 @@ class TestDeviceSeam:
         assert updated is not None
         return updated
 
-    @pytest.mark.asyncio
     async def test_get_device_keeps_cores_device_and_entity_rows(
-        self, hass: HomeAssistant, dev: dr.DeviceEntry
+        self,
+        hass: HomeAssistant,
+        dev: dr.DeviceEntry,
+        component_core_client: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
         """A field of Core's device row or of its entities' registry rows that
         the single lookup drops, renames or rewrites fails here; the lookup
@@ -86,83 +106,55 @@ class TestDeviceSeam:
             "sensor", "zha", "kitchen-temp", device_id=dev.id
         )
         entity_registry.async_update_entity(sensor.entity_id, name="Kitchen Temp")
-        update = entity_registry.async_get_or_create(
+        entity_registry.async_get_or_create(
             "update", "zha", "kitchen-fw", device_id=dev.id
         )
         # config/entity_registry/list lists disabled entities too.
-        disabled = entity_registry.async_get_or_create(
+        entity_registry.async_get_or_create(
             "sensor",
             "zha",
             "kitchen-rssi",
             device_id=dev.id,
             disabled_by=er.RegistryEntryDisabler.USER,
         )
-        client = GetDeviceRoutingClient(
-            entries=[{"entry_id": "cfg-1", "domain": "zha"}]
-        )
-        # A zha device triggers the ZHA metrics enricher (a dedicated path outside
-        # the device_get seam); serve it an empty result so it is a graceful no-op.
-        base_send = client.send_websocket_message
-
-        async def _send(msg: Any, **kwargs: Any) -> dict[str, Any]:
-            if msg.get("type") == "zha/devices":
-                return {"success": True, "result": []}
-            return await base_send(msg, **kwargs)
-
-        client.send_websocket_message = _send  # type: ignore[assignment]
-        ws = _real_component_ws(hass)
-        get_device = _build_get_device(client)
-        with patch_ws(ws, component_devices):
-            resp = await get_device(device_id=dev.id)
+        with _sent(socket) as spy:
+            resp = await RegistryTools(component_core_client).ha_get_device(
+                device_id=dev.id
+            )
 
         assert resp["success"] is True
         info = resp["device"]
-        # Read out of Core's dict_repr; integration_type is the domain the
-        # client's config_entries/get answer gives the owning entry.
-        assert info["id"] == dev.id
-        assert (info["name"], info["name_by_user"]) == ("Kitchen Sensor", "Kitchen")
-        assert info["area_id"] == info["effective_area_id"] == "kitchen"
-        assert info["labels"] == ["important"]
-        assert info["config_entry_id"] == "cfg-1"
+        core_row = json.loads(json.dumps(dev.dict_repr))
+        assert {k: info[k] for k in core_row} == core_row
+        assert info["effective_area_id"] == "kitchen"
         assert info["integration_type"] == "zha"
         assert info["ieee_address"] == "00:11:22:33:44:55:66:77"
-        # The device's entity list came from the include_entities join over the REAL
-        # component output — the whole device AND entity registries were never dumped.
         assert resp["entity_count"] == 3
         assert "entities" not in resp
-        assert client.device_list_calls == 0
-        assert client.entity_list_calls == 0
+        assert not REGISTRY_DUMPS & _types(spy)
 
-        # The entities are Core's registry rows as the component reads them
-        # (config/entity_registry/list's shape), disabled_by and all.
-        raw = wsapi._do_device_get(
-            hass, {"device_id": dev.id, "include_entities": True}
-        )
-        assert {k: info[k] for k in raw["device"]} == raw["device"]
-        assert sorted(info["entities"], key=lambda e: e["entity_id"]) == sorted(
-            raw["entities"], key=lambda e: e["entity_id"]
-        )
-        by_entity = {e["entity_id"]: e for e in info["entities"]}
-        assert set(by_entity) == {
-            sensor.entity_id,
-            update.entity_id,
-            disabled.entity_id,
-        }
-        assert by_entity[sensor.entity_id]["name"] == "Kitchen Temp"
-        assert by_entity[disabled.entity_id]["disabled_by"] == "user"
+        # The entities are Core's config/entity_registry/list rows.
+        core_entities = [
+            json.loads(json.dumps(entry.as_partial_dict))
+            for entry in er.async_entries_for_device(
+                entity_registry, dev.id, include_disabled_entities=True
+            )
+        ]
+        by_id = itemgetter("entity_id")
+        assert sorted(info["entities"], key=by_id) == sorted(core_entities, key=by_id)
 
-    @pytest.mark.asyncio
     async def test_core_2026_9_child_device_is_retained_with_effective_area(
-        self, hass: HomeAssistant
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
         """Core's reduced child row reaches the public tools.
 
-        The row has no direct ``area_id`` and names its owner only in
-        ``config_entry_id`` (no ``primary_config_entry``, no ``config_entries``).
-        ``area_id`` stays the child's own empty one in the list, the single
-        lookup and the raw component record, ``effective_area_id`` carries
-        Core's parent-derived area and ``integration_type`` the owning entry's
-        domain.
+        The child's own ``area_id`` is unset and it names its owner only in
+        ``config_entry_id``. ``area_id`` stays the child's own empty one in the
+        list and the single lookup, ``effective_area_id`` carries Core's
+        parent-derived area and ``integration_type`` the owning entry's domain.
         """
         MockConfigEntry(domain="hue", entry_id="cfg-hue").add_to_hass(hass)
         registry = dr.async_get(hass)
@@ -178,61 +170,65 @@ class TestDeviceSeam:
             name="Channel 1",
             parent_device_id=parent.id,
         )
-        client = GetDeviceRoutingClient(
-            entries=[{"entry_id": "cfg-hue", "domain": "hue"}]
-        )
-        ws = _real_component_ws(hass)
-        get_device = _build_get_device(client)
-        with patch_ws(ws, component_devices):
-            listed = await get_device()
-            single = await get_device(device_id=child.id)
+        tools = RegistryTools(component_core_client)
+        with _sent(socket) as spy:
+            listed = await tools.ha_get_device()
+            single = await tools.ha_get_device(device_id=child.id)
 
+        assert {"ha_mcp_tools/device_list", "ha_mcp_tools/device_get"} <= _types(spy)
         by_id = {row["id"]: row for row in listed["devices"]}
         assert set(by_id) == {parent.id, child.id}
         for row in (by_id[child.id], single["device"]):
             assert (row["area_id"], row["effective_area_id"]) == (None, "office")
             assert row["parent_device_id"] == parent.id
         assert single["device"]["integration_type"] == "hue"
-        raw = wsapi._do_device_list(hass, {})["devices"]
-        raw_child = next(row for row in raw if row["id"] == child.id)
-        assert raw_child["parent_device_id"] == parent.id
-        assert raw_child["area_id"] is None
 
-    @pytest.mark.asyncio
     async def test_remove_device_looks_up_cores_row_without_a_registry_dump(
-        self, hass: HomeAssistant, dev: dr.DeviceEntry, monkeypatch: pytest.MonkeyPatch
+        self,
+        dev: dr.DeviceEntry,
+        component_core_client: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
         """The removal finds the device through the component's ``device_get``
         and sends Core's ``remove`` for its id; a lookup that misreads the
-        component's row, or falls back to the whole device list, fails here."""
-        settings = MagicMock()
-        settings.enable_auto_backup = False
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: settings
-        )
-        client = RemoveDeviceRoutingClient()
-        ws = _real_component_ws(hass)
-        remove_device = _build_remove_device(client)
-        with patch_ws(ws, component_devices):
-            resp = await remove_device(device_id=dev.id)
+        component's row, or falls back to the whole device list, fails here.
+        The entry was never set up, so Core refuses the removal itself."""
+        with (
+            _sent(socket) as spy,
+            pytest.raises(ToolError, match="does not support device removal"),
+        ):
+            await RegistryTools(component_core_client).ha_remove_device(
+                device_id=dev.id
+            )
 
-        assert resp["success"] is True
-        assert resp["device_name"] == "Kitchen"
-        # The device was looked up through device_get and removed by id.
-        assert client.remove_calls == [dev.id]
-        assert client.device_list_calls == 0
+        assert "ha_mcp_tools/device_get" in _types(spy)
+        removals = [
+            call.kwargs["device_id"]
+            for call in spy.call_args_list
+            if call.args[0] == "config/device_registry/remove"
+        ]
+        assert removals == [dev.id]
+        assert not REGISTRY_DUMPS & _types(spy)
 
-    @pytest.mark.asyncio
-    async def test_resolve_ieee_reads_the_zha_identifier_of_cores_row(
-        self, hass: HomeAssistant, dev: dr.DeviceEntry
+    async def test_zha_action_targets_the_ieee_of_cores_identifier(
+        self,
+        dev: dr.DeviceEntry,
+        component_core_client: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        """``_resolve_ieee`` takes the IEEE address from the ``identifiers`` of
-        the row the component serves; a changed shape of that field fails here."""
-        client = ZigbeeRoutingClient()
-        ws = _real_component_ws(hass)
-        with patch_ws(ws, component_devices):
-            ieee = await _resolve_ieee(client, dev.id)
+        """A ZHA action addresses the IEEE address in the ``identifiers`` of the
+        row the component serves; a changed shape of that field fails here.
+        ZHA is not loaded, so Core refuses ``zha/device`` itself."""
+        with _sent(socket) as spy, pytest.raises(ToolError):
+            await RadioTools(component_core_client).ha_manage_radio(
+                radio="zigbee", action="diagnostics", device_id=dev.id
+            )
 
-        # _resolve_ieee parsed the identifiers out of the same raw shape.
-        assert ieee == "00:11:22:33:44:55:66:77"
-        assert client.device_list_calls == 0
+        zha_calls = [
+            call.kwargs["ieee"]
+            for call in spy.call_args_list
+            if call.args[0] == "zha/device"
+        ]
+        assert zha_calls == ["00:11:22:33:44:55:66:77"]
+        assert "ha_mcp_tools/device_get" in _types(spy)
+        assert not REGISTRY_DUMPS & _types(spy)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -173,6 +173,7 @@ class TestSetDeviceCoreAnswers:
         device: dr.DeviceEntry,
         device_registry: dr.DeviceRegistry,
     ) -> None:
+        """``device_entry`` is Core's updated row, every field as Core sends it."""
         result = await tools.ha_set_device(device_id=device.id, name="Den")
 
         stored = device_registry.async_get(device.id)
@@ -180,13 +181,20 @@ class TestSetDeviceCoreAnswers:
         assert result["device_entry"] == json.loads(json.dumps(stored.dict_repr))
 
     @pytest.mark.parametrize(
-        ("change", "code", "expected"),
+        ("change", "code", "expected", "message"),
         [
-            ({"device_id": "ghost", "name": "Den"}, "not_found", "RESOURCE_NOT_FOUND"),
+            # device_id overrides the existing device's id.
+            (
+                {"device_id": "ghost", "name": "Den"},
+                "not_found",
+                "RESOURCE_NOT_FOUND",
+                "Device not found",
+            ),
             (
                 {"disabled_by": "integration"},
                 "invalid_format",
                 "VALIDATION_INVALID_PARAMETER",
+                "at 'disabled_by'",
             ),
         ],
     )
@@ -197,16 +205,20 @@ class TestSetDeviceCoreAnswers:
         change: dict[str, str],
         code: str,
         expected: str,
+        message: str,
     ) -> None:
+        """Core's refusal keeps its code as ``ha_error_code`` and its message
+        without the client's prefix."""
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_device(**{"device_id": device.id, **change})
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == expected
+        assert message in error_data["error"]["message"]
         assert "Command failed" not in error_data["error"]["message"]
         assert error_data["ha_error_code"] == code
-        # Only an unknown device gets pointed at ha_get_device; for any other
-        # refusal Core's message says what is wrong.
+        # Only not_found points at ha_get_device; for invalid_format Core's
+        # message says what is wrong.
         suggests_lookup = "ha_get_device" in json.dumps(error_data["error"])
         assert suggests_lookup == (code == "not_found")
 
@@ -218,13 +230,11 @@ class TestSetDeviceCoreAnswers:
     ) -> None:
         """Core before 2026.9 had no not_found check: its registry raised
         KeyError for an unknown id, which Core answers as unknown_error."""
-
-        def raise_key_error(
-            self: dr.DeviceRegistry, device_id: str, **_: object
-        ) -> None:
-            raise KeyError(device_id)
-
-        monkeypatch.setattr(dr.DeviceRegistry, "async_update_device", raise_key_error)
+        monkeypatch.setattr(
+            dr.DeviceRegistry,
+            "async_update_device",
+            Mock(side_effect=KeyError(device.id)),
+        )
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_device(device_id=device.id, name="Den")

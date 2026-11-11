@@ -702,8 +702,9 @@ class RegistryTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                # An unknown id: Core 2026.9+ answers not_found, older Core
-                # an unknown_error.
+                # An unknown id: Core 2026.9+ answers not_found; older Core
+                # answers unknown_error, which newer Core also uses for other
+                # failures.
                 unknown = result.get("error_code") in ("not_found", "unknown_error")
                 raise_core_refusal(
                     "Failed to update device",

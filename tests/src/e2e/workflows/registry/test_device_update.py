@@ -181,28 +181,6 @@ class TestDeviceSet:
         )
         logger.info("No-changes update correctly rejected")
 
-    async def test_unknown_device_update_is_resource_not_found(self, mcp_client):
-        """Core's ``not_found`` for an unknown id reaches the caller as
-        RESOURCE_NOT_FOUND."""
-        logger.info("Testing update non-existent device")
-
-        update_data = await safe_call_tool(
-            mcp_client,
-            "ha_set_device",
-            {
-                "device_id": "definitely_not_a_real_device_id_12345",
-                "name": "Test Name",
-            },
-        )
-
-        assert not update_data.get("success"), (
-            "Updating non-existent device should fail"
-        )
-        assert update_data["error"]["code"] == "RESOURCE_NOT_FOUND", update_data
-        logger.info(
-            f"Non-existent device update correctly rejected: {update_data.get('error')}"
-        )
-
 
 async def _device_for_entity(mcp_client: Any, entity_id: str) -> dict[str, Any]:
     data = parse_mcp_result(
