@@ -810,11 +810,4 @@ def _filter_trace_sections(result: dict[str, Any], sections: str) -> dict[str, A
             )
         )
     keep = requested | _TRACE_METADATA_KEYS
-    if "logbook" in requested:
-        keep |= {
-            "logbook_entries",
-            "logbook_transport",
-            "logbook_total",
-            "logbook_truncated",
-        }
     return {key: value for key, value in result.items() if key in keep}

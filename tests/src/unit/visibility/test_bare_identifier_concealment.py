@@ -23,7 +23,6 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.visibility.identifier_aliases import (
     BARE_IDENTIFIER_ARGS,
     PREFIXED_IDENTIFIER_ARGS,
-    TRACE_KEY_FAIL_CLOSED_REASON,
 )
 
 from .._registered_tools import all_registered_tools
@@ -436,7 +435,9 @@ class TestHiddenScriptStorageKeyInContent:
                 _unreached_call_next,
             )
 
-        assert TRACE_KEY_FAIL_CLOSED_REASON in _error_body(exc)["error"]["message"]
+        message = _error_body(exc)["error"]["message"]
+        assert "no entity registry key" in message
+        assert "Give a restricted YAML automation an id" in message
 
     async def test_context_only_trace_with_an_unkeyed_hidden_automation_is_refused(
         self, set_config: Callable[..., Any]

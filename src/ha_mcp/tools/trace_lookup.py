@@ -288,7 +288,7 @@ def _raise_global_context_not_found(
     """Raise the structured not-found for an unresolvable global context id."""
     suggestions = [
         (
-            "The ha_mcp_tools component inspected every stored run and found no match"
+            "The ha_mcp_tools component found no match in its trace store"
             if component_checked
             else "Install the ha_mcp_tools component to resolve triggering (parent) contexts"
         ),
@@ -318,7 +318,8 @@ def _raise_context_not_found(
     """Raise the structured not-found for an unresolvable context id."""
     suggestions = [
         (
-            "The ha_mcp_tools component inspected every stored run and found no match"
+            "The ha_mcp_tools component found no match in its trace store under "
+            "those selectors"
             if component_checked
             else "Install the ha_mcp_tools component to resolve triggering (parent) contexts"
         ),

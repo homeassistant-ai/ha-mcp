@@ -138,8 +138,9 @@ the info handshake carries no capability entry:
   context, preferring a real run over a not-triggered diagnostic and returning
   the trace's ``as_extended_dict()`` (the frontend's trace-view/Download shape).
   The server's ``ha_get_automation_traces`` prefers this command and keeps
-  Core's public ``trace/contexts`` plus a bounded ``trace/list`` + ``trace/get``
-  scan as its component-absent fallbacks.
+  Core's public ``trace/contexts`` (a run's own context) as its
+  component-absent fallback; a parent context there is a not-found that names
+  this command.
 * ``ha_mcp_tools/search`` (``search_visibility`` capability) — the search command
   additionally accepts a raw ``visibility`` config dict; when present it excludes
   the server's opt-in hidden entities before counts/pagination (the pure

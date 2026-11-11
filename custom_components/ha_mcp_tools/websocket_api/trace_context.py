@@ -167,8 +167,6 @@ def _match_result(
         "item_id": item_id,
         "trace": trace.as_extended_dict(),
         "scanned": scanned,
-        "truncated": False,
-        "errors": [],
     }
 
 
@@ -182,6 +180,4 @@ def _empty_result(*, scanned: int, available: bool = True) -> dict[str, Any]:
         "item_id": None,
         "trace": None,
         "scanned": scanned,
-        "truncated": False,
-        "errors": [],
     }
