@@ -20,7 +20,6 @@ from pytest_homeassistant.components.recorder.common import async_wait_recording
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_history
 from ha_mcp.tools.statistics_helpers import fetch_statistics_metadata
-from ha_mcp.tools.tools_history import _fetch_statistics
 
 STATISTIC_ID = "sensor.energy"
 START = datetime(2024, 1, 1, tzinfo=UTC)
@@ -45,10 +44,25 @@ async def import_hour(
     await async_wait_recording_done(hass)
 
 
-async def query(client: HomeAssistantClient, *, offset: int = 0) -> dict[str, Any]:
-    return await _fetch_statistics(
-        client, [STATISTIC_ID], START, END, "hour", ["sum", "change"], 1, offset
+async def query(
+    client: HomeAssistantClient,
+    *,
+    offset: int = 0,
+    statistic_types: tuple[str, ...] | None = ("sum", "change"),
+) -> dict[str, Any]:
+    """One hourly page of ``ha_get_history(source="statistics")``: the tool's
+    data with the warnings it lifts to the top of the response."""
+    response = await tools_history.HistoryTools(client).ha_get_history(
+        entity_ids=STATISTIC_ID,
+        source="statistics",
+        start_time=START.isoformat(),
+        end_time=END.isoformat(),
+        period="hour",
+        statistic_types=None if statistic_types is None else list(statistic_types),
+        limit=1,
+        offset=offset,
     )
+    return {**response["data"], "warnings": response.get("warnings", [])}
 
 
 @pytest.mark.parametrize("stored,display", [("kWh", "kWh"), ("MWh", "kWh")])
@@ -193,9 +207,7 @@ async def test_import_committing_between_reads_never_yields_rows_without_unit(
         return await fetch_statistics_metadata(client, statistic_ids)
 
     with patch.object(tools_history, "fetch_statistics_metadata", import_then_read):
-        result = await _fetch_statistics(
-            core_client, [STATISTIC_ID], START, END, "hour", None, 1, 0
-        )
+        result = await query(core_client, statistic_types=None)
 
     entity = result["entities"][0]
     assert not entity["statistics"] or entity["unit_of_measurement"] == "kWh", entity

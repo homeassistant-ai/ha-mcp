@@ -9,6 +9,7 @@ covered through both write paths in test_helper_config_fold.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -26,7 +27,7 @@ from ha_mcp.tools.config_helpers.core_payload import (
     storage_fields,
     with_create_defaults,
 )
-from ha_mcp.tools.config_helpers.update import _execute_legacy_update, _stored_item
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 from ._tool_errors import _error
 
@@ -34,7 +35,9 @@ from ._tool_errors import _error
 async def _stored_counter(hass: HomeAssistant, client: HomeAssistantClient) -> str:
     """Create a storage counter in Core and return its id."""
     name = f"Count {uuid.uuid4().hex[:8]}"
-    assert await async_setup_component(hass, "counter", {})
+    # ``config`` serves the entity-registry read the update resolves the id by.
+    for domain in ("config", "counter"):
+        assert await async_setup_component(hass, domain, {})
     created = await client.send_websocket_message(
         {"type": "counter/create", "name": name, "minimum": 0, "maximum": 10}
     )
@@ -126,19 +129,19 @@ async def test_update_path_sends_a_step_core_accepts(
         "send_websocket_message",
         wraps=core_client.send_websocket_message,
     ) as sent:
-        result = await _execute_legacy_update(
-            core_client,
-            "counter",
-            f"counter.{counter_id}",
-            counter_id,
-            None,
-            None,
-            {"step": 0},
+        result = await HelperConfigTools(core_client).ha_config_set_helper(
+            helper_type="counter",
+            helper_id=f"counter.{counter_id}",
+            config={"step": 0},
+            wait=False,
         )
-    assert sent.await_args is not None
-    update_message = sent.await_args.args[0]
-    assert update_message["type"] == "counter/update" and update_message["step"] == 0
-    assert result["step"] == 0
+    updates = [
+        call.args[0]
+        for call in sent.await_args_list
+        if call.args[0].get("type") == "counter/update"
+    ]
+    assert [message["step"] for message in updates] == [0]
+    assert result["data"]["step"] == 0
 
 
 async def test_item_vanishing_before_the_update_reports_like_the_read(
@@ -147,28 +150,29 @@ async def test_item_vanishing_before_the_update_reports_like_the_read(
     """Core's not_found on <type>/update is the same missing item the stored
     read reports as CONFIG_NOT_FOUND, so the caller sees one code for it."""
     counter_id = await _stored_counter(hass, core_client)
+    deletions: list[asyncio.Task[dict[str, Any]]] = []
 
-    async def read_then_delete(
-        client: Any, helper_type: str, entity_id: str, unique_id: str
-    ) -> dict[str, Any]:
-        stored = await _stored_item(client, helper_type, entity_id, unique_id)
-        deleted = await core_client.send_websocket_message(
-            {"type": "counter/delete", "counter_id": unique_id}
+    def delete_after_the_read(*args: Any) -> dict[str, Any]:
+        # Runs once the stored item has been read and before counter/update is
+        # sent: the deletion reaches Core first, so Core answers the update.
+        deletions.append(
+            hass.async_create_task(
+                core_client.send_websocket_message(
+                    {"type": "counter/delete", "counter_id": counter_id}
+                )
+            )
         )
-        assert deleted["success"], deleted
-        return stored
+        return merged_update(*args)
 
     with (
-        patch.object(update, "_stored_item", read_then_delete),
+        patch.object(update, "merged_update", delete_after_the_read),
         pytest.raises(ToolError) as exc_info,
     ):
-        await _execute_legacy_update(
-            core_client,
-            "counter",
-            f"counter.{counter_id}",
-            counter_id,
-            "Renamed",
-            None,
-            {},
+        await HelperConfigTools(core_client).ha_config_set_helper(
+            helper_type="counter",
+            helper_id=f"counter.{counter_id}",
+            name="Renamed",
+            wait=False,
         )
+    assert [(await task)["success"] for task in deletions] == [True]
     assert json.loads(str(exc_info.value))["error"]["code"] == "CONFIG_NOT_FOUND"
