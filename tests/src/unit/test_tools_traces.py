@@ -387,6 +387,12 @@ class TestTraceFetchFailures:
                 "CONNECTION_FAILED",
                 id="transport-shaped-answer",
             ),
+            pytest.param(
+                "trace/contexts",
+                "Unknown command.",
+                "SERVICE_CALL_FAILED",
+                id="contexts-command-error",
+            ),
         ],
     )
     def test_ws_failure_is_classified_by_its_message(
