@@ -24,7 +24,6 @@ from .test_settings_ui_js_behavior import (
     _localized_policy_dom,
     _probe,
 )
-from .test_settings_ui_js_behavior import settings_script as settings_script
 
 _MESSAGES = CATALOGS[DEFAULT_LOCALE]["messages"]
 _EMPTY = _MESSAGES["policies.pending.empty"]

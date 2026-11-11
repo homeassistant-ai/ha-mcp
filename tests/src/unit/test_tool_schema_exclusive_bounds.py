@@ -31,7 +31,7 @@ from typing import Any
 import probatio
 import pytest
 
-from .test_container_param_coercion_complete import _all_registered_tools
+from ._registered_tools import all_registered_tools
 
 _EXCLUSIVE_KEYWORDS = ("exclusiveMinimum", "exclusiveMaximum")
 
@@ -76,7 +76,7 @@ def all_tools() -> Any:
     previous = os.environ.get("HAMCP_ENABLE_DEV_MODE")
     os.environ["HAMCP_ENABLE_DEV_MODE"] = "true"
     try:
-        return _all_registered_tools()
+        return all_registered_tools()
     finally:
         if previous is None:
             os.environ.pop("HAMCP_ENABLE_DEV_MODE", None)
