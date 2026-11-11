@@ -38,12 +38,6 @@ BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
     "ha_config_remove_automation": ("entity_id", "automation"),
 }
 
-# Tools whose identifier carries its domain as a ``script.`` / ``automation.``
-# prefix but falls back to the bare key when no entity has that entity_id.
-PREFIXED_IDENTIFIER_ARGS: dict[str, str] = {
-    "ha_get_automation_traces": "entity_id",
-}
-
 _SERVICE_TOOL = "ha_call_service"
 _TRACE_TOOL = "ha_get_automation_traces"
 
@@ -182,14 +176,6 @@ def hidden_identifier_argument(
         if not isinstance(entity_id, str):
             return None
         return _hidden_trace_entity_id(entity_id, aliases)
-    prefixed_arg = PREFIXED_IDENTIFIER_ARGS.get(tool_name)
-    if prefixed_arg is not None:
-        value = args.get(prefixed_arg)
-        if not isinstance(value, str):
-            return None
-        domain = value.strip().partition(".")[0]
-        hit = domain in _TRACE_DOMAINS and aliases.addresses_hidden(domain, value)
-        return value if hit else None
     spec = BARE_IDENTIFIER_ARGS.get(tool_name)
     if spec is None:
         return None

@@ -20,10 +20,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-from ha_mcp.visibility.identifier_aliases import (
-    BARE_IDENTIFIER_ARGS,
-    PREFIXED_IDENTIFIER_ARGS,
-)
+from ha_mcp.visibility.identifier_aliases import BARE_IDENTIFIER_ARGS
 
 from .._registered_tools import all_registered_tools
 from .test_enforcement import (
@@ -328,8 +325,10 @@ def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:
         if _takes_bare_identifier(tool_name, param_name)
     }
     covered = {(tool, arg) for tool, (arg, _domain) in BARE_IDENTIFIER_ARGS.items()}
-    covered |= set(PREFIXED_IDENTIFIER_ARGS.items())
-    covered |= {("ha_get_automation_traces", "item_id")}
+    covered |= {
+        ("ha_get_automation_traces", "entity_id"),
+        ("ha_get_automation_traces", "item_id"),
+    }
 
     assert discovered == covered, (
         "BARE_IDENTIFIER_ARGS is out of sync with the registered tools.\n"
