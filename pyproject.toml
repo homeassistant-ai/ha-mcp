@@ -262,6 +262,7 @@ module = [
     "tests.src.unit.test_embedded_version_dist",
     "tests.src.unit.test_embedded_worker_teardown_2127",
     "tests.src.unit.test_entity_backup_component",
+    "tests.src.unit.test_entity_expose_changed",
     "tests.src.unit.test_extract_tools_field_info",
     "tests.src.unit.test_fast_checks_workflow_shape",
     "tests.src.unit.test_filesystem_doc_parity",

@@ -107,6 +107,9 @@ from .test_ha_remove_device_component_routing import (
     _build_remove_device,
 )
 from .test_ha_search_component_routing import _build_ha_search
+from .test_radio_zigbee_component_routing import (
+    RoutingClient as ZigbeeRoutingClient,
+)
 
 _REAL_FNS = {
     "ha_mcp_tools/overview": wsapi._do_overview,
@@ -787,7 +790,7 @@ class TestDeviceSeam:
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
         )
-        client = GetDeviceRoutingClient()
+        client = ZigbeeRoutingClient()
         ws = _real_component_ws(FakeHass())
         with patch_ws(ws, component_devices):
             ieee = await _resolve_ieee(client, "dev-1")
