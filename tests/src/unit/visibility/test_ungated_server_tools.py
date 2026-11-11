@@ -68,7 +68,7 @@ async def test_server_text_naming_hidden_entity_is_not_refused(
     )
     set_config(enabled=True, enforce=True, deny_entity_ids=["light.kitchen"])
 
-    result = await _ChainedEnforcement(core_client).on_call_tool(
+    result = await _ChainedEnforcement(lambda: core_client).on_call_tool(
         context, _returns(text_result(_TEXT))
     )
 
@@ -87,7 +87,7 @@ async def test_skill_guide_is_served_when_visibility_config_cannot_load(
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     monkeypatch.setattr(resolver, "load_visibility_config", _broken)
 
-    result = await _ChainedEnforcement(core_client).on_call_tool(
+    result = await _ChainedEnforcement(lambda: core_client).on_call_tool(
         make_context("ha_get_skill_guide", _GUIDE_ARGS), _returns(text_result(_TEXT))
     )
 

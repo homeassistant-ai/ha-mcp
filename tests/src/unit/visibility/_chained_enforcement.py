@@ -2,35 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
-from typing import Any
-
-from ha_mcp.client.rest_client import (
-    HomeAssistantClient,
-)
 from ha_mcp.visibility.enforcement import (
     VisibilityInboundEnforcement,
     VisibilityOutboundEnforcement,
 )
 
 
-def _returns(result: SimpleNamespace) -> Callable[[Any], Awaitable[SimpleNamespace]]:
-    async def _call_next(context: Any) -> SimpleNamespace:
+def _returns(result):
+    async def _call_next(context):
         return result
 
     return _call_next
 
 
 class _ChainedEnforcement:
-    """Inbound wrapping outbound, as the server registers the pair."""
+    """Inbound + outbound halves chained in server registration order.
 
-    def __init__(self, client: HomeAssistantClient) -> None:
-        self.inbound = VisibilityInboundEnforcement(get_client=lambda: client)
-        self.outbound = VisibilityOutboundEnforcement(get_client=lambda: client)
+    The server registers the inbound half before read-only/policy and the
+    outbound half innermost; from the enforcement pair's own perspective the
+    composition is inbound-wrapping-outbound, which this reproduces so tests
+    exercise the full conceal/refuse/scan pipeline through one entry point.
+    """
 
-    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
-        async def _inner(ctx: Any) -> Any:
+    def __init__(self, get_client):
+        self.inbound = VisibilityInboundEnforcement(get_client=get_client)
+        self.outbound = VisibilityOutboundEnforcement(get_client=get_client)
+
+    async def on_call_tool(self, context, call_next):
+        async def _inner(ctx):
             return await self.outbound.on_call_tool(ctx, call_next)
 
         return await self.inbound.on_call_tool(context, _inner)
