@@ -17,16 +17,32 @@ from homeassistant.components.script.trace import ScriptTrace
 from homeassistant.components.trace import async_store_trace
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.trace import TraceElement
+from homeassistant.helpers.trigger.models import NotTriggeredInfo
 
 STORED_TRACES = 10
+
+# The diagnostics Core stores on a trigger that evaluated a change but did not
+# fire; see ``AutomationEntity._handle_not_triggered``.
+_NOT_TRIGGERED = NotTriggeredInfo(
+    reason="threshold_entity_not_found", data={"entity_id": "sensor.missing"}
+)
 
 
 def _finish(
     trace: AutomationTrace | ScriptTrace,
     changed_variables: dict[str, Any] | None = None,
 ) -> None:
-    """Give the run one action step, then Core's own stopped state."""
-    trace.set_trace({"action/0": [TraceElement(changed_variables or {}, "action/0")]})
+    """Give the run the one step Core records for its kind, then its stopped state."""
+    if trace.not_triggered:
+        # A trigger that did not fire records only its trigger step, carrying
+        # the trigger's diagnostics in the step's result.
+        element = TraceElement(changed_variables or {}, "trigger/0")
+        element.set_result(**_NOT_TRIGGERED.as_dict())
+        trace.set_trace({"trigger/0": [element]})
+    else:
+        # A script runs its sequence; an automation's steps are actions.
+        path = "sequence/0" if isinstance(trace, ScriptTrace) else "action/0"
+        trace.set_trace({path: [TraceElement(changed_variables or {}, path)]})
     trace.finished()
 
 

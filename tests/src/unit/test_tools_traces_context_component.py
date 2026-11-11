@@ -75,7 +75,7 @@ class TestComponentContextLookup:
                 "match": "parent",
             }
         ]
-        assert result["trace"]["action/0"][0]["path"] == "action/0"
+        assert result["trace"]["sequence/0"][0]["path"] == "sequence/0"
         assert "entity_id" not in result
 
     async def test_component_own_context_returns_a_trace_match(
