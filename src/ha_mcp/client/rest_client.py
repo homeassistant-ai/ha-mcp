@@ -755,11 +755,10 @@ class HomeAssistantClient:
                 domain, service, payload, return_response
             )
 
-        # When return_response is True, HA returns a dict with service_response key
+        # Core answers return_response with its {changed_states, service_response}
+        # envelope; ``_request`` turns a non-JSON reply into ``{}``.
         if return_response:
-            if isinstance(result, dict):
-                return result
-            return {"service_response": result}
+            return result
 
         # Normal behavior: return list of affected states
         if isinstance(result, list):

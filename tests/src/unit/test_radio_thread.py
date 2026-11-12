@@ -291,6 +291,36 @@ async def test_set_network_without_otbr_raises(
     assert [call.args[0]["type"] for call in sent.await_args_list] == ["otbr/info"]
 
 
+async def test_set_network_with_no_loaded_otbr_entry_raises(
+    hass: HomeAssistant, core_client: HomeAssistantClient, radio: RadioTools
+) -> None:
+    # With the otbr integration set up but no entry loaded, Core's otbr/info
+    # refuses with not_loaded rather than answering an empty map.
+    assert await async_setup_component(hass, "config", {})
+
+    @websocket_api.websocket_command({vol.Required("type"): "otbr/info"})
+    @callback
+    def no_otbr_loaded(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        connection.send_error(msg["id"], "not_loaded", "No OTBR API loaded")
+
+    websocket_api.async_register_command(hass, no_otbr_loaded)
+
+    with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="thread",
+            action="set_network",
+            params={"dataset_id": "d1"},
+            confirm=True,
+        )
+
+    assert "otbr integration is not loaded" in str(exc.value).lower()
+    assert [call.args[0]["type"] for call in sent.await_args_list] == ["otbr/info"]
+
+
 async def test_create_network_with_explicit_address_skips_the_lookup(
     hass: HomeAssistant, radio: RadioTools
 ) -> None:

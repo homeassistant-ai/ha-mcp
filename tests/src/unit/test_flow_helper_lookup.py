@@ -146,7 +146,7 @@ async def test_a_state_read_without_an_answer_is_not_evidence_of_absence(
 async def test_a_registry_read_without_an_answer_propagates(
     core_client: HomeAssistantClient,
 ) -> None:
-    # Not "lookup_failed": the caller's handler reports the lost connection.
+    # The caller's handler reports the lost connection.
     with (
         patch.object(
             core_client,

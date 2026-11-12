@@ -348,8 +348,11 @@ def filter_active_repairs(
     Entries with ``active=False`` are always dropped, regardless of
     ``include_dismissed``: HA core's ``ws_list_issues`` never emits them
     (on restart the registry reloads each stored non-persistent issue as an
-    inactive stub until it is re-raised or deleted), but the component's
-    raw registry dump does.
+    inactive stub until it is re-raised or deleted) and component 1.2.0+
+    skips them. Only component 1.1.0 (ha-mcp 7.13.0), whose ``overview``
+    repairs slice dumped the raw registry, sends them: a legacy fallback.
+    Dropping them in both modes also keeps those stubs out of the dismissed
+    count the callers derive from ``include_dismissed=True``.
     """
     if include_dismissed:
         return [r for r in issues if r.get("active") is not False]

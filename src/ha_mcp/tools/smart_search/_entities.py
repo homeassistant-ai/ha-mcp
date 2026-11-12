@@ -242,11 +242,6 @@ class EntitySearchMixin(_SearchBase):
 
         failed_chunks = 0
         for chunk, entries_resp in zip(chunks, responses, strict=True):
-            # Same convention as _fetch_search_entities: a captured
-            # CancelledError means the surrounding task is being torn
-            # down — propagate it instead of degrading to a warning.
-            if isinstance(entries_resp, asyncio.CancelledError):
-                raise entries_resp
             if isinstance(entries_resp, BaseException):
                 failed_chunks += 1
                 logger.warning(
@@ -356,12 +351,6 @@ class EntitySearchMixin(_SearchBase):
         # with success=True.
         if isinstance(states_result, BaseException):
             raise states_result
-        # CancelledError on the registry tasks must propagate too; gather captures
-        # it like any other exception when return_exceptions=True.
-        if isinstance(registry_result, asyncio.CancelledError):
-            raise registry_result
-        if isinstance(device_result, asyncio.CancelledError):
-            raise device_result
         entities = states_result
 
         # Opt-in visibility filter. registry_result is the unprojected registry,
@@ -505,13 +494,6 @@ class EntitySearchMixin(_SearchBase):
             if isinstance(results[0], BaseException):
                 raise results[0]
             entities = results[0]
-            # A registry sub-task that was individually cancelled must propagate,
-            # not be silently degraded to an empty registry by the parsers below
-            # (mirrors _fetch_search_entities). Non-cancellation registry errors
-            # still fail open.
-            for reg_result in results[1:]:
-                if isinstance(reg_result, asyncio.CancelledError):
-                    raise reg_result
             # Opt-in visibility filter. results[2] is the unprojected entity
             # registry, so entity_category/hidden_by/area_id/labels are present;
             # results[3] is the device registry, so the area/label dimensions
