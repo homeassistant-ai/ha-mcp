@@ -624,10 +624,12 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     return auth if isinstance(auth, str) else None
 
 
+COMPONENT_VIA_HACS = (
+    "via HACS (the Marketplace on Home Assistant 2026.11+) and restart Home Assistant."
+)
 # Said wherever a response is poorer for want of a component command.
 COMPONENT_INSTALL_HINT = (
-    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
-    "on Home Assistant 2026.11+) and restart Home Assistant."
+    f"Install or update the ha_mcp_tools component {COMPONENT_VIA_HACS}"
 )
 
 

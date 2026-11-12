@@ -30,8 +30,10 @@ from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
     COMPONENT_INSTALL_HINT,
+    COMPONENT_VIA_HACS,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_ENRICH_FULL_NAME,
+    ComponentDiscoveryError,
     component_serves,
     component_supports,
     get_component_caps,
@@ -102,6 +104,9 @@ WS_ENTITY_ENRICH = "ha_mcp_tools/entity_enrich"
 # Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
 # the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
 _MAX_BULK_REMOVE = 100
+
+# What ha_get_entity's rows lack without the component's entity_enrich.
+_WITHOUT_ENRICHMENT = "the entries come without area, floor, label_names and full_name"
 
 _CLEAR_DEVICE_NAME_HINT = (
     "new_device_name cannot clear the device name; use ha_set_device(name='') "
@@ -1691,11 +1696,11 @@ class EntityTools:
         helper's current config (template body, group members, etc.) without
         scanning a domain list.
 
-        Resolved-name enrichment, served by the ha_mcp_tools component (absent
-        without it; a warning says when its command fails or the component
-        predates `full_name`): `full_name` (the name Home Assistant shows,
-        composed from the parent device, device and entity names; null when it
-        has none),
+        Resolved-name enrichment on an entity_id lookup, served by the
+        ha_mcp_tools component (absent without it, and a warning says which
+        fields are missing and whether to install or update the component):
+        `full_name` (the name Home Assistant shows, composed from the parent
+        device, device and entity names; null when it has none),
         `area` (assigned area NAME, device-inherited when the entity has none),
         `floor`, and `label_names`. This tool's base `labels` carries the label ids;
         ha_search result_fields and the exposure listing's `entity_info`
@@ -1874,23 +1879,42 @@ class EntityTools:
     async def _enrich_entries(self, entity_entries: list[dict[str, Any]]) -> str | None:
         """Add the component's entity_enrich fields to the found entries.
 
-        Without the command the fields are absent. Returns a warning when the
-        advertised command answers with an error or times out, or when the
-        component predates ``full_name``.
+        Returns a warning whenever the entries come without some of them: no
+        component answered (install it), the component is too old for the
+        command or ``full_name`` (update it), it could not be asked, or the
+        advertised command answers with an error or times out.
         """
         found_ids = [e["entity_id"] for e in entity_entries]
+        if not found_ids:
+            return None
+        # Read before the fetch: an unknown_command there drops the cached caps.
+        # Strict, so a refused or failed probe is not taken for no component.
+        try:
+            caps = await get_component_caps(self._client, strict=True)
+        except ComponentDiscoveryError as exc:
+            return (
+                f"The ha_mcp_tools component could not be asked ({exc}), so "
+                f"{_WITHOUT_ENRICHMENT}."
+            )
         try:
             enriched = await fetch_entity_enrichment_via_component(
                 self._client, found_ids
             )
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             return (
-                f"{WS_ENTITY_ENRICH} failed: {core_error_message(exc)}; the "
-                "entries come without area, floor, label_names and full_name. "
-                + COMPONENT_INSTALL_HINT
+                f"{WS_ENTITY_ENRICH} failed: {core_error_message(exc)}; "
+                f"{_WITHOUT_ENRICHMENT}. {COMPONENT_INSTALL_HINT}"
             )
         if enriched is None:
-            return None
+            if caps is None:
+                return (
+                    f"No ha_mcp_tools component answered, so {_WITHOUT_ENRICHMENT}. "
+                    f"Install it {COMPONENT_VIA_HACS}"
+                )
+            return (
+                f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
+                f"Update it {COMPONENT_VIA_HACS}"
+            )
         with_full_name = await component_serves(self._client, ENTITY_ENRICH_FULL_NAME)
         for entry in entity_entries:
             _merge_entity_enrichment(
@@ -1900,7 +1924,7 @@ class EntityTools:
             return None
         return (
             "The ha_mcp_tools component predates full_name, so the entries come "
-            "without it. " + COMPONENT_INSTALL_HINT
+            f"without it. Update it {COMPONENT_VIA_HACS}"
         )
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
