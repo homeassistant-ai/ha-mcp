@@ -1,7 +1,8 @@
-"""Chunked ``config/entity_registry/get_entries`` reads.
+"""Entity registry reads: chunked get_entries, the unique_id resolver, NotInRegistry.
 
-They serve ``ha_get_entity``'s list and unique_id modes and ``ha_set_entity``'s
-exposure-target lookup and bulk refetch.
+``config/entity_registry/get_entries`` is read in chunks that keep each
+WebSocket frame under the size cap, and an id Core holds no entry for is told
+apart from a failed read.
 """
 
 import asyncio
@@ -22,7 +23,7 @@ _GET_ENTRIES_CHUNK_SIZE = 500
 _NOT_IN_REGISTRY = "Entity not found"
 
 
-class NotInRegistry(ValueError):
+class NotInRegistry(LookupError):
     """Core's entity registry holds no entry for the entity (``not_found``)."""
 
 

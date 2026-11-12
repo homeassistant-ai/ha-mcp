@@ -31,7 +31,8 @@ from .coercion import JSON_STRING_COERCION
 from .component_api import (
     COMPONENT_INSTALL_HINT,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
-    component_failure,
+    ENTITY_ENRICH_FULL_NAME,
+    component_serves,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -79,6 +80,7 @@ from .entity_update_fields import (
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
+    core_error_message,
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
@@ -91,9 +93,9 @@ from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
-# The ha_mcp_tools/entity_enrich WS command: resolved area/floor/label NAMES +
-# aliases per entity_id, byte-shaped like the component's registry join. Named
-# once so the routing helper and its tests stay in lockstep.
+# The ha_mcp_tools/entity_enrich WS command: resolved area/floor/label NAMES,
+# aliases and the composed name per entity_id, byte-shaped like the component's
+# registry join. Named once so the routing helper and its tests stay in lockstep.
 WS_ENTITY_ENRICH = "ha_mcp_tools/entity_enrich"
 
 
@@ -114,10 +116,11 @@ async def fetch_entity_enrichment_via_component(
 
     Returns ``{id: {area, floor, labels, aliases, full_name}}``: resolved
     area/floor/label NAMES the raw registry entry lacks (it carries
-    ``area_id`` / label *ids*) and the name Home Assistant shows. ``None``
-    when the component does not advertise the command, or no longer knows it
-    (``unknown_command`` → invalidate the cached caps): the rows then stay as
-    Core serves them. Any other failure of the advertised command raises.
+    ``area_id`` / label *ids*) and, with ``entity_enrich_full_name``, the name
+    Home Assistant shows. ``None`` for no ids, or when the component does not
+    advertise the command or no longer knows it (``unknown_command`` →
+    invalidate the cached caps): the rows then stay as Core serves them. Any
+    other failure of the advertised command raises.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
@@ -151,25 +154,22 @@ async def fetch_entity_enrichment_via_component(
 
 
 def _merge_entity_enrichment(
-    record: dict[str, Any], enrichment: dict[str, Any] | None
+    record: dict[str, Any], enrichment: dict[str, Any] | None, with_full_name: bool
 ) -> None:
-    """Additively attach resolved area/floor/label NAMES and the shown name.
+    """Attach the component's resolved names without overwriting a base key.
 
-    The base record already carries ``area_id`` and label *ids* (``labels``); the
-    component join adds the resolved, device-inherited NAMES under non-clobbering
-    keys — ``area`` / ``floor`` / ``label_names`` — and ``full_name``, the name
-    Home Assistant shows, so nothing existing is overwritten. ``aliases`` is already on the base record (same set — the
-    component sorts, so ordering may differ — and the base value is authoritative),
-    so it is not re-added. A ``None`` / empty enrichment is a no-op: on a capability
-    miss the fields are simply absent, leaving the legacy response shape unchanged.
+    Adds ``area`` / ``floor`` / ``label_names`` (device-inherited NAMES; the base
+    record carries ``area_id`` and label ids) and, with ``with_full_name``,
+    ``full_name``, the name Home Assistant shows. ``aliases`` is not re-added:
+    the base record carries the same set (the component sorts it) and is
+    authoritative. A ``None`` / empty enrichment is a no-op.
     """
     if not enrichment:
         return
     record["area"] = enrichment.get("area")
     record["floor"] = enrichment.get("floor")
     record["label_names"] = enrichment.get("labels") or []
-    # Components released before entity_enrich carried full_name send none.
-    if "full_name" in enrichment:
+    if with_full_name:
         record["full_name"] = enrichment["full_name"]
 
 
@@ -565,13 +565,9 @@ class EntityTools:
         if new_device_name is None:
             return None, entity_entry
 
-        # Without a registry write yet, nothing has been written, so a failed
-        # read can end the call; an entity without an entry has no device.
-        if not entity_entry:
-            try:
-                entity_entry = await self._fetch_entity(entity_id)
-            except NotInRegistry:
-                pass
+        # An entity without a registry entry has no device.
+        _, entry = await self._resolve_target(entity_id, entity_entry)
+        entity_entry = entry or {}
 
         device_id = entity_entry.get("device_id")
         if not device_id:
@@ -634,13 +630,15 @@ class EntityTools:
                 context["device_rename_succeeded"] = True
         return context
 
-    async def _expose_target(
+    async def _resolve_target(
         self, entity_id: str, entity_entry: dict[str, Any]
     ) -> tuple[str, dict[str, Any] | None]:
-        """The id to send Core for the exposure, and the registry entry if any.
+        """The id Core knows the entity by, and its registry entry if any.
 
         Same resolution as ``expose_targets``: an id Home Assistant does not
-        know is refused before anything is written.
+        know is refused (ENTITY_NOT_FOUND). Callers pass an empty
+        ``entity_entry`` only before any write, so the refusal leaves nothing
+        applied; a non-empty one is returned as it is.
         """
         if entity_entry:
             return entity_entry["entity_id"], entity_entry
@@ -671,7 +669,7 @@ class EntityTools:
         """
         if parsed_expose_to is None:
             return None, entity_entry, None
-        target, entry = await self._expose_target(entity_id, entity_entry)
+        target, entry = await self._resolve_target(entity_id, entity_entry)
         if not parsed_expose_to:
             updates_made.append(_expose_update(parsed_expose_to, True))
             return None, entry, None
@@ -1232,12 +1230,11 @@ class EntityTools:
                 description=(
                     "The entity's own name part, not the full name: the UI puts "
                     "the device name (and, where linked, a parent device's) in "
-                    "front of it while the entry's "
-                    "next_name_part is 'device', that is while the entity has a "
-                    "device and no area of its own; the state's friendly_name puts "
-                    "the device name in front regardless. Use empty string '' to "
-                    "remove the custom name and revert to default. "
-                    + WHITESPACE_CLEARS_NOTE
+                    "front of it while the entry's next_name_part is 'device', "
+                    "that is while the entity has a device and no area of its "
+                    "own; the state's friendly_name puts the device name in front "
+                    "regardless. Use empty string '' to remove the custom name and "
+                    "revert to default. " + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1246,13 +1243,13 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "The entity dialog's 'Main entity of the device' switch. "
-                    "True names the "
-                    "entity after its device, following device renames, and like "
-                    "the dialog moves it from its own area to the device's; Home "
-                    "Assistant refuses an area_id of its own on a main entity, so "
-                    "set the area on the device with ha_set_device. An entity "
-                    "without a name of its own already is the main entity and is "
+                    "The entity dialog's 'Main entity of the device' switch. True "
+                    "names the entity after its device, following device renames, "
+                    "and like the dialog moves it from its own area to the "
+                    "device's; Home Assistant refuses an area_id of its own on a "
+                    "main entity, so set the area on the device with "
+                    "ha_set_device. An entity without a name of its own already "
+                    "is the main entity and is "
                     "left as is. False restores the integration's default name; an "
                     "entity the integration gives no name then is the main entity, "
                     "which Home Assistant refuses while it has an area of its own, "
@@ -1292,8 +1289,8 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. Multiple domains are sent '
-                    "as separate registry updates. For 'Show As' use device_class; for "
+                    'e.g. {"sensor": {"display_precision": 2}}. '
+                    "For 'Show As' use device_class; for "
                     "voice-assistant exposure use expose_to, not "
                     "options.<assistant>.should_expose."
                 ),
@@ -1304,11 +1301,13 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "True to enable the entity, False to disable it. "
-                    "WARNING: Setting enabled=False is a registry-level disable — it completely "
-                    "removes the entity from the state machine and hides it from the UI. "
-                    "Re-enabling returns Home Assistant's own answer: require_restart, "
-                    "or reload_delay (seconds until it reloads the integration itself)."
+                    "True to enable the entity, False to disable it. WARNING: "
+                    "enabled=False is a registry-level disable, not 'turning off': "
+                    "the entity leaves the state machine, the UI, dashboards and "
+                    "automations until it is re-enabled and its integration has "
+                    "reloaded. Re-enabling returns Home Assistant's own answer: "
+                    "require_restart, or reload_delay (seconds until it reloads "
+                    "the integration itself)."
                 ),
                 default=None,
             ),
@@ -1432,9 +1431,10 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "New display name for the associated device. "
-                    "If provided, both entity and device are updated in one operation. "
-                    "Empty or whitespace-only never changes the device name: it is "
+                    "New display name for the associated device. An entity_id "
+                    "Home Assistant does not know is refused; an entity without a "
+                    "device gets a warning. Empty or whitespace-only never changes "
+                    "the device name: it is "
                     "reported under warnings when other fields are given and is an "
                     "error when it is the only update. To clear the device name use "
                     "ha_set_device(name='')."
@@ -1471,10 +1471,6 @@ class EntityTools:
         - Entity history is preserved (HA 2022.4+)
         - Entities without unique IDs cannot be renamed
 
-        DEVICE RENAME:
-        new_device_name can be combined with new_entity_id to rename both in one
-        call. The device is looked up automatically.
-
         REGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home
         Assistant's `settings`, the `expose_new_entities` written, and the values
         they replace
@@ -1493,13 +1489,7 @@ class EntityTools:
         - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
         - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
 
-        ENABLED/DISABLED WARNING:
-        A disabled entity will NOT appear in state queries, dashboards, or
-        automations until it is re-enabled and its integration has reloaded (or
-        Home Assistant restarted: re-enabling returns Core's `reload_delay` or
-        `require_restart`).
-        This is NOT the same as "turning off" an entity.
-
+        AUTOMATIONS AND SCRIPTS:
         For automations and scripts, enabled=False is blocked. For automations,
         use ha_config_set_automation(entity_id="automation.xxx", enabled=False)
         (or enabled=True to re-enable).
@@ -1690,11 +1680,10 @@ class EntityTools:
         entity of the device" switch). Plus the enrichment keys below.
 
         RESOLVER MODE:
-        Pass unique_id (instead of entity_id) to resolve a stable integration
-        unique_id to its entity_id(s). Since the registry's unique key is
-        (domain, platform, unique_id), the same unique_id can match multiple
-        platforms — all matches are returned in entity_entries with a `matches`
-        count. Narrow with domain/platform.
+        Pass unique_id to resolve it to its entity_id(s). Since the registry's
+        unique key is (domain, platform, unique_id), the same unique_id can match
+        multiple platforms — all matches are returned in entity_entries with a
+        `matches` count. Narrow with domain/platform.
 
         When config_entry_id is non-null — e.g. for UI-created template / group /
         utility_meter / derivative helpers — pass it to
@@ -1702,9 +1691,11 @@ class EntityTools:
         helper's current config (template body, group members, etc.) without
         scanning a domain list.
 
-        Resolved-name enrichment (present only when the ha_mcp_tools component
-        advertises it; otherwise these keys are absent): `full_name` (the name
-        Home Assistant shows, composed from the device and entity names),
+        Resolved-name enrichment, served by the ha_mcp_tools component (absent
+        without it; a warning says when its command fails or the component
+        predates `full_name`): `full_name` (the name Home Assistant shows,
+        composed from the parent device, device and entity names; null when it
+        has none),
         `area` (assigned area NAME, device-inherited when the entity has none),
         `floor`, and `label_names`. This tool's base `labels` carries the label ids;
         ha_search result_fields and the exposure listing's `entity_info`
@@ -1713,9 +1704,10 @@ class EntityTools:
         VOICE ASSISTANT EXPOSURE:
         An entity with a registry entry keeps its exposure in the entry's
         `options` (`options.<assistant>.should_expose`; absent while nothing is
-        stored); ha_set_entity(expose_to=...) sets it. An entity without a registry entry that has a state, or is
-        stored as exposed, returns `entity_entry: null` with `exposed_to` (the
-        assistants Home Assistant has stored as exposed) and
+        stored); ha_set_entity(expose_to=...) sets it. An entity without a
+        registry entry that has a state, or is stored as exposed, returns
+        `entity_entry: null` with `exposed_to` (the assistants Home Assistant has
+        stored as exposed) and
         `is_exposed_anywhere`; a list call returns such entities under
         `unregistered_entities`.
 
@@ -1842,8 +1834,6 @@ class EntityTools:
         if not is_bulk:
             return await self._get_single_entity(entity_ids[0])
 
-        # Bulk case - fetch all entities in one chunked get_entries call
-        # (native HA bulk command) instead of one registry get per id.
         logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
         raw_map, known, error_map = await get_entries_or_unregistered(
             self._client, entity_ids
@@ -1885,7 +1875,8 @@ class EntityTools:
         """Add the component's entity_enrich fields to the found entries.
 
         Without the command the fields are absent. Returns a warning when the
-        component advertises the command and then fails it.
+        advertised command answers with an error or times out, or when the
+        component predates ``full_name``.
         """
         found_ids = [e["entity_id"] for e in entity_entries]
         try:
@@ -1894,14 +1885,23 @@ class EntityTools:
             )
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             return (
-                f"{component_failure(WS_ENTITY_ENRICH, exc)}; the entries come "
-                "without area, floor, label_names and full_name. "
+                f"{WS_ENTITY_ENRICH} failed: {core_error_message(exc)}; the "
+                "entries come without area, floor, label_names and full_name. "
                 + COMPONENT_INSTALL_HINT
             )
-        if enriched is not None:
-            for entry in entity_entries:
-                _merge_entity_enrichment(entry, enriched.get(entry["entity_id"]))
-        return None
+        if enriched is None:
+            return None
+        with_full_name = await component_serves(self._client, ENTITY_ENRICH_FULL_NAME)
+        for entry in entity_entries:
+            _merge_entity_enrichment(
+                entry, enriched.get(entry["entity_id"]), with_full_name
+            )
+        if with_full_name:
+            return None
+        return (
+            "The ha_mcp_tools component predates full_name, so the entries come "
+            "without it. " + COMPONENT_INSTALL_HINT
+        )
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
         """Validate the id list, then remove the ids one at a time; registry

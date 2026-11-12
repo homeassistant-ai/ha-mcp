@@ -61,7 +61,7 @@ async def apply_bulk_expose(
     for those being turned off) regardless of entity count — not one per
     entity. Returns (error, changed): error is None on success, or the message
     of the first failing set, which applies to every id in the list. changed
-    holds the ids Core reports it changed.
+    holds the ids Core reports it changed, and is empty on error.
     """
     expose_true = [a for a, v in parsed_expose_to.items() if v]
     expose_false = [a for a, v in parsed_expose_to.items() if not v]

@@ -68,9 +68,11 @@ the info handshake carries no capability entry:
   component path.
 * ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join and the
   name Core composes for a set of entity_ids (``{entities: {id: {area, floor,
-  labels, aliases, full_name}}}``), computed
-  by the SAME ``_entity_record``/``_RegistryView`` registry join the search path
-  uses (device-inherited area/labels included). Lets ``ha_get_entity`` add the
+  labels, aliases, full_name}}}``). The join is the SAME
+  ``_entity_record``/``_RegistryView`` registry join the search path uses
+  (device-inherited area/labels included); ``full_name`` is the composed name
+  the overview serves as ``full_name`` (search's ``name`` falls back to
+  friendly_name where it is None). Lets ``ha_get_entity`` add the
   resolved-name enrichment fields the raw registry entry lacks (it carries
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are

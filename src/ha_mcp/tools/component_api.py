@@ -77,6 +77,10 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # friendly_name alone, and the server says so where that changes the answer.
 ENTITY_COMPOSED_NAME = "entity_composed_name"
 
+# Additive flag on entity_enrich: each entity carries the name Core composes
+# (as under ENTITY_COMPOSED_NAME) as ``full_name``.
+ENTITY_ENRICH_FULL_NAME = "entity_enrich_full_name"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
@@ -625,12 +629,6 @@ COMPONENT_INSTALL_HINT = (
     "Install or update the ha_mcp_tools component via HACS (the Marketplace "
     "on Home Assistant 2026.11+) and restart Home Assistant."
 )
-
-
-def component_failure(command: str, exc: Exception) -> str:
-    """What to say when the component advertises ``command`` and then fails it."""
-    detail = str(exc).removeprefix("Command failed: ")
-    return f"{command} failed: {detail}"
 
 
 async def component_serves(client: Any, capability: str) -> bool:

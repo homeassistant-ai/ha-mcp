@@ -415,6 +415,16 @@ class TestExposeToWithoutRegistryEntry:
         settings = core_exposed.async_get_entity_settings(hass, "zone.home")
         assert settings["cloud.alexa"]["should_expose"] is True
 
+    async def test_a_device_rename_of_an_unknown_id_is_refused(
+        self, tools: EntityTools
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.does_not_exist", new_device_name="X"
+            )
+
+        assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+
 
 class TestBulkRead:
     async def test_a_failed_exposure_read_keeps_the_found_entries(

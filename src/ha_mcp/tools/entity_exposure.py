@@ -21,7 +21,6 @@ from ..errors import ErrorCode, create_error_response
 from .component_api import (
     COMPONENT_INSTALL_HINT,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
-    component_failure,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -69,7 +68,7 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    component_failure(WS_EXPOSURE, exc),
+                    f"{WS_EXPOSURE} failed: {core_error_message(exc)}",
                     suggestions=[COMPONENT_INSTALL_HINT],
                 )
             )
@@ -90,10 +89,7 @@ async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     component = await _fetch_exposure_via_component(client)
     if component is not None:
-        return (
-            component.get("exposed_entities") or {},
-            component.get("entity_info") or {},
-        )
+        return component["exposed_entities"], component["entity_info"]
     result = await client.send_websocket_message(
         {"type": "homeassistant/expose_entity/list"}
     )

@@ -2,12 +2,12 @@
 
 ``ha_get_entity`` serves its base registry record from the native
 ``config/entity_registry/get`` (single) / ``config/entity_registry/get_entries``
-(bulk) reads Phase 0 already landed. When the component advertises
-``entity_enrich``, one ``ha_mcp_tools/entity_enrich`` frame additively decorates
-each record with the resolved area/floor NAMES and label NAMES the raw registry
-entry lacks (it carries ``area_id`` / label ids). These tests pin the additive
-merge, that the enrichment keys are ABSENT on a capability miss (legacy shape
-unchanged) and on ``unknown_command`` (which also invalidates the cached caps).
+(bulk) reads. When the component advertises ``entity_enrich``, one
+``ha_mcp_tools/entity_enrich`` frame additively decorates each record with the
+resolved area/floor NAMES and label NAMES the raw registry entry lacks (it
+carries ``area_id`` / label ids). These tests pin the additive merge, that
+the enrichment keys are ABSENT on a capability miss (legacy shape unchanged)
+and on ``unknown_command`` (which also invalidates the cached caps).
 """
 
 from __future__ import annotations
@@ -168,8 +168,6 @@ async def test_single_entity_enriched_via_component() -> None:
     assert entry["area"] == "Kitchen"
     assert entry["floor"] == "Main"
     assert entry["label_names"] == ["Favorites"]
-    # This component's enrichment carries no full_name, so the row has none.
-    assert "full_name" not in entry
     assert len(_enrich_calls(ws)) == 1
     assert _enrich_calls(ws)[0].kwargs["entity_ids"] == ["light.a"]
 

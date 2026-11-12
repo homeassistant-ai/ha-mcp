@@ -1150,10 +1150,10 @@ class SystemTools:
         ``config_entries/get`` round-trips (a TOCTOU across sections) into one
         consistent in-process read.
 
-        All-or-nothing per call, mirroring ``_fetch_exposure_via_component`` /
-        ``_overview_via_component``: a capability miss, command error/timeout,
-        or malformed slice falls back to the legacy per-section fetches for
-        EVERY consuming section in this call — never a partial hybrid where
+        All-or-nothing per call, mirroring ``_overview_via_component``: a
+        capability miss, command error/timeout, or malformed slice falls back
+        to the legacy per-section fetches for EVERY consuming section in this
+        call — never a partial hybrid where
         one section reads the snapshot and a sibling reads legacy data from a
         different instant. ``unknown_command`` invalidates the cached caps
         (component downgraded mid-session); any other command error/timeout

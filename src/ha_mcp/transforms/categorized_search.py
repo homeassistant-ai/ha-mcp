@@ -35,12 +35,12 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import (
-    adapt_retired_call,
     add_stale_list_warning,
     current_tool_name,
 )
 from ..server_tool_text import SKILL_TOOL_NAME
 from ..tool_catalog import tool_search_active
+from ..tools.renamed_tool_middleware import adapt_retired_call
 from .compact_params import compact_params, summary
 from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
@@ -809,11 +809,6 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
             arguments = _coerce_proxy_arguments(arguments, proxy_name, name)
-            # A retired name folded into an action-dispatched tool (#2329)
-            # needs the action its old signature never carried.
-            arguments = await adapt_retired_call(
-                requested, arguments, transform._get_client
-            )
 
             # Detect and unwrap double-wrapped arguments where the LLM
             # accidentally nested name/arguments inside the arguments param
@@ -851,18 +846,25 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     )
                     name = inner_name
                     # The nested payload gets the same treatment as the outer
-                    # one: a JSON string is parsed, a scalar or list is
+                    # one: a JSON string is parsed, and a scalar or list is
                     # refused with the same structured error rather than
                     # reaching the adapter, whose dict() would raise a bare
-                    # ValueError, and a retired inner name gets its action.
+                    # ValueError.
                     nested = _coerce_proxy_arguments(
                         arguments.get("arguments"), proxy_name, inner_name
                     )
                     if nested is not None and not isinstance(nested, dict):
                         _raise_non_object_arguments(nested, proxy_name, inner_name)
-                    arguments = await adapt_retired_call(
-                        requested_inner, nested or {}, transform._get_client
-                    )
+                    requested, arguments = requested_inner, nested or {}
+
+            # A retired name folded into an action-dispatched tool (#2329)
+            # needs the action its old signature never carried, and Core
+            # judges a name the current tool drops. When the call was
+            # double-wrapped, the outer name is a proxy name, which is never
+            # retired, so only the unwrapped name needs adapting.
+            arguments = await adapt_retired_call(
+                requested, arguments, transform._get_client
+            )
 
             if not _admits(transform, category, name, arguments):
                 _raise_wrong_category_error(name, transform, proxy_name)

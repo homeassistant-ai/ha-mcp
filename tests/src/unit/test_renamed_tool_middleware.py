@@ -8,6 +8,7 @@ tool, and the old name has to stay out of the catalog.
 import json
 import logging
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.automation.trace import AutomationTrace
@@ -18,7 +19,10 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.renamed_tools import RENAMED_PARAMETERS
 from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.tools.renamed_tool_middleware import (
@@ -428,6 +432,45 @@ async def test_core_judges_the_retired_assistant_sent_with_an_entity_id(
         )
 
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_no_answer_to_the_assistant_check_is_a_structured_error(
+    exposure_mcp: FastMCP,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+) -> None:
+    monkeypatch.setattr(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await exposure_mcp.call_tool(
+            *_EXPOSURE_CALL_SHAPES[shape](
+                {"entity_id": "light.lamp", "assistant": "conversation"}
+            )
+        )
+
+    body = json.loads(str(exc_info.value))
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+    # The check's own error, not ha_get_entity's read failing the same way.
+    assert body["assistant"] == "conversation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_a_retired_entity_read_without_an_assistant_reads_the_entity(
+    exposure_mcp: FastMCP, shape: str
+) -> None:
+    result = await exposure_mcp.call_tool(
+        *_EXPOSURE_CALL_SHAPES[shape]({"entity_id": "light.lamp"})
+    )
+
+    assert result.structured_content["entity_entry"]["entity_id"] == "light.lamp"
 
 
 @pytest.mark.asyncio
