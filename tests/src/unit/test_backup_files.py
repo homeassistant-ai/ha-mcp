@@ -1,62 +1,111 @@
 """A file snapshot keeps line endings as stored when the component can.
 
-Kept out of ``test_backup_manager.py``, which is at its module-size baseline.
+Home Assistant's config directory is this test's ``tmp_path``, and Core sets
+the File & YAML Tools entry up, which registers its ``read_file`` service and
+the ``ha_mcp_tools/*`` commands the server reads the component's capabilities
+from. Kept out of ``test_backup_manager.py``, which is at its module-size
+baseline.
 """
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp import backup_files, backup_manager
-from ha_mcp.tools import component_api, tools_filesystem
+from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
+from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
+from custom_components.ha_mcp_tools.websocket_api import system
+from ha_mcp import backup_files
+from ha_mcp.backup_manager import BackupManager, get_backup_manager
+from ha_mcp.client.rest_client import HomeAssistantClient
+
+CRLF = "a: 1\r\nb: 2\r\n"
 
 
-def _caps(*capabilities: str) -> component_api.ComponentCaps:
-    return component_api.ComponentCaps(
-        schema_version=1,
-        component_version="9.9.9",
-        capabilities=frozenset(capabilities),
-        limits={},
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core's config directory is this test's ``tmp_path``."""
+    return hass_tmp_config_dir
+
+
+@pytest.fixture
+def crlf_files(hass_config_dir: str) -> None:
+    """A stylesheet and ``configuration.yaml`` saved with CRLF line endings."""
+    for path in ("www/a.css", "configuration.yaml"):
+        target = Path(hass_config_dir, path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(CRLF.encode())
+
+
+@pytest.fixture
+async def manager(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    crlf_files: None,
+) -> BackupManager:
+    """A backup manager on a ``hass`` with the File & YAML Tools entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TOOLS_ENTRY_TITLE,
+        version=HaMcpToolsConfigFlow.VERSION,
+        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
+        data={},
     )
-
-
-async def _snapshot(caps: Any) -> tuple[Any, AsyncMock]:
-    service = AsyncMock(return_value={"success": True, "content": "a\r\nb\r\n"})
-    with (
-        patch.object(component_api, "get_component_caps", AsyncMock(return_value=caps)),
-        patch.object(tools_filesystem, "call_mcp_tools_service", service),
-    ):
-        content = await backup_files._fetch_file_as_stored(MagicMock(), "www/a.css")
-    return content, service
-
-
-@pytest.mark.asyncio
-async def test_snapshot_asks_for_stored_line_endings() -> None:
-    content, service = await _snapshot(_caps(backup_files.LINE_ENDINGS_CAPABILITY))
-
-    assert content == "a\r\nb\r\n"
-    assert service.await_args.args[1:] == (
-        "read_file",
-        {"path": "www/a.css", "keep_line_endings": True},
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+        auto_backup_dir=str(tmp_path / "backups"),
     )
+    return get_backup_manager(core_client, settings)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("caps", [None, _caps("search")], ids=["no-caps", "older"])
-async def test_older_component_is_not_sent_the_field(caps: Any) -> None:
+async def _snapshot_content(manager: BackupManager, domain: str, path: str) -> str:
+    captured = await manager.maybe_snapshot(domain, path, force=True)
+    assert captured is not None
+    content = manager.read_snapshot(captured.name)["config"]
+    assert isinstance(content, str)
+    return content
+
+
+@pytest.mark.parametrize(
+    ("domain", "path"), [("file", "www/a.css"), ("yaml_file", "configuration.yaml")]
+)
+async def test_a_file_snapshot_restores_crlf_exactly(
+    manager: BackupManager, domain: str, path: str
+) -> None:
+    """A snapshot that turned CRLF into LF would restore a different file."""
+    assert await _snapshot_content(manager, domain, path) == CRLF
+
+
+async def test_older_component_is_not_sent_the_field(
+    manager: BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Its strict read_file schema would refuse the call, and with it the write."""
-    _, service = await _snapshot(caps)
+    # A component from before the flag: it does not advertise it.
+    monkeypatch.setattr(
+        system,
+        "CAPABILITIES",
+        [c for c in system.CAPABILITIES if c != backup_files.LINE_ENDINGS_CAPABILITY],
+    )
+    with patch.object(
+        core_client, "call_service", wraps=core_client.call_service
+    ) as spy:
+        content = await _snapshot_content(manager, "file", "www/a.css")
 
-    assert service.await_args.args[2] == {"path": "www/a.css"}
-
-
-def test_file_domains_snapshot_as_stored() -> None:
-    registered: dict[str, Any] = {}
-    manager = MagicMock()
-    manager.register = lambda handler: registered.update({handler.domain: handler})
-
-    backup_manager.register_default_handlers(manager, MagicMock())
-
-    assert registered["file"].fetch is backup_files._fetch_file_as_stored
-    assert registered["yaml_file"].fetch is backup_files._fetch_file_as_stored
+    reads = [
+        c.args[2] for c in spy.call_args_list if c.args[:2] == (DOMAIN, "read_file")
+    ]
+    assert content == "a: 1\nb: 2\n"
+    assert reads
+    assert all("keep_line_endings" not in data for data in reads)
