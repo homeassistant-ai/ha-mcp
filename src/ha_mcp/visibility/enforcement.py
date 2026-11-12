@@ -743,7 +743,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        effective_name, effective_args = _effective_tool_call(name, args)
+        effective_name, _effective_args = _effective_tool_call(name, args)
         config = await self._active_config(effective_name)
         if config is None:
             return await call_next(context)
@@ -752,14 +752,12 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
         return await self._call_and_scan_outbound(
-            effective_name, effective_args, config, context, call_next, matcher
+            effective_name, context, call_next, matcher
         )
 
     async def _call_and_scan_outbound(
         self,
         name: str,
-        args: dict[str, Any],
-        config: VisibilityConfig,
         context: MiddlewareContext,
         call_next: CallNext,
         matcher: _HiddenMatcher,
@@ -772,13 +770,6 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
-        if is_trace_query(name, args):
-            # The tool can register the item that keys the run it stores, so the
-            # pre-call set may lack that key: rescan with a post-call set.
-            try:
-                matcher = await self._hidden_matcher(config, fresh=True)
-            except VisibilityDataUnavailable:
-                _raise_enforced(name, _FAIL_CLOSED_REASON)
         scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:
             scrub_tally = _scrub_state_result(result, matcher)
