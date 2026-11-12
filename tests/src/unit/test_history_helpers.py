@@ -1,9 +1,9 @@
-"""Unit tests for history tools helper functions."""
+"""ha_get_history's time window, and the parser behind its time parameters."""
 
 import json
 import re
 from datetime import UTC, datetime, timedelta, tzinfo
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,58 +14,91 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_history
-from ha_mcp.tools.tools_history import (
-    _RELATIVE_TIME_UNIT_SECONDS,
-    _parse_time_range,
-    parse_relative_time,
-)
+from ha_mcp.tools.tools_history import RELATIVE_TIME_UNIT_SECONDS, parse_relative_time
 
 NOW = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
 
 
 @pytest.fixture
 def frozen_now(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the history module's current time NOW."""
+    """Make the history module's current time NOW.
+
+    Only the module's own clock: Core's ``freezer`` would also stop the event
+    loop the client runs on.
+    """
 
     class FrozenDateTime(datetime):
         @classmethod
-        def now(cls, tz: tzinfo | None = None) -> datetime:
-            return NOW
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return cls.fromtimestamp(NOW.timestamp(), tz)
 
     monkeypatch.setattr(tools_history, "datetime", FrozenDateTime)
 
 
-class TestParseTimeRange:
-    def test_relative_end_time_counts_back_like_start_time(self) -> None:
-        """A relative end_time counts back from the same reference time as start_time."""
-        start, end = _parse_time_range("2h", "1h", 24, reference_time=NOW)
-        assert (start, end) == (NOW - timedelta(hours=2), NOW - timedelta(hours=1))
-
-    @pytest.mark.usefixtures("frozen_now")
-    def test_window_without_reference_time_counts_back_from_now(self) -> None:
-        """Without a reference time, a look-back counts from the current time and the window ends now."""
-        assert _parse_time_range("2h", None, 24) == (NOW - timedelta(hours=2), NOW)
-
-    @pytest.mark.parametrize(
-        ("start_time", "end_time"), [("bogus", None), ("2h", "bogus")]
+async def _window_sent_to_core(
+    hass: HomeAssistant, core_client: HomeAssistantClient, **kwargs: Any
+) -> tuple[datetime, datetime]:
+    """The start and end ha_get_history asks Core's history command for."""
+    assert await async_setup_component(hass, "history", {})
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(wraps=core_client.send_websocket_message),
+    ) as send:
+        await tools_history.HistoryTools(core_client).ha_get_history(
+            entity_ids="sensor.temp", **kwargs
+        )
+    (message,) = [
+        c.args[0]
+        for c in send.call_args_list
+        if c.args[0]["type"] == "history/history_during_period"
+    ]
+    return (
+        datetime.fromisoformat(message["start_time"]),
+        datetime.fromisoformat(message["end_time"]),
     )
-    def test_rejected_time_suggests_every_relative_unit(
-        self, start_time: str, end_time: str | None
-    ) -> None:
-        """A rejected start_time or end_time suggests working examples for every relative unit."""
-        with pytest.raises(ToolError) as exc_info:
-            _parse_time_range(start_time, end_time, 24, reference_time=NOW)
 
-        suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
-        examples = [ex for s in suggestions for ex in re.findall(r"'([^']+)'", s)]
-        for example in examples:
-            parse_relative_time(example, reference_time=NOW)
-        for unit in _RELATIVE_TIME_UNIT_SECONDS:
-            assert any(re.fullmatch(rf"\d+{unit}", ex) for ex in examples), unit
+
+@pytest.mark.usefixtures("frozen_now")
+async def test_relative_end_time_counts_back_like_start_time(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """A relative end_time counts back from the same current time as start_time."""
+    window = await _window_sent_to_core(
+        hass, core_client, start_time="2h", end_time="1h"
+    )
+    assert window == (NOW - timedelta(hours=2), NOW - timedelta(hours=1))
+
+
+@pytest.mark.usefixtures("frozen_now")
+async def test_window_without_end_time_ends_now(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Without an end_time, a look-back counts from the current time and the window ends now."""
+    window = await _window_sent_to_core(hass, core_client, start_time="2h")
+    assert window == (NOW - timedelta(hours=2), NOW)
+
+
+@pytest.mark.parametrize(("start_time", "end_time"), [("bogus", None), ("2h", "bogus")])
+async def test_rejected_time_suggests_every_relative_unit(
+    core_client: HomeAssistantClient, start_time: str, end_time: str | None
+) -> None:
+    """A rejected start_time or end_time suggests working examples for every relative unit."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools_history.HistoryTools(core_client).ha_get_history(
+            entity_ids="sensor.temp", start_time=start_time, end_time=end_time
+        )
+
+    suggestions = json.loads(str(exc_info.value))["error"]["suggestions"]
+    examples = [ex for s in suggestions for ex in re.findall(r"'([^']+)'", s)]
+    for example in examples:
+        parse_relative_time(example, reference_time=NOW)
+    for unit in RELATIVE_TIME_UNIT_SECONDS:
+        assert any(re.fullmatch(rf"\d+{unit}", ex) for ex in examples), unit
 
 
 class TestParseRelativeTime:
-    """Test parse_relative_time function."""
+    """The parser behind ha_get_history's start_time and end_time."""
 
     @pytest.mark.usefixtures("frozen_now")
     def test_without_reference_time_counts_back_from_now(self) -> None:
@@ -73,103 +106,45 @@ class TestParseRelativeTime:
         assert parse_relative_time("1h") == NOW - timedelta(hours=1)
 
     def test_none_returns_default_hours_ago(self) -> None:
-        """None input returns datetime default_hours ago."""
-        result = parse_relative_time(None, default_hours=24, reference_time=NOW)
-        assert result == NOW - timedelta(hours=24)
-
-    def test_none_with_custom_default_hours(self) -> None:
-        """None with custom default_hours works correctly."""
+        """No value looks back the caller's default number of hours."""
         result = parse_relative_time(None, default_hours=48, reference_time=NOW)
         assert result == NOW - timedelta(hours=48)
 
-    def test_hours_relative_format(self) -> None:
-        """Hours relative format (e.g., '24h') parsed correctly."""
-        result = parse_relative_time("24h", reference_time=NOW)
-        assert result == NOW - timedelta(hours=24)
-
-    def test_days_relative_format(self) -> None:
-        """Days relative format (e.g., '7d') parsed correctly."""
-        result = parse_relative_time("7d", reference_time=NOW)
-        assert result == NOW - timedelta(days=7)
-
-    def test_weeks_relative_format(self) -> None:
-        """Weeks relative format (e.g., '2w') parsed correctly."""
-        result = parse_relative_time("2w", reference_time=NOW)
-        assert result == NOW - timedelta(weeks=2)
-
-    def test_months_relative_format(self) -> None:
-        """Months relative format (e.g., '1m') parsed correctly as 30 days."""
-        result = parse_relative_time("1m", reference_time=NOW)
-        assert result == NOW - timedelta(days=30)
-
-    def test_months_multiple(self) -> None:
-        """Multiple months (e.g., '6m') parsed correctly."""
-        result = parse_relative_time("6m", reference_time=NOW)
-        assert result == NOW - timedelta(days=180)
-
-    def test_minutes_suffix_looks_back_minutes(self) -> None:
-        """'30min' looks back 30 minutes instead of being rejected."""
-        result = parse_relative_time("30min", reference_time=NOW)
-        assert result == NOW - timedelta(minutes=30)
-
-    def test_relative_format_uppercase(self) -> None:
-        """Uppercase relative format (e.g., '24H') works."""
-        result = parse_relative_time("24H", reference_time=NOW)
-        assert result == NOW - timedelta(hours=24)
-
-    def test_relative_format_with_whitespace(self) -> None:
-        """Relative format with leading/trailing whitespace works."""
-        result = parse_relative_time("  7d  ", reference_time=NOW)
-        assert result == NOW - timedelta(days=7)
+    @pytest.mark.parametrize(
+        ("value", "look_back"),
+        [
+            ("30min", timedelta(minutes=30)),
+            ("24h", timedelta(hours=24)),
+            ("7d", timedelta(days=7)),
+            ("2w", timedelta(weeks=2)),
+            # The documented meaning of "m": 30 days, not a calendar month.
+            ("1m", timedelta(days=30)),
+            ("24H", timedelta(hours=24)),
+            ("  7d  ", timedelta(days=7)),
+            ("0h", timedelta(0)),
+        ],
+    )
+    def test_relative_value_looks_back_from_reference_time(
+        self, value: str, look_back: timedelta
+    ) -> None:
+        """Each unit, in any case and with surrounding spaces, looks back from the reference time."""
+        assert parse_relative_time(value, reference_time=NOW) == NOW - look_back
 
     def test_iso_format_with_z_suffix(self) -> None:
-        """ISO format with Z suffix parsed correctly."""
+        """An ISO time ending in Z is read as UTC."""
         result = parse_relative_time("2025-01-25T12:00:00Z")
-        expected = datetime(2025, 1, 25, 12, 0, 0, tzinfo=UTC)
-        assert result == expected
-
-    def test_iso_format_with_timezone(self) -> None:
-        """ISO format with timezone offset parsed correctly."""
-        result = parse_relative_time("2025-01-25T12:00:00+00:00")
-        expected = datetime(2025, 1, 25, 12, 0, 0, tzinfo=UTC)
-        assert result == expected
+        assert result == datetime(2025, 1, 25, 12, 0, 0, tzinfo=UTC)
 
     def test_iso_format_without_timezone(self) -> None:
         """ISO format without timezone stays naive for ha_get_history to resolve."""
         result = parse_relative_time("2025-01-25T12:00:00")
-        expected = datetime(2025, 1, 25, 12, 0, 0)
-        assert result == expected
+        assert result == datetime(2025, 1, 25, 12, 0, 0)
 
-    def test_iso_format_date_only(self) -> None:
-        """ISO format with date only parsed correctly."""
-        result = parse_relative_time("2025-01-25")
-        expected = datetime(2025, 1, 25, 0, 0, 0)
-        assert result == expected
-
-    def test_invalid_format_raises_error(self) -> None:
-        """Invalid format raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
-            parse_relative_time("invalid")
-
-    @pytest.mark.parametrize("value", ["24x", "20mins"])
-    def test_invalid_relative_unit_raises_error(self, value: str) -> None:
-        """An unknown unit ('24x', or '20mins', which is not '20min') is rejected, not read as another window."""
+    @pytest.mark.parametrize("value", ["invalid", "24x", "20mins", "-24h"])
+    def test_unknown_value_is_rejected(self, value: str) -> None:
+        """An unknown unit ('24x', or '20mins', which is not '20min') or a negative look-back is rejected, not read as another window."""
         with pytest.raises(ValueError, match="Invalid time format"):
             parse_relative_time(value)
-
-    def test_negative_relative_raises_error(self) -> None:
-        """Negative relative time (e.g., '-24h') raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
-            parse_relative_time("-24h")
-
-    def test_zero_hours(self) -> None:
-        """Zero hours ('0h') returns the reference time."""
-        assert parse_relative_time("0h", reference_time=NOW) == NOW
-
-    def test_large_hours_value(self) -> None:
-        """Large hours value (e.g., '168h' = 1 week) works."""
-        result = parse_relative_time("168h", reference_time=NOW)
-        assert result == NOW - timedelta(hours=168)
 
     @pytest.mark.parametrize("value", ["99999999d", "100000000m"])
     def test_overflowing_relative_value_raises_validation_error(
@@ -184,27 +159,17 @@ async def test_time_without_offset_is_home_assistant_local_time(
     recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Like Core, ha_get_history reads a time without an offset in HA's zone."""
-    assert await async_setup_component(hass, "history", {})
     await hass.config.async_set_time_zone("Europe/Berlin")
-    with patch.object(
+    window = await _window_sent_to_core(
+        hass,
         core_client,
-        "send_websocket_message",
-        AsyncMock(wraps=core_client.send_websocket_message),
-    ) as send:
-        await tools_history.HistoryTools(core_client).ha_get_history(
-            entity_ids="sensor.temp",
-            start_time="2026-07-01T12:00:00",
-            end_time="2026-07-01T13:00:00Z",
-        )
-    (message,) = [
-        c.args[0]
-        for c in send.call_args_list
-        if c.args[0]["type"] == "history/history_during_period"
-    ]
-    assert (
-        datetime.fromisoformat(message["start_time"]),
-        datetime.fromisoformat(message["end_time"]),
-    ) == (datetime(2026, 7, 1, 10, tzinfo=UTC), datetime(2026, 7, 1, 13, tzinfo=UTC))
+        start_time="2026-07-01T12:00:00",
+        end_time="2026-07-01T13:00:00Z",
+    )
+    assert window == (
+        datetime(2026, 7, 1, 10, tzinfo=UTC),
+        datetime(2026, 7, 1, 13, tzinfo=UTC),
+    )
 
 
 @pytest.mark.parametrize(
