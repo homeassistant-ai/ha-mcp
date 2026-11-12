@@ -329,10 +329,6 @@
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_unavailable",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::_unavailable"
   ],
-  "5e84f1c6a506": [
-    "tests/addon/test_webhook_proxy.py::TestAuthorizeViewGet.setup",
-    "tests/addon/test_webhook_proxy.py::TestAuthorizeViewPost.setup"
-  ],
   "624482911c9a": [
     "custom_components/ha_mcp_tools/mcp_webhook.py::_active_webhook_cfg",
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_webhook_cfg",
@@ -384,11 +380,6 @@
     "tests/src/unit/test_label_area_assignment.py::register_tools",
     "tests/src/unit/test_label_set_discriminator_1860.py::register_tools"
   ],
-  "6e37d2da2e4e": [
-    "tests/addon/test_webhook_proxy.py::TestPendingCodeCap.provider",
-    "tests/addon/test_webhook_proxy.py::TestPkceLengthEnforcement.provider",
-    "tests/addon/test_webhook_proxy.py::TestTokenExpiryBoundary.provider"
-  ],
   "6efc58b2f40e": [
     "tests/src/unit/test_set_dashboard_metadata.py::TestSetDashboardListCallDedup.mock_client",
     "tests/src/unit/test_set_dashboard_metadata.py::TestSetDashboardMetadataUpdate.mock_client",
@@ -436,14 +427,6 @@
   "7d7afd2fb81e": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::translated_client_id_for_refresh",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::translated_client_id_for_refresh"
-  ],
-  "7db8af26861f": [
-    "tests/addon/test_webhook_proxy.py::TestAsyncSetupBootMarker.hass",
-    "tests/addon/test_webhook_proxy.py::TestDebugLogging.hass",
-    "tests/addon/test_webhook_proxy.py::TestOAuthOffPreservesBehavior.hass",
-    "tests/addon/test_webhook_proxy.py::TestRefreshRepairsService.hass",
-    "tests/addon/test_webhook_proxy.py::TestRelaySessionTimeout.hass",
-    "tests/addon/test_webhook_proxy.py::TestSetupEntrySurfaceFailures.hass"
   ],
   "7ddf78ed433f": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_fetch_pinned_cimd",
@@ -520,12 +503,6 @@
     "tests/src/unit/test_tools_get_states.py::TestHaGetStateSingleEntity.get_state_tool",
     "tests/src/unit/test_tools_get_states.py::TestHaGetStates.get_states_tool"
   ],
-  "98ab1e1c8977": [
-    "tests/addon/test_webhook_proxy.py::TestHaAuthMode.hass",
-    "tests/addon/test_webhook_proxy.py::TestNoneAutoApproveMode.hass",
-    "tests/addon/test_webhook_proxy.py::TestOAuthRestartRepairTrigger.hass",
-    "tests/addon/test_webhook_proxy.py::TestOAuthSetupEntryRegistersExpectedViews.hass"
-  ],
   "9925d5a902ca": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::core_token_for_revocation",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::core_token_for_revocation"
@@ -567,10 +544,6 @@
   "a0a761eca63b": [
     "tests/src/unit/test_tools_calendar_rrule.py::_make_mock_client",
     "tests/src/unit/test_tools_calendar_update.py::_make_mock_client"
-  ],
-  "a1aeb24fafd1": [
-    "tests/addon/test_webhook_proxy.py::TestRepairsFlowSubmit.repairs",
-    "tests/addon/test_webhook_proxy.py::TestRepairsModule.repairs"
   ],
   "a1c0642e4ff2": [
     "tests/src/unit/test_tools_bug_report.py::TestBugReportClientHostRow.mock_client",
