@@ -255,6 +255,59 @@ def test_extract_section_handles_fenced_code_blocks() -> None:
     assert "Trigger Types" not in result
 
 
+def test_extract_section_handles_nested_shorter_fences() -> None:
+    """A ``` example inside a ```` wrapper must not close the outer fence.
+
+    Otherwise a # comment in the inner example is read as a heading and
+    the surrounding section is truncated after the first inner fence.
+    """
+    body = (
+        "## Native Conditions\n"
+        "\n"
+        "Use these.\n"
+        "\n"
+        "````markdown\n"
+        "```yaml\n"
+        "# Single state\n"
+        "condition: state\n"
+        "```\n"
+        "````\n"
+        "\n"
+        "More prose after the code block.\n"
+        "\n"
+        "## Trigger Types\n"
+        "\n"
+        "Different section.\n"
+    )
+    result = skill_loader.extract_section(body, "native-conditions")
+    assert result is not None
+    assert "More prose after the code block" in result
+    assert "Trigger Types" not in result
+
+
+def test_extract_section_does_not_close_backtick_fence_on_tildes() -> None:
+    """~~~ inside a ``` block is not a closing fence (CommonMark)."""
+    body = (
+        "## Native Conditions\n"
+        "\n"
+        "```python\n"
+        "~~~\n"
+        "# not a heading\n"
+        "~~~\n"
+        "```\n"
+        "\n"
+        "More prose after the code block.\n"
+        "\n"
+        "## Trigger Types\n"
+        "\n"
+        "Different section.\n"
+    )
+    result = skill_loader.extract_section(body, "native-conditions")
+    assert result is not None
+    assert "More prose after the code block" in result
+    assert "Trigger Types" not in result
+
+
 def test_extract_section_handles_ifthen_style_anchor() -> None:
     """Slashes in headings get stripped: '## if/then vs choose' → 'ifthen-vs-choose'."""
     body = "## if/then vs choose\n\nbody\n\n## Other\n"

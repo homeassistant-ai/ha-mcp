@@ -49,6 +49,11 @@ logger = logging.getLogger(__name__)
 # used by the skill:// URIs the best-practice checker emits
 # (e.g. "## if/then vs choose" → "ifthen-vs-choose").
 _HEADING_LINE_RE = re.compile(r"^(#+)\s+(.+?)\s*$")
+# CommonMark info-string fences: 0-3 spaces of indent, then 3+ backticks or
+# tildes. A closing fence must use the same character and be at least as long;
+# an inner shorter fence (a ``` example inside a ```` markdown wrapper, or a
+# ~~~ line inside a ``` block) must not end the code block.
+_FENCE_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
 # One hyphen per whitespace CHARACTER, not per run. GitHub drops stripped
 # punctuation in place and leaves the spaces that flanked it, so ANY heading
@@ -116,20 +121,50 @@ def extract_section(body: str, anchor: str) -> str | None:
     return None
 
 
+def _fence_marker(line: str) -> tuple[str, int] | None:
+    """Return ``(character, length)`` for a CommonMark fence line, else None.
+
+    Opening fences may have an info string. Closing fences may not, and
+    backtick fences cannot have backticks in the info string.
+    """
+    match = _FENCE_RE.match(line.rstrip("\r\n"))
+    if not match:
+        return None
+    _indent, ticks, rest = match.groups()
+    if ticks[0] == "`" and "`" in rest:
+        return None
+    return ticks[0], len(ticks)
+
+
 def _iter_headings(lines: list[str]) -> Iterator[tuple[int, int, str]]:
     """Yield ``(index, level, heading_text)`` for each markdown heading line.
 
     Lines inside fenced code blocks (```` ``` ```` or ``~~~``) are skipped so
     that ``# comment`` lines in YAML/bash examples aren't misread as an H1
     heading and made to silently close a section after its first code example.
+    Fence type and length follow CommonMark: a closing fence must use the
+    same character and be at least as long as the opener, so a ``` example
+    nested in a ```` wrapper, or a ~~~ line inside a ``` block, stays inside
+    the code block.
     """
-    in_fence = False
+    in_fence: tuple[str, int] | None = None
     for i, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
+        marker = _fence_marker(line)
+        if in_fence is None:
+            if marker is not None:
+                in_fence = marker
+                continue
+        else:
+            # A closing fence has no info string, only optional spaces.
+            fence = _FENCE_RE.match(line.rstrip("\r\n"))
+            if (
+                marker is not None
+                and fence is not None
+                and marker[0] == in_fence[0]
+                and marker[1] >= in_fence[1]
+                and not fence.group(3).strip()
+            ):
+                in_fence = None
             continue
         m = _HEADING_LINE_RE.match(line)
         if not m:
