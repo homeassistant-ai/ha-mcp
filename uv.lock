@@ -1399,6 +1399,7 @@ dev = [
     { name = "ha-silabs-firmware-client" },
     { name = "hamcp-test-env" },
     { name = "homeassistant" },
+    { name = "infrared-protocols" },
     { name = "lefthook" },
     { name = "mcp" },
     { name = "mypy" },
@@ -1478,6 +1479,7 @@ dev = [
     { name = "ha-silabs-firmware-client", specifier = "==0.4.0" },
     { name = "hamcp-test-env", editable = "tests/test-env" },
     { name = "homeassistant", specifier = "==2026.11.1" },
+    { name = "infrared-protocols", specifier = "==10.5.0" },
     { name = "lefthook", specifier = ">=1.10.0" },
     { name = "mcp", specifier = ">=1.26.0,<2" },
     { name = "mypy", specifier = ">=1.17.0" },
@@ -1779,6 +1781,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e8/ac/fb4c578f4a3256561548cd825646680edcadb9440f3f68add95ade1eb791/ifaddr-0.2.0.tar.gz", hash = "sha256:cc0cbfcaabf765d44595825fb96a99bb12c79716b73b44330ea38ee2b0c4aed4", size = 10485, upload-time = "2022-06-15T21:40:27.561Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9c/1f/19ebc343cc71a7ffa78f17018535adc5cbdd87afb31d7c34874680148b32/ifaddr-0.2.0-py3-none-any.whl", hash = "sha256:085e0305cfe6f16ab12d72e2024030f5d52674afad6911bb1eee207177b8a748", size = 12314, upload-time = "2022-06-15T21:40:25.756Z" },
+]
+
+[[package]]
+name = "infrared-protocols"
+version = "10.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/d2/af4c025d91cc3e28186de8c2bfd8ffd3e6fabb621cdc184dbd46077a146e/infrared_protocols-10.5.0.tar.gz", hash = "sha256:38e7940929a48f114d4b4a014baf32f7e882793041e401df69d37ef45075aac0", size = 60836, upload-time = "2026-10-26T19:27:47.32Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/0b/99e3ea688bfef387bbb6b5853f3b3258037dd2223f45cd70482c6604dcb7/infrared_protocols-10.5.0-py3-none-any.whl", hash = "sha256:bdca92b6dc5875a9a51d0d37ea6b3ac47ed0b98e65a541fe9047b01671d23686", size = 91628, upload-time = "2026-10-26T19:27:45.835Z" },
 ]
 
 [[package]]

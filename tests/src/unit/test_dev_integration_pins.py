@@ -25,6 +25,7 @@ _INTEGRATIONS = (
     "usb",
     "hassio",
     "homeassistant_hardware",
+    "infrared",
 )
 
 

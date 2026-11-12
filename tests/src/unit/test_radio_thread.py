@@ -1,24 +1,27 @@
 """The Thread/OTBR handler behind ``ha_manage_radio`` on real Home Assistant Core.
 
-Core's ``thread`` and ``otbr`` integrations need ``python-otbr-api``, which is
-not installed with Core, so they cannot be imported here. Their WebSocket
-commands are registered as those integrations register them, with Core's own
-``websocket_command`` decorator and the request schemas Core declares, and
-answer with the reply shape Core sends. Core validates every request against
-those schemas and writes every reply and refusal; config entries come from
-Core's config entries API.
+Core's own ``thread`` and ``otbr`` integrations run here and answer every
+``thread/*`` and ``otbr/*`` command. Only the border router itself is replaced,
+as Core's own otbr tests replace it: the ``python_otbr_api.OTBR`` methods that
+talk to the router's REST API return what a router reports, and mDNS runs on
+Core's mocked zeroconf. The dataset TLVs are device data, taken from Core's
+otbr and thread tests.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-import voluptuous as vol
-from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
+import python_otbr_api
+from homeassistant.components import otbr, thread
+from homeassistant.components.thread.dataset_store import DatasetStore, async_get_store
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -26,93 +29,28 @@ from ha_mcp.tools.tools_radio import RadioTools
 
 from ._client_spies import sent_messages
 
-EXTENDED_ADDRESS = "f00dcafe"
-# ``otbr/info``'s reply: one border router keyed by its extended address.
-BORDER_ROUTERS = {
-    EXTENDED_ADDRESS: {
-        "active_dataset_tlvs": "0e08abcd",
-        "border_agent_id": "ba1",
-        "channel": 15,
-        "extended_address": EXTENDED_ADDRESS,
-        "extended_pan_id": "1111222233334444",
-        "url": "http://core-silabs-multiprotocol:8081",
-    }
-}
-DATASETS = {
-    "datasets": [
-        {
-            "channel": 15,
-            "created": "2026-01-01T00:00:00+00:00",
-            "dataset_id": "d1",
-            "extended_pan_id": "1111222233334444",
-            "network_name": "OpenThread",
-            "pan_id": "1234",
-            "preferred": True,
-            "preferred_border_agent_id": None,
-            "preferred_extended_address": None,
-            "source": "Google",
-        }
-    ]
-}
-# Each command's request fields as Core's integration declares them.
-SCHEMAS: dict[str, dict[Any, Any]] = {
-    "otbr/info": {},
-    "otbr/create_network": {vol.Required("extended_address"): str},
-    "otbr/set_network": {
-        vol.Required("extended_address"): str,
-        vol.Required("dataset_id"): str,
-    },
-    "otbr/set_channel": {
-        vol.Required("extended_address"): str,
-        vol.Required("channel"): int,
-    },
-    "thread/add_dataset_tlv": {
-        vol.Required("source"): str,
-        vol.Required("tlv"): str,
-    },
-    "thread/set_preferred_dataset": {vol.Required("dataset_id"): str},
-    "thread/delete_dataset": {vol.Required("dataset_id"): str},
-    "thread/list_datasets": {},
-    "thread/discover_routers": {},
-}
-REPLIES: dict[str, Any] = {
-    "otbr/info": BORDER_ROUTERS,
-    "thread/list_datasets": DATASETS,
-}
+# A border router reached over its REST API; not the multiprotocol app's
+# host, so Core lets it change channel.
+OTBR_URL = "http://core-openthread-border-router:8081"
+EXTENDED_ADDRESS = bytes.fromhex("AEEB2F594B570BBF")
+BORDER_AGENT_ID = bytes.fromhex("230C6A1AC57F6F4BE262ACF32E5EF52C")
+# The network the border router runs: channel 15, extended PAN F642646DA209B1D0.
+ROUTER_DATASET = (
+    "0E080000000000010000000300000F35060004001FFFE00208F642646DA209B1D00708FDF57B5A"
+    "0FE2AAF60510DE98B5BA1A528FEE049D4B4B01835375030D4F70656E5468726561642048410102"
+    "25A40410F5DD18371BFD29E1A601EF6FFAD94C030C0402A0F7F8"
+)
+# Another network the user shared with Home Assistant.
+OTHER_DATASET = (
+    "0E080000000000010000000300000F35060004001FFFE0020811111111222222330708FDAD70BF"
+    "E5AA15DD051000112233445566778899AABBCCDDEEFF030E486f6d65417373697374616e742101"
+    "0212340410445F2B5CA6F2A93A55CE570A70EFEECB0C0402A0F7F8"
+)
 
 
-def _register(
-    hass: HomeAssistant, command: str, received: list[dict[str, Any]]
-) -> None:
-    """Register ``command`` as its integration does; record what Core accepts."""
-
-    @websocket_api.websocket_command(
-        {vol.Required("type"): command, **SCHEMAS[command]}
-    )
-    @callback
-    def handler(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        received.append(msg)
-        connection.send_result(msg["id"], REPLIES.get(command))
-
-    websocket_api.async_register_command(hass, handler)
-
-
-async def _thread_and_otbr(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Core with one OTBR config entry and the thread/otbr commands loaded."""
-    assert await async_setup_component(hass, "config", {})
-    MockConfigEntry(domain="otbr", entry_id="otbr1", title="OTBR").add_to_hass(hass)
-    received: list[dict[str, Any]] = []
-    for command in SCHEMAS:
-        _register(hass, command, received)
-    return received
-
-
-def _commands(received: list[dict[str, Any]], command: str) -> list[dict[str, Any]]:
-    return [msg for msg in received if msg["type"] == command]
+@pytest.fixture(autouse=True)
+def use_mocked_zeroconf(mock_async_zeroconf: MagicMock) -> None:
+    """Thread's router discovery runs on Core's mocked zeroconf."""
 
 
 @pytest.fixture
@@ -120,17 +58,79 @@ def radio(core_client: HomeAssistantClient) -> RadioTools:
     return RadioTools(core_client)
 
 
-async def test_network_status_reports_the_otbr_entry_and_border_routers(
-    hass: HomeAssistant, radio: RadioTools
-) -> None:
-    await _thread_and_otbr(hass)
+@pytest.fixture
+def border_router() -> Iterator[dict[str, AsyncMock]]:
+    """The border router's REST API, as ``python_otbr_api`` reads it."""
+    device = {
+        "get_border_agent_id": AsyncMock(return_value=BORDER_AGENT_ID),
+        "get_extended_address": AsyncMock(return_value=EXTENDED_ADDRESS),
+        "get_active_dataset_tlvs": AsyncMock(
+            return_value=bytes.fromhex(ROUTER_DATASET)
+        ),
+        "get_active_dataset": AsyncMock(
+            return_value=python_otbr_api.ActiveDataSet(
+                channel=15, extended_pan_id="F642646DA209B1D0"
+            )
+        ),
+        "get_coprocessor_version": AsyncMock(
+            return_value="SL-OPENTHREAD/2.4.4.0_GitHub-7074a43e4; EFR32"
+        ),
+        "set_enabled": AsyncMock(return_value=None),
+        "factory_reset": AsyncMock(return_value=None),
+        "create_active_dataset": AsyncMock(return_value=None),
+        "set_active_dataset_tlvs": AsyncMock(return_value=None),
+        "set_channel": AsyncMock(return_value=None),
+    }
+    with patch.multiple(python_otbr_api.OTBR, **device):
+        yield device
 
+
+@pytest.fixture
+async def dataset_store(hass: HomeAssistant) -> DatasetStore:
+    """Core's thread integration holding the router's network and one other.
+
+    The router's network is already known before the OTBR entry loads, so
+    loading it does not start Core's 30-second preferred-network discovery.
+    """
+    assert await async_setup_component(hass, thread.DOMAIN, {})
+    for tlv in (ROUTER_DATASET, OTHER_DATASET):
+        await thread.async_add_dataset(hass, "Google", tlv)
+    return await async_get_store(hass)
+
+
+@pytest.fixture
+async def otbr_entry_id(
+    hass: HomeAssistant,
+    dataset_store: DatasetStore,
+    border_router: dict[str, AsyncMock],
+    aioclient_mock: AiohttpClientMocker,
+) -> str:
+    """One OTBR config entry, loaded by Core; any unpatched REST call fails."""
+    assert await async_setup_component(hass, "config", {})
+    entry = MockConfigEntry(
+        domain=otbr.DOMAIN,
+        data={"url": OTBR_URL},
+        title="OpenThread Border Router",
+        unique_id=BORDER_AGENT_ID.hex(),
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    return entry.entry_id
+
+
+def _dataset_id(store: DatasetStore, tlv: str) -> str:
+    return next(entry.id for entry in store.datasets.values() if entry.tlv == tlv)
+
+
+async def test_network_status_reports_the_otbr_entry_and_border_routers(
+    radio: RadioTools, otbr_entry_id: str
+) -> None:
     out = await radio.ha_manage_radio(radio="thread", action="network_status")
 
     assert out["success"] is True
     assert out["radio"] == "thread"
-    assert out["config_entry_id"] == "otbr1"
-    assert out["border_routers"] == BORDER_ROUTERS
+    assert out["config_entry_id"] == otbr_entry_id
+    assert list(out["border_routers"]) == [EXTENDED_ADDRESS.hex()]
 
 
 async def test_network_status_without_otbr_degrades_to_unavailable(
@@ -146,13 +146,12 @@ async def test_network_status_without_otbr_degrades_to_unavailable(
 
 
 async def test_list_datasets_returns_cores_datasets(
-    hass: HomeAssistant, radio: RadioTools
+    radio: RadioTools, dataset_store: DatasetStore
 ) -> None:
-    await _thread_and_otbr(hass)
-
     out = await radio.ha_manage_radio(radio="thread", action="list_datasets")
 
-    assert out["datasets"] == DATASETS
+    listed = [dataset["dataset_id"] for dataset in out["datasets"]["datasets"]]
+    assert listed == list(dataset_store.datasets)
 
 
 @pytest.mark.parametrize(
@@ -165,15 +164,12 @@ async def test_list_datasets_returns_cores_datasets(
     ],
 )
 async def test_missing_required_param_is_refused_before_core_is_asked(
-    hass: HomeAssistant,
     core_client: HomeAssistantClient,
     radio: RadioTools,
     action: str,
     params: dict[str, Any],
     missing: str,
 ) -> None:
-    await _thread_and_otbr(hass)
-
     with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc:
         await radio.ha_manage_radio(
             radio="thread", action=action, params=params, confirm=True
@@ -193,14 +189,11 @@ async def test_missing_required_param_is_refused_before_core_is_asked(
     ],
 )
 async def test_destructive_action_without_confirm_sends_nothing(
-    hass: HomeAssistant,
     core_client: HomeAssistantClient,
     radio: RadioTools,
     action: str,
     params: dict[str, Any],
 ) -> None:
-    await _thread_and_otbr(hass)
-
     with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc:
         await radio.ha_manage_radio(radio="thread", action=action, params=params)
 
@@ -208,67 +201,83 @@ async def test_destructive_action_without_confirm_sends_nothing(
     sent.assert_not_called()
 
 
-@pytest.mark.parametrize("action", ["set_preferred_dataset", "delete_dataset"])
-async def test_dataset_write_reaches_core_with_the_dataset_id(
-    hass: HomeAssistant, radio: RadioTools, action: str
+async def test_set_preferred_dataset_makes_cores_store_prefer_it(
+    radio: RadioTools, dataset_store: DatasetStore
 ) -> None:
-    """The positive side of the required-param and confirm gates."""
-    received = await _thread_and_otbr(hass)
+    dataset_id = _dataset_id(dataset_store, OTHER_DATASET)
 
     out = await radio.ha_manage_radio(
-        radio="thread", action=action, params={"dataset_id": "d1"}, confirm=True
+        radio="thread",
+        action="set_preferred_dataset",
+        params={"dataset_id": dataset_id},
     )
 
     assert out["success"] is True
-    [sent] = _commands(received, f"thread/{action}")
-    assert sent["dataset_id"] == "d1"
+    assert dataset_store.preferred_dataset == dataset_id
+
+
+async def test_delete_dataset_removes_it_from_cores_store(
+    radio: RadioTools, dataset_store: DatasetStore
+) -> None:
+    dataset_id = _dataset_id(dataset_store, OTHER_DATASET)
+
+    out = await radio.ha_manage_radio(
+        radio="thread",
+        action="delete_dataset",
+        params={"dataset_id": dataset_id},
+        confirm=True,
+    )
+
+    assert out["success"] is True
+    assert dataset_id not in dataset_store.datasets
 
 
 async def test_discover_routers_starts_the_scan(
-    hass: HomeAssistant, radio: RadioTools
+    hass: HomeAssistant, radio: RadioTools, mock_async_zeroconf: MagicMock
 ) -> None:
-    received = await _thread_and_otbr(hass)
+    assert await async_setup_component(hass, thread.DOMAIN, {})
 
     out = await radio.ha_manage_radio(radio="thread", action="discover_routers")
 
     assert out["success"] is True
     assert out["long_running"] is True
-    assert _commands(received, "thread/discover_routers")
+    mock_async_zeroconf.async_add_service_listener.assert_called_once()
 
 
-async def test_add_dataset_sends_source_and_tlv(
+async def test_add_dataset_stores_the_tlv_from_its_source(
     hass: HomeAssistant, radio: RadioTools
 ) -> None:
-    received = await _thread_and_otbr(hass)
+    assert await async_setup_component(hass, thread.DOMAIN, {})
 
     out = await radio.ha_manage_radio(
         radio="thread",
         action="add_dataset",
-        params={"source": "Google", "tlv": "0e08abcd"},
+        params={"source": "Google", "tlv": OTHER_DATASET},
     )
 
     assert out["success"] is True
-    [sent] = _commands(received, "thread/add_dataset_tlv")
-    assert sent["source"] == "Google"
-    assert sent["tlv"] == "0e08abcd"
+    store = await async_get_store(hass)
+    [stored] = store.datasets.values()
+    assert (stored.source, stored.tlv) == ("Google", OTHER_DATASET)
 
 
 async def test_set_network_targets_the_only_border_router(
-    hass: HomeAssistant, radio: RadioTools
+    radio: RadioTools,
+    dataset_store: DatasetStore,
+    border_router: dict[str, AsyncMock],
+    otbr_entry_id: str,
 ) -> None:
-    received = await _thread_and_otbr(hass)
-
     out = await radio.ha_manage_radio(
         radio="thread",
         action="set_network",
-        params={"dataset_id": "d1"},
+        params={"dataset_id": _dataset_id(dataset_store, OTHER_DATASET)},
         confirm=True,
     )
 
-    assert out["extended_address"] == EXTENDED_ADDRESS
-    [sent] = _commands(received, "otbr/set_network")
-    assert sent["extended_address"] == EXTENDED_ADDRESS
-    assert sent["dataset_id"] == "d1"
+    assert out["extended_address"] == EXTENDED_ADDRESS.hex()
+    border_router["set_active_dataset_tlvs"].assert_awaited_once_with(
+        bytes.fromhex(OTHER_DATASET)
+    )
 
 
 async def test_set_network_without_otbr_raises(
@@ -287,7 +296,7 @@ async def test_set_network_without_otbr_raises(
             confirm=True,
         )
 
-    assert "otbr" in str(exc.value).lower()
+    assert "otbr integration or command is unavailable" in str(exc.value).lower()
     assert [call.args[0]["type"] for call in sent.await_args_list] == ["otbr/info"]
 
 
@@ -296,18 +305,7 @@ async def test_set_network_with_no_loaded_otbr_entry_raises(
 ) -> None:
     # With the otbr integration set up but no entry loaded, Core's otbr/info
     # refuses with not_loaded rather than answering an empty map.
-    assert await async_setup_component(hass, "config", {})
-
-    @websocket_api.websocket_command({vol.Required("type"): "otbr/info"})
-    @callback
-    def no_otbr_loaded(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        connection.send_error(msg["id"], "not_loaded", "No OTBR API loaded")
-
-    websocket_api.async_register_command(hass, no_otbr_loaded)
+    assert await async_setup_component(hass, otbr.DOMAIN, {})
 
     with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc:
         await radio.ha_manage_radio(
@@ -322,28 +320,29 @@ async def test_set_network_with_no_loaded_otbr_entry_raises(
 
 
 async def test_create_network_with_explicit_address_skips_the_lookup(
-    hass: HomeAssistant, radio: RadioTools
+    core_client: HomeAssistantClient,
+    radio: RadioTools,
+    border_router: dict[str, AsyncMock],
+    otbr_entry_id: str,
 ) -> None:
-    received = await _thread_and_otbr(hass)
+    with sent_messages(core_client) as sent:
+        out = await radio.ha_manage_radio(
+            radio="thread",
+            action="create_network",
+            params={"extended_address": EXTENDED_ADDRESS.hex()},
+            confirm=True,
+        )
 
-    out = await radio.ha_manage_radio(
-        radio="thread",
-        action="create_network",
-        params={"extended_address": "abcd1234"},
-        confirm=True,
-    )
-
-    assert out["extended_address"] == "abcd1234"
-    [sent] = _commands(received, "otbr/create_network")
-    assert sent["extended_address"] == "abcd1234"
-    assert not _commands(received, "otbr/info")
+    assert out["extended_address"] == EXTENDED_ADDRESS.hex()
+    border_router["create_active_dataset"].assert_awaited_once()
+    assert [call.args[0]["type"] for call in sent.await_args_list] == [
+        "otbr/create_network"
+    ]
 
 
 async def test_set_channel_reaches_the_border_router(
-    hass: HomeAssistant, radio: RadioTools
+    radio: RadioTools, border_router: dict[str, AsyncMock], otbr_entry_id: str
 ) -> None:
-    received = await _thread_and_otbr(hass)
-
     out = await radio.ha_manage_radio(
         radio="thread",
         action="set_channel",
@@ -352,9 +351,8 @@ async def test_set_channel_reaches_the_border_router(
     )
 
     assert out["success"] is True
-    [sent] = _commands(received, "otbr/set_channel")
-    assert sent["channel"] == 20
-    assert sent["extended_address"] == EXTENDED_ADDRESS
+    assert out["extended_address"] == EXTENDED_ADDRESS.hex()
+    border_router["set_channel"].assert_awaited_once_with(20, delay=ANY)
 
 
 async def test_unknown_action_lists_supported(
