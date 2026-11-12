@@ -38,6 +38,9 @@ from .helpers import (
 # sibling entity_info enrichment (names/areas). Named once so the routing helper
 # and its tests agree on the wire string.
 WS_EXPOSURE = "ha_mcp_tools/exposure"
+# State reads one bulk lookup keeps in flight, so a long list of ids without
+# a registry entry does not take every connection of the client's pool.
+STATE_READS_AT_ONCE = 10
 
 
 async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
@@ -144,9 +147,15 @@ async def unregistered_lookup(
     """
     if not entity_ids:
         return {}
+    in_flight = asyncio.Semaphore(STATE_READS_AT_ONCE)
+
+    async def bounded_state_entity_id(entity_id: str) -> str | None:
+        async with in_flight:
+            return await _state_entity_id(client, entity_id)
+
     reply, *state_ids = await asyncio.gather(
         client.send_websocket_message({"type": "homeassistant/expose_entity/list"}),
-        *(_state_entity_id(client, eid) for eid in entity_ids),
+        *(bounded_state_entity_id(eid) for eid in entity_ids),
     )
     if not reply.get("success"):
         # The "Command failed:" prefix is what the shared classifier reads as
