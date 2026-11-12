@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import ssl
 import time
 from dataclasses import dataclass
 from typing import Any, NoReturn
@@ -26,21 +25,7 @@ from .error_log_journald import (
 )
 from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
-
-
-def _is_ssl_error(exc: BaseException) -> bool:
-    """True if ``exc`` (or anything in its cause chain) is an SSL error.
-
-    httpx wraps ``ssl.SSLError`` inside ``httpx.ConnectError``; the only
-    reliable check is to walk ``__cause__`` / ``__context__``.
-    """
-    cur: BaseException | None = exc
-    while cur is not None:
-        if isinstance(cur, ssl.SSLError):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
+from .transport_errors import is_ssl_error, redirect_message
 
 logger = logging.getLogger(__name__)
 
@@ -455,8 +440,7 @@ class HomeAssistantClient:
             HomeAssistantAuthError: 401 response.
             HomeAssistantAPIError: Non-2xx response (with status_code and
                 response_data set from JSON body when possible).
-            HomeAssistantConnectionError: Network, timeout, or transport error,
-                or a 3xx redirect (the request did not reach Home Assistant).
+            HomeAssistantConnectionError: Network, timeout, transport or redirect.
         """
         backoff = 0.5
         for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
@@ -471,14 +455,8 @@ class HomeAssistantClient:
                     )
 
                 if 300 <= response.status_code < 400:
-                    # Redirects are not followed (a write must not be replayed,
-                    # nor the token sent to another host), so the request never
-                    # reached Home Assistant.
-                    location = response.headers.get("location", "")
                     raise HomeAssistantConnectionError(
-                        f"Home Assistant was not reached at {self.base_url}: "
-                        f"HTTP {response.status_code} redirect to {location or '(no location)'}. "
-                        "Set HOMEASSISTANT_URL to the address Home Assistant answers on."
+                        redirect_message(self.base_url, response)
                     )
 
                 if response.status_code >= 400:
@@ -507,7 +485,7 @@ class HomeAssistantClient:
                 return response
 
             except httpx.ConnectError as e:
-                if _is_ssl_error(e) and self.verify_ssl:
+                if is_ssl_error(e) and self.verify_ssl:
                     raise HomeAssistantConnectionError(
                         f"TLS verification failed for {self.base_url}: {e}. "
                         "If this is a self-signed certificate or hostname "
@@ -767,8 +745,7 @@ class HomeAssistantClient:
                 domain, service, payload, return_response
             )
 
-        # Core answers return_response with its {changed_states, service_response}
-        # envelope; ``_request`` turns a non-JSON reply into ``{}``.
+        # Core's {changed_states, service_response} envelope, or ``{}`` (non-JSON).
         if return_response:
             return result
 
