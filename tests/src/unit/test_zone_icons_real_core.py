@@ -13,7 +13,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.device_tracker import ATTR_IN_ZONES
 from homeassistant.components.zone.const import DATA_ZONE
@@ -219,22 +218,6 @@ async def test_the_component_reads_only_the_zones_states(
     assert all("persons" in z for z in result["zones"])
 
 
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "ha_mcp_tools/states",
-        vol.Optional("entity_ids"): [str],
-    }
-)
-@websocket_api.async_response
-async def _close_the_socket(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """The socket closes instead of an answer to the state read."""
-    await websocket_manager.disconnect()
-
-
 @pytest.mark.parametrize("core_client", ["component"], indirect=True)
 async def test_a_dropped_state_read_still_lists_who_is_in_each_zone(
     hass: HomeAssistant, core_client: HomeAssistantClient
@@ -246,7 +229,23 @@ async def test_a_dropped_state_read_still_lists_who_is_in_each_zone(
     hass.states.async_set(
         "device_tracker.phone", "Office", {ATTR_IN_ZONES: [created["entity_id"]]}
     )
-    websocket_api.async_register_command(hass, _close_the_socket)
+    # The component's own command stays registered with its own schema; when
+    # Core receives the state read, the socket closes instead of an answer.
+    _, schema = hass.data[websocket_api.DOMAIN]["ha_mcp_tools/states"]
+
+    async def drop_the_socket(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        await websocket_manager.disconnect()
+
+    websocket_api.async_register_command(
+        hass,
+        "ha_mcp_tools/states",
+        websocket_api.async_response(drop_the_socket),
+        schema,
+    )
 
     with patch.object(
         core_client, "get_states", wraps=core_client.get_states

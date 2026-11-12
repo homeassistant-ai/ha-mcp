@@ -17,11 +17,7 @@ from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.hassio import const as hassio_const
-from homeassistant.components.hassio import websocket_api as hassio_websocket_api
-from homeassistant.components.hassio.handler import HassIO
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
@@ -31,10 +27,9 @@ from ha_mcp.config import Settings, get_global_settings
 from ha_mcp.tools.tools_service import ServiceTools
 
 from ._code_mode import run_custom_tool
+from ._supervisor_core import load_supervisor_api, supervisor_requests
 from ._tool_errors import _error
 
-# The Supervisor's address, as Core's hassio tests give it.
-SUPERVISOR = "127.0.0.1"
 SNAPSHOT_SERVICES = [
     ("hassio", "backup_partial"),
     ("backup", "create_automatic"),
@@ -89,24 +84,18 @@ async def backup_core(
     aioclient_mock: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AiohttpClientMocker:
-    """Core's backup integration and Core's own ``supervisor/api``.
-
-    A unit test has no Supervisor, so ``hassio``'s client and WebSocket API
-    are set up as its ``async_setup`` sets them up, and the Supervisor's HTTP
-    API at its address is answered by ``aioclient_mock``, as Core's own hassio
-    tests answer it. Core validates each command and builds each reply.
-    """
+    """Core's backup integration and Core's own ``supervisor/api``, in front of
+    a Supervisor that lists no backups (``_supervisor_core``)."""
     assert await async_setup_component(hass, "backup", {})
-    monkeypatch.setenv("SUPERVISOR_TOKEN", "abcdefgh")
-    hass.data[hassio_const.DATA_COMPONENT] = HassIO(
-        hass.loop, async_get_clientsession(hass), SUPERVISOR
+    load_supervisor_api(
+        hass,
+        aioclient_mock,
+        monkeypatch,
+        {
+            ("get", path): {"backups": []}
+            for path in ("/backups", "/v2/backups", "/backups_report")
+        },
     )
-    hassio_websocket_api.async_load_websocket_api(hass)
-    for path in ("/backups", "/v2/backups", "/backups_report"):
-        aioclient_mock.get(
-            f"http://{SUPERVISOR}{path}",
-            json={"result": "ok", "data": {"backups": []}},
-        )
     return aioclient_mock
 
 
@@ -292,9 +281,7 @@ class TestWsCommandMode:
         )
 
         assert result["success"] is True
-        assert [(method, str(url)) for method, url, *_ in backup_core.mock_calls] == [
-            ("get", f"http://{SUPERVISOR}/backups_report")
-        ]
+        assert supervisor_requests(backup_core) == [("get", "/backups_report")]
 
 
 class TestCodeModeBridges:
