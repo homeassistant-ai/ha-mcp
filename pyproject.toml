@@ -232,7 +232,6 @@ module = [
     "tests.src.unit.test_component_helper_collections",
     "tests.src.unit.test_component_helpers_list",
     "tests.src.unit.test_component_oauth_callbacks_ws",
-    "tests.src.unit.test_component_readapi_contract",
     "tests.src.unit.test_component_search_locations",
     "tests.src.unit.test_component_template_diagnose",
     "tests.src.unit.test_component_ws_phase2_async",

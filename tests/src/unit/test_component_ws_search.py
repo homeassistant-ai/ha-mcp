@@ -162,7 +162,7 @@ class FakeErModule:
     """Faithful stand-in for the ``entity_registry`` module's device index.
 
     ``_do_device_get(include_entities)`` calls ``er.async_entries_for_device``;
-    the real ``er`` is MagicMock-stubbed at import, so tests monkeypatch
+    a fake registry view has no real index, so tests on one monkeypatch
     ``wsapi.er`` with this. Mirrors core's filter — disabled entities are excluded
     unless ``include_disabled_entities`` (the component passes True, matching
     ``config/entity_registry/list``)."""
@@ -357,10 +357,10 @@ class FakeDevice:
 
     @property
     def dict_repr(self):
-        # Mirrors core ``DeviceEntry.dict_repr`` (one ``config/device_registry/
-        # list`` element): the key set + order the device_get/device_list commands
-        # return VERBATIM. Sets are rendered to lists here as core does; timestamps
-        # are fixed floats (their exact value is irrelevant to the consumers).
+        # Part of core's ``DeviceEntry.dict_repr`` in its key order: Core 2026.11
+        # also emits config_entry_id, config_subentry_id, next_name_part and
+        # parent_device_id, so a consumer of those is tested on Core's registry.
+        # Sets render as lists; timestamps are fixed floats.
         return {
             "area_id": self.area_id,
             "configuration_url": self.configuration_url,

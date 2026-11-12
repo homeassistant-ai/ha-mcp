@@ -221,8 +221,8 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
         and isinstance(entry_row.get("parent_device_id"), str)
     ):
         # Additive internal transport metadata. The raw child ``dict_repr`` stays
-        # byte-identical to Core while the server can expose its existing area_id
-        # field using Core's effective placement without a whole-registry read.
+        # byte-identical to Core while the server can report Core's effective
+        # placement as effective_area_id without a whole-registry read.
         result["effective_area_id"] = _effective_device_area_id(view, entry)
     if include_entities:
         result["entities"] = _device_entities(view, device_id) if device_id else []
