@@ -23,7 +23,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -35,7 +35,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import (
-    adapt_retired_arguments,
+    adapt_retired_call,
     add_stale_list_warning,
     current_tool_name,
 )
@@ -504,6 +504,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
         call_write_name: str = "ha_call_write_tool",
         call_delete_name: str = "ha_call_delete_tool",
         enable_code_mode: bool = False,
+        get_client: Callable[[], Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -530,6 +531,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
         # running code mode; server.py flips this on when
         # ``settings.enable_code_mode`` is True.
         self._enable_code_mode = enable_code_mode
+        # Core judges a name a retired signature carried and the current one
+        # drops (``adapt_retired_call``).
+        self._get_client = get_client
 
         # Category caches rebuilt when the catalog hash changes,
         # matching BM25SearchTransform's staleness detection pattern.
@@ -807,7 +811,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
             arguments = _coerce_proxy_arguments(arguments, proxy_name, name)
             # A retired name folded into an action-dispatched tool (#2329)
             # needs the action its old signature never carried.
-            arguments = adapt_retired_arguments(requested, arguments)
+            arguments = await adapt_retired_call(
+                requested, arguments, transform._get_client
+            )
 
             # Detect and unwrap double-wrapped arguments where the LLM
             # accidentally nested name/arguments inside the arguments param
@@ -854,7 +860,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     )
                     if nested is not None and not isinstance(nested, dict):
                         _raise_non_object_arguments(nested, proxy_name, inner_name)
-                    arguments = adapt_retired_arguments(requested_inner, nested or {})
+                    arguments = await adapt_retired_call(
+                        requested_inner, nested or {}, transform._get_client
+                    )
 
             if not _admits(transform, category, name, arguments):
                 _raise_wrong_category_error(name, transform, proxy_name)

@@ -63,7 +63,7 @@ def set_entity(client: MagicMock) -> Any:
 def _entity_ws_handler(
     *, device_id: str | None = "dev1", device_update_ok: bool = True
 ) -> Any:
-    async def handler(msg: dict[str, Any]) -> dict[str, Any]:
+    async def handler(msg: dict[str, Any], **_: Any) -> dict[str, Any]:
         msg_type = msg["type"]
         if msg_type == "config/area_registry/list":
             return {"success": True, "result": [{"area_id": "living_room"}]}

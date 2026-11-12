@@ -5,10 +5,9 @@ map with no names/areas, forcing a second ha_search to identify an exposed
 entity. When the component advertises ``exposure`` one ``ha_mcp_tools/exposure``
 frame returns the same map PLUS an additive ``entity_info`` enrichment
 (friendly_name/domain/area/floor/labels). These tests pin: the component-served
-list shape (Core's map unchanged, enrichment additive), and the error-taxonomy
-fallbacks — capability miss, ``unknown_command`` (invalidate caps + Core's
-list), and a command error/timeout — all serving Core's
-``homeassistant/expose_entity/list`` result unchanged.
+list shape (Core's map unchanged, enrichment additive), and the routes to
+Core's ``homeassistant/expose_entity/list`` — capability miss and
+``unknown_command`` (which also invalidates the cached caps).
 """
 
 from __future__ import annotations
@@ -19,15 +18,12 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, entity_exposure
 
 from ._component_routing_helpers import (
     make_ws,
     patch_ws,
-    patch_ws_establish_failure,
 )
 
 _CAPS_PRE_CHILD_SEMANTICS = {
@@ -203,42 +199,3 @@ async def test_unknown_command_invalidates_and_falls_back() -> None:
     assert "entity_info" not in resp
     assert client.legacy_calls == 1
     assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command error/timeout → legacy list, enrichment absent."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient(_LEGACY_MAP)
-
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client)
-
-    assert resp["exposed_entities"] == _LEGACY_MAP
-    assert "entity_info" not in resp
-    assert client.legacy_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) → legacy ``expose_entity/list``, enrichment absent, not a propagated
-    error. The legacy list rides the WS bridge, so it does not die
-    identically on a pooled-WS drop."""
-    caps_ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_EXPOSURE)
-    client = RoutingClient(_LEGACY_MAP)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        entity_exposure,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        resp = await _listing(client)
-
-    assert resp["exposed_entities"] == _LEGACY_MAP
-    assert "entity_info" not in resp
-    assert client.legacy_calls == 1

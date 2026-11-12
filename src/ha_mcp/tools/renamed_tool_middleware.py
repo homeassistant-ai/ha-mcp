@@ -26,6 +26,7 @@ Registering the old name as a second, disabled tool would not work:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
@@ -36,7 +37,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 
 from ..renamed_tools import (
     RENAMED_TOOLS,
-    adapt_retired_arguments,
+    adapt_retired_call,
     add_stale_list_warning,
     retired_parameters_used,
 )
@@ -54,7 +55,10 @@ class RenamedToolAliasMiddleware(Middleware):
     on, rather than an alias it would not recognise.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
+        # Core judges a name the retired signature carried and the current
+        # one drops (``adapt_retired_call``).
+        self._get_client = get_client
         # Which retired names have been logged at INFO already, so the first
         # call on each is audible and the rest stay at DEBUG. An operator
         # otherwise has no way to know a client is still calling the old name —
@@ -93,7 +97,7 @@ class RenamedToolAliasMiddleware(Middleware):
             renames.append((called, name))
             # A consolidated tool needs the ``action`` the retired signature
             # never carried; a plain rename forwards the arguments as they are.
-            arguments = adapt_retired_arguments(called, arguments)
+            arguments = await adapt_retired_call(called, arguments, self._get_client)
         retired_parameters = retired_parameters_used(name, arguments)
         if retired_parameters:
             arguments = {

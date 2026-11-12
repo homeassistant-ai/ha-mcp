@@ -29,6 +29,8 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import entity_registry_reads
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._tool_errors import _error
+
 _LIST = "homeassistant/expose_entity/list"
 _FLAG_GET = "homeassistant/expose_new_entities/get"
 _FLAG_SET = "homeassistant/expose_new_entities/set"
@@ -94,10 +96,6 @@ def _types(sent: AsyncMock) -> list[str]:
 
 def _body(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))
-
-
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return _body(exc_info)["error"]
 
 
 def _list_raises(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
@@ -248,6 +246,18 @@ class TestRegistryWideRead:
         assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         sent.assert_not_called()
 
+    @pytest.mark.parametrize("resolver_filter", ["domain", "platform"])
+    async def test_a_resolver_filter_without_unique_id_is_refused(
+        self, tools: EntityTools, sent: AsyncMock, resolver_filter: str
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_get_entity(**{resolver_filter: "light"})
+
+        error = _error(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "only apply when unique_id is provided" in error["message"]
+        sent.assert_not_called()
+
     async def test_an_empty_assistant_filter_goes_to_core(
         self, tools: EntityTools, sent: AsyncMock
     ) -> None:
@@ -386,6 +396,24 @@ class TestExposeToWithoutRegistryEntry:
         assert failed.keys() == {"light.kitchen", _BAD_ID}
         assert all("entity_ids" in error for error in failed.values())
         assert _EXPOSE not in _types(sent)
+
+    async def test_a_device_rename_without_an_entry_is_skipped_not_failed(
+        self, hass: HomeAssistant, tools: EntityTools
+    ) -> None:
+        hass.states.async_set("zone.home", "0")
+
+        result = await tools.ha_set_entity(
+            entity_id="zone.home",
+            expose_to={"cloud.alexa": True},
+            new_device_name="X",
+        )
+
+        assert "partial" not in result
+        assert result["warnings"] == [
+            "Entity has no associated device — device rename skipped"
+        ]
+        settings = core_exposed.async_get_entity_settings(hass, "zone.home")
+        assert settings["cloud.alexa"]["should_expose"] is True
 
 
 class TestBulkRead:
@@ -733,6 +761,16 @@ class TestEntityWriteFailure:
         assert all("boom" in f["error"] for f in result["failed"])
         assert _types(sent).count(_EXPOSE) == 1
         assert _types(sent)[-1] == _EXPOSE
+
+    async def test_a_refused_read_before_a_device_rename_ends_the_call(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        """Nothing is written before the read, so Core's refusal is the answer."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id=_BAD_ID, new_device_name="X")
+
+        assert _body(exc_info)["ha_error_code"] == "invalid_format"
+        assert _types(sent) == ["config/entity_registry/get"]
 
     async def test_a_refused_first_options_write_is_not_partial(
         self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools

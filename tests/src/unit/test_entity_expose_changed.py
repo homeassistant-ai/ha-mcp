@@ -1,8 +1,7 @@
-"""ha_set_entity reports an exposure that changed nothing (Core 2026.11+).
+"""ha_set_entity reports an exposure that changed nothing.
 
-Core 2026.11 answers ``homeassistant/expose_entity`` with the entity ids it
-actually changed (core#188809); before that the reply carried no result, and
-the tool can only assume the request changed something.
+Core answers ``homeassistant/expose_entity`` with the entity ids it actually
+changed (core#188809).
 """
 
 from typing import Any
@@ -59,12 +58,3 @@ async def test_bulk_exposure_collects_what_core_changed() -> None:
     )
     assert error is None
     assert changed == {"light.a", "light.b"}
-
-
-async def test_bulk_exposure_on_older_core_reports_no_change_set() -> None:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(return_value={"success": True})
-    error, changed = await apply_bulk_expose(
-        client, ["light.a"], {"conversation": True}, str
-    )
-    assert (error, changed) == (None, None)

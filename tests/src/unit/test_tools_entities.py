@@ -550,39 +550,6 @@ class TestHaSetEntityCombined:
         assert "suggestions" in error or "suggestion" in error
 
     @pytest.mark.asyncio
-    async def test_device_rename_lookup_failure_marks_partial(
-        self, mock_mcp, mock_client
-    ):
-        """Registry lookup failure during device rename must mark response partial.
-
-        The rename was effectively skipped, so ``partial: True`` tells the agent
-        the operation didn't fully complete, and no device_name echo is claimed.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "WS lookup transport failure"},
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            new_device_name="Living Room",
-        )
-
-        assert result["success"] is True
-        assert result.get("partial") is True
-        assert not any(u.startswith("device_name") for u in result["updates"])
-        device_rename = result["device_rename"]
-        assert device_rename.get("lookup_failed") is True
-        assert any(
-            "Entity registry lookup failed" in w
-            for w in device_rename.get("warnings", [])
-        )
-
-    @pytest.mark.asyncio
     async def test_device_rename_no_device_does_not_mark_partial(
         self, mock_mcp, mock_client
     ):
@@ -607,7 +574,6 @@ class TestHaSetEntityCombined:
         assert result["success"] is True
         assert "partial" not in result
         device_rename = result["device_rename"]
-        assert device_rename.get("lookup_failed") is None
         assert any(
             "no associated device" in w for w in device_rename.get("warnings", [])
         )

@@ -10,12 +10,9 @@ from .helpers import raise_core_refusal
 logger = logging.getLogger(__name__)
 
 
-def changed_entity_ids(reply: dict[str, Any]) -> set[str] | None:
-    """The entities Core reports it changed, or None before Core 2026.11."""
-    result = reply.get("result")
-    if isinstance(result, dict) and isinstance(result.get("changed_entity_ids"), list):
-        return set(result["changed_entity_ids"])
-    return None
+def changed_entity_ids(reply: dict[str, Any]) -> set[str]:
+    """The entities Core reports its ``homeassistant/expose_entity`` call changed."""
+    return set(reply["result"]["changed_entity_ids"])
 
 
 async def read_expose_new(client: Any, assistant: str) -> bool:
@@ -56,7 +53,7 @@ async def apply_bulk_expose(
     entity_ids: list[str],
     parsed_expose_to: dict[str, bool],
     extract_error: Callable[[dict[str, Any]], str],
-) -> tuple[str | None, set[str] | None]:
+) -> tuple[str | None, set[str]]:
     """Expose/hide many entities in one homeassistant/expose_entity call per set.
 
     The command's schema accepts the full entity_ids list, so bulk exposure
@@ -64,13 +61,12 @@ async def apply_bulk_expose(
     for those being turned off) regardless of entity count — not one per
     entity. Returns (error, changed): error is None on success, or the message
     of the first failing set, which applies to every id in the list. changed
-    holds the ids Core reports it changed, or None when Core does not report
-    them (before 2026.11).
+    holds the ids Core reports it changed.
     """
     expose_true = [a for a, v in parsed_expose_to.items() if v]
     expose_false = [a for a, v in parsed_expose_to.items() if not v]
     applied: list[str] = []
-    changed: set[str] | None = set()
+    changed: set[str] = set()
     for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
         if not assistants:
             continue
@@ -96,10 +92,9 @@ async def apply_bulk_expose(
                     f"{', '.join(applied)} were already applied before "
                     "this failure)"
                 )
-            return error, None
+            return error, set()
         applied.extend(assistants)
-        reported = changed_entity_ids(result)
-        changed = None if reported is None or changed is None else changed | reported
+        changed |= changed_entity_ids(result)
     return None, changed
 
 

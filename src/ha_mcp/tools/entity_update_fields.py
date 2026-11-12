@@ -3,15 +3,9 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from packaging.version import InvalidVersion, Version
-
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
+from .entity_registry_reads import NotInRegistry
 from .helpers import clearable_value, raise_tool_error
-
-# Home Assistant release that reads an empty entity-name override as "use the
-# device name" (home-assistant/core#181576). Older Cores store "" but render
-# the default name, so the switch would silently do the opposite there.
-USE_DEVICE_NAME_MIN_CORE = (2026, 10)
 
 
 def reject_name_with_use_device_name(
@@ -50,21 +44,19 @@ def reject_use_device_name_without_device(
 
 async def ensure_use_device_name_allowed(
     use_device_name: bool | None,
-    client: Any,
     entity_id: str,
     fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any] | None:
-    """use_device_name=True needs a 2026.10 Core and an entity with a device.
+    """use_device_name=True needs an entity with a device.
 
     Returns the entry it read for use_device_name=True (the main-entity
     write is built from it), else None.
     """
     if not use_device_name:
         return None
-    await ensure_use_device_name_supported(client)
     try:
         current = await fetch_entity(entity_id)
-    except ValueError:
+    except NotInRegistry:
         raise_tool_error(
             create_entity_not_found_error(
                 entity_id, details=f"{entity_id} has no entity registry entry."
@@ -98,35 +90,6 @@ def main_entity_fields(entry: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-async def ensure_use_device_name_supported(client: Any) -> None:
-    """Refuse use_device_name=True on a Core older than 2026.10."""
-    config = await client.get_config()
-    raw = str(config.get("version", ""))
-    try:
-        release = Version(raw).release[:2]
-    except InvalidVersion:
-        release = None
-    if release is not None and tuple(release) >= USE_DEVICE_NAME_MIN_CORE:
-        return
-    detail = (
-        f"this Core reports {raw} and would show the default name instead"
-        if release is not None
-        else f"this Core's version {raw!r} could not be parsed, so support "
-        "cannot be confirmed"
-    )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"use_device_name needs Home Assistant 2026.10 or newer; {detail}",
-            context={"ha_version": raw},
-            suggestions=[
-                "Upgrade Home Assistant to 2026.10 or newer",
-                "Pass name='<device name>' to set the device's name as a fixed custom name",
-            ],
-        )
-    )
-
-
 def build_name_visibility_fields(
     message: dict[str, Any],
     updates_made: list[str],
@@ -153,7 +116,7 @@ def build_name_visibility_fields(
         message["name"] = None
         updates_made.append("name cleared")
     elif use_device_name:
-        entry = entry or {}
+        assert entry is not None  # read by ensure_use_device_name_allowed
         already_main = is_main_entity(entry)
         fields = main_entity_fields(entry)
         # An explicit area_id goes to Core, which refuses it on a main entity

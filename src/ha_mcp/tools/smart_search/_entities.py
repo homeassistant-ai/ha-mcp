@@ -15,16 +15,12 @@ from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
+from ..entity_registry_reads import _GET_ENTRIES_CHUNK_SIZE
 from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
 logger = logging.getLogger(__name__)
-
-# Bounds the per-frame response size of config/entity_registry/get_entries
-# (extended entries, ~1KB typical each) so alias enrichment can't produce an
-# over-cap WebSocket frame on large instances (#1721).
-_GET_ENTRIES_CHUNK_SIZE = 500
 
 
 def _redact_hidden_memberships(

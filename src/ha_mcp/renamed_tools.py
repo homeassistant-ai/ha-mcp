@@ -20,7 +20,9 @@ names can now carry different stored states for one current tool, so the
 readers pick the more restrictive one (``rename_retired_keys``'s ``prefer``).
 And a call on a retired name carries the old signature, which
 ``adapt_retired_arguments`` maps onto the current tool's: the blueprint
-tools' missing ``action``, the exposure tool's ``assistant``.
+tools' missing ``action``, the exposure tool's ``assistant``. Where the
+current tool drops a name the old one checked, ``adapt_retired_call`` has
+Core check it first.
 
 A parameter can move the same way a tool does. ``RENAMED_PARAMETERS`` keeps
 the old parameter name callable for a client that has not re-listed, and
@@ -114,7 +116,7 @@ def _adapt_import_blueprint(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _adapt_get_entity_exposure(arguments: dict[str, Any]) -> dict[str, Any]:
     # The assistant filter applied only to the listing, without an entity_id;
-    # with one, the old tool only checked the name.
+    # with one, the old tool only checked the name (``adapt_retired_call``).
     assistant = arguments.pop("assistant", None)
     if assistant is not None and arguments.get("entity_id") is None:
         arguments["exposed_to"] = assistant
@@ -143,6 +145,32 @@ def adapt_retired_arguments(
     if adapter is None:
         return dict(arguments) if arguments is not None else None
     return adapter(dict(arguments or {}))
+
+
+async def adapt_retired_call(
+    name: str,
+    arguments: Mapping[str, Any] | None,
+    get_client: Callable[[], Any] | None,
+) -> dict[str, Any] | None:
+    """``adapt_retired_arguments``, after Core judged what the adapter drops.
+
+    ``ha_get_entity_exposure`` refused an unknown ``assistant`` sent with an
+    ``entity_id``; ``ha_get_entity`` has no place for that name, so Core's
+    ``homeassistant/expose_new_entities/get`` judges it here, the check an
+    ``expose_to`` name gets.
+    """
+    if (
+        name == "ha_get_entity_exposure"
+        and arguments
+        and arguments.get("entity_id") is not None
+        and arguments.get("assistant") is not None
+    ):
+        # Imported here: the tools package imports this module.
+        from .tools.entity_expose_batch import read_expose_new
+
+        assert get_client is not None, "the server passes its client"
+        await read_expose_new(get_client(), arguments["assistant"])
+    return adapt_retired_arguments(name, arguments)
 
 
 def retired_parameters_used(

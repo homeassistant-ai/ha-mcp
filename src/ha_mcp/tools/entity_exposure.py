@@ -8,7 +8,6 @@ Writes go through ``ha_set_entity`` (``expose_to``).
 """
 
 import asyncio
-import logging
 from collections import Counter
 from typing import Any
 
@@ -18,8 +17,11 @@ from ..client.rest_client import (
     HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
+from ..errors import ErrorCode, create_error_response
 from .component_api import (
+    COMPONENT_INSTALL_HINT,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
+    component_failure,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -30,9 +32,8 @@ from .helpers import (
     core_error_message,
     get_entity_state_or_none,
     raise_core_refusal,
+    raise_tool_error,
 )
-
-logger = logging.getLogger(__name__)
 
 # The ha_mcp_tools/exposure WS command: Core's expose_entity/list map PLUS a
 # sibling entity_info enrichment (names/areas). Named once so the routing helper
@@ -45,18 +46,10 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
 
     Returns the component payload — ``{exposed_entities: {id: {assistant:
     True}}, entity_info: {id: {...}}}`` — where ``exposed_entities`` holds the
-    same entries as Core's ``homeassistant/expose_entity/list`` map. ``None`` on
-    capability miss, downgrade (``unknown_command`` → invalidate the cached
-    caps), command error/timeout (logged), a connection-establishment failure
-    (logged), or a reply without ``exposed_entities`` — the
-    caller falls back to Core's list. A
-    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed (re)connect
-    — is caught here and mapped to ``None``: Core's list read rides the
-    ``send_websocket_message`` bridge, which answers a component-side fault with
-    ``{"success": False}`` - so a fault here falls back rather than escapes. It
-    is the SAME pooled connection, so a genuinely dead transport raises there
-    too (#1947) instead of degrading. Same caps-gate discipline as
-    ``component_devices.fetch_device_via_component``.
+    same entries as Core's ``homeassistant/expose_entity/list`` map. ``None``
+    when the component does not advertise the command, or no longer knows it
+    (``unknown_command`` → invalidate the cached caps). Any other failure of
+    the advertised command is the tool's error, naming the component.
     """
     caps = await get_component_caps(client)
     if not (
@@ -64,27 +57,25 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
         and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
     ):
         return None
+    ws = await get_websocket_client(
+        url=client.base_url,
+        token=client.token,
+        verify_ssl=getattr(client, "verify_ssl", None),
+    )
     try:
-        ws = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
         raw = await ws.send_command(WS_EXPOSURE)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if is_unknown_command(exc):
-            invalidate_caps(client)
-        else:
-            logger.warning("%s failed; reading Core's list: %r", WS_EXPOSURE, exc)
+        if not is_unknown_command(exc):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    component_failure(WS_EXPOSURE, exc),
+                    suggestions=[COMPONENT_INSTALL_HINT],
+                )
+            )
+        invalidate_caps(client)
         return None
-    except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError or any other error → Core's list (it
-        # rides the bridge).
-        logger.warning("%s connection error; reading Core's list: %r", WS_EXPOSURE, exc)
-        return None
-    result = raw.get("result")
-    if not isinstance(result, dict) or "exposed_entities" not in result:
-        return None
+    result: dict[str, Any] = raw["result"]
     return result
 
 
@@ -93,9 +84,9 @@ async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
     Prefers the component's in-process read when advertised: the same map as
     ``expose_entity/list`` plus an ``entity_info`` enrichment (names/areas), so
-    a caller needs no second ha_search to name an exposed entity. Falls back to
-    Core's list on any miss (taxonomy in ``_fetch_exposure_via_component``),
-    with no ``entity_info``.
+    a caller needs no second ha_search to name an exposed entity. Reads
+    Core's list, with no ``entity_info``, when the component does not serve
+    the command (``_fetch_exposure_via_component``).
     """
     component = await _fetch_exposure_via_component(client)
     if component is not None:

@@ -7,7 +7,6 @@ fields ha_set_entity takes from the entity dialog land in a real registry.
 
 from __future__ import annotations
 
-import functools
 import json
 from collections.abc import Callable
 from typing import Any
@@ -19,7 +18,6 @@ from homeassistant.components.homeassistant.const import DATA_EXPOSED_ENTITIES
 from homeassistant.components.homeassistant.exposed_entities import (
     async_expose_entity,
 )
-from homeassistant.components.websocket_api import ActiveConnection
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -32,6 +30,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
+
+from ._tool_errors import _error
 
 
 @pytest.fixture(params=["component", "core"])
@@ -76,10 +76,6 @@ def _expose_writes(sent: AsyncMock) -> list[dict[str, Any]]:
         for call in sent.call_args_list
         if call.args[0]["type"] == "homeassistant/expose_entity"
     ]
-
-
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))["error"]
 
 
 def _assert_cores_refusal(
@@ -340,7 +336,12 @@ async def test_get_entity_serves_cores_full_entry(
     for entry in (single, bulk[0], resolved[0]):
         # Every field of Core's entry, value for value; enrichment is additive.
         assert entry.items() >= core["result"].items()
-        assert entry.keys() - core["result"].keys() <= {"area", "floor", "label_names"}
+        assert entry.keys() - core["result"].keys() <= {
+            "area",
+            "floor",
+            "label_names",
+            "full_name",
+        }
         assert entry["aliases"] == ["Desk"]
 
 
@@ -433,6 +434,22 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
     _assert_cores_refusal(exc_info, "invalid_info")
+
+
+async def test_a_rename_with_expose_to_exposes_the_new_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    lamp: str,
+) -> None:
+    """The old ID has no entry after the rename; an exposure written to it
+    would land in Core's store for entities without one."""
+    await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, new_entity_id="light.porch", expose_to={"cloud.alexa": True}
+    )
+
+    assert core_exposed.async_get_assistant_settings(hass, "cloud.alexa") == {
+        "light.porch": {"should_expose": True}
+    }
 
 
 async def test_enabling_returns_cores_restart_answer(
@@ -918,36 +935,6 @@ async def test_bulk_expose_to_marks_only_the_unchanged_entities(
     updates = {r["entity_id"]: " ".join(r["updates"]) for r in result["succeeded"]}
     assert "already set" not in updates[lamp]
     assert "already set" in updates[desk]
-
-
-async def test_expose_to_on_a_core_without_a_change_report_assumes_a_change(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Core before 2026.11 answers ``homeassistant/expose_entity`` with no result."""
-
-    # wraps copies the command, schema and callback mark Core registers it by.
-    @functools.wraps(core_exposed.ws_expose_entity)
-    def without_change_report(
-        hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]
-    ) -> None:
-        for entity_id in msg["entity_ids"]:
-            for assistant in msg["assistants"]:
-                async_expose_entity(hass, assistant, entity_id, msg["should_expose"])
-        connection.send_result(msg["id"])
-
-    # Registered when the component sets up, so replaced before that.
-    monkeypatch.setattr(core_exposed, "ws_expose_entity", without_change_report)
-    assert await async_setup_component(hass, "homeassistant", {})
-    lamp = er.async_get(hass).async_get_or_create("light", "demo", "lamp").entity_id
-
-    # Nothing changes, but this Core does not say so.
-    result = await EntityTools(core_client).ha_set_entity(
-        entity_id=lamp, expose_to={"cloud.alexa": False}
-    )
-
-    assert result["updates"] == ["expose_to={'cloud.alexa': False}"]
 
 
 @pytest.mark.parametrize("new_entity_id", [None, "sensor.renamed"])

@@ -333,7 +333,8 @@ class TestBlueprintConsolidation:
 
     def test_entity_exposure_arguments_map_onto_ha_get_entity(self) -> None:
         """The assistant filter becomes exposed_to only for the listing; with
-        an entity_id the old tool ignored it, and ha_get_entity refuses it."""
+        an entity_id the adapter drops it, after adapt_retired_call had Core
+        check the name."""
         assert adapt_retired_arguments(
             "ha_get_entity_exposure", {"assistant": "cloud.alexa"}
         ) == {"exposed_to": "cloud.alexa"}

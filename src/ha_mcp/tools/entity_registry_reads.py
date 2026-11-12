@@ -1,4 +1,8 @@
-"""Entity registry reads shared by ``ha_get_entity``'s list and unique_id modes."""
+"""Chunked ``config/entity_registry/get_entries`` reads.
+
+They serve ``ha_get_entity``'s list and unique_id modes and ``ha_set_entity``'s
+exposure-target lookup and bulk refetch.
+"""
 
 import asyncio
 import logging
@@ -11,12 +15,15 @@ logger = logging.getLogger(__name__)
 
 # Bounds the per-frame size of a bulk config/entity_registry/get_entries call
 # (extended entries, ~1KB each) so a large id list can't produce an over-cap
-# WebSocket frame. Matches the chunk size smart_search uses for the same
-# command. Typical bulk calls fit in a single chunk (one WS message).
+# WebSocket frame. Typical bulk calls fit in a single chunk (one WS message).
 _GET_ENTRIES_CHUNK_SIZE = 500
 
 # The per-id error of an id get_entries returns no entry for.
 _NOT_IN_REGISTRY = "Entity not found"
+
+
+class NotInRegistry(ValueError):
+    """Core's entity registry holds no entry for the entity (``not_found``)."""
 
 
 def _extract_ws_error(result: dict[str, Any]) -> str:
@@ -44,10 +51,10 @@ async def get_entries_raw(
 
     Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
     entity_id to HA's raw extended registry dict; ``errors`` maps a failed
-    entity_id to a message. A ``null`` in HA's entries map (id not in the
-    registry) and a chunk-level WS failure both land in ``errors`` — this
-    reproduces the per-id not-found contract of the old one-get-per-id
-    fan-out, where every id got its own error.
+    entity_id to a message. Every id sent lands in exactly one of the two: a
+    ``null`` in HA's entries map (id not in the registry) gives it
+    ``_NOT_IN_REGISTRY``, and a failed chunk gives each of its ids that
+    failure.
     """
     raw: dict[str, dict[str, Any]] = {}
     errors: dict[str, str] = {}
@@ -84,8 +91,8 @@ async def get_entries_raw(
                 else:
                     raw[eid] = entry
             continue
-        # Whole-chunk failure (WS raised, or success=False): every id in
-        # the chunk failed, mirroring the old per-id fan-out behaviour.
+        # Whole-chunk failure (WS raised, or success=False): each id in the
+        # chunk gets that failure as its error.
         msg = _extract_ws_error(resp) if isinstance(resp, dict) else str(resp)
         for eid in chunk:
             errors[eid] = msg

@@ -627,6 +627,12 @@ COMPONENT_INSTALL_HINT = (
 )
 
 
+def component_failure(command: str, exc: Exception) -> str:
+    """What to say when the component advertises ``command`` and then fails it."""
+    detail = str(exc).removeprefix("Command failed: ")
+    return f"{command} failed: {detail}"
+
+
 async def component_serves(client: Any, capability: str) -> bool:
     """Whether the installed component advertises ``capability``."""
     return component_supports(await get_component_caps(client), capability)

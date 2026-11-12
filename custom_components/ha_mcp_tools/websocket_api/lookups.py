@@ -20,6 +20,7 @@ from .assist import (
 from .registry import (
     _all_device_entries,
     _all_entity_entries,
+    _composed_entity_name,
     _device_dict_repr,
     _effective_device_area_id,
     _entity_partial_dict,
@@ -298,13 +299,15 @@ def _entries_for_device(view: _RegistryView, device_id: str) -> list[Any]:
 # ha_mcp_tools/entity_enrich
 # =============================================================================
 def _do_entity_enrich(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return the area/floor/labels/aliases join for each requested entity_id.
+    """Return the area/floor/labels/aliases join and the composed name for each id.
 
-    ``{entities: {id: {area, floor, labels, aliases}}}`` — each id runs through the
-    SAME :func:`_registry_enrichment` join the search path uses (device-inherited
-    area/labels, resolved NAMES), so ``ha_get_entity`` adds the resolved-name
-    fields the raw registry entry lacks without the caller fanning out its own
-    area/floor/label registry reads. Pure O(id) in-memory registry lookups; a
+    ``{entities: {id: {area, floor, labels, aliases, full_name}}}`` — each id runs
+    through the SAME :func:`_registry_enrichment` join the search path uses
+    (device-inherited area/labels, resolved NAMES), so ``ha_get_entity`` adds the
+    resolved-name fields the raw registry entry lacks without the caller fanning
+    out its own area/floor/label registry reads. ``full_name`` is the name Home
+    Assistant shows, composed by Core as for search and the overview
+    (:func:`_composed_entity_name`). Pure O(id) in-memory registry lookups; a
     registry-only (stateless) entity is enriched too (the join keys off the
     registry, not the state machine). An id with no registry entry yields empty /
     ``None`` fields rather than being dropped, so the caller can pair the result
@@ -320,6 +323,7 @@ def _do_entity_enrich(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
             "floor": join["floor"],
             "labels": join["labels"],
             "aliases": join["aliases"],
+            "full_name": _composed_entity_name(view, _reg_entity(view, entity_id)),
         }
     return {"entities": entities}
 

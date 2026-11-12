@@ -66,8 +66,9 @@ the info handshake carries no capability entry:
   equivalent of ``config/device_registry/list`` served through the component
   seam, so ``ha_get_device`` list mode need not mix a legacy WS read with the
   component path.
-* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join for a set
-  of entity_ids (``{entities: {id: {area, floor, labels, aliases}}}``), computed
+* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join and the
+  name Core composes for a set of entity_ids (``{entities: {id: {area, floor,
+  labels, aliases, full_name}}}``), computed
   by the SAME ``_entity_record``/``_RegistryView`` registry join the search path
   uses (device-inherited area/labels included). Lets ``ha_get_entity`` add the
   resolved-name enrichment fields the raw registry entry lacks (it carries

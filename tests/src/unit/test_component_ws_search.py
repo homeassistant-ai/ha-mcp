@@ -3116,6 +3116,8 @@ class TestEntityEnrich:
             "floor": "Upstairs",
             "labels": ["Favorites"],
             "aliases": ["reading light"],
+            # This fake view has no hass, so there is no name to compose.
+            "full_name": None,
         }
 
     def test_device_inherited_area_and_labels(self, monkeypatch):
@@ -3136,6 +3138,7 @@ class TestEntityEnrich:
             "floor": None,
             "labels": [],
             "aliases": [],
+            "full_name": None,
         }
 
     def test_empty_id_list(self, monkeypatch):
