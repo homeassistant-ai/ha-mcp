@@ -8,12 +8,16 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceNotFound
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import async_mock_service
 
 import custom_components.ha_mcp_tools as component
 from custom_components.ha_mcp_tools import file_ops, file_post_action
+from custom_components.ha_mcp_tools.const import DOMAIN
 from custom_components.ha_mcp_tools.file_ops import (
     _REFUSALS,
     _replace_file_sync,
@@ -29,6 +33,12 @@ needs_symlinks = pytest.mark.skipif(
 
 def _edit(old: str, new: str) -> dict[str, str]:
     return {"old": old, "new": new}
+
+
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core's config directory is this test's ``tmp_path``."""
+    return hass_tmp_config_dir
 
 
 class TestWholeFileReplace:
@@ -207,68 +217,53 @@ def test_every_refusal_reason_has_a_template() -> None:
     assert reasons <= set(_REFUSALS)
 
 
-class _Hass:
-    def __init__(self, config_dir: Path) -> None:
-        self.config = MagicMock(config_dir=str(config_dir))
-        self.config.path = lambda *parts: os.path.join(str(config_dir), *parts)
-        self.data: dict[str, Any] = {}
-        self.services = MagicMock(async_call=AsyncMock())
-
-
-def _yaml_dashboard(path: str, url_path: str) -> MagicMock:
-    return MagicMock(
-        path=path,
-        mode="yaml",
-        config={"mode": "yaml", "filename": "dashboards/x.yaml", "title": "Rev"},
-        url_path=url_path,
-    )
-
-
 class TestAfterFileWrite:
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("path", ["themes/rev.yaml", "themes/sub/rev.yml"])
-    async def test_a_theme_is_reloaded(self, tmp_path: Path, path: str) -> None:
-        hass = _Hass(tmp_path)
+    async def test_a_theme_is_reloaded(
+        self, hass: HomeAssistant, hass_config_dir: str, path: str
+    ) -> None:
+        reload_calls = async_mock_service(hass, "frontend", "reload_themes")
 
-        info = await file_post_action.after_file_write(hass, path, 10)  # type: ignore[arg-type]
+        info = await file_post_action.after_file_write(hass, path, 10)
 
-        hass.services.async_call.assert_awaited_once_with(
-            "frontend", "reload_themes", {}, blocking=True
-        )
+        assert len(reload_calls) == 1
+        assert reload_calls[0].data == {}
         assert info == {
             "post_action": "reload_performed",
             "reload_service": "frontend.reload_themes",
         }
 
-    @pytest.mark.asyncio
-    async def test_a_failed_reload_is_reported(self, tmp_path: Path) -> None:
-        hass = _Hass(tmp_path)
-        hass.services.async_call.side_effect = RuntimeError("boom")
+    async def test_a_failed_reload_is_reported(
+        self, hass: HomeAssistant, hass_config_dir: str
+    ) -> None:
+        """Without the frontend loaded, Core has no frontend.reload_themes."""
 
-        info = await file_post_action.after_file_write(hass, "themes/x.yaml", 1)  # type: ignore[arg-type]
+        info = await file_post_action.after_file_write(hass, "themes/x.yaml", 1)
 
         assert info["post_action"] == "reload_available"
-        assert info["reload_error"] == "boom"
+        assert info["reload_error"] == str(ServiceNotFound("frontend", "reload_themes"))
 
-    @pytest.mark.asyncio
     async def test_a_custom_template_is_reloaded(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        hass: HomeAssistant,
+        hass_config_dir: str,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        hass = _Hass(tmp_path)
+        reload_calls = async_mock_service(
+            hass, "homeassistant", "reload_custom_templates"
+        )
 
         info = await file_post_action.after_file_write(
-            hass,  # type: ignore[arg-type]
+            hass,
             "custom_templates/sub/rev.jinja",
             100,
         )
 
-        hass.services.async_call.assert_awaited_once_with(
-            "homeassistant", "reload_custom_templates", {}, blocking=True
-        )
+        assert len(reload_calls) == 1
+        assert reload_calls[0].data == {}
         assert info["post_action"] == "reload_performed"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("path", "size", "says"),
         [
@@ -279,32 +274,50 @@ class TestAfterFileWrite:
     )
     async def test_a_template_core_skips_is_flagged(
         self,
-        tmp_path: Path,
+        hass: HomeAssistant,
+        hass_config_dir: str,
         monkeypatch: pytest.MonkeyPatch,
         path: str,
         size: int,
         says: str,
     ) -> None:
         monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        hass = _Hass(tmp_path)
+        reload_calls = async_mock_service(
+            hass, "homeassistant", "reload_custom_templates"
+        )
 
-        info = await file_post_action.after_file_write(hass, path, size)  # type: ignore[arg-type]
+        info = await file_post_action.after_file_write(hass, path, size)
 
-        hass.services.async_call.assert_not_awaited()
+        assert reload_calls == []
         assert "post_action" not in info
         assert says in info["warnings"][0]
 
-    @pytest.mark.asyncio
-    async def test_a_dashboard_file_names_its_dashboard(self, tmp_path: Path) -> None:
-        hass = _Hass(tmp_path)
-        backed = _yaml_dashboard(str(tmp_path / "dashboards" / "rev.yaml"), "rev-2976")
-        other = _yaml_dashboard(str(tmp_path / "dashboards" / "other.yaml"), "other")
-        hass.data["lovelace"] = MagicMock(
-            dashboards={None: MagicMock(), "rev-2976": backed, "other": other}
+    async def test_a_dashboard_file_names_its_dashboard(
+        self, hass: HomeAssistant, hass_config_dir: str
+    ) -> None:
+        assert await async_setup_component(
+            hass,
+            "lovelace",
+            {
+                "lovelace": {
+                    "dashboards": {
+                        "rev-2976": {
+                            "mode": "yaml",
+                            "filename": "dashboards/rev.yaml",
+                            "title": "Rev",
+                        },
+                        "other-dash": {
+                            "mode": "yaml",
+                            "filename": "dashboards/other.yaml",
+                            "title": "Other",
+                        },
+                    }
+                }
+            },
         )
 
         info = await file_post_action.after_file_write(
-            hass,  # type: ignore[arg-type]
+            hass,
             "dashboards/rev.yaml",
             10,
         )
@@ -312,71 +325,67 @@ class TestAfterFileWrite:
         assert [row["url_path"] for row in info["dashboards"]] == ["rev-2976"]
         assert info["dashboards"][0]["mode"] == "yaml"
         assert info["dashboards"][0]["title"] == "Rev"
-        hass.services.async_call.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_an_unused_dashboard_file_is_flagged(self, tmp_path: Path) -> None:
-        hass = _Hass(tmp_path)
-        hass.data["lovelace"] = MagicMock(dashboards={})
+    async def test_an_unused_dashboard_file_is_flagged(
+        self, hass: HomeAssistant, hass_config_dir: str
+    ) -> None:
+        assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
 
         info = await file_post_action.after_file_write(
-            hass,  # type: ignore[arg-type]
+            hass,
             "dashboards/rev.yaml",
             10,
         )
 
         assert "No YAML dashboard names dashboards/rev.yaml" in info["warnings"][0]
 
-    @pytest.mark.asyncio
     async def test_an_absolute_path_inside_the_config_dir_counts(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        hass: HomeAssistant,
+        hass_config_dir: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A custom directory can name the config dir by its absolute path."""
         monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        hass = _Hass(tmp_path)
+        async_mock_service(hass, "homeassistant", "reload_custom_templates")
         path = str(tmp_path / "custom_templates" / "rev.jinja")
 
-        info = await file_post_action.after_file_write(hass, path, 10)  # type: ignore[arg-type]
+        info = await file_post_action.after_file_write(hass, path, 10)
 
         assert info["reload_service"] == "homeassistant.reload_custom_templates"
 
-    @pytest.mark.asyncio
-    async def test_unreadable_dashboards_claim_nothing(self, tmp_path: Path) -> None:
+    async def test_unreadable_dashboards_claim_nothing(
+        self, hass: HomeAssistant, hass_config_dir: str
+    ) -> None:
         """Without Core's dashboards nothing was checked, so nothing is said."""
-        hass = _Hass(tmp_path)
 
         info = await file_post_action.after_file_write(
-            hass,  # type: ignore[arg-type]
+            hass,
             "dashboards/rev.yaml",
             10,
         )
 
         assert info == {}
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "path", ["www/card.js", "/share/themes/x.yaml", "themes/readme.md"]
     )
-    async def test_other_files_need_nothing(self, tmp_path: Path, path: str) -> None:
-        hass = _Hass(tmp_path)
+    async def test_other_files_need_nothing(
+        self, hass: HomeAssistant, hass_config_dir: str, path: str
+    ) -> None:
+        reload_calls = async_mock_service(hass, "frontend", "reload_themes")
 
-        assert await file_post_action.after_file_write(hass, path, 1) == {}  # type: ignore[arg-type]
-        hass.services.async_call.assert_not_awaited()
+        assert await file_post_action.after_file_write(hass, path, 1) == {}
+        assert reload_calls == []
 
 
-@pytest.mark.asyncio
-async def test_an_edit_reports_the_theme_reload(tmp_path: Path) -> None:
+async def test_an_edit_reports_the_theme_reload(
+    hass: HomeAssistant, hass_config_dir: str, tmp_path: Path
+) -> None:
     (tmp_path / "themes").mkdir()
     (tmp_path / "themes" / "rev.yaml").write_text("rev:\n  primary-color: red\n")
-    hass = MagicMock()
-    hass.config = _Hass(tmp_path).config
-    hass.data = {}
-    hass.services = MagicMock(async_call=AsyncMock())
-
-    async def run(func: Any, *args: Any) -> Any:
-        return func(*args)
-
-    hass.async_add_executor_job = run
+    async_mock_service(hass, "frontend", "reload_themes")
     handler = file_ops.build_edit_file_handler(
         hass,
         caller_token_ok=lambda _hass, _call: True,
@@ -386,7 +395,12 @@ async def test_an_edit_reports_the_theme_reload(tmp_path: Path) -> None:
     )
 
     response = await handler(
-        MagicMock(data={"path": "themes/rev.yaml", "edits": [_edit("red", "blue")]})
+        ServiceCall(
+            hass=hass,
+            domain=DOMAIN,
+            service="edit_file",
+            data={"path": "themes/rev.yaml", "edits": [_edit("red", "blue")]},
+        )
     )
 
     assert response["success"] is True
