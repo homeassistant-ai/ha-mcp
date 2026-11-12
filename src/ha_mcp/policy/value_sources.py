@@ -60,6 +60,11 @@ def all_value_sources_for(tool_name: str) -> dict[str, str]:
     }
 
 
+def clear_value_source_cache() -> None:
+    """Forget every fetched value, so the next fetch reads Home Assistant."""
+    _cache.clear()
+
+
 def _cache_get(key: str) -> list[str] | None:
     entry = _cache.get(key)
     if entry is None:
