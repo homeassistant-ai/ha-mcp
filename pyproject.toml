@@ -246,7 +246,6 @@ module = [
     "tests.src.unit.test_dashboard_patch",
     "tests.src.unit.test_dashboard_screenshot",
     "tests.src.unit.test_dashboard_screenshot_theme_guard",
-    "tests.src.unit.test_deep_search_helper_rename_1794",
     "tests.src.unit.test_domain_handlers",
     "tests.src.unit.test_e2e_failure_diagnostics",
     "tests.src.unit.test_e2e_lane_env_shape",

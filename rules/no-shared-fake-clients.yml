@@ -119,7 +119,6 @@ ignores:
   - "tests/src/unit/test_helper_flows.py"
   - "tests/src/unit/test_helper_icon_core_contract.py"
   - "tests/src/unit/test_helper_input_validation.py"
-  - "tests/src/unit/test_helper_list_registry_join.py"
   - "tests/src/unit/test_helper_registry_id_validation.py"
   - "tests/src/unit/test_helper_response_shape.py"
   - "tests/src/unit/test_helper_update_persistence.py"
