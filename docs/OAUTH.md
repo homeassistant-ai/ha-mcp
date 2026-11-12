@@ -29,7 +29,7 @@ docker run -d -p 8086:8086 \
 ```bash
 HOMEASSISTANT_URL=https://your-ha-instance.example.com \
 MCP_BASE_URL=https://your-mcp-server.example.com \
-uvx --from=ha-mcp@latest ha-mcp-oauth
+uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oauth
 ```
 
 The consent form now accepts only the Long-Lived Access Token. Everything else stays the same.
@@ -79,7 +79,7 @@ docker run -d --name ha-mcp-oauth \
 ```bash
 export HOMEASSISTANT_URL=http://homeassistant.local:8123
 export MCP_BASE_URL=https://your-tunnel.trycloudflare.com
-uvx --from=ha-mcp@latest ha-mcp-oauth
+uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oauth
 ```
 
 ### 3. Environment Variables

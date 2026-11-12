@@ -714,7 +714,7 @@ async def _validate_legacy_dashboard_root(
         except ToolError as exc:
             try:
                 error_payload = json.loads(str(exc))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 # A non-JSON ToolError (e.g. a WS-layer error whose str() is not
                 # the raise_tool_error JSON form) must surface as its original
                 # ToolError, not as the leaked parse exception.

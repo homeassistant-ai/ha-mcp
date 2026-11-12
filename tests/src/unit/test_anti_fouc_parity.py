@@ -2,7 +2,7 @@
 
 The #1572 accessibility feature ships the same pre-paint resolver on two
 independent surfaces — the Python-served settings UI
-(``ha_mcp.settings_ui._SETTINGS_HTML``) and the Astro docs layout
+(``ha_mcp.settings_ui.render_settings_html``) and the Astro docs layout
 (``site/src/layouts/Layout.astro``). Both read the same ``ha-mcp-*``
 ``localStorage`` key names and interpret them identically — the storage
 itself is per-origin, so each surface keeps its own saved values — and set
@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
+from ._js_harness import extract_script_body
 
 _ANTI_FOUC_RE = re.compile(
     r"""<script[^>]*\bdata-purpose\s*=\s*["']anti-fouc["'][^>]*>(.*?)</script>""",
@@ -52,7 +54,7 @@ def _normalize(js: str) -> str:
 
 
 def test_anti_fouc_resolvers_are_logically_identical() -> None:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
+    from ha_mcp.settings_ui import render_settings_html
 
     layout_path = (
         Path(__file__).resolve().parents[3]
@@ -62,7 +64,7 @@ def test_anti_fouc_resolvers_are_logically_identical() -> None:
         / "Layout.astro"
     )
 
-    settings_body = _extract_anti_fouc(_SETTINGS_HTML, label="settings_ui")
+    settings_body = _extract_anti_fouc(render_settings_html(), label="settings_ui")
     layout_body = _extract_anti_fouc(
         layout_path.read_text(encoding="utf-8"), label="Layout.astro"
     )
@@ -87,7 +89,9 @@ _BINDING_CORE_RE = re.compile(r"const PREFS = \{.*?const APPLY = \{[^}]*\};", re
 
 def test_binding_script_cores_are_logically_identical() -> None:
     repo = Path(__file__).resolve().parents[3]
-    from ha_mcp.settings_ui import _settings_js_template as settings_js
+    from ha_mcp.settings_ui import render_settings_html
+
+    settings_js = extract_script_body(render_settings_html())
 
     layout = (repo / "site" / "src" / "layouts" / "Layout.astro").read_text(
         encoding="utf-8"

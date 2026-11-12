@@ -21,7 +21,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .._version import is_running_in_addon
-from ..config import _reset_global_settings, get_global_settings
+from ..config import get_global_settings, reset_global_settings
 from ..errors import ErrorCode, create_error_response
 from . import _persistence, _supervisor
 
@@ -558,7 +558,7 @@ async def _save_advanced_settings(
 
     try:
         body = await request.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_JSON, "Invalid JSON body"
@@ -594,7 +594,7 @@ async def _save_advanced_settings(
     if write_err is not None:
         return write_err
 
-    _reset_global_settings()
+    reset_global_settings()
     return JSONResponse(
         {
             "success": True,

@@ -1,147 +1,102 @@
-"""Unit tests for ``_extract_tool_result`` in ``ha_mcp.tools.tools_code``.
+"""What sandbox code gets back from ``call_tool`` in ``ha_manage_custom_tool``.
 
-The helper converts a FastMCP call_tool return value (which can be a
-ToolResult, a list of content objects, or a basic Python type) into a
-shape Monty can hand back to sandbox code (basic types only). The
-list-passthrough branch is the M3 fix from the round-3 review: naked
-list returns must NOT be string-repr'd, they must reach the sandbox
-as iterable lists.
+FastMCP hands the bridge a ToolResult of content blocks; Monty can only pass
+basic Python types into the sandbox, so the bridge decodes them. Naked list
+returns must reach the sandbox as iterable lists, not as ``str(list)`` reprs
+(the M3 fix from the round-3 review): sandbox code commonly does
+``for item in result:``, which breaks on a string. Each case runs real sandbox
+code that calls a real tool registered beside the custom-tool tool.
 """
 
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
 from typing import Any
 
-from ha_mcp.tools.tools_code import _extract_tool_result
+import pytest
+
+from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.tools import Tool, ToolResult
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import reset_global_settings
+from ha_mcp.tools.tools_code import register_code_tools
 
 
-@dataclass
-class _FakeContentBlock:
-    """Stand-in for a FastMCP content block — has ``.text`` and ``.type``
-    attributes the helper uses to recognize content-list shape."""
-
-    text: str
-    type: str = "text"
-
-
-@dataclass
-class _FakeToolResult:
-    """Stand-in for a FastMCP ToolResult — has a ``.content`` list of
-    blocks plus optional ``is_error`` flag."""
-
-    content: list[Any]
-    is_error: bool = False
+@pytest.fixture
+def code_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """ha_manage_custom_tool registers only with (beta) code mode on."""
+    monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
+    monkeypatch.setenv("ENABLE_CODE_MODE", "true")
+    reset_global_settings()
+    yield
+    reset_global_settings()
 
 
-class TestBasicTypePassthrough:
-    """Basic types Monty natively handles must round-trip unchanged."""
-
-    def test_string_passthrough(self):
-        assert _extract_tool_result("hello") == "hello"
-
-    def test_int_passthrough(self):
-        assert _extract_tool_result(42) == 42
-
-    def test_float_passthrough(self):
-        assert _extract_tool_result(3.14) == 3.14
-
-    def test_bool_passthrough(self):
-        assert _extract_tool_result(True) is True
-        assert _extract_tool_result(False) is False
-
-    def test_none_passthrough(self):
-        assert _extract_tool_result(None) is None
-
-    def test_dict_passthrough(self):
-        d = {"key": "value", "n": 1}
-        assert _extract_tool_result(d) is d
-
-
-class TestNakedListPassthrough:
-    """The M3 round-3 fix: lists that don't carry FastMCP content blocks
-    must reach the sandbox as iterable lists, not as ``str(list)``
-    reprs. Sandbox code commonly does ``for item in result:`` which
-    breaks on a string-repr."""
-
-    def test_naked_list_of_dicts(self):
-        """Tool returning ``[{"id": 1}, {"id": 2}]`` (the example
-        Patch76 explicitly called out in the round-3 review)."""
-        payload = [{"id": 1}, {"id": 2}]
-        result = _extract_tool_result(payload)
-        assert result == payload
-        assert isinstance(result, list)
-        assert result[0]["id"] == 1
-
-    def test_naked_list_of_strings(self):
-        payload = ["alpha", "beta", "gamma"]
-        result = _extract_tool_result(payload)
-        assert result == payload
-        assert isinstance(result, list)
-
-    def test_naked_list_of_ints(self):
-        payload = [1, 2, 3, 4, 5]
-        result = _extract_tool_result(payload)
-        assert result == payload
-
-    def test_naked_list_mixed_basic_types(self):
-        payload = ["x", 1, True, None, {"k": "v"}]
-        result = _extract_tool_result(payload)
-        assert result == payload
-
-    def test_empty_list_passthrough(self):
-        """Empty list must pass through too — a tool that finds no
-        results should hand back ``[]`` not the string ``"[]"``."""
-        assert _extract_tool_result([]) == []
-
-    def test_naked_list_dicts_without_content_keys(self):
-        """Dicts that don't carry ``text`` or ``type`` keys are clearly
-        data, not content blocks. Pass through."""
-        payload = [{"entity_id": "light.foo", "state": "on"}]
-        result = _extract_tool_result(payload)
-        assert result == payload
-
-
-class TestContentBlockDetection:
-    """The helper recognizes content blocks by attribute (FastMCP's
-    Pydantic-model shape) so they're not misclassified as a naked
-    data list."""
-
-    def test_attribute_blocks_extracted(self):
-        """Pydantic-model-style content blocks: ``.text`` extracted,
-        JSON-decoded if possible."""
-        blocks = [
-            _FakeContentBlock(text='{"answer": 42}', type="text"),
-        ]
-        result = _extract_tool_result(blocks)
-        # JSON-decoded payload reaches the sandbox.
-        assert result == {"answer": 42}
-
-
-class TestToolResultExtraction:
-    """End-to-end: a FastMCP ToolResult with content blocks gets
-    JSON-decoded to a basic type."""
-
-    def test_tool_result_json_payload(self):
-        result = _extract_tool_result(
-            _FakeToolResult(content=[_FakeContentBlock(text=json.dumps({"ok": True}))])
+async def _sandbox_sees(client: HomeAssistantClient, probe: Callable[[], Any]) -> Any:
+    """What ``await call_tool("probe", {})`` evaluates to inside the sandbox."""
+    mcp = FastMCP("sandbox-results")
+    mcp.add_tool(Tool.from_function(probe, name="probe"))
+    register_code_tools(mcp, client)
+    async with Client(mcp) as mcp_client:
+        result = await mcp_client.call_tool(
+            "ha_manage_custom_tool",
+            {
+                "code": 'await call_tool("probe", {})',
+                "justification": "reads another tool's result",
+            },
         )
-        assert result == {"ok": True}
+    assert isinstance(result.structured_content, dict)
+    return result.structured_content["data"]["result"]
 
-    def test_tool_result_text_payload(self):
-        """Non-JSON text falls through as a string."""
-        result = _extract_tool_result(
-            _FakeToolResult(content=[_FakeContentBlock(text="plain text")])
-        )
-        assert result == "plain text"
 
-    def test_tool_result_with_is_error_returns_error_dict(self):
-        """is_error=True wraps the payload in ``{"error": ...}`` so
-        sandbox code can branch on the failure."""
-        result = _extract_tool_result(
-            _FakeToolResult(
-                content=[_FakeContentBlock(text=json.dumps({"detail": "boom"}))],
-                is_error=True,
-            )
-        )
-        assert isinstance(result, dict)
-        assert "error" in result
+def _list_of_dicts() -> list[dict[str, Any]]:
+    # The example Patch76 called out in the round-3 review.
+    return [{"id": 1}, {"id": 2}]
+
+
+def _data_rows() -> list[dict[str, str]]:
+    # Rows without ``text``/``type`` keys are data, not content blocks.
+    return [{"entity_id": "light.foo", "state": "on"}]
+
+
+def _dict() -> dict[str, Any]:
+    return {"key": "value", "n": 1}
+
+
+def _plain_text() -> str:
+    return "plain text"
+
+
+@pytest.mark.usefixtures("code_mode")
+@pytest.mark.parametrize(
+    ("probe", "expected"),
+    [
+        pytest.param(_list_of_dicts, [{"id": 1}, {"id": 2}], id="list-of-dicts"),
+        pytest.param(
+            _data_rows, [{"entity_id": "light.foo", "state": "on"}], id="data-rows"
+        ),
+        pytest.param(_dict, {"key": "value", "n": 1}, id="json-object"),
+        pytest.param(_plain_text, "plain text", id="non-json-text"),
+    ],
+)
+async def test_sandbox_code_gets_the_tool_result_as_basic_python_values(
+    core_client: HomeAssistantClient, probe: Callable[[], Any], expected: Any
+) -> None:
+    assert await _sandbox_sees(core_client, probe) == expected
+
+
+@pytest.mark.usefixtures("code_mode")
+async def test_a_tool_error_reaches_sandbox_code_as_an_error_dict(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Sandbox code branches on ``result.get("error")`` as it does for
+    ``api_get``/``api_post``/``ws_send`` failures."""
+
+    def _failing() -> ToolResult:
+        return ToolResult(content=json.dumps({"detail": "boom"}), is_error=True)
+
+    seen = await _sandbox_sees(core_client, _failing)
+
+    assert isinstance(seen, dict)
+    assert "boom" in seen["error"]

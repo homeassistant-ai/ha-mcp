@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 
 from ha_mcp.utils.python_sandbox import (
-    _EXECUTION_ERROR_TEXT_LIMIT,
-    _SAFE_BUILTINS,
+    EXECUTION_ERROR_TEXT_LIMIT,
+    SAFE_BUILTINS,
     SAFE_METHODS,
     PythonSandboxError,
     PythonSandboxExecutionError,
@@ -120,7 +120,7 @@ class TestSecurityDocumentation:
     def test_documented_builtins_match_exposed_builtins(self) -> None:
         """Agents avoid builtins the description omits, and hit NameErrors
         for ones it lists but the sandbox does not expose."""
-        assert self._documented("Safe builtins") == set(_SAFE_BUILTINS)
+        assert self._documented("Safe builtins") == set(SAFE_BUILTINS)
 
 
 class TestUnaryOperators:
@@ -257,46 +257,15 @@ for view in config['views']:
         result = safe_execute(expr, config)
         assert result["card"]["label"] == "7.5/10"
 
-    def test_match_family_includes_hint(self) -> None:
-        """Sub-pattern Match nodes get the same hint as Match itself.
+    def test_match_statement_rejection_suggests_if_elif_else(self) -> None:
+        """A rejected ``match`` statement names the rewrite an agent can use."""
+        valid, error = validate_expression(
+            "match config['mode']:\n    case 'a':\n        config['x'] = 1"
+        )
 
-        These nodes are unreachable today (Match itself is rejected at the
-        SAFE_NODES check first), but if Match ever enters SAFE_NODES the
-        sub-patterns shouldn't silently slip through with a generic message.
-        Test by validating each sub-pattern node directly.
-        """
-        import ast
-
-        for node_name in (
-            "MatchAs",
-            "MatchValue",
-            "MatchClass",
-            "MatchSingleton",
-            "MatchSequence",
-            "MatchMapping",
-            "MatchOr",
-            "MatchStar",
-        ):
-            assert hasattr(ast, node_name), f"ast.{node_name} not present"
-        # Indirectly verify via _NODE_SUGGESTIONS — every Match* family
-        # member is mapped to a recovery hint.
-        from ha_mcp.utils.python_sandbox import _NODE_SUGGESTIONS
-
-        for node_name in (
-            "Match",
-            "MatchAs",
-            "MatchValue",
-            "MatchClass",
-            "MatchSingleton",
-            "MatchSequence",
-            "MatchMapping",
-            "MatchOr",
-            "MatchStar",
-        ):
-            assert node_name in _NODE_SUGGESTIONS, (
-                f"{node_name} missing from _NODE_SUGGESTIONS"
-            )
-            assert "if/elif/else" in _NODE_SUGGESTIONS[node_name]
+        assert valid is False
+        assert "Match" in error
+        assert "if/elif/else" in error
 
     def test_compositional_pattern_executes(self) -> None:
         """Realistic agent code: ternary inside a comprehension, kwarg call,
@@ -753,7 +722,7 @@ class TestSandboxErrorSubclasses:
         with pytest.raises(PythonSandboxExecutionError) as exc_info:
             safe_execute(expr, {})
         text = str(exc_info.value)
-        assert len(text) <= _EXECUTION_ERROR_TEXT_LIMIT, (
+        assert len(text) <= EXECUTION_ERROR_TEXT_LIMIT, (
             f"runtime error text not truncated: {len(text)} chars"
         )
         # Without truncation the message would include the full 1000-char key
@@ -811,7 +780,7 @@ class TestBuiltinsIsolation:
 
     def test_subsequent_real_execution_sees_pristine_builtins(self) -> None:
         """After a per-call copy is mutated, real executions still resolve
-        len/range/etc. from the unmodified _SAFE_BUILTINS source — guards
+        len/range/etc. from the unmodified SAFE_BUILTINS source — guards
         against a shallow-copy regression.
         """
         result = safe_execute_expression(
@@ -824,7 +793,7 @@ class TestBuiltinsIsolation:
     def test_builtin_replacement_does_not_persist_between_executions(self) -> None:
         from unittest.mock import patch
 
-        original_builtins = dict(_SAFE_BUILTINS)
+        original_builtins = dict(SAFE_BUILTINS)
         mutated_builtins = None
 
         def mutate_execution_builtins(
@@ -840,13 +809,13 @@ class TestBuiltinsIsolation:
                     "response = response", {"response": []}, "response"
                 )
         finally:
-            _SAFE_BUILTINS.clear()
-            _SAFE_BUILTINS.update(original_builtins)
+            SAFE_BUILTINS.clear()
+            SAFE_BUILTINS.update(original_builtins)
 
         assert mutated_builtins is not None
-        assert mutated_builtins is not _SAFE_BUILTINS
+        assert mutated_builtins is not SAFE_BUILTINS
         assert mutated_builtins["len"] is not len
-        assert _SAFE_BUILTINS["len"] is len
+        assert SAFE_BUILTINS["len"] is len
 
 
 class TestFormatSandboxError:

@@ -1,6 +1,6 @@
 """Behavioral test for the server-prefs seed script.
 
-The ``data-purpose="server-prefs"`` head script in ``_SETTINGS_HTML``
+The ``data-purpose="server-prefs"`` head script of the served settings page
 reads persisted theme prefs from the backend (substituted into a
 ``data-prefs`` attribute at request time) and seeds missing localStorage
 keys so the user's saved choices survive browser storage clearing. It
@@ -20,18 +20,18 @@ from ._js_harness import run_script
 
 def _extract_server_prefs_body() -> str:
     """Return the body of the ``data-purpose="server-prefs"`` inline script."""
-    from ha_mcp.settings_ui import _SETTINGS_HTML
+    from ha_mcp.settings_ui import render_settings_html
 
     match = re.search(
         r'<script[^>]*\bdata-purpose\s*=\s*["\']server-prefs["\'][^>]*>(.*?)</script>',
-        _SETTINGS_HTML,
+        render_settings_html(),
         re.DOTALL,
     )
-    assert match is not None, "no server-prefs script found in _SETTINGS_HTML"
+    assert match is not None, "no server-prefs script found in the settings page"
     return match.group(1)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def server_prefs_script() -> str:
     return _extract_server_prefs_body()
 

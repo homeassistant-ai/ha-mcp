@@ -11,7 +11,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from ha_mcp.config import Settings
-from ha_mcp.settings_ui import _handlers_backups as ui
+from ha_mcp.settings_ui import build_settings_handlers
 
 from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import run_script
@@ -54,12 +54,27 @@ def _dispatcher() -> Any:
     return fn
 
 
+def backup_tool(monkeypatch, manager) -> Any:
+    """``ha_manage_backup`` working on ``manager``, under ``_backup_settings``."""
+    monkeypatch.setattr("ha_mcp.tools.backup.get_backup_manager", lambda *args: manager)
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
+    monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
+    return _dispatcher()
+
+
 NAME = "helper_template.sensor.example.20260909_000000.yaml"
 
 
+def use_backup_manager(monkeypatch, manager) -> None:
+    """Hand the settings backup routes ``manager``: their server is not built."""
+    monkeypatch.setattr(
+        "ha_mcp.settings_ui._handlers_backups._backup_mgr", lambda server: manager
+    )
+
+
 def response_for(monkeypatch, manager, name=NAME):
-    monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
-    handler = ui.build_backups_handlers(None)["restore_backup"]
+    use_backup_manager(monkeypatch, manager)
+    handler = build_settings_handlers(None)["restore_backup"]
     app = Starlette(
         routes=[Route("/backups/{name}/restore", handler, methods=["POST"])]
     )

@@ -32,7 +32,7 @@ def test_backup_fixture_overrides_existing_legacy_directory(
     monkeypatch.setattr(data_paths, "get_data_dir", lambda: tmp_path / "data")
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.setenv("HAMCP_BACKUP_DIR", "")
-    config._reset_global_settings()
+    config.reset_global_settings()
     before = config.get_global_settings()
     client = SimpleNamespace()
     assert bm.get_backup_manager(client, before).backup_dir == legacy
@@ -56,7 +56,7 @@ def test_backup_fixture_overrides_existing_legacy_directory(
 
     assert os.environ["HAMCP_BACKUP_DIR"] == ""
     assert config.get_global_settings().auto_backup_dir == ""
-    config._reset_global_settings()
+    config.reset_global_settings()
 
 
 @pytest.mark.parametrize(
@@ -67,7 +67,7 @@ def test_backup_fixture_preserves_out_of_process_environment(
 ) -> None:
     monkeypatch.setenv("HAMCP_BACKUP_DIR", "/server/backups")
     reset = Mock()
-    monkeypatch.setattr(config, "_reset_global_settings", reset)
+    monkeypatch.setattr(config, "reset_global_settings", reset)
     fixture = contextmanager(backup_fixtures.isolate_edit_backups.__wrapped__)
     with fixture(monkeypatch, tmp_path, {"backend": backend}):
         assert os.environ["HAMCP_BACKUP_DIR"] == "/server/backups"

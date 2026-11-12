@@ -1041,11 +1041,11 @@ def _auto_backup_disabled():
     their mandatory writes refuse. Restoring + re-resetting in ``finally``
     keeps the toggle scoped to this test.
     """
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
 
     prev = os.environ.get("ENABLE_AUTO_BACKUP")
     os.environ["ENABLE_AUTO_BACKUP"] = "false"
-    _reset_global_settings()
+    reset_global_settings()
     try:
         yield
     finally:
@@ -1053,7 +1053,7 @@ def _auto_backup_disabled():
             os.environ.pop("ENABLE_AUTO_BACKUP", None)
         else:
             os.environ["ENABLE_AUTO_BACKUP"] = prev
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.filesystem

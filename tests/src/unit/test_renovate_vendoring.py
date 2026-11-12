@@ -52,7 +52,7 @@ def test_each_vendoring_hook_is_scoped_to_its_private_pins() -> None:
         assert rule["postUpgradeTasks"]["commands"] == [command]
         assert rule["postUpgradeTasks"]["fileFilters"] == file_filters
         assert rule["postUpgradeTasks"]["installTools"] == {"python": {}}
-        assert rule["constraints"]["python"] == ">=3.13,<3.14"
+        assert rule["constraints"]["python"] == ">=3.14,<3.15"
         # Update mode retains the matched upgrade's Python constraint in 44.50.1.
         assert rule["postUpgradeTasks"]["executionMode"] == "update"
         assert "minimumReleaseAge" not in rule

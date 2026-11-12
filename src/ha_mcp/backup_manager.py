@@ -1961,7 +1961,7 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
     manager (and one set of per-entity locks). Rebuilds when the
     ``settings`` object identity differs from the cached manager's —
     runtime env-var changes that reset the global settings singleton
-    (see ``config._reset_global_settings``) yield a fresh ``settings``
+    (see ``config.reset_global_settings``) yield a fresh ``settings``
     instance, which forces a manager rebuild so new settings take effect.
     Active guards, capture locks and restore pins survive that replacement.
     """
@@ -1979,7 +1979,7 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
         register_default_handlers(mgr, client)
         try:
             client._auto_backup_manager = mgr
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             # Read-only client (e.g. a slotted mock) — manager still works,
             # just isn't cached.
             pass

@@ -141,7 +141,7 @@ class Policy(BaseModel):
     schema_version: int = Field(default=POLICY_SCHEMA_VERSION, ge=1)
 
     @model_validator(mode="after")
-    def _wait_must_be_less_than_ttl(self) -> "Policy":
+    def _wait_must_be_less_than_ttl(self) -> Policy:
         # If the middleware's wait window can outlast the entry's TTL
         # the queue's sweeper evicts the entry mid-wait and the
         # reissue-pending path fires on every call — burning one

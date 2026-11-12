@@ -5,7 +5,7 @@ from Z-Wave JS. It never creates or enables parameter entities or sets device
 configuration. An administrator's HA connection is required by the underlying
 WebSocket APIs.
 
-Use a Home Assistant `device_id`, found with
+Use a Home Assistant `device_id`: the `id` field of a row from
 `ha_get_device(integration="zwave_js")`. An existing `entity_id` can optionally
 resolve that device, including a disabled registry entity. A parameter entity
 is not required. Bare node numbers are not accepted: device IDs disambiguate

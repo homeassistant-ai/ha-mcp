@@ -36,9 +36,9 @@ from .search.entities import (
     _validate_result_field_names,
 )
 from .search.overview import (
-    _OVERVIEW_AVAILABLE_FIELDS,
-    _OVERVIEW_ENTITY_FIELDS,
-    _OVERVIEW_INDEPENDENT_FIELDS,
+    OVERVIEW_AVAILABLE_FIELDS,
+    OVERVIEW_ENTITY_FIELDS,
+    OVERVIEW_INDEPENDENT_FIELDS,
     OverviewMixin,
     _OverviewInputs,
 )
@@ -640,9 +640,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             raise_tool_error(create_validation_error(str(exc), parameter="domains"))
 
         requested_fields = set(parsed_fields or [])
-        recognized_fields = requested_fields & _OVERVIEW_INDEPENDENT_FIELDS
+        recognized_fields = requested_fields & OVERVIEW_INDEPENDENT_FIELDS
         use_independent_collectors = (
-            parsed_fields is not None and not requested_fields & _OVERVIEW_ENTITY_FIELDS
+            parsed_fields is not None and not requested_fields & OVERVIEW_ENTITY_FIELDS
         )
         if use_independent_collectors:
             result = await self._collect_independent_overview(
@@ -700,7 +700,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         projected = project_fields(
             result,
             parsed_fields,
-            available_fields=_OVERVIEW_AVAILABLE_FIELDS,
+            available_fields=OVERVIEW_AVAILABLE_FIELDS,
         )
         sidecar_url = live_sidecar_url()
         if sidecar_url:

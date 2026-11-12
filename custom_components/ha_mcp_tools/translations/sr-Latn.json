@@ -1,0 +1,256 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "HA-MCP — Upravljajte Home Assistant-om pomoću AI",
+                "description": "Izaberite šta želite da dodate. **HA-MCP Server** pokreće kompletan ha-mcp server unutar Home Assistant-a i izlaže ga putem Home Assistant webhook-a — ovo je instalacija koju većina korisnika želi. To je samostalan server i potpuna zamena za svaki drugi način instalacije: App (add-on), Docker, uvx/PyPI, stdio; ako ga pokrećete, nemojte istovremeno pokretati nijedan od navedenih. **HA-MCP Alati za datoteke i YAML** ima dve uloge. Ako se vaš ha-mcp server pokreće izvan Home Assistant-a — app, Docker, uvx/PyPI, stdio — ova stavka tom serveru takođe pruža mogućnosti ugrađene komponente kojima ne može pristupiti spolja (brza interna pretraga, metapodaci konfiguracionih stavki, čitanja podržana registrom), pa ju je korisno dodati svakoj eksternoj instalaciji, a ujedno kontroliše pristup privilegovanim servisima za uređivanje datoteka i YAML-a koje koriste opcioni ha-mcp alati za datoteke/YAML. Ako umesto toga dodate stavku HA-MCP Server, ta stavka već pruža te zajedničke mogućnosti, pa je ova druga stavka tada potrebna samo kao kontrola pristupa za opcione alate za datoteke/YAML. Radi sa svakim tipom servera i može se dodati kasnije u bilo kom trenutku.",
+                "menu_options": {
+                    "server": "HA-MCP Server (preporučeno)",
+                    "tools": "HA-MCP Alati za datoteke i YAML (opciono)"
+                }
+            },
+            "tools": {
+                "title": "HA-MCP Alati za datoteke i YAML",
+                "description": "Podešava privilegovane servise za konfiguraciju datoteka i YAML-a, koji ostaju zaključani iza opcionih ha-mcp alata za uređivanje datoteka/YAML-a (zastavice funkcija, podrazumevano isključene) — ovo važi za svaki tip servera, uključujući i ugrađeni HA-MCP Server. Ako se vaš ha-mcp server pokreće izvan Home Assistant-a, ova stavka mu takođe pruža mogućnosti ugrađene komponente kojima ne može pristupiti spolja (brza interna pretraga, metapodaci konfiguracionih stavki, čitanja podržana registrom), koje je korisno imati čak i kada su alati za datoteke/YAML isključeni. Ovu stavku možete dodati ili ukloniti u bilo kom trenutku."
+            },
+            "server": {
+                "title": "HA-MCP Server",
+                "description": "Ovo pokreće kompletan ha-mcp server unutar Home Assistant-a. To je samostalan server i potpuna zamena za app (add-on), Docker, uvx/PyPI i stdio načine instalacije — nemojte ga pokretati uporedo sa drugim ha-mcp serverom.\n\nPodrazumevano mu ništa izvan ovog Home Assistant računara ne može pristupiti: panel u bočnoj traci i sopstveni agenti za razgovor u Home Assistant-u rade, ali MCP klijenti na drugim uređajima ne mogu da se povežu dok ispod ne izaberete režim daljinskog pristupa ili pristup lokalnoj mreži. Oba podešavanja možete promeniti kasnije u opcijama integracije.",
+                "data": {
+                    "remote_access": "Daljinski pristup putem Home Assistant-a",
+                    "bind_host": "Mrežni pristup",
+                    "admin_token": "Pristupni token administratora",
+                    "admin_username": "Ili: korisničko ime lokalnog naloga napravljenog za HA-MCP",
+                    "admin_password": "Lozinka tog naloga"
+                },
+                "data_description": {
+                    "remote_access": "Omogućava MCP klijentima da se povežu putem Home Assistant webhook-a, što radi svuda gde je Home Assistant dostupan (uključujući Nabu Casa). Prijava putem Home Assistant-a: klijenti kao što je claude.ai prijavljuju se pomoću administratorskog naloga za Home Assistant. Stari OAuth: Client ID i Secret koje nalepite u klijente kojima su potrebni. Tajni URL: sam webhook link je jedini kredencijal — svako ko ga poseduje može da koristi sve alate.",
+                    "bind_host": "Ko može direktno da se poveže na sopstveni port servera. Samo ovaj računar je bezbedna podrazumevana opcija. Lokalna mreža omogućava drugim uređajima na vašoj mreži da se povežu pomoću tajnog URL-a za direktan pristup prikazanog na ekranu Konfiguriši.",
+                    "admin_token": "Dugotrajni pristupni token administratorskog naloga. Vaš sopstveni token radi: otvorite svoj profil (vaše ime na dnu bočne trake), izaberite karticu Bezbednost i u odeljku Dugotrajni pristupni tokeni izaberite Napravi token. Vaš sopstveni token takođe radi i izvan vaše kućne mreže ako ikada procuri, a Home Assistant beleži izmene servera pod vašim imenom. Bezbednije: nalog napravljen isključivo za HA-MCP, sa uključenom opcijom Samo lokalni pristup (pogledajte polja ispod).",
+                    "admin_username": "Samo za nalog koji ste napravili isključivo za HA-MCP, pod Podešavanja → Osobe → Dodaj osobu sa uključenim opcijama Dozvoli prijavu, Samo lokalni pristup i Administrator. Nikada ovde ne unosite sopstvenu prijavu: da biste koristili sopstveni nalog, umesto toga nalepite njegov token iznad. HA-MCP kreira token ovog naloga (pod nazivom HA-MCP Server), tako da niko ne mora da se prijavljuje preko njega, a lozinka se ne čuva. Njegov token radi samo iz vaše lokalne mreže, gde server radi, a Home Assistant beleži izmene servera pod ovim nalogom.",
+                    "admin_password": "Koristi se jednokratno, za kreiranje tokena. Nikada vaša sopstvena lozinka."
+                }
+            }
+        },
+        "abort": {
+            "already_configured": "Ova stavka je već podešena.",
+            "unsupported_home_assistant": "Ugrađeni HA-MCP Server zahteva Home Assistant {required} ili noviji, ali ova instanca koristi {installed}. I dalje možete koristiti stavku HA-MCP Alati za datoteke i YAML ove komponente sa eksternim ha-mcp serverom koji radi kao app (add-on) ili Docker kontejner."
+        },
+        "error": {
+            "invalid_token": "Home Assistant ne prepoznaje ovaj token. Kopirajte ceo token ili napravite novi.",
+            "token_not_long_lived": "Ovo je privremeni token za prijavu koji ističe. Umesto njega napravite dugotrajni pristupni token.",
+            "token_not_admin": "Ovaj token pripada nalogu koji nije aktivan administrator.",
+            "invalid_login": "Unesite korisničko ime i lozinku lokalnog administratorskog naloga napravljenog za HA-MCP.",
+            "credentials_needed": "Unesite korisničko ime i lozinku administratorskog naloga ili nalepite pristupni token."
+        }
+    },
+    "options": {
+        "error": {
+            "invalid_connect_path": "Ne sme sadržati #, ?, % niti razmake.",
+            "invalid_webhook_id": "ID-jevi webhook-a ne smeju sadržati kosu crtu (/).",
+            "invalid_oauth_callback": "Svaki callback mora biti https:// URL, ili http:// URL na 127.0.0.1, [::1] ili localhost, bez korisničkog imena, lozinke ili #fragmenta, i dužine najviše 2048 znakova. Ispravite: {invalid_callbacks}",
+            "too_many_oauth_callbacks": "Navedite najviše {max_callbacks} callback-ova.",
+            "invalid_token": "Home Assistant ne prepoznaje ovaj token. Kopirajte ceo token ili napravite novi.",
+            "token_not_long_lived": "Ovo je privremeni token za prijavu koji ističe. Umesto njega napravite dugotrajni pristupni token.",
+            "token_not_admin": "Ovaj token pripada nalogu koji nije aktivan administrator.",
+            "invalid_login": "Unesite korisničko ime i lozinku lokalnog administratorskog naloga napravljenog za HA-MCP.",
+            "credentials_needed": "Unesite korisničko ime i lozinku administratorskog naloga ili nalepite pristupni token."
+        },
+        "step": {
+            "tools_info": {
+                "title": "HA-MCP Alati za datoteke i YAML",
+                "description": "Konfigurišite privilegovane servise za uređivanje datoteka i YAML-a koje koriste opcioni ha-mcp alati za datoteke/YAML. Ova podešavanja se takođe pojavljuju u korisničkom interfejsu podešavanja samog ha-mcp servera i primenjuju se uživo, bez ponovnog pokretanja. Nezaobilazni sloj zabrane i dalje blokira osetljive putanje (npr. .storage) i ključne granice poverenja (homeassistant, http, frontend, lovelace).",
+                "data": {
+                    "allowed_dirs": "Dodatne putanje datoteka",
+                    "extra_yaml_keys": "Dodatni ključevi za pisanje u YAML"
+                },
+                "data_description": {
+                    "allowed_dirs": "Putanje relativne u odnosu na direktorijum config, uključujući tačne nazive datoteka kao što je sensor.yaml, ili putanje pod /share, /media i /ssl (samo za čitanje na HAOS i Supervised). Svakoj stavci se odobrava čitanje i pisanje za tu putanju i sve ispod nje; unesite svaku putanju kao posebnu stavku liste. Stavke se upoređuju doslovno; džoker znakovi kao što je * nisu podržani. Prolaženje kroz direktorijume (traversal) i druge nedozvoljene putanje se odbacuju.",
+                    "extra_yaml_keys": "Ključevi najvišeg nivoa koje ha_config_set_yaml sme da upisuje pored ugrađenih, za integracije zasnovane prvenstveno na YAML-u na ovoj instalaciji (npr. alert2). Ključevi granica poverenja se odbacuju."
+                }
+            },
+            "init": {
+                "title": "HA-MCP Server",
+                "description": "Konfigurišite HA-MCP server. {panel_hint}Izmene se primenjuju prilikom čuvanja.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+                "data": {
+                    "server_port": "Port na kojem sluša MCP server",
+                    "bind_host": "Mrežni pristup",
+                    "webhook_auth": "Režim autentifikacije",
+                    "oauth_client_id_override": "Stari OAuth: prilagođeni Client ID (opciono)",
+                    "oauth_client_secret_override": "Stari OAuth: prilagođeni Client Secret (opciono)",
+                    "oauth_regenerate": "Stari OAuth: ponovo generiši Client ID/Secret sada",
+                    "pip_spec": "Programer: zamena ha-mcp paketa",
+                    "server_url": "Home Assistant URL (napredno)",
+                    "external_url": "Spoljni URL (opciono)",
+                    "webhook_id_override": "Prilagođena tajna webhook-a (opciono)",
+                    "secret_path_override": "Prilagođena putanja za direktan pristup (opciono)",
+                    "regenerate_secrets": "Ponovo generiši tajne za povezivanje sada",
+                    "enable_webhook": "Daljinski pristup putem webhook-a",
+                    "enable_llm_api": "LLM API agenta za razgovor",
+                    "llm_api_exposure": "Izloženost alata agenta za razgovor",
+                    "enable_startup_notification": "Obaveštenje pri pokretanju",
+                    "enable_sidebar_panel": "Panel podešavanja u bočnoj traci",
+                    "access_off_after_restart": "Isključi pristup nakon ponovnog pokretanja",
+                    "oauth_redirect_allowlist": "Dozvoljeni OAuth callback URL-ovi",
+                    "admin_token_replacement": "Zameni pristupni token administratora (opciono)",
+                    "admin_username": "Ili pređite na lokalni nalog napravljen za HA-MCP: korisničko ime (opciono)",
+                    "admin_password": "Lozinka tog naloga",
+                    "oauth_allow_any_callback": "Dozvoli bilo koji OAuth callback URL (isključuje listu iznad)"
+                },
+                "data_description": {
+                    "server_port": "Port na kojem ovaj server sluša. Aplikacija (add-on) ha-mcp koristi 9583, pa je ovo podrazumevano postavljeno na 9584 kako bi oba mogla da rade uporedo — ako ne koristite aplikaciju (add-on), odgovara bilo koji slobodan port.",
+                    "bind_host": "Ko može direktno da se poveže na port MCP servera. Lokalna mreža ga čini dostupnim sa vaše lokalne mreže, uz tajnu putanju kao kredencijal, kao kod aplikacije (add-on). Samo ovaj računar dozvoljava povezivanje isključivo sa samog Home Assistant računara — webhook URL i panel u bočnoj traci rade u oba slučaja.",
+                    "webhook_auth": "Način na koji se MCP klijenti potvrđuju na webhook URL-u. Sa tajnim URL-om, sam link je jedini kredencijal — OAuth i dalje radi za klijente koji ga koriste, a prijava koja se vraća na dozvoljeni callback URL (pogledajte ispod) odobrava se automatski: nije potrebna prijava niti Client ID ili Secret. Sa prijavom putem Home Assistant-a, klijenti kao što je claude.ai prijavljuju se pomoću administratorskog naloga za Home Assistant (OAuth). Sa starim OAuth-om, ova integracija pokreće sopstveni servis za prijavu i izdaje Client ID i Secret koje nalepite u klijente kojima su potrebni — možda će biti potrebno ponovno pokretanje Home Assistant-a da bi se potpuno uključio ili isključio.",
+                    "oauth_client_id_override": "Zamenjuje automatski generisani stari OAuth Client ID. Ostavite prazno da zadržite trenutni. Koristi se samo dok je Režim autentifikacije podešen na stari OAuth.",
+                    "oauth_client_secret_override": "Zamenjuje automatski generisani stari OAuth Client Secret. Ostavite prazno da zadržite trenutni. Koristi se samo dok je Režim autentifikacije podešen na stari OAuth.",
+                    "oauth_regenerate": "Jednokratna radnja: kreira novi Client ID i Secret za stari OAuth režim. Stupa na snagu tek nakon ponovnog pokretanja Home Assistant-a koje zahteva obaveštenje za popravku — dok ne restartujete, prethodni Client ID i Secret nastavljaju da rade, a novi ne rade. Takođe briše dva polja za zamenu iznad.",
+                    "pip_spec": "Ostavite prazno da pokrenete ha-mcp server koji je instaliralo ovo izdanje komponente. Samo za testiranje određene verzije ha-mcp-a (fiksna verzija, pull-request arhiva ili wheel URL); primenjuje se ponovnim učitavanjem servera, bez restartovanja Home Assistant-a. Obrišite polje da se vratite na upareni server.",
+                    "server_url": "URL koji ugrađeni server koristi za pristup vašem Home Assistant-u (obično ovoj istoj instanci). Ostavite prazno da se izvede iz porta i SSL podešavanja ove instance; unesite vrednost samo kada je serveru potrebna drugačija ruta.",
+                    "external_url": "Prikazuje se kao primarni URL za povezivanje — koristite ovo kada se Home Assistant nalazi iza vašeg domena ili obrnutog proksija (reverse proxy). Unesite punu osnovnu adresu uključujući šemu. Mora da pokazuje direktno na Home Assistant — otvaranje u pregledaču treba da vodi na vašu HA stranicu za prijavu — i ne sme da sadrži port kao što je :8123 (niti bilo koji drugi port), inače udaljeni MCP klijenti neće moći da mu pristupe. Ostavite prazno da se automatski koristi Nabu Casa / lokalna adresa.",
+                    "webhook_id_override": "Zamenjuje nasumičnu tajnu webhook-a u URL-u za povezivanje (/api/webhook/...). URL je kredencijal — koristite dugačku vrednost koju je teško pogoditi. Ostavite prazno da zadržite trenutnu.",
+                    "secret_path_override": "Zamenjuje nasumičnu putanju koja se koristi za direktan pristup na portu servera. Isto pravilo: putanja je kredencijal. Ostavite prazno da zadržite trenutnu.",
+                    "regenerate_secrets": "Jednokratna radnja: kreira novu nasumičnu tajnu webhook-a i putanju za direktan pristup, čime stari URL-ovi za povezivanje odmah postaju nevažeći. Takođe briše dva polja za zamenu iznad.",
+                    "enable_webhook": "Isključite za režim samo za lokalnu mrežu: Home Assistant webhook se uopšte ne registruje, tako da ništa — uključujući Nabu Casa — ne može da pristupi serveru putem Home Assistant-a. Direktni port servera i panel u bočnoj traci nastavljaju da rade.",
+                    "enable_llm_api": "Ponuđuje kompletan skup alata Home Assistant agentima za razgovor (OpenAI, Google, Ollama, ...): dok je uključeno, agenti mogu izabrati 'HA-MCP Server' pod Kontrola Home Assistant-a i upravljati alatima putem Assist ćaskanja i glasa. Uključivanje ga samo čini dostupnim za izbor — ništa nije izloženo dok ga ne izaberete na agentu. Vodič za korišćenje: {llm_api_docs_url}",
+                    "llm_api_exposure": "Oblik skupa alata koji se nudi agentima za razgovor. Pretraga alata (podrazumevano) održava kontekst agenta malim: kompaktan API sa zakačenim alatima plus meta-alati za pretragu/izvršavanje. Ceo katalog direktno navodi svaki izloženi alat — bolje za modele sa velikim kontekstom. Oba registruje oba režima jedan pored drugog tako da svaki agent bira svoj pod Kontrola Home Assistant-a. Izloženost pojedinačnih alata podešava se u HA-MCP panelu podešavanja; detalji: {llm_api_docs_url}",
+                    "enable_startup_notification": "Prikazuje obaveštenje svaki put kada Home Assistant pokrene server (ne kada ga uključi prekidač Pristup), upućujući na stranice podešavanja dostupne samo administratorima. Isključite za tiho pokretanje — URL-ovi za povezivanje ostaju na ovom ekranu.",
+                    "enable_sidebar_panel": "Prikazuje HA-MCP panel podešavanja u bočnoj traci (samo za administratore). Isključite da uklonite stavku iz bočne trake — opcije servera ostaju dostupne na ovom ekranu.",
+                    "access_off_after_restart": "Prekidač Pristup na serveru obično zadržava svoje poslednje stanje nakon ponovnog pokretanja Home Assistant-a. Uključite ovo da pristup bude isključen nakon svakog restarta; ostaje isključen dok se ručno ne uključi. Prvo omogućite prekidač (podrazumevano je onemogućen): dok je onemogućen, ništa ne može ponovo da uključi pristup.",
+                    "oauth_redirect_allowlist": "Koristi se samo dok je Režim autentifikacije podešen na tajni webhook URL. Kada se klijent prijavi putem OAuth-a, HA-MCP vraća prijavu samo na callback URL sa ove liste; svaki drugi se odbija uz stranicu koja objašnjava kako da ga dodate. Unesite svaki callback tačno onako kako ga klijent šalje. Lokalni http:// callback (127.0.0.1, [::1] ili localhost) takođe se podudara na bilo kom portu. Klijenti koji se povezuju bez OAuth prijave ne zahtevaju unos. Stupa na snagu bez ponovnog pokretanja.",
+                    "admin_token_replacement": "Ostavite prazno da zadržite trenutni pristup; server se ponovo pokreće kada izvršite zamenu. Dugotrajni pristupni token administratorskog naloga. Vaš sopstveni token radi: otvorite svoj profil (vaše ime na dnu bočne trake), izaberite karticu Bezbednost i u odeljku Dugotrajni pristupni tokeni izaberite Napravi token. Vaš sopstveni token takođe radi i izvan vaše kućne mreže ako ikada procuri, a Home Assistant beleži izmene servera pod vašim imenom. Bezbednije: nalog napravljen isključivo za HA-MCP, sa uključenom opcijom Samo lokalni pristup (pogledajte polja ispod).",
+                    "admin_username": "Samo za nalog koji ste napravili isključivo za HA-MCP, pod Podešavanja → Osobe → Dodaj osobu sa uključenim opcijama Dozvoli prijavu, Samo lokalni pristup i Administrator. Nikada ovde ne unosite sopstvenu prijavu: da biste koristili sopstveni nalog, umesto toga nalepite njegov token iznad. HA-MCP kreira token ovog naloga (pod nazivom HA-MCP Server), tako da niko ne mora da se prijavljuje preko njega, a lozinka se ne čuva. Njegov token radi samo iz vaše lokalne mreže, gde server radi, a Home Assistant beleži izmene servera pod ovim nalogom.",
+                    "admin_password": "Koristi se jednokratno, za kreiranje tokena. Nikada vaša sopstvena lozinka.",
+                    "oauth_allow_any_callback": "Koristi se samo dok je Režim autentifikacije podešen na tajni webhook URL. Prihvata OAuth prijavu na bilo koji https:// callback, ili http:// na 127.0.0.1, [::1] ili localhost, umesto samo sa liste iznad, tako da nikada ne morate da dodajete klijenta. Cena toga: vaša Home Assistant adresa tada prosleđuje posebno napravljen link za prijavu na bilo koju veb-stranicu koju taj link navede, što fišing (phishing) link može iskoristiti da izgleda kao da dolazi sa vašeg Home Assistant-a. Stupa na snagu bez ponovnog pokretanja."
+                }
+            }
+        }
+    },
+    "issues": {
+        "server_start_failed": {
+            "title": "Pokretanje ugrađenog HA-MCP servera nije uspelo",
+            "description": "Ugrađeni HA-MCP server nije mogao biti pokrenut unutar Home Assistant-a:\n\n{detail}\n\nProverite dnevnike (logove) Home Assistant-a, a zatim ponovo učitajte integraciju (ili rešite osnovni problem i ponovo učitajte) da biste pokušali ponovo."
+        },
+        "server_package_install_failed": {
+            "title": "Instalacija paketa ugrađenog HA-MCP servera nije uspela",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Ponovo instalirajte HA-MCP server",
+                        "description": "Ugrađeni HA-MCP server nije mogao biti instaliran ili pokrenut:\n\n{detail}\n\nPotvrdite da biste ponovo pokrenuli Home Assistant; paket servera će biti ponovo instaliran pre pokretanja servera, zajedno sa svim zavisnostima čija verzija više ne odgovara. Ako poruka iznad navodi neku drugu integraciju koja je promenila jedan od tih paketa, prvo ažurirajte ili uklonite tu integraciju: u suprotnom će Home Assistant vratiti njenu verziju pri sledećem pokretanju. Ako ste u opcijama za HA-MCP Server podesili **ha-mcp paket (napredno)**, prvo proverite tu vrednost: ponovna instalacija paketa koji ne može biti instaliran ponovo će biti neuspešna na isti način."
+                    }
+                },
+                "abort": {
+                    "entry_removed": "Stavka HA-MCP Server više ne postoji.",
+                    "externally_managed": "Home Assistant je pokrenut sa opcijom skip_pip, pa ne instalira Python pakete. Ponovo instalirajte ha-mcp paket pomoću menadžera paketa vašeg sistema, a zatim ponovo učitajte integraciju."
+                }
+            }
+        },
+        "component_outdated": {
+            "title": "Ažurirajte HA-MCP integraciju",
+            "description": "Instalirani ha-mcp server zahteva HA-MCP integraciju {required} ili noviju, ali vi imate {installed}. Ažurirajte integraciju preko Podešavanja > Sistem > Ažuriranja (u HACS-u, ili na Marketplace-u u Home Assistant-u 2026.11+, otvorite HA-MCP integraciju i koristite 'Ažuriraj informacije' (HACS) ili 'Osveži informacije' (Marketplace) ako ažuriranje još nije prikazano) i ponovo pokrenite Home Assistant. Server nastavlja da radi u međuvremenu, ali neke novije funkcije možda neće raditi dok se integracija ne ažurira."
+        },
+        "legacy_oauth_restart": {
+            "title": "Ponovo pokrenite Home Assistant da biste primenili stara OAuth podešavanja",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Ponovo pokrenuti Home Assistant?",
+                        "description": "Slanjem ovog obrasca ponovo ćete pokrenuti Home Assistant i primeniti stara OAuth podešavanja.\n\nKliknite na **Potvrdi** da biste ga sada ponovo pokrenuli."
+                    }
+                }
+            }
+        },
+        "server_token_needed": {
+            "title": "HA-MCP zahteva pristupni token administratora",
+            "fix_flow": {
+                "step": {
+                    "token": {
+                        "title": "Unesite pristupni token administratora",
+                        "description": "Ugrađeni HA-MCP server nema Home Assistant token koji može da koristi, pa trenutno ne radi. Token možda nedostaje, opozvan je ili je istekao, ili njegov nalog više nije aktivan administrator. Nalepite novi dugotrajni pristupni token ili unesite podatke za prijavu lokalnog naloga koji ste napravili isključivo za HA-MCP (nikada sopstvene podatke za prijavu) i HA-MCP će kreirati njegov token.",
+                        "data": {
+                            "admin_token": "Pristupni token administratora",
+                            "admin_username": "Ili: korisničko ime lokalnog naloga napravljenog za HA-MCP",
+                            "admin_password": "Lozinka tog naloga"
+                        }
+                    }
+                },
+                "error": {
+                    "invalid_token": "Home Assistant ne prepoznaje ovaj token. Kopirajte ceo token ili napravite novi.",
+                    "token_not_long_lived": "Ovo je privremeni token za prijavu koji ističe. Umesto njega napravite dugotrajni pristupni token.",
+                    "token_not_admin": "Ovaj token pripada nalogu koji nije aktivan administrator.",
+                    "invalid_login": "Unesite korisničko ime i lozinku lokalnog administratorskog naloga napravljenog za HA-MCP.",
+                    "credentials_needed": "Unesite korisničko ime i lozinku administratorskog naloga ili nalepite pristupni token."
+                },
+                "abort": {
+                    "entry_removed": "Stavka HA-MCP Server više ne postoji."
+                }
+            }
+        },
+        "store_records_conflict": {
+            "title": "HA-MCP je instaliran sa dve liste u prodavnici",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Zadržati HA-MCP na jednoj listi u prodavnici?",
+                        "description": "HA-MCP je označen kao instaliran sa obe liste: {records}. One sadrže istu integraciju (druga je ogledalo za distribuciju sa kojeg su dolazile starije instalacije). Marketplace u Home Assistant-u 2026.11 dozvoljava da samo jedna lista poseduje integraciju, tako da tamo nijedna od njih ne može da ažurira HA-MCP; HACS i dalje ažurira, ali bi nadogradnja na 2026.11 ostavila HA-MCP zaglavljenim.\n\nPotvrdom zadržavate **{keep}**, listu u podrazumevanom katalogu kojoj nije potrebno prilagođeno spremište, a druga lista se označava kao neinstalirana. Ništa se ne briše: vaše HA-MCP stavke, podešavanja i datoteke ostaju tačno kakvi jesu, a od sada će se ažuriranja prikazivati pod {keep} kao i obično."
+                    }
+                },
+                "abort": {
+                    "already_resolved": "HA-MCP je sada instaliran sa jedne liste u prodavnici; nema ničega za popravku.",
+                    "store_unavailable": "Prodavnica (HACS ili Marketplace) još nije učitana, pa liste ne mogu biti proverene. Pokušajte ponovo za nekoliko minuta."
+                }
+            }
+        }
+    },
+    "selector": {
+        "server_remote_access": {
+            "options": {
+                "disabled": "Onemogućeno (podrazumevano)",
+                "ha_auth": "Prijava putem Home Assistant-a",
+                "legacy": "Stari OAuth (Client ID i Secret)",
+                "none": "Tajni URL (bez prijave)"
+            }
+        },
+        "server_webhook_auth": {
+            "options": {
+                "none": "Tajni webhook URL",
+                "ha_auth": "Prijavite se putem Home Assistant-a (OAuth)",
+                "legacy": "Stari OAuth (ova integracija izdaje Client ID/Secret za lepljenje)"
+            }
+        },
+        "llm_api_exposure": {
+            "options": {
+                "tool_search": "Pretraga alata (kompaktno, podrazumevano)",
+                "full": "Ceo katalog",
+                "both": "Oba (izbor po agentu)"
+            }
+        }
+    },
+    "common": {
+        "connect_direct_access": "Direktan pristup sa Home Assistant računara: {url}",
+        "connect_local_lan": "Lokalno/LAN (kada je Mrežni pristup podešen na \"Local network\" / Lokalna mreža): {url}",
+        "connect_remote_url": "URL za daljinsko povezivanje: {url}",
+        "connect_urls_label": "URL-ovi za povezivanje:",
+        "connect_urls_pending": "URL-ovi za povezivanje će se pojaviti ovde kada se server pokrene.",
+        "connect_webhook_disabled": "Daljinski pristup putem webhook-a je onemogućen (režim samo za lokalnu mrežu).",
+        "oauth_creds_pending": "Client ID i Client Secret će se pojaviti ovde kada se server pokrene.",
+        "oauth_not_serving": "Stari OAuth ih još uvek ne opslužuje — ponovo pokrenite Home Assistant kada to zatraži da biste ih aktivirali.",
+        "oauth_select_legacy_mode": "Za klijente koji ne podržavaju moderni OAuth, promenite režim na stari OAuth da biste generisali ID i tajnu. Ako imate problema sa povezivanjem kada je podešeno na \"Prijavite se putem Home Assistant-a\", preporučujemo da se prvo prebacite na \"Tajni webhook URL\" da biste testirali vezu pre nego što isprobate stari OAuth.",
+        "panel_hint": "Otvorite [HA-MCP panel podešavanja](/ha-mcp) za upravljanje alatima i podešavanjima servera.",
+        "tools_module_installed": "Beta/napredni modul alata za datoteke i YAML (opciono): Instaliran",
+        "tools_module_not_installed": "Beta/napredni modul alata za datoteke i YAML (opciono): Nije instaliran — pritisnite \"Dodaj stavku\" na stranici ove integracije i izaberite \"HA-MCP File & YAML Tools\" da biste ga dodali",
+        "tools_module_not_loaded": "Beta/napredni modul alata za datoteke i YAML (opciono): Instaliran, ali nije učitan — omogućite ili ponovo učitajte stavku \"HA-MCP File & YAML Tools\" na stranici ove integracije",
+        "version_line": "Komponenta {component_version} - Server ha-mcp {server_version} ({source})",
+        "server_source_paired": "instaliran sa ovim izdanjem komponente",
+        "server_source_override": "zamena pip zahteva",
+        "version_not_installed": "još nije instaliran",
+        "version_unknown": "nepoznato"
+    },
+    "entity": {
+        "switch": {
+            "server_access": {
+                "name": "Pristup"
+            }
+        }
+    }
+}

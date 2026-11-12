@@ -1,20 +1,5 @@
 """Home Assistant MCP Server."""
 
-import sys
-
-if sys.version_info < (3, 13):  # noqa: UP036 — uvx can bypass requires-python and run on 3.12
-    # Write directly to stderr (not print) so this import-time version gate
-    # fires before any 3.13-only syntax in the rest of the module is parsed.
-    sys.stderr.write(
-        f"ERROR: ha-mcp requires Python 3.13+, but you are running Python "
-        f"{sys.version_info.major}.{sys.version_info.minor}.\n"
-        "If using uvx, add '--python 3.13' to your config args:\n"
-        '  "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"]\n'
-        "Or install Python 3.13: brew install python@3.13 (macOS) / "
-        "sudo apt install python3.13 (Linux)\n"
-    )
-    sys.exit(1)
-
 import truststore
 
 truststore.inject_into_ssl()
@@ -65,7 +50,7 @@ class OAuthProxyClient:
         self._oauth_clients: dict[str, HomeAssistantClient] = {}
         self._lock = threading.Lock()
 
-    def current_client(self) -> "HomeAssistantClient":
+    def current_client(self) -> HomeAssistantClient:
         """The requesting user's client; per-user caches key on it, not the proxy."""
         from ha_mcp._vendor.fastmcp.server.dependencies import get_access_token
         from ha_mcp.client.rest_client import (
@@ -215,7 +200,7 @@ def _check_stdin_available() -> bool:
     try:
         fd = sys.stdin.fileno()
         mode = os.fstat(fd).st_mode
-    except (ValueError, OSError):
+    except ValueError, OSError:
         # fileno() or fstat() can raise if stdin is not a real file
         return False
 
@@ -271,7 +256,7 @@ For setup instructions, see:
     sys.exit(1)
 
 
-def _validate_standard_credentials(settings: "Settings") -> None:
+def _validate_standard_credentials(settings: Settings) -> None:
     """Exit with error if HA credentials are OAuth sentinels in standard (non-OAuth) mode."""
     from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL
 
@@ -327,7 +312,7 @@ def _http_run_kwargs(host: str, port: int, path: str) -> dict[str, Any]:
     }
 
 
-def _create_server() -> "HomeAssistantSmartMCPServer":
+def _create_server() -> HomeAssistantSmartMCPServer:
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
@@ -350,10 +335,10 @@ def _create_server() -> "HomeAssistantSmartMCPServer":
 
 
 # Lazy server creation - only create when needed
-_server: "HomeAssistantSmartMCPServer | None" = None
+_server: HomeAssistantSmartMCPServer | None = None
 
 
-def _get_mcp() -> "FastMCP":
+def _get_mcp() -> FastMCP:
     """Get the MCP instance, creating server if needed."""
     global _server
     if _server is None:
@@ -361,7 +346,7 @@ def _get_mcp() -> "FastMCP":
     return _server.mcp
 
 
-def _get_server() -> "HomeAssistantSmartMCPServer":
+def _get_server() -> HomeAssistantSmartMCPServer:
     """Get the server instance, creating if needed."""
     global _server
     if _server is None:
@@ -559,7 +544,7 @@ async def _cleanup_resources() -> None:
     logger.info("Server resources cleaned up")
 
 
-def _log_cleanup_result(task: "asyncio.Future[None]") -> None:
+def _log_cleanup_result(task: asyncio.Future[None]) -> None:
     """Consume the cleanup task's outcome so a failure is never silent.
 
     ``asyncio.wait`` does not retrieve results, and the timeout path
@@ -1138,7 +1123,7 @@ def _oidc_allowed_client_redirect_uris() -> list[str] | None:
 
 
 def register_browser_landing(
-    mcp_instance: "FastMCP | _DeferredMCP",
+    mcp_instance: FastMCP | _DeferredMCP,
     path: str,
 ) -> None:
     """Register the friendly browser landing page and tidy the uvicorn access log.
@@ -1277,8 +1262,8 @@ def _resolve_settings_secret_path() -> str | None:
 
 
 def _register_settings_ui_secret_path(
-    mcp: "FastMCP",
-    server: "HomeAssistantSmartMCPServer",
+    mcp: FastMCP,
+    server: HomeAssistantSmartMCPServer,
     host: str,
     port: int,
     mcp_path: str,

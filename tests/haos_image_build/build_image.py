@@ -50,7 +50,7 @@ LOG = logging.getLogger("haos_image_build")
 # renovate: datasource=custom.ha-os-stable depName=home-assistant/operating-system
 STABLE_HAOS_VERSION = "18.4"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
-STABLE_SUPERVISOR_VERSION = "2026.10.5"
+STABLE_SUPERVISOR_VERSION = "2026.11.0"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
 STABLE_CORE_VERSION = "2026.11.1"
 
@@ -333,7 +333,7 @@ def _http(
         err_body: str = ""
         try:
             err_body = e.read().decode()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             # Closed socket or non-utf8 body — best-effort only; never hide
             # the original HTTPError, which is re-raised below.
             pass

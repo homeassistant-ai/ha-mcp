@@ -53,7 +53,7 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
                         .replace("null", "None")
                     )
                     return ast.literal_eval(fixed_text)
-                except (SyntaxError, ValueError):
+                except SyntaxError, ValueError:
                     return {"raw_response": response_text, "parse_error": True}
 
         return {

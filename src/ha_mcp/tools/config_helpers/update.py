@@ -32,7 +32,7 @@ from .schemas import (
 )
 
 
-async def _stored_item(
+async def stored_item(
     client: Any, helper_type: str, entity_id: str, unique_id: str
 ) -> dict[str, Any]:
     """The stored item from ``<type>/list`` (person nests its storage items)."""
@@ -71,7 +71,7 @@ async def _execute_legacy_update(
     fields: dict[str, Any],
 ) -> dict[str, Any]:
     """Update through Core's ``<type>/update`` WS command (no component)."""
-    stored = await _stored_item(client, helper_type, entity_id, unique_id)
+    stored = await stored_item(client, helper_type, entity_id, unique_id)
     body = merged_update(helper_type, stored, name, item_icon, fields)
     result = await client.send_websocket_message(
         {**body, "type": f"{helper_type}/update", f"{helper_type}_id": unique_id}
@@ -79,7 +79,7 @@ async def _execute_legacy_update(
     if not result.get("success"):
         code = ws_failure_code(result)
         if code is ErrorCode.RESOURCE_NOT_FOUND:
-            # The item vanished after _stored_item read it; report it the same way.
+            # The item vanished after stored_item read it; report it the same way.
             code = ErrorCode.CONFIG_NOT_FOUND
         raise_tool_error(
             create_error_response(

@@ -141,6 +141,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Resolve current beta OS, Supervisor, and Core versions
         id: versions
         run: |
@@ -381,6 +385,10 @@ jobs:
           submodules: true
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Resolve current beta OS, Supervisor, and Core versions
         id: versions

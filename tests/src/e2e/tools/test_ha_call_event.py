@@ -78,14 +78,14 @@ async def _assert_trace_parent_id(mcp_client, automation_id, context_id):
     for _ in range(30):
         traces_result = await mcp_client.call_tool(
             "ha_get_automation_traces",
-            {"automation_id": automation_id, "limit": 5},
+            {"entity_id": automation_id, "limit": 5},
         )
         traces_data = assert_mcp_success(traces_result, "list automation traces")
         for trace in traces_data.get("traces") or []:
             detailed_result = await mcp_client.call_tool(
                 "ha_get_automation_traces",
                 {
-                    "automation_id": automation_id,
+                    "entity_id": automation_id,
                     "run_id": trace["run_id"],
                     "detailed": True,
                 },

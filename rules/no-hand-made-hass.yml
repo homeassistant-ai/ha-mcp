@@ -26,9 +26,6 @@ files:
 # Files written before the unit tests ran on real Home Assistant Core. They are
 # to be converted and removed from this list; never add a file to it.
 ignores:
-  - "tests/addon/test_webhook_proxy.py"
-  - "tests/addon/test_webhook_proxy_catalog.py"
-  - "tests/addon/test_webhook_proxy_cloudhook.py"
   - "tests/src/unit/_llm_api_helpers.py"
   - "tests/src/unit/test_caller_token_auth.py"
   - "tests/src/unit/test_card_definitions.py"

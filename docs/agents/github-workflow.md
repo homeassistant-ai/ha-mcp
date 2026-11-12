@@ -311,7 +311,7 @@ Passing the same file as action-global `configurationFile` as well duplicates
 custom managers and dependency-dashboard entries.
 
 The private websockets and FastMCP pins each have a narrowly scoped
-post-upgrade task. Renovate installs Python 3.13, runs
+post-upgrade task. Renovate installs Python 3.14, runs
 `python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
 and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
 generated artifacts alongside the pin. The scanner allows only those exact

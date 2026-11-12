@@ -1,10 +1,18 @@
 """Tests for generic entity-membership normalization."""
 
-from types import MappingProxyType
+from pathlib import Path
 
-from ha_mcp.tools.search.entities import _add_membership_fields
-from ha_mcp.tools.smart_search._entities import _redact_hidden_memberships
+import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils.entity_membership import normalize_member_entity_ids
+from ha_mcp.visibility import resolver
+from ha_mcp.visibility.model import VisibilityConfig
+from ha_mcp.visibility.persistence import save_visibility_config
+
+from ._search_tool import _build_ha_search
 
 
 def test_prefers_modern_group_entities_and_sorts_deduplicates() -> None:
@@ -70,22 +78,41 @@ def test_uppercase_or_invalid_characters_fail_closed() -> None:
     assert normalize_member_entity_ids({"entity_id": ["light.not-valid"]}) is None
 
 
-def test_visibility_denied_member_withholds_ids_but_keeps_group_signal() -> None:
-    """Withhold the full member list if any member is not visible."""
-    attributes = {"group_entities": ["light.visible", "light.denied"]}
-    entities = [{"entity_id": "light.group", "attributes": attributes}]
-
-    redacted = _redact_hidden_memberships(entities, {"light.denied"})
-    record: dict = {}
-    _add_membership_fields(
-        record,
-        redacted[0]["attributes"],
-        ("is_group", "member_entity_ids"),
-        denied_member_ids=set(),
+async def test_visibility_denied_member_withholds_ids_but_keeps_group_signal(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group with a member hidden from the agent still reads as a group,
+    but ha_search withholds its member list rather than leak the hidden id."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True, exclude_categories=[], deny_entity_ids=["light.denied"]
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    # ``config`` serves the registry reads of the search.
+    assert await async_setup_component(hass, "config", {})
+    hass.states.async_set("light.visible", "on")
+    hass.states.async_set("light.denied", "on")
+    hass.states.async_set(
+        "light.group",
+        "on",
+        {
+            "friendly_name": "Group",
+            "group_entities": ["light.visible", "light.denied"],
+        },
     )
 
-    assert record == {"is_group": True}
-    assert entities[0]["attributes"] == attributes
+    data = await _build_ha_search(core_client)(
+        query="light.group",
+        result_fields=["entity_id", "is_group", "member_entity_ids"],
+    )
+
+    row = next(row for row in data["entities"] if row["entity_id"] == "light.group")
+    assert row == {"entity_id": "light.group", "is_group": True}
 
 
 def test_frozenset_is_normalized_and_non_ascii_is_rejected() -> None:
@@ -104,24 +131,6 @@ def test_valid_modern_membership_takes_precedence_over_legacy() -> None:
             "entity_id": ["light.legacy"],
         }
     ) == ["light.modern"]
-
-
-def test_mapping_redaction_sentinel_is_honored() -> None:
-    """Accept immutable Mapping attributes when smart search marks redaction."""
-    attributes = MappingProxyType(
-        {
-            "group_entities": ["light.visible", "light.denied"],
-            "_ha_mcp_membership_redacted": True,
-        }
-    )
-    record: dict = {}
-    _add_membership_fields(
-        record,
-        attributes,
-        ("is_group", "member_entity_ids"),
-        denied_member_ids=set(),
-    )
-    assert record == {"is_group": True}
 
 
 def test_group_members_attribute_is_not_membership() -> None:

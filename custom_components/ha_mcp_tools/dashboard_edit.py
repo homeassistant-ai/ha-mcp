@@ -196,7 +196,7 @@ async def async_edit_dashboard(
         if _resolve_dashboard(hass, url_path) is not dashboard:
             raise _EditError("conflict", "Dashboard changed during verification")
         config_hash = _config_hash(config)
-    except (Exception, asyncio.CancelledError):
+    except Exception, asyncio.CancelledError:
         _LOGGER.warning("Unable to verify the saved dashboard config", exc_info=True)
         return {
             "success": True,

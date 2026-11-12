@@ -119,7 +119,7 @@ def _floor_sort_key(floor: dict[str, Any]) -> int:
         return 0
     try:
         return int(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         logger.warning(
             f"Floor {floor.get('floor_id')!r} has non-numeric "
             f"level {raw!r}; treating as 0 for sort"

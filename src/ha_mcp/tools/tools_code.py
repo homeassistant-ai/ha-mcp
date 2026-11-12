@@ -585,7 +585,7 @@ def _decode_tool_result_texts(texts: list[str], is_error: bool) -> Any:
     combined = "\n".join(texts)
     try:
         payload: Any = json.loads(combined)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         payload = combined
     if is_error:
         message = payload if isinstance(payload, str) else json.dumps(payload)
@@ -884,7 +884,7 @@ class _SandboxBridge:
         except ToolError as te:
             try:
                 return json.loads(str(te))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 return _sandbox_error(ErrorCode.INTERNAL_ERROR, str(te))
         except Exception as exc:
             logger.warning("call_tool(%r) failed", tool_name, exc_info=True)

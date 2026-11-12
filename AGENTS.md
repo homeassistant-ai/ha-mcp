@@ -37,7 +37,7 @@ removes stale worktree references.
 
 ## Project Overview
 
-**Home Assistant MCP Server** is a Python 3.13 FastMCP server that lets AI assistants control and configure Home Assistant through MCP. The repository is `homeassistant-ai/ha-mcp`; the package is `ha-mcp` on PyPI.
+**Home Assistant MCP Server** is a Python 3.14 FastMCP server that lets AI assistants control and configure Home Assistant through MCP. The repository is `homeassistant-ai/ha-mcp`; the package is `ha-mcp` on PyPI.
 
 ## Security
 

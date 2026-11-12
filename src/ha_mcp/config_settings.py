@@ -72,7 +72,7 @@ def _parse_lenient(
         return None, "not a number"
     try:
         val = float(v)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None, "not a number"
     if val == setting.off_value:
         return int(val), None

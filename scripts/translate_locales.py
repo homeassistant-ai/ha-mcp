@@ -82,7 +82,7 @@ from ha_mcp.settings_ui._i18n import (  # noqa: E402
     _PLACEHOLDER_RE,
     _TAG_LIKE_RE,
 )
-from ha_mcp.settings_ui._locale_policy import is_best_effort_locale  # noqa: E402
+from ha_mcp.settings_ui.locale_policy import is_best_effort_locale  # noqa: E402
 
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 COMPONENT_DIR = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
@@ -758,7 +758,7 @@ def _describe_unusable(payload: dict[str, Any], exc: Exception, body: str) -> st
     text = ""
     try:
         text = str(candidate["content"]["parts"][0]["text"])
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         pass  # no candidate text at all; the raw body stands in below
     shown = (
         f"text[{len(text)} chars] ends {text[-200:]!r}"

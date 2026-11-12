@@ -1242,7 +1242,7 @@ class HomeAssistantWebSocketClient:
 MAX_POOL_SIZE = 50
 
 
-def _log_stale_disconnect(future: "concurrent.futures.Future[None]") -> None:
+def _log_stale_disconnect(future: concurrent.futures.Future[None]) -> None:
     """Report how a disconnect scheduled on a stale event loop ended.
 
     Nothing awaits that future, so without this the outcome would be invisible
@@ -1274,7 +1274,7 @@ class WebSocketManager:
     _lock_loop: asyncio.AbstractEventLoop | None = None
     _client_factory: Callable[..., HomeAssistantWebSocketClient] | None = None
 
-    def __new__(cls) -> "WebSocketManager":
+    def __new__(cls) -> WebSocketManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._clients = {}
@@ -1492,7 +1492,7 @@ class WebSocketManager:
                     # doing network I/O and leave a fresh connection retained
                     # in the pool.
                     raise
-                except (OSError, RuntimeError):
+                except OSError, RuntimeError:
                     logger.warning(
                         "Error disconnecting stale WebSocket client",
                         exc_info=True,
@@ -1547,7 +1547,7 @@ class WebSocketManager:
                 # cancelled caller (mirror of the stale-replacement clause
                 # in get_client).
                 raise
-            except (OSError, RuntimeError):
+            except OSError, RuntimeError:
                 logger.warning(
                     "Error disconnecting evicted WebSocket client",
                     exc_info=True,
@@ -1577,7 +1577,7 @@ class WebSocketManager:
             for client in clients:
                 try:
                     await client.disconnect()
-                except (OSError, RuntimeError, asyncio.CancelledError):
+                except OSError, RuntimeError, asyncio.CancelledError:
                     logger.warning(
                         "Error disconnecting WebSocket client", exc_info=True
                     )

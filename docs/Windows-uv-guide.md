@@ -40,7 +40,7 @@ winget install astral-sh.uv -e
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "https://ha-mcp-demo-server.qc-h.net",
         "HOMEASSISTANT_TOKEN": "demo"
@@ -106,7 +106,7 @@ Replace the demo values:
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token"

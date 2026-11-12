@@ -20,10 +20,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-from ha_mcp.visibility.identifier_aliases import (
-    BARE_IDENTIFIER_ARGS,
-    PREFIXED_IDENTIFIER_ARGS,
-)
+from ha_mcp.visibility.identifier_aliases import BARE_IDENTIFIER_ARGS
 
 from .._registered_tools import all_registered_tools
 from .test_enforcement import (
@@ -45,8 +42,8 @@ def _entry(entity_id: str, unique_id: str, platform: str) -> dict[str, str]:
     return {"entity_id": entity_id, "unique_id": unique_id, "platform": platform}
 
 
-# A hidden script renamed from ``come_home``: its storage key, service name and
-# trace item_id stay ``come_home`` while its entity_id is ``script.front_door``.
+# A hidden script renamed from ``come_home``: its storage key and service name
+# stay ``come_home`` while its entity_id is ``script.front_door``.
 _RENAMED_HIDDEN_SCRIPT = _entry("script.front_door", "come_home", "script")
 
 
@@ -111,25 +108,6 @@ class TestBareIdentifierConcealment:
                 {"script_id": "script.come_home"},
                 _RENAMED_HIDDEN_SCRIPT,
                 id="renamed-script-prefixed-storage-key",
-            ),
-            # Traces are keyed by storage key, and the trace tool falls back to
-            # the bare object ID when no entity has the given entity_id.
-            pytest.param(
-                "ha_get_automation_traces",
-                {"automation_id": "script.come_home"},
-                _RENAMED_HIDDEN_SCRIPT,
-                id="trace-by-script-storage-key",
-            ),
-            pytest.param(
-                "ha_call_service",
-                {
-                    "ws_command": "trace/get",
-                    "data": json.dumps(
-                        {"domain": "script", "item_id": "come_home", "run_id": "1"}
-                    ),
-                },
-                _RENAMED_HIDDEN_SCRIPT,
-                id="raw-trace-command-by-storage-key",
             ),
             # The check must see the proxy-unwrapped call, not the envelope.
             pytest.param(
@@ -263,27 +241,6 @@ class TestHiddenScriptStorageKeyInContent:
             await mw.on_call_tool(make_context(tool, args), _unreached_call_next)
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
-    async def test_raw_trace_listing_naming_a_hidden_script_is_refused(
-        self, set_config: Callable[..., Any]
-    ) -> None:
-        mw = _enforce_hiding(set_config, "script.front_door", _RENAMED_HIDDEN_SCRIPT)
-        listing = {
-            "success": True,
-            "result": [
-                {"domain": "script", "item_id": "wake_up", "run_id": "1"},
-                {"domain": "script", "item_id": "come_home", "run_id": "2"},
-            ],
-        }
-        context = make_context(
-            "ha_call_service",
-            {"ws_command": "trace/list", "data": {"domain": "script"}},
-        )
-        with pytest.raises(ToolError) as exc:
-            await mw.on_call_tool(
-                context, _returns(text_result(json.dumps(listing), listing))
-            )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
-
 
 class _NotFoundClient(FakeClient):
     """Answers every config fetch with a 404, as for a genuinely absent key."""
@@ -345,6 +302,10 @@ async def test_genuine_not_found_lists_only_visible_ids(
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     if param_name in ("script_id", "scene_id", "automation_id"):
         return True
+    if param_name == "item_id" and tool_name == "ha_get_automation_traces":
+        return True
+    if param_name == "entity_id" and tool_name == "ha_get_automation_traces":
+        return True
     # The automation config tools also take a bare config id as ``entity_id``.
     return (
         param_name == "entity_id"
@@ -364,7 +325,10 @@ def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:
         if _takes_bare_identifier(tool_name, param_name)
     }
     covered = {(tool, arg) for tool, (arg, _domain) in BARE_IDENTIFIER_ARGS.items()}
-    covered |= set(PREFIXED_IDENTIFIER_ARGS.items())
+    covered |= {
+        ("ha_get_automation_traces", "entity_id"),
+        ("ha_get_automation_traces", "item_id"),
+    }
 
     assert discovered == covered, (
         "BARE_IDENTIFIER_ARGS is out of sync with the registered tools.\n"

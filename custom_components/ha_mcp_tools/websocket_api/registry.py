@@ -157,12 +157,6 @@ def _reg_entity_id(view: _RegistryView, platform: str, unique_id: str) -> str | 
         return None
 
 
-def _device(view: _RegistryView, device_id: str | None) -> Any:
-    if not device_id:
-        return None
-    return _call_lookup(view, "device", "async_get", device_id)
-
-
 def _device_collection_values(
     view: _RegistryView,
     collection: Any,

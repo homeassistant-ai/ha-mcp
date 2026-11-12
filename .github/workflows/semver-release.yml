@@ -170,6 +170,10 @@ jobs:
         # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN
         token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+      with:
+        python-version: "${{ env.PYTHON_VERSION }}"
+
     - name: Python Semantic Release
       id: semantic
       uses: python-semantic-release/python-semantic-release@b700dbeb1f431a0fcc30a79f3f0869407fe07278 # v10.7.0

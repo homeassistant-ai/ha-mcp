@@ -73,7 +73,7 @@ const withBase = (path: string) => {
           <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant App?</h3>
           <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA app is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). To run ha-mcp inside Home Assistant itself, you can install it as the app (Home Assistant OS / Supervised) or via the <a href="#custom-component" class="text-blue-400 hover:underline">HA-MCP custom component</a>'s in-process server, which works on every installation type.</p>
           <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the app, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
-          <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">npx mcp-remote</code> with the app's URL and <strong>no</strong> token.</p>
+          <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx --python 3.14 ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">npx mcp-remote</code> with the app's URL and <strong>no</strong> token.</p>
         </div>
 
         <div class="faq-item">
@@ -206,7 +206,7 @@ docker run -d -p 8086:8086 \
 # uvx
 HOMEASSISTANT_URL=https://your-ha-instance.example.com \
 MCP_BASE_URL=https://your-mcp-server.example.com \
-uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
+uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-400 text-sm mt-3">The consent form now accepts only the token. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/OAUTH.md#migrating-from-v6x" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">full migration guide</a> for details.</p>
         </div>
 
@@ -232,12 +232,12 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-300 mb-3">Home Assistant running in container mode (Docker, K3s) uses HTTP by default. Using <code class="bg-slate-800 px-1 rounded">https://</code> causes a TLS handshake error. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you have explicitly configured SSL/TLS or a reverse proxy.</p>
 
           <h4 class="font-medium text-white mt-4 mb-2">4. Python version too old</h4>
-          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.13+. If you are on Python 3.12 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
-          <pre class="code-block mb-2"><code>brew install python@3.13</code></pre>
+          <p class="text-slate-300 mb-3">ha-mcp requires Python 3.14+. If you are on Python 3.13 or older, <code class="bg-slate-800 px-1 rounded">uvx</code> installs an outdated version with known bugs (including read-only filesystem errors). Upgrade Python:</p>
+          <pre class="code-block mb-2"><code>brew install python@3.14</code></pre>
           <p class="text-slate-400 text-sm mb-1">Then force a refresh:</p>
-          <pre class="code-block"><code>uvx --refresh ha-mcp@latest</code></pre>
-          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.13, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.13</code> to your config args:</p>
-          <pre class="code-block mt-2"><code>"args": ["--python", "3.13", "ha-mcp@latest"]</code></pre>
+          <pre class="code-block"><code>uvx --python 3.14 --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> still uses the old Python after installing 3.14, explicitly pin it by adding <code class="bg-slate-800 px-1 rounded">--python 3.14</code> to your config args:</p>
+          <pre class="code-block mt-2"><code>"args": ["--python", "3.14", "ha-mcp@latest"]</code></pre>
         </div>
 
         <div class="faq-item" id="ssl-certificates">
@@ -286,7 +286,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["--python", "3.14", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
         "HOMEASSISTANT_TOKEN": "your_long_lived_token",
@@ -509,9 +509,9 @@ source ~/.zshrc
 uv cache clean
 
 # Force refresh to latest version
-uvx --refresh ha-mcp@latest</code></pre>
+uvx --python 3.14 --refresh ha-mcp@latest</code></pre>
           <p class="text-slate-400 mt-3 mb-2">Verify the version:</p>
-          <pre class="code-block"><code>uvx ha-mcp@latest --version</code></pre>
+          <pre class="code-block"><code>uvx --python 3.14 ha-mcp@latest --version</code></pre>
           <p class="text-slate-400 text-sm mt-3">The version should match the <a href="https://github.com/homeassistant-ai/ha-mcp/releases/latest" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">latest release</a>. If you see a much older version, the cache needs clearing.</p>
         </div>
 
@@ -540,7 +540,7 @@ uvx --refresh ha-mcp@latest</code></pre>
               <strong>"EOF" errors:</strong> Use absolute paths for the command, not relative paths.
             </li>
             <li>
-              <strong>First run timeout:</strong> Run <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest --version</code> in your terminal first to download and cache the package before Antigravity tries to start it.
+              <strong>First run timeout:</strong> Run <code class="bg-slate-800 px-1 rounded">uvx --python 3.14 ha-mcp@latest --version</code> in your terminal first to download and cache the package before Antigravity tries to start it.
             </li>
             <li>
               <strong><code class="bg-slate-800 px-1 rounded">sending "subscriptions/listen": failed to connect (session ID: ): session not found</code>:</strong> A bug in Antigravity's built-in MCP client, not a server or config problem: it opens a <code class="bg-slate-800 px-1 rounded">subscriptions/listen</code> stream the server never offered, then misreads the spec-mandated <code class="bg-slate-800 px-1 rounded">404 Method not found</code> reply as a lost session (request sequence in <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2545" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2545</a>; fixed in Go MCP SDK v1.8.0 by <a href="https://github.com/modelcontextprotocol/go-sdk/pull/1193" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">modelcontextprotocol/go-sdk#1193</a>, which Antigravity has not shipped yet; the same error is reported in <a href="https://github.com/google-antigravity/antigravity-cli/issues/877" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">google-antigravity/antigravity-cli#877</a>). Until Antigravity ships a fix, connect through the <code class="bg-slate-800 px-1 rounded">mcp-remote</code> stdio bridge: <code class="bg-slate-800 px-1 rounded">"command": "npx", "args": ["-y", "mcp-remote", "&lt;your MCP server URL&gt;"]</code> (append <code class="bg-slate-800 px-1 rounded">"--allow-http"</code> for a LAN <code class="bg-slate-800 px-1 rounded">http://</code> URL).
@@ -624,7 +624,7 @@ uvx --refresh ha-mcp@latest</code></pre>
         <div class="faq-item" id="quick-test">
           <h3 class="text-lg font-medium text-white mb-2">Test ha-mcp without configuring a client</h3>
           <p class="text-slate-300 mb-3">Before setting up a client, you can run a quick smoke test against the public demo server to confirm <code class="bg-slate-800 px-1 rounded">uvx</code> is installed and ha-mcp launches correctly:</p>
-          <pre class="code-block"><code>HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest</code></pre>
+          <pre class="code-block"><code>HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx --python 3.14 ha-mcp@latest</code></pre>
           <p class="text-slate-400 text-sm mt-3">This starts ha-mcp in stdio mode connected to the public demo Home Assistant instance. Press <strong>Ctrl+C</strong> to stop. If it launches without errors, your environment is ready — replace the URL and token with your own values to connect to your Home Assistant.</p>
         </div>
 
@@ -633,7 +633,7 @@ uvx --refresh ha-mcp@latest</code></pre>
           <p class="text-slate-300 mb-3">To run the ha-mcp HTTP server detached from the terminal so it survives logout:</p>
           <pre class="code-block"><code>HOMEASSISTANT_URL=http://homeassistant.local:8123 \
 HOMEASSISTANT_TOKEN=your_long_lived_token \
-nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
+nohup uvx --python 3.14 --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
           <p class="text-slate-300 text-sm mt-3">Both variables are required: without them ha-mcp-web exits immediately, and because this command sends output to <code class="bg-slate-800 px-1 rounded">/dev/null</code> the error explaining why is discarded with it. Drop them only if they are already exported in that shell.</p>
           <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">nohup</code> detaches the process from the terminal and redirects output to <code class="bg-slate-800 px-1 rounded">/dev/null</code>. The trailing <code class="bg-slate-800 px-1 rounded">&amp;</code> sends it to the background. For more robust setups (auto-restart on crash, start on boot), use <strong>systemd</strong> or the <strong>Home Assistant app</strong> instead.</p>
         </div>

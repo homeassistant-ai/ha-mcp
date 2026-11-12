@@ -669,7 +669,7 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
     async def test_state_filter_not_echoed_at_top_level(self, search_tool):
         """state_filter is a caller-input echo and must not bleed into the
         ha_search top-level envelope (entities-branch strip — see
-        `_ENTITIES_BRANCH_SKIP_KEYS`). The filtering still applies to
+        `ENTITIES_BRANCH_SKIP_KEYS`). The filtering still applies to
         `entities`; the caller already has the input they passed.
         """
         result = await search_tool(query="light", state_filter="on")
@@ -684,7 +684,7 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
 
         The filter still applies to each entity in ``entities``; the input
         echo at top level is stripped at the orchestrator (see
-        ``_ENTITIES_BRANCH_SKIP_KEYS``), so callers must not expect the
+        ``ENTITIES_BRANCH_SKIP_KEYS``), so callers must not expect the
         echo even when they read it through the domain_listing branch.
         """
         result = await search_tool(domain_filter="light", state_filter="on")

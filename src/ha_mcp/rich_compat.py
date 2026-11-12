@@ -51,7 +51,8 @@ def ensure_rich_handler_compat() -> bool:
     Returns ``True`` when a shim is in place (freshly applied or already
     applied), ``False`` when none is needed or none could be applied — an
     unimportable ``rich``, an uninspectable ``__init__``, or a signature that
-    already absorbs ``**kwargs``.
+    already absorbs ``**kwargs``. Importing ``ha_mcp`` applies it once; a
+    public module so tests can re-apply it to a stand-in ``RichHandler``.
     """
     try:
         from rich.logging import RichHandler
@@ -67,7 +68,7 @@ def ensure_rich_handler_compat() -> bool:
 
     try:
         parameters = inspect.signature(original_init).parameters
-    except (TypeError, ValueError):  # pragma: no cover - exotic rich build
+    except TypeError, ValueError:  # pragma: no cover - exotic rich build
         logger.debug("RichHandler.__init__ is not introspectable; skipping shim")
         return False
 

@@ -96,7 +96,7 @@ async def _legacy_poll_until(
                     f"after {time.monotonic() - start:.2f}s"
                 )
                 return result
-        except (HomeAssistantConnectionError, HomeAssistantAuthError):
+        except HomeAssistantConnectionError, HomeAssistantAuthError:
             raise
         await asyncio.sleep(poll_interval)
     logger.warning(
@@ -212,7 +212,7 @@ async def _ws_post_subscribe_check(
                 f"post-subscribe sample after {time.monotonic() - start:.2f}s"
             )
             return result, True
-    except (HomeAssistantConnectionError, HomeAssistantAuthError):
+    except HomeAssistantConnectionError, HomeAssistantAuthError:
         raise
 
     if not ws_client.is_connected:
@@ -280,7 +280,7 @@ async def _ws_run_wait_loop(
                     f"after {time.monotonic() - start:.2f}s"
                 )
                 return result
-        except (HomeAssistantConnectionError, HomeAssistantAuthError):
+        except HomeAssistantConnectionError, HomeAssistantAuthError:
             raise
 
     logger.warning(
