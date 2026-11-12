@@ -679,6 +679,22 @@ dev = [
     "python-semantic-release==10.7.0",
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
+    # The requirements of the Core integrations whose own handlers the unit
+    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS and ZHA,
+    # plus usb, hassio and homeassistant_hardware, which those load. Only the
+    # device below each library is replaced. Each pin equals the integration's
+    # manifest in the Core above; test_dev_integration_pins.py keeps them equal.
+    "python-otbr-api==3.1.0",
+    "pyroute2==0.9.6",
+    "zwave-js-server-python==0.74.0",
+    "zha==2.4.3",
+    "zha-quirks==2.4.1",
+    "aiousbwatcher==1.1.2",
+    "serialx==1.15.1",
+    "aiohasupervisor==0.8.1",
+    "universal-silabs-flasher==1.3.0",
+    "ha-silabs-firmware-client==0.4.0",
+    "pygbl==1.2.0",
 ]
 
 [tool.uv]
