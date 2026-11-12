@@ -108,10 +108,13 @@ class LogTools(
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: Literal["newest", "oldest"],
+        order: Literal["newest", "oldest"] | None,
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
+        # Only a supervisor/system_service page read can take its order from a
+        # token, so only those two are given ``order`` as it came.
+        chosen = order or "newest"
         numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
@@ -124,18 +127,18 @@ class LogTools(
                 offset=numeric_offset,
                 search=search,
                 compact=compact,
-                order=order,
+                order=chosen,
             )
         if source == "system":
             return await self._get_system_log(
-                limit=limit, search=search, level=level, order=order, compact=compact
+                limit=limit, search=search, level=level, order=chosen, compact=compact
             )
         if source == "error_log":
             return await self._get_error_log(
                 limit=limit,
                 search=search,
                 level=level,
-                order=order,
+                order=chosen,
                 offset=offset,
                 structured=structured,
                 top_n=top_n,
@@ -146,7 +149,7 @@ class LogTools(
             return await self._get_logger_info(limit=limit, search=search)
         if source == "fault_log":
             return await self._get_fault_log(
-                limit=limit, search=search, offset=numeric_offset, order=order
+                limit=limit, search=search, offset=numeric_offset, order=chosen
             )
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
@@ -182,7 +185,7 @@ class LogTools(
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: Literal["newest", "oldest"] = "newest",
+        order: Literal["newest", "oldest"] | None = None,
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
@@ -196,7 +199,7 @@ class LogTools(
             context_id,
             end_time,
             slug,
-            order,
+            order or "newest",
             offset,
             hours_back=hours_back,
             search=search,
@@ -321,7 +324,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         order: Annotated[
-            Literal["newest", "oldest"],
+            Literal["newest", "oldest"] | None,
             Field(
                 description=(
                     "Sort order for time-ordered sources (logbook, system, error_log, "
@@ -330,14 +333,16 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "error_log, supervisor and system_service it sets the read "
                     "direction of the newest lines read; a supervisor/"
                     "system_service page read (see offset) starts at the "
-                    "window's first entry ('oldest') or the journal's newest "
-                    "('newest'). fault_log orders whole crash blocks; error_log orders "
+                    "window's first entry ('oldest') or its last ('newest'), "
+                    "and one continuing a next_offset token takes the "
+                    "token's order when this is omitted. Default 'newest'. "
+                    "fault_log orders whole crash blocks; error_log orders "
                     "whole records and keeps each record's lines in place. Ignored "
                     "for source='logger', and for source='error_log' with "
                     "structured=True."
                 )
             ),
-        ] = "newest",
+        ] = None,
         # Source-scoped options: each description names the sources it applies to
         hours_back: Annotated[
             int | None,
@@ -351,9 +356,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "offset); has_more says more of it remains. With search "
                     "the whole window is read at once, up to 10,000 entries: "
                     "window_complete says whether every entry of the window "
-                    "was searched, and when false only the newest were. "
-                    "Entries stamped out of order by a clock step can move "
-                    "where a newest-first read ends."
+                    "was searched, and when false only the newest were."
                 ),
             ),
         ] = None,
@@ -400,7 +403,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "read: hours_back and no search (ignored otherwise). "
                     "There it is the opaque token a previous page returned "
                     "in 'next_offset', which continues from an exact journal "
-                    "entry in the same window; pass it with the same order. "
+                    "entry in the same window; pass it with the same slug "
+                    "(its order and hours_back may be omitted). "
                     "With order='oldest' "
                     "an integer skips that many entries from the window's "
                     "first. A page's total_lines is its line count. On error_log it "

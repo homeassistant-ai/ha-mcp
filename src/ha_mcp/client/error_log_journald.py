@@ -160,9 +160,7 @@ async def _newest_page(lines: int, offset: int, fetch: JournaldFetch) -> ErrorLo
     if len(text_lines) < lines:
         # Nothing clamps a window smaller than asked for, so a short window is
         # the end of the journal.
-        return ErrorLogPage(
-            text=page.text, has_more=False, first_cursor=page.first_cursor
-        )
+        return ErrorLogPage(text=page.text, has_more=False)
     has_more = await _has_older_than(page.first_cursor, fetch)
     return ErrorLogPage(
         text=page.text,
@@ -183,7 +181,7 @@ async def _cursor_page(
         # entries the previous page already returned. Keep only what precedes
         # the resume point.
         entries = entries[
-            : await entries_before_resume(
+            : await _entries_before_resume(
                 cursor, skip, len(entries), page.first_cursor, fetch
             )
         ]
@@ -194,13 +192,12 @@ async def _cursor_page(
     )
 
 
-async def entries_before_resume(
+async def _entries_before_resume(
     cursor: str,
     skip: int,
     count: int,
     head: str,
     fetch: JournaldFetch,
-    at_least: int = 0,
 ) -> int:
     """How many entries of a head-clamped block precede the resume point.
 
@@ -215,13 +212,8 @@ async def entries_before_resume(
     (at or past the head the start clamps there), which binary-searches its
     position without needing per-entry cursors — Supervisor rejects a JSON
     Accept, so cursors are the only per-entry identity it will not serve.
-
-    ``at_least`` skips probes the caller already knows the answer to. A caller
-    whose resume point may lie past the journal's end passes 1, so the resume
-    point itself is never probed: gatewayd before systemd 258 answers a skip
-    past the end with the last entry, which can be the head.
     """
-    low, high = at_least, count
+    low, high = 0, count
     while low < high:
         middle = (low + high) // 2
         probe = await fetch(f"entries={cursor}:{skip - middle}:1")

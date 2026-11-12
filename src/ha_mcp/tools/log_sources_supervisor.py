@@ -72,7 +72,7 @@ class SupervisorLogSourcesMixin:
         slug: str,
         path: str,
         hours_back: int | None,
-        order: Literal["newest", "oldest"],
+        order: Literal["newest", "oldest"] | None,
         limit: int,
         offset: int | str,
         now: datetime | None,
@@ -80,22 +80,35 @@ class SupervisorLogSourcesMixin:
         """One page of the window, served by the journal and continued by token.
 
         The first page starts at the window's first entry (oldest-first, an
-        integer ``offset`` entries in) or at the journal's newest entry. A
-        later page passes the ``next_offset`` token back: it carries the
-        window's start and the exact entry to continue from, so the window
-        does not move between calls.
+        integer ``offset`` entries in) or ends at the window's last. A later
+        page passes the ``next_offset`` token back: it carries the window's
+        start and exact journal entries, so the window does not move between
+        calls. Oldest-first, that is the page before's first entry and a skip
+        from it. Newest-first, it is the window's first entry plus either the
+        oldest entry of the page before (read back from it), or, when the
+        journal's cursors cannot be ordered, a position counted from the first
+        entry.
         """
         read_at = now or datetime.now(UTC)
         resume = None
         warnings: list[str] = []
         if isinstance(offset, str):
             resume = parse_window_token(offset)
-            if resume.order != order:
+            if order is not None and resume.order != order:
+                warnings.append(
+                    f"order='{order}' does not match the read this 'offset' "
+                    f"token continues (order='{resume.order}'); the token's "
+                    "order is kept. Start a new read without the token for "
+                    "the other order."
+                )
+            order = resume.order
+            if resume.path != path:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"This 'offset' token continues an order='{resume.order}' "
-                        f"read; pass order='{resume.order}' with it",
+                        f"This 'offset' token continues the log of '{resume.path}'"
+                        f", not '{path}'; pass the slug it came from, or start "
+                        "a new read without the token",
                     )
                 )
             if hours_back is not None and hours_back != resume.hours_back:
@@ -110,6 +123,7 @@ class SupervisorLogSourcesMixin:
         else:
             assert hours_back is not None  # routed here only with hours_back
             since = window_start(read_at, hours_back)
+            order = order or "newest"
         page = await read_logs_page(
             self._client,
             path,
@@ -213,7 +227,7 @@ class SupervisorLogSourcesMixin:
         path: str,
         limit: int | None,
         search: str | None,
-        order: Literal["newest", "oldest"],
+        order: Literal["newest", "oldest"] | None,
         hours_back: int | None,
         offset: int | str,
         now: datetime | None,
@@ -237,6 +251,7 @@ class SupervisorLogSourcesMixin:
                 source, slug, path, hours_back, order, effective_limit, offset, now
             )
 
+        order = order or "newest"
         window: dict[str, Any] = {}
         cap = 0
         if hours_back is not None:
@@ -295,7 +310,7 @@ class SupervisorLogSourcesMixin:
         slug: str,
         limit: int | None = None,
         search: str | None = None,
-        order: Literal["newest", "oldest"] = "newest",
+        order: Literal["newest", "oldest"] | None = None,
         hours_back: int | None = None,
         offset: int | str = 0,
         now: datetime | None = None,
@@ -487,7 +502,7 @@ class SupervisorLogSourcesMixin:
         service: str,
         limit: int | None = None,
         search: str | None = None,
-        order: Literal["newest", "oldest"] = "newest",
+        order: Literal["newest", "oldest"] | None = None,
         hours_back: int | None = None,
         offset: int | str = 0,
         now: datetime | None = None,

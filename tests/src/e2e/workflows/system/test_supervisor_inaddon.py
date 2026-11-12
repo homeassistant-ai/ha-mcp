@@ -39,6 +39,10 @@ from ...utilities.assertions import MCPAssertions
 
 pytestmark = [pytest.mark.inaddon_only]
 
+# An hours_back reaching before 1970, which the window defines as the whole
+# journal, so it holds entries whenever the journal does.
+_WHOLE_JOURNAL = 10**12
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,17 +112,22 @@ class TestGetLogsHoursBackReal:
             ("supervisor", HA_MCP_DEV_ADDON_SLUG),
         ],
     )
-    async def test_a_recent_window_has_entries(
+    async def test_a_whole_journal_window_has_entries(
         self, mcp_client, source: str, slug: str
     ) -> None:
-        """Supervisor and the dev app both log within the hour the lane started."""
+        """Supervisor and the dev app both have journal entries on a lane."""
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
                 "ha_get_logs",
-                {"source": source, "slug": slug, "hours_back": 1, "limit": 500},
+                {
+                    "source": source,
+                    "slug": slug,
+                    "hours_back": _WHOLE_JOURNAL,
+                    "limit": 500,
+                },
             )
 
-        assert result["log"], "Expected entries logged in the last hour"
+        assert result["log"], "Expected entries in the journal"
         assert datetime.fromisoformat(result["window_start"]) < datetime.fromisoformat(
             result["read_at"]
         )
