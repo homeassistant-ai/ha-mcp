@@ -1857,8 +1857,7 @@ _CMD_MSG_EXTRA: dict[str, dict[str, object]] = {
     # exposure, list mode: registries resolve empty, so the probe stays pure.
     "ha_mcp_tools/entity_lookup": {"unique_id": "x"},
     "ha_mcp_tools/registries": {"registries": []},
-    # registry_lookup now REQUIRES a target (entity_ids or config_entry_id) —
-    # a neither-present request raises HomeAssistantError (issue #1813 M2).
+    # registry_lookup REQUIRES a target; neither-present raises (issue #1813 M2).
     "ha_mcp_tools/registry_lookup": {"entity_ids": ["light.x"]},
     "ha_mcp_tools/call_event": {"event_type": "probe_event"},
     # config_entries / system_snapshot need no required params.
@@ -1900,6 +1899,7 @@ class TestRegistrationAndAdminGate:
             wsapi.WS_BULK_CALL_SERVICE,
             wsapi.WS_TEMPLATE_DIAGNOSE,
             wsapi.WS_LOGBOOK_EVENTS,
+            wsapi.WS_TRACE_CONTEXT,
             wsapi.WS_OAUTH_CALLBACKS,
             wsapi.WS_OAUTH_CALLBACKS_UPDATE,
             *wsapi.helper_collections.COMMANDS + wsapi.entity_restore.COMMANDS,

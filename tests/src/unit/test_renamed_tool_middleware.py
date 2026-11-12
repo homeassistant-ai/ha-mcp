@@ -9,15 +9,27 @@ import json
 import logging
 
 import pytest
+from homeassistant.components.automation.trace import AutomationTrace
+from homeassistant.components.trace import async_store_trace
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.renamed_tools import RENAMED_PARAMETERS
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,
 )
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
+
+
+@pytest.fixture
+async def registry_api(hass: HomeAssistant) -> None:
+    """Core's config component, which serves ``config/entity_registry/get``."""
+    assert await async_setup_component(hass, "config", {})
 
 
 def _make_mcp() -> FastMCP:
@@ -55,6 +67,10 @@ def _make_mcp() -> FastMCP:
     @mcp.tool()
     async def ha_config_remove_automation(entity_id: str) -> dict:
         return {"entity_id": entity_id, "warnings": ["Backup skipped."]}
+
+    @mcp.tool()
+    async def ha_get_automation_traces(entity_id: str) -> dict:
+        return {"tool": "ha_get_automation_traces", "entity_id": entity_id}
 
     return mcp
 
@@ -105,6 +121,7 @@ async def test_the_old_names_stay_out_of_the_catalog():
         "ha_manage_blueprints",
         "ha_config_get_automation",
         "ha_config_remove_automation",
+        "ha_get_automation_traces",
     }
     assert not listed & set(RENAMED_TOOLS)
 
@@ -232,6 +249,67 @@ def test_every_tool_that_renamed_identifier_keeps_it_callable():
         "ha_config_set_automation",
         "ha_config_remove_automation",
     }
+
+
+@pytest.mark.asyncio
+async def test_the_registered_trace_tool_resolves_automation_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    registry_api: None,
+) -> None:
+    """A cached client's automation_id reaches the real trace tool and lists runs."""
+    from ha_mcp.tools.tools_traces import register_trace_tools
+
+    assert await async_setup_component(hass, "trace", {})
+    entity_registry.async_get_or_create(
+        "automation", "test", "uid_1", suggested_object_id="trace"
+    )
+    trace = AutomationTrace("uid_1", {"alias": "Trace capture"}, None, Context())
+    trace.run_id = "r1"
+    trace.finished()
+    async_store_trace(hass, trace, stored_traces=10)
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(RenamedToolAliasMiddleware())
+    register_trace_tools(mcp, core_client)
+
+    result = await mcp.call_tool(
+        "ha_get_automation_traces", {"automation_id": "automation.trace"}
+    )
+
+    data = result.structured_content
+    assert data["entity_id"] == "automation.trace"
+    assert "automation_id" not in data
+    assert data["traces"][0]["run_id"] == "r1"
+    text = json.loads(result.content[0].text)
+    assert "automation_id" not in text
+
+
+@pytest.mark.asyncio
+async def test_current_trace_call_omits_legacy_automation_id():
+    """A caller on the current parameter does not receive the retired field."""
+    result = await _make_mcp().call_tool(
+        "ha_get_automation_traces", {"entity_id": "automation.trace"}
+    )
+
+    assert "automation_id" not in result.structured_content
+    text = json.loads(result.content[0].text)
+    assert "automation_id" not in text
+
+
+@pytest.mark.asyncio
+async def test_the_trace_tool_keeps_automation_id_callable():
+    """The trace tool renamed automation_id; a cached client still sends it."""
+    result = await _make_mcp().call_tool(
+        "ha_get_automation_traces", {"automation_id": "automation.trace"}
+    )
+
+    assert result.structured_content["tool"] == "ha_get_automation_traces"
+    assert result.structured_content["entity_id"] == "automation.trace"
+    assert any(
+        "automation_id" in warning for warning in result.structured_content["warnings"]
+    )
 
 
 @pytest.mark.asyncio
