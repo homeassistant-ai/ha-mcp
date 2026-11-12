@@ -200,7 +200,6 @@ ignores:
   - "tests/src/unit/test_manage_theme.py"
   - "tests/src/unit/test_mandatory_tool_warnings.py"
   - "tests/src/unit/test_oauth.py"
-  - "tests/src/unit/test_overview_repairs.py"
   - "tests/src/unit/test_overview_system_info.py"
   - "tests/src/unit/test_performance_parallelization.py"
   - "tests/src/unit/test_radio_management.py"
@@ -295,10 +294,6 @@ ignores:
   - "tests/src/unit/visibility/test_bare_identifier_concealment.py"
   - "tests/src/unit/visibility/test_enforcement.py"
   - "tests/src/unit/visibility/test_hidden_config_file_reads.py"
-  - "tests/src/unit/visibility/test_load_hidden_set.py"
-  - "tests/src/unit/visibility/test_overview_filter.py"
-  - "tests/src/unit/visibility/test_search_filter.py"
-  - "tests/src/unit/visibility/test_smart_search_filter.py"
 message: |
   Do not type in what Home Assistant answered. A replaced client method that
   returns a hand-written reply (or a hand-written client class) asserts against

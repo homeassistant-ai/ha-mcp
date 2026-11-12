@@ -1,349 +1,340 @@
-import asyncio
+"""``load_hidden_set`` on real Core: the config file, the registry and Assist.
+
+The registry and states each test hands the resolver are Core's own replies to
+the server's client, and the Assist exposure reads go to Core's
+``homeassistant`` integration over the same client, so every explicit
+``should_expose`` and the ``expose_new`` flag are what Core reports.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.homeassistant.exposed_entities import (
+    ExposedEntities,
+    async_expose_entity,
+)
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
-from ha_mcp.visibility.resolver import VisibilityDataUnavailable
+from ha_mcp.visibility.resolver import VisibilityDataUnavailable, load_hidden_set
+
+_ASSIST_READS = {
+    "homeassistant/expose_entity/list",
+    "homeassistant/expose_new_entities/get",
+}
 
 
-def test_load_hidden_set_reads_config(tmp_path, monkeypatch):
-    save_visibility_config(
-        tmp_path, VisibilityConfig(enabled=True, exclude_categories=["diagnostic"])
-    )
+@pytest.fixture(autouse=True)
+async def assist_api(hass: HomeAssistant) -> None:
+    """Load the integrations that answer the registry and Assist reads."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+def save_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Write a config file to the data dir the resolver reads."""
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {
-        "success": True,
-        "result": [{"entity_id": "s.b", "entity_category": "diagnostic"}],
-    }
-    assert asyncio.run(resolver.load_hidden_set(reg))[0] == {"s.b"}
+
+    def _save(**kwargs: Any) -> None:
+        kwargs.setdefault("exclude_categories", [])
+        save_visibility_config(tmp_path, VisibilityConfig(enabled=True, **kwargs))
+
+    return _save
 
 
-def test_load_hidden_set_fails_open_on_bad_config(tmp_path, monkeypatch):
+def _register(
+    entity_registry: er.EntityRegistry,
+    entity_id: str,
+    entity_category: EntityCategory | None = None,
+) -> None:
+    domain, _, object_id = entity_id.partition(".")
+    entry = entity_registry.async_get_or_create(
+        domain,
+        "test",
+        object_id,
+        suggested_object_id=object_id,
+        entity_category=entity_category,
+    )
+    assert entry.entity_id == entity_id
+
+
+async def _registry(client: HomeAssistantClient) -> dict[str, Any]:
+    reply = await client.send_websocket_message({"type": "config/entity_registry/list"})
+    assert reply["success"] is True
+    return reply
+
+
+def _assist_reads(send: AsyncMock) -> list[str]:
+    return [
+        call.args[0]["type"]
+        for call in send.await_args_list
+        if call.args[0]["type"] in _ASSIST_READS
+    ]
+
+
+def _assist_degraded(warnings: list[str]) -> bool:
+    return any("Assist exposure data was unavailable" in w for w in warnings)
+
+
+async def test_category_in_saved_config_hides_registry_entity(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """The saved config's category filter hides a diagnostic registry entity."""
+    save_config(exclude_categories=["diagnostic"])
+    _register(entity_registry, "sensor.diag", EntityCategory.DIAGNOSTIC)
+    _register(entity_registry, "sensor.plain")
+
+    hidden, warnings = await load_hidden_set(await _registry(core_client))
+
+    assert hidden == {"sensor.diag"}
+    assert warnings == []
+
+
+async def test_corrupt_config_file_fails_open_with_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+) -> None:
+    """A corrupt config hides nothing and says the filter is off."""
     (tmp_path / "entity_visibility.json").write_text("{ corrupt")
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {
-        "success": True,
-        "result": [{"entity_id": "s.b", "entity_category": "diagnostic"}],
-    }
-    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg))
+    _register(entity_registry, "sensor.diag", EntityCategory.DIAGNOSTIC)
+
+    hidden, warnings = await load_hidden_set(await _registry(core_client))
+
     assert hidden == set()
     assert any("could not be loaded" in w for w in warnings)
 
 
-class _FakeAssistClient:
-    """Assist-exposure seam double for the fetch's failure modes: answers the
-    ``expose_entity/list`` read and the ``expose_new`` read, or fails."""
-
-    def __init__(self, expose_new=False, fail=False, new_fails=False):
-        self._expose_new = expose_new
-        self._fail = fail
-        self._new_fails = new_fails
-        self.calls = []
-
-    async def send_websocket_message(self, msg):
-        self.calls.append(msg["type"])
-        if self._fail:
-            raise ConnectionError("ws down")
-        if msg["type"] == "homeassistant/expose_entity/list":
-            return {"success": True, "result": {"exposed_entities": {}}}
-        if msg["type"] == "homeassistant/expose_new_entities/get":
-            if self._new_fails:
-                return {"success": False, "error": {"message": "boom"}}
-            return {"success": True, "result": {"expose_new": self._expose_new}}
-        raise AssertionError(f"unexpected ws message: {msg}")
-
-
-def test_load_hidden_set_fetches_assist_and_hides_unexposed(tmp_path, monkeypatch):
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], respect_assist_exposure=True
-        ),
+async def test_explicitly_exposed_entity_stays_visible_when_new_entities_are_not(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """With "expose new entities" off, only an explicit expose keeps an entity."""
+    save_config(respect_assist_exposure=True)
+    _register(entity_registry, "light.a")
+    _register(entity_registry, "light.b")
+    async_expose_entity(hass, "conversation", "light.a", True)
+    reply = await core_client.send_websocket_message(
+        {
+            "type": "homeassistant/expose_new_entities/set",
+            "assistant": "conversation",
+            "expose_new": False,
+        }
     )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    # Faithful seam: each registry entry's explicit should_expose (incl. the False
-    # un-expose) lives in the ``options`` the registry list payload already carries;
-    # expose_entity/list only ever reports the True one. expose_new off -> only the
-    # explicit setting decides.
-    reg = {
-        "success": True,
-        "result": [
-            {
-                "entity_id": "light.a",
-                "options": {"conversation": {"should_expose": True}},
-            },
-            {
-                "entity_id": "light.b",
-                "options": {"conversation": {"should_expose": False}},
-            },
-        ],
-    }
-    client = _FakeExposeSeamClient(
-        exposed={"light.a": {"conversation": True}}, expose_new=False
-    )
-    hidden, _ = asyncio.run(resolver.load_hidden_set(reg, None, client))
-    assert hidden == {"light.b"}
+    assert reply["success"] is True
 
-
-def test_load_hidden_set_allowlist_skips_assist_fetch(tmp_path, monkeypatch):
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=["diagnostic"],
-            allow_entity_ids=["light.a"],
-            respect_assist_exposure=True,
-        ),
+    hidden, warnings = await load_hidden_set(
+        await _registry(core_client), None, core_client
     )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {
-        "success": True,
-        "result": [
-            {"entity_id": "light.a", "entity_category": "diagnostic"},
-            {"entity_id": "light.b"},
-        ],
-    }
-    client = _FakeAssistClient(fail=True)
-    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
+
     assert hidden == {"light.b"}
     assert warnings == []
-    assert client.calls == []
 
 
-def test_degraded_area_allowlist_fetches_assist(tmp_path, monkeypatch):
-    """An empty-registry area allowlist re-enables and fetches the Assist filter."""
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            allow_areas=["kitchen"],
-            respect_assist_exposure=True,
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {"success": True, "result": []}
-    states = [
-        {"entity_id": "sensor.exposed", "attributes": {}},
-        {"entity_id": "sensor.hidden", "attributes": {}},
-    ]
-    client = _FakeExposeSeamClient(
-        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
-    )
+async def test_explicit_unexpose_hides_default_exposed_registry_entity(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """An entity un-exposed from Assist is hidden although its domain is
+    exposed by default.
 
-    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, states, client))
+    Core's ``expose_entity/list`` omits an un-exposed entity, so only the
+    ``should_expose: false`` in the registry row's options says so.
+    """
+    save_config(respect_assist_exposure=True)
+    _register(entity_registry, "light.a")
+    _register(entity_registry, "light.b")
+    async_expose_entity(hass, "conversation", "light.b", False)
 
-    assert hidden == {"sensor.hidden"}
-    assert resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING in warnings
+    hidden, _ = await load_hidden_set(await _registry(core_client), None, core_client)
+
+    assert hidden == {"light.b"}
 
 
-def test_missing_registry_result_degrades_allowlist_and_fetches_assist(
-    tmp_path, monkeypatch
-):
-    """A missing result key has the same semantics as an empty result list."""
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            allow_areas=["kitchen"],
-            respect_assist_exposure=True,
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    states = [
-        {"entity_id": "sensor.exposed", "attributes": {}},
-        {"entity_id": "sensor.hidden", "attributes": {}},
-    ]
-    client = _FakeExposeSeamClient(
-        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
+async def test_states_only_entity_explicitly_exposed_stays_visible(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """An entity with no registry row stays visible when exposed explicitly;
+    a sibling with no setting and no default exposure is hidden."""
+    save_config(respect_assist_exposure=True)
+    hass.states.async_set("sensor.exposed", "1")
+    hass.states.async_set("sensor.plain", "1")
+    async_expose_entity(hass, "conversation", "sensor.exposed", True)
+
+    hidden, _ = await load_hidden_set(
+        await _registry(core_client), await core_client.get_states(), core_client
     )
 
-    hidden, warnings = asyncio.run(
-        resolver.load_hidden_set({"success": True}, states, client)
+    assert hidden == {"sensor.plain"}
+
+
+async def test_entity_allowlist_skips_the_assist_reads(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """An entity allowlist overrides Assist, so its data is never fetched."""
+    save_config(
+        exclude_categories=["diagnostic"],
+        allow_entity_ids=["light.a"],
+        respect_assist_exposure=True,
     )
+    _register(entity_registry, "light.a", EntityCategory.DIAGNOSTIC)
+    _register(entity_registry, "light.b")
+    registry = await _registry(core_client)
 
-    assert hidden == {"sensor.hidden"}
-    assert resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING in warnings
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(wraps=core_client.send_websocket_message),
+    ) as send:
+        hidden, warnings = await load_hidden_set(registry, None, core_client)
 
-
-def test_load_hidden_set_assist_fetch_fails_soft(tmp_path, monkeypatch):
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            respect_assist_exposure=True,
-            deny_entity_ids=["light.denied"],
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {"success": True, "result": [{"entity_id": "light.a"}]}
-    client = _FakeAssistClient(expose_new=True, fail=True)
-    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
-    # Assist dimension degrades (skipped) but deny still applies; not fail-closed.
-    assert hidden == {"light.denied"}
-    assert resolver._ASSIST_UNAVAILABLE_WARNING in warnings
+    assert hidden == {"light.b"}
+    assert warnings == []
+    send.assert_not_awaited()
 
 
-def test_load_hidden_set_assist_unavailable_fails_closed_in_strict_mode(
-    tmp_path, monkeypatch
-):
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], respect_assist_exposure=True
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+async def test_area_allowlist_with_empty_registry_still_applies_assist(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """An area allowlist that cannot match an empty registry is dropped with a
+    warning, and Assist exposure is fetched and applied instead."""
+    save_config(allow_areas=["kitchen"], respect_assist_exposure=True)
+    hass.states.async_set("sensor.exposed", "1")
+    hass.states.async_set("sensor.hidden", "1")
+    async_expose_entity(hass, "conversation", "sensor.exposed", True)
+    registry = await _registry(core_client)
+    assert registry["result"] == []
 
-    with pytest.raises(VisibilityDataUnavailable, match="Assist exposure data"):
-        asyncio.run(
-            resolver.load_hidden_set(
-                {"success": True, "result": [{"entity_id": "light.a"}]},
-                None,
-                _FakeAssistClient(fail=True),
-                strict=True,
-            )
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(wraps=core_client.send_websocket_message),
+    ) as send:
+        hidden, warnings = await load_hidden_set(
+            registry, await core_client.get_states(), core_client
         )
 
+    assert hidden == {"sensor.hidden"}
+    assert sorted(_assist_reads(send)) == sorted(_ASSIST_READS)
+    assert any("area/label allowlist" in w for w in warnings)
 
-def test_strict_allowlist_makes_unavailable_assist_irrelevant(tmp_path, monkeypatch):
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            allow_entity_ids=["light.a"],
-            respect_assist_exposure=True,
+
+async def test_unanswered_assist_reads_skip_only_that_dimension(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """With no Assist answer, the deny list still hides and a warning says the
+    Assist dimension was skipped."""
+    save_config(respect_assist_exposure=True, deny_entity_ids=["light.denied"])
+    _register(entity_registry, "light.a")
+    registry = await _registry(core_client)
+
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        side_effect=HomeAssistantConnectionError("ws down"),
+    ):
+        hidden, warnings = await load_hidden_set(registry, None, core_client)
+
+    assert hidden == {"light.denied"}
+    assert _assist_degraded(warnings)
+
+
+async def test_unanswered_assist_reads_fail_closed_in_strict_mode(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """Enforcement refuses rather than skip the Assist dimension."""
+    save_config(respect_assist_exposure=True)
+    _register(entity_registry, "light.a")
+    registry = await _registry(core_client)
+
+    with (
+        patch.object(
+            core_client,
+            "send_websocket_message",
+            side_effect=HomeAssistantConnectionError("ws down"),
         ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    registry = {
-        "success": True,
-        "result": [{"entity_id": "light.a"}, {"entity_id": "light.b"}],
-    }
+        pytest.raises(VisibilityDataUnavailable, match="Assist exposure data"),
+    ):
+        await load_hidden_set(registry, None, core_client, strict=True)
 
-    client = _FakeAssistClient(fail=True)
-    hidden, warnings = asyncio.run(
-        resolver.load_hidden_set(registry, None, client, strict=True)
-    )
+
+async def test_strict_entity_allowlist_does_not_need_assist(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """Under an entity allowlist, strict mode neither reads Assist nor refuses
+    when Assist would be unanswered."""
+    save_config(allow_entity_ids=["light.a"], respect_assist_exposure=True)
+    _register(entity_registry, "light.a")
+    _register(entity_registry, "light.b")
+    registry = await _registry(core_client)
+
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        side_effect=HomeAssistantConnectionError("ws down"),
+    ) as send:
+        hidden, warnings = await load_hidden_set(
+            registry, None, core_client, strict=True
+        )
 
     assert hidden == {"light.b"}
     assert warnings == []
-    assert client.calls == []
+    send.assert_not_awaited()
 
 
-def test_load_hidden_set_assist_partial_failure_degrades_dimension(
-    tmp_path, monkeypatch
-):
-    # expose_entity/list succeeds but expose_new/get fails: without the flag the
-    # default-exposure branch cannot be computed, so the whole dimension degrades
-    # (skipped + warning) rather than assuming expose_new=False and wrongly hiding
-    # a default-domain entity that has no explicit override.
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], respect_assist_exposure=True
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {"success": True, "result": [{"entity_id": "light.a"}]}
-    client = _FakeAssistClient(expose_new=True, new_fails=True)
-    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
-    assert hidden == set()  # dimension skipped, light.a not wrongly hidden
-    assert resolver._ASSIST_UNAVAILABLE_WARNING in warnings
+async def test_rejected_expose_new_read_skips_assist_instead_of_hiding(
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    save_config: Any,
+) -> None:
+    """When Core rejects the "expose new entities" read, the dimension is
+    skipped rather than assuming new entities are not exposed, which would hide
+    a default-exposed light with no explicit setting."""
+    save_config(respect_assist_exposure=True)
+    _register(entity_registry, "light.a")
+    registry = await _registry(core_client)
 
+    with patch.object(
+        ExposedEntities,
+        "async_get_expose_new_entities",
+        side_effect=HomeAssistantError("boom"),
+    ):
+        hidden, warnings = await load_hidden_set(registry, None, core_client)
 
-class _FakeExposeSeamClient:
-    """Faithful Assist seam: serves the two reads the resolver actually makes —
-    ``homeassistant/expose_entity/list`` (the True-only exposed set) and
-    ``homeassistant/expose_new_entities/get``. A registry entry's explicit
-    ``should_expose`` (True *or* False) is NOT served here: it lives in the
-    ``config/entity_registry/list`` payload's ``options`` (HA's ``as_partial_dict``
-    carries it), which the caller puts in ``reg``. A stray
-    ``config/entity_registry/get_entries`` call is a regression to the redundant
-    round-trip and fails the test.
-    """
-
-    def __init__(self, exposed=None, expose_new=False):
-        # exposed: {entity_id: {assistant: True}} — HA's expose_entity/list shape.
-        self._exposed = exposed or {}
-        self._expose_new = expose_new
-
-    async def send_websocket_message(self, msg):
-        msg_type = msg["type"]
-        if msg_type == "homeassistant/expose_new_entities/get":
-            return {"success": True, "result": {"expose_new": self._expose_new}}
-        if msg_type == "homeassistant/expose_entity/list":
-            return {
-                "success": True,
-                "result": {"exposed_entities": self._exposed},
-            }
-        raise AssertionError(f"unexpected ws message: {msg}")
-
-
-def test_load_hidden_set_assist_reads_explicit_unexpose_from_registry_options(
-    tmp_path, monkeypatch
-):
-    # Regression for the round-2 finding: an entity explicitly un-exposed from the
-    # conversation assistant is ABSENT from expose_entity/list (which only ever
-    # returns True), so the filter reads the explicit should_expose=False from the
-    # registry entry ``options`` in the list payload to honor it. expose_new=True is
-    # HA's conversation default, and light is a default-exposed domain — so without
-    # the options read light.b wrongly stays visible.
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], respect_assist_exposure=True
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {
-        "success": True,
-        "result": [
-            {"entity_id": "light.a", "options": {}},  # no explicit setting
-            {
-                "entity_id": "light.b",
-                "options": {"conversation": {"should_expose": False}},
-            },
-        ],
-    }
-    # expose_entity/list reports neither (light.a has no explicit True, light.b is
-    # explicitly False) — the False must come from the registry payload options.
-    client = _FakeExposeSeamClient(exposed={}, expose_new=True)
-    hidden, _ = asyncio.run(resolver.load_hidden_set(reg, None, client))
-    # light.b explicitly un-exposed -> hidden; light.a default-exposed -> visible.
-    assert hidden == {"light.b"}
-
-
-def test_load_hidden_set_assist_states_only_explicit_expose_stays_visible(
-    tmp_path, monkeypatch
-):
-    # A states-only entity (no registry entry) that the user explicitly exposed to
-    # the conversation assistant appears in expose_entity/list (True) and must stay
-    # visible — the True-only list is the only exposure source for non-registry ids.
-    # A sibling states-only entity in a non-default domain with no explicit expose
-    # falls to its default (not exposed) and is hidden, so the assertion pins that
-    # the list-True is what saves the exposed one.
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], respect_assist_exposure=True
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    reg = {"success": True, "result": []}  # neither entity has a registry entry
-    states = [
-        {"entity_id": "sensor.exposed", "attributes": {}},
-        {"entity_id": "sensor.plain", "attributes": {}},
-    ]
-    client = _FakeExposeSeamClient(
-        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
-    )
-    hidden, _ = asyncio.run(resolver.load_hidden_set(reg, states, client))
-    # sensor.exposed: explicit True from the list -> visible. sensor.plain: sensor
-    # with no default-exposed device_class -> not default-exposed -> hidden.
-    assert hidden == {"sensor.plain"}
+    assert hidden == set()
+    assert _assist_degraded(warnings)

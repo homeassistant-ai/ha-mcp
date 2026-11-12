@@ -310,7 +310,6 @@ module = [
     "tests.src.unit.test_oauth_ha_auth",
     "tests.src.unit.test_oauth_legacy_component",
     "tests.src.unit.test_oidc_compat",
-    "tests.src.unit.test_overview_repairs",
     "tests.src.unit.test_overview_system_info",
     "tests.src.unit.test_performance_parallelization",
     "tests.src.unit.test_read_only",
@@ -390,8 +389,6 @@ module = [
     "tests.src.unit.test_zone_tools_core_contract",
     "tests.src.unit.visibility.test_enforcement",
     "tests.src.unit.visibility.test_hidden_config_file_reads",
-    "tests.src.unit.visibility.test_overview_filter",
-    "tests.src.unit.visibility.test_smart_search_filter",
 ]
 ignore_errors = true
 
