@@ -212,15 +212,16 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:  # noqa
         ("haos-e2e-embedded-beta", "embedded", "haos-e2e-embedded"),
     )
     beta_resolvers: list[str] = []
-    # The container beta workflow's resolver job is the only other beta.json
-    # consumer; it has no HAOS mode and is pinned down by
-    # test_container_beta_lane_resolves_the_beta_core_image_once below.
+    # The other beta.json consumers have no HAOS mode: the container beta
+    # workflow's resolver (test_container_beta_lane_resolves_the_beta_core_image_once)
+    # and pr.yml's beta unit lane (test_pr_unit_beta_lane_runs_the_suites_on_the_beta_core).
     assert _beta_lane_jobs() == {
         (_BETA_WORKFLOW, beta_job_id, mode)
         for beta_job_id, mode, _stable_job_id in lane_specs
     } | {
         (_BETA_WORKFLOW, "resolve-beta", "None"),
         (_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None"),
+        ("pr.yml", "unit-tests-beta", "None"),
     }
 
     beta_path = _WORKFLOW_DIR / _BETA_WORKFLOW
@@ -503,3 +504,44 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
             "version.home-assistant.io/beta.json" in str(step.get("run", ""))
             for step in _job_steps(job)
         ), f"{job_id} must not resolve the beta version a second time"
+
+
+def test_pr_unit_beta_lane_runs_the_suites_on_the_beta_core() -> None:
+    """The beta unit lane tests the beta Core, and only while it differs.
+
+    One resolver step reads the beta Core and compares it with the dev group's
+    Core pin; every later step is gated on that comparison and installs or
+    runs against the resolved version. The suites run with --no-sync: a plain
+    `uv run` re-syncs the venv to the lock and would test the stable Core
+    again while reporting a beta run.
+    """
+    job = _workflow(_WORKFLOW_DIR / "pr.yml")["jobs"]["unit-tests-beta"]
+    steps = _job_steps(job)
+    resolve = next(step for step in steps if step.get("id") == "beta")
+    assert "version.home-assistant.io/beta.json" in resolve["run"]
+    assert "pyproject.toml" in resolve["run"], (
+        "the skip compares with the dev group's pin"
+    )
+
+    later = steps[steps.index(resolve) + 1 :]
+    skip_guard = (
+        "github.event_name == 'workflow_dispatch' || "
+        "steps.beta.outputs.superfluous != 'true'"
+    )
+    install = next(step for step in later if step.get("id") == "install")
+    assert install["if"] == skip_guard
+    assert install["env"]["BETA_CORE"] == "${{ steps.beta.outputs.version }}"
+    for package in ("homeassistant", "pytest-homeassistant"):
+        assert f'"{package}==$BETA_CORE"' in install["run"], package
+
+    suites = [step for step in later if "pytest tests/" in str(step.get("run", ""))]
+    assert {step["run"].split()[4] for step in suites} == {
+        "tests/src/unit/",
+        "tests/addon/",
+    }
+    for step in suites:
+        assert step["run"].startswith("uv run --no-sync pytest "), step["name"]
+        assert step["if"] in (
+            skip_guard,
+            "${{ !cancelled() && steps.install.outcome == 'success' }}",
+        ), step["name"]

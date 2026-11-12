@@ -236,7 +236,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr.yml` | Pull request or manual | Fast checks and validation orchestration. |
+| `pr.yml` | Pull request or manual | Fast checks and validation orchestration, plus the non-required beta Core unit lane. |
 | `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
@@ -331,6 +331,14 @@ which moves the runtime packages Core pins only in `package_constraints.txt`
 request (they warn instead when the file is unreachable). Dependabot ignores
 the runtime dependencies Core pins exactly, since a bump of one would only
 fail that check.
+
+Renovate moves those pins only to stable releases. `pr.yml`'s
+`Unit Tests (beta Core)` job covers the beta: it reads the current beta Core
+from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
+over the locked environment, and runs the unit and app suites. Unlike the E2E
+beta lanes it runs on every pull request, because these suites take minutes.
+It is not a required check, so a beta Core change reports without blocking
+a merge, and it skips while beta equals the dev group's pin.
 
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major
