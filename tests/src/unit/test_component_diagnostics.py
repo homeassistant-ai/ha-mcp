@@ -461,11 +461,12 @@ async def test_running_and_bring_up_follow_the_live_objects(
     )
     manager = object.__new__(eserver.EmbeddedServerManager)
     manager._thread = None
+    loop = asyncio.get_running_loop()
     if task_done:
-        task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(0))
-        await task
+        task: asyncio.Future[None] = loop.create_future()
+        task.set_result(None)
     else:
-        task = asyncio.create_task(asyncio.sleep(3600))
+        task = loop.create_future()
 
     try:
         entry = await _setup_server_entry(hass)
