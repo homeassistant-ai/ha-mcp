@@ -41,14 +41,22 @@ async def categories(
 async def test_label_update_without_a_name_keeps_the_name(
     hass: HomeAssistant, labels: LabelTools
 ) -> None:
-    """Changing only a label's color does not make the caller restate its name."""
-    label = lr.async_get(hass).async_create("Security", color="red")
+    """Changing only a label's color does not make the caller restate its name,
+    and leaves the fields it omits as they were."""
+    label = lr.async_get(hass).async_create(
+        "Security", color="red", icon="mdi:shield", description="Locks"
+    )
 
     result = await labels.ha_config_set_label(label_id=label.label_id, color="blue")
 
     stored = lr.async_get(hass).async_get_label(label.label_id)
     assert stored is not None
-    assert (stored.name, stored.color) == ("Security", "blue")
+    assert (stored.name, stored.color, stored.icon, stored.description) == (
+        "Security",
+        "blue",
+        "mdi:shield",
+        "Locks",
+    )
     assert result["message"] == "Successfully updated label: Security"
 
 
@@ -68,6 +76,22 @@ async def test_label_update_with_empty_values_clears_them(
     stored = lr.async_get(hass).async_get_label(label.label_id)
     assert stored is not None
     assert (stored.color, stored.icon, stored.description) == (None, None, None)
+
+
+async def test_label_description_is_stored_as_written(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    """Only a blank description clears it; any other one reaches Core with its
+    indentation and line breaks."""
+    label = lr.async_get(hass).async_create("Security")
+
+    await labels.ha_config_set_label(
+        label_id=label.label_id, description="  Locks\n  Alarms\n"
+    )
+
+    stored = lr.async_get(hass).async_get_label(label.label_id)
+    assert stored is not None
+    assert stored.description == "  Locks\n  Alarms\n"
 
 
 async def test_label_create_without_a_name_reports_cores_refusal(

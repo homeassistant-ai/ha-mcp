@@ -8,7 +8,7 @@ import logging
 import posixpath
 import urllib.parse
 from collections.abc import Mapping
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -90,8 +90,7 @@ async def search_related(
         reason = core_error_message(result.get("error") or "request failed")
         warnings.append(f"related unavailable: {reason}")
         return None
-    related = result.get("result")
-    return related if isinstance(related, dict) else None
+    return cast(dict[str, Any], result["result"])
 
 
 def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:

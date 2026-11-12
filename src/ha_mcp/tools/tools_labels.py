@@ -522,13 +522,14 @@ class LabelTools:
             message["label_id"] = label_id
         if name is not None:
             message["name"] = name
-        for key, value in (
-            ("color", color),
-            ("icon", icon),
-            ("description", description),
-        ):
+        for key, value in (("color", color), ("icon", icon)):
             if value is not None:
                 message[key] = clearable_value(value, key)
+        if description is not None:
+            # Blank clears it, quote-only is refused, other text goes to Core as given.
+            message["description"] = (
+                clearable_value(description, "description") and description
+            )
         return action, message
 
     async def _label_set_success_response(
