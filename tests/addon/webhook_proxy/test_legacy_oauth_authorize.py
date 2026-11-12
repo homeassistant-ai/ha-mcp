@@ -80,10 +80,20 @@ async def test_authorize_refuses_a_malformed_request(
         ("http://claude.ai/cb", False),
         ("ftp://claude.ai/cb", False),
         ("javascript:alert(1)", False),
+        ("https:///nohost", False),
         ("", False),
         ("https://claude.ai/cb#fragment", False),
     ],
-    ids=["https", "https-port", "http", "ftp", "no-host", "empty", "fragment"],
+    ids=[
+        "https",
+        "https-port",
+        "http",
+        "ftp",
+        "javascript",
+        "no-host",
+        "empty",
+        "fragment",
+    ],
 )
 async def test_authorize_accepts_only_safe_redirect_uris(
     hass: HomeAssistant,

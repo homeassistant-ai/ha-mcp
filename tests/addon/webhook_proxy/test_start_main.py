@@ -228,6 +228,7 @@ async def test_updated_component_raises_the_restart_repair(
     assert await run_main(hass, app) == 0
 
     assert issue_registry.async_get_issue(variant.domain, "update_restart_required")
+    assert "INTEGRATION UPDATED" in app.out()
     bundled = json.loads((variant.component_dir / "manifest.json").read_text())
     deployed = json.loads((app.deployed_component / "manifest.json").read_text())
     assert deployed["version"] == bundled["version"]
