@@ -412,7 +412,7 @@ def _seqnum(cursor: str) -> tuple[str, int] | None:
     fields = dict(f.partition("=")[::2] for f in cursor.split(";"))
     try:
         return fields["s"], int(fields["i"], 16)
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         return None
 
 
