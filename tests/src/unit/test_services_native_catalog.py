@@ -415,7 +415,7 @@ async def test_unreadable_config_uses_english_and_warns(
 ) -> None:
     client = _LegacyClient(raise_on_config=True)
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_services"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.flow_translations"):
         result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"
@@ -432,7 +432,7 @@ async def test_config_without_a_language_uses_english_and_warns(
 ) -> None:
     client = _LegacyClient(config={"time_zone": "UTC"})
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_services"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.tools.flow_translations"):
         result = await _build_list_services(client)()
 
     assert client.translation_messages[0]["language"] == "en"

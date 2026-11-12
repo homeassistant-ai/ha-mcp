@@ -59,15 +59,12 @@ class TestSystemTools:
         assert "config_check" in data, "Missing 'config_check' section"
         config_check = data["config_check"]
         assert "result" in config_check, "Missing 'result' field"
-        assert "is_valid" in config_check, "Missing 'is_valid' field"
         assert "errors" in config_check, "Missing 'errors' field"
 
         # The test environment should have valid config
-        if config_check.get("is_valid"):
+        if config_check["result"] == "valid":
             logger.info("Configuration is valid")
-            assert config_check["result"] == "valid"
-            errors = config_check.get("errors") or []
-            assert len(errors) == 0, f"Valid config should have no errors: {errors}"
+            assert config_check["errors"] is None, config_check["errors"]
         else:
             # Log errors if config is invalid (unexpected in test env)
             logger.warning(f"Configuration has errors: {config_check['errors']}")
