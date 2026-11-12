@@ -23,14 +23,16 @@ from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .helpers import (
+    clearable_value,
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import websocket_error_message
+from .util_helpers import search_related, websocket_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,7 @@ class LabelTools:
             )
         return labels
 
-    async def _require_existing_label(self, label_id: str, name: str) -> None:
+    async def _require_existing_label(self, label_id: str, name: str | None) -> None:
         """Raise RESOURCE_NOT_FOUND if ``label_id`` is not in the registry.
 
         Enforces the strict update-only contract (issue #1860): update of an
@@ -473,40 +475,9 @@ class LabelTools:
             )
         return await self._add_label_to_areas(resolved_id, parsed_areas)
 
-    def _raise_label_set_failure(
-        self, result: dict[str, Any], action: str, name: str, label_id: str | None
-    ) -> NoReturn:
-        """Raise for a failed label_registry create/update.
-
-        The unknown-id case is caught up front by ``_require_existing_label``.
-        This substring match only catches HA error texts containing
-        ``"not found"``/``"doesn't exist"``; HA's label update does NOT emit
-        those for an unknown/deleted id (it surfaces ``"Unknown error"``), so
-        it is a best-effort guard for other/future phrasings only.
-        """
-        error_str = str(result.get("error", "")).lower()
-        if "not found" in error_str or "doesn't exist" in error_str:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Label not found: {label_id}",
-                    context={"name": name, "label_id": label_id},
-                    suggestions=[
-                        "Use ha_config_get_label() without label_id to see all labels",
-                    ],
-                )
-            )
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to {action} label: {result.get('error', 'Unknown error')}",
-                context={"name": name, "label_id": label_id},
-            )
-        )
-
     async def _prepare_label_write(
         self,
-        name: str,
+        name: str | None,
         label_id: str | None,
         areas: str | list[str] | None,
     ) -> list[str] | None:
@@ -538,32 +509,32 @@ class LabelTools:
 
     def _build_label_set_message(
         self,
-        name: str,
+        name: str | None,
         label_id: str | None,
         color: str | None,
         icon: str | None,
         description: str | None,
     ) -> tuple[str, dict[str, Any]]:
+        """Core's create/update message: None leaves a field out, blank clears it."""
         action = "update" if label_id else "create"
-        message: dict[str, Any] = {
-            "type": f"config/label_registry/{action}",
-            "name": name,
-        }
+        message: dict[str, Any] = {"type": f"config/label_registry/{action}"}
         if action == "update":
             message["label_id"] = label_id
-        if color is not None:
-            message["color"] = color
-        if icon is not None:
-            message["icon"] = icon
-        if description is not None:
-            message["description"] = description
+        if name is not None:
+            message["name"] = name
+        for key, value in (
+            ("color", color),
+            ("icon", icon),
+            ("description", description),
+        ):
+            if value is not None:
+                message[key] = clearable_value(value, key)
         return action, message
 
     async def _label_set_success_response(
         self,
         result: dict[str, Any],
         action: str,
-        name: str,
         label_id: str | None,
         parsed_areas: list[str] | None,
     ) -> dict[str, Any]:
@@ -577,7 +548,7 @@ class LabelTools:
             "success": True,
             "label_id": resolved_id,
             "label_data": label_data,
-            "message": f"Successfully {action_past} label: {name}",
+            "message": f"Successfully {action_past} label: {label_data.get('name')}",
         }
         if assigned_areas is not None:
             payload["assigned_areas"] = assigned_areas
@@ -602,7 +573,10 @@ class LabelTools:
         """Get label info - list all labels or get a specific one by ID.
 
         Without a label_id: Lists all Home Assistant labels with their configurations.
-        With a label_id: Returns configuration for that specific label.
+        With a label_id: Returns that label and, as `related`, Home Assistant's
+        Related set for it: the areas, devices and entities that carry it, the
+        automations and scripts that target it, and the areas, devices, floors,
+        config entries and integrations those items belong to.
 
         EXAMPLES:
         - List all labels: ha_config_get_label()
@@ -641,12 +615,19 @@ class LabelTools:
             )
 
             if label:
-                return {
+                warnings: list[str] = []
+                response: dict[str, Any] = {
                     "success": True,
                     "label_id": label_id,
                     "label": label,
+                    "related": await search_related(
+                        self._client, "label", label_id, warnings
+                    ),
                     "message": f"Found label: {label.get('name', label_id)}",
                 }
+                if warnings:
+                    response["warnings"] = warnings
+                return response
             else:
                 available_ids = [lbl.get("label_id") for lbl in labels[:10]]
                 raise_tool_error(
@@ -692,7 +673,13 @@ class LabelTools:
     @log_tool_usage
     async def ha_config_set_label(
         self,
-        name: Annotated[str, Field(description="Display name for the label")],
+        name: Annotated[
+            str | None,
+            Field(
+                description="Display name. Required to create; omit on update to keep it.",
+                default=None,
+            ),
+        ] = None,
         label_id: Annotated[
             str | None,
             Field(
@@ -703,21 +690,21 @@ class LabelTools:
         color: Annotated[
             str | None,
             Field(
-                description="Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733')",
+                description="Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733'); empty string clears it",
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); empty string clears it",
                 default=None,
             ),
         ] = None,
         description: Annotated[
             str | None,
             Field(
-                description="Description of the label's purpose",
+                description="Description of the label's purpose; empty string clears it",
                 default=None,
             ),
         ] = None,
@@ -744,7 +731,7 @@ class LabelTools:
 
         EXAMPLES:
         - Create: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
-        - Update: ha_config_set_label("Updated Name", label_id="my_label_id", color="blue")
+        - Update: ha_config_set_label(label_id="my_label_id", color="blue")
         - Create and apply to areas: ha_config_set_label("Site Home", areas=["kitchen", "living_room"])
 
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities,
@@ -759,9 +746,13 @@ class LabelTools:
             result = await self._client.send_websocket_message(message)
             if result.get("success"):
                 return await self._label_set_success_response(
-                    result, action, name, label_id, parsed_areas
+                    result, action, label_id, parsed_areas
                 )
-            self._raise_label_set_failure(result, action, name, label_id)
+            raise_core_refusal(
+                f"Failed to {action} label",
+                result,
+                context={"name": name, "label_id": label_id},
+            )
 
         except ToolError:
             raise
@@ -798,16 +789,16 @@ class LabelTools:
         """
         Delete a Home Assistant label.
 
-        Removes the label from the label registry. This will also remove the label
-        from all entities, devices, and areas that have it assigned.
+        Removes the label from the label registry. Home Assistant also takes it off
+        every entity, device and area that carries it. Automations and scripts that
+        target the label keep the reference, which then matches nothing;
+        ha_config_get_label(label_id) lists them under `related`. This cannot be
+        undone.
 
         EXAMPLES:
         - Delete label: ha_config_remove_label("my_label_id")
 
         Use ha_config_get_label() to find label IDs.
-
-        **WARNING:** Deleting a label will remove it from all assigned entities.
-        This action cannot be undone.
         """
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.

@@ -16,6 +16,7 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantError
 from .config_write_helpers import fetch_registry_entry
+from .util_helpers import search_related
 
 REFERENCES_NEED_COMPONENT = (
     "references need the ha_mcp_tools component's automation_config bridge, "
@@ -82,19 +83,7 @@ async def core_related(
             "related unavailable: no automation entity was found for this config id"
         )
         return None
-    try:
-        result = await client.send_websocket_message(
-            {"type": "search/related", "item_type": "automation", "item_id": entity_id}
-        )
-    except HomeAssistantError as e:
-        warnings.append(f"related unavailable: {e}")
-        return None
-    if not result.get("success"):
-        reason = result.get("error") or "request failed"
-        warnings.append(f"related unavailable: {reason}")
-        return None
-    related = result.get("result")
-    return related if isinstance(related, dict) else None
+    return await search_related(client, "automation", entity_id, warnings)
 
 
 async def repair_validation(

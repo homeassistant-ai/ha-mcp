@@ -14,6 +14,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    HomeAssistantError,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,28 @@ def websocket_error_message(error: Any) -> str:
     if isinstance(error, dict):
         return str(error.get("message", error))
     return str(error)
+
+
+async def search_related(
+    client: Any, item_type: str, item_id: str, warnings: list[str]
+) -> dict[str, Any] | None:
+    """Core's ``search/related`` answer for one item, the Related set its UI shows.
+
+    None, with the reason in ``warnings``, when Core does not answer it.
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "search/related", "item_type": item_type, "item_id": item_id}
+        )
+    except HomeAssistantError as e:
+        warnings.append(f"related unavailable: {e}")
+        return None
+    if not result.get("success"):
+        reason = result.get("error") or "request failed"
+        warnings.append(f"related unavailable: {reason}")
+        return None
+    related = result.get("result")
+    return related if isinstance(related, dict) else None
 
 
 def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
