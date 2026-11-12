@@ -173,31 +173,63 @@ async def test_zwave_node_id_and_status_come_from_the_identifier(
     assert result["success"] is True
     device = result["device"]
     assert device["integration_type"] == "zwave_js"
-    assert device["node_id"] == str(_NODE_ID)
+    assert device["node_id"] == _NODE_ID
+    # Z-Wave JS's whole reply, including fields such as ``ready``.
     assert device["node_status"]["node_id"] == _NODE_ID
     assert device["node_status"]["status"] == NodeStatus.ALIVE
+    assert device["node_status"]["ready"] is True
     assert {"type": "zwave_js/node_status", "device_id": dev.id} in [
         call.args[0] for call in spy.call_args_list
     ]
     assert "warnings" not in result
 
 
-async def test_zwave_identifier_without_node_part_reads_no_status(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools: RegistryTools
-) -> None:
-    """An identifier with no ``-{node_id}`` gives no node id, so no status
-    is asked for."""
-    dev = _device(hass, "zwave_js", str(_HOME_ID))
+# A SmartStart DSK: eight dash-separated five-digit blocks, as on a QR code.
+_DSK = "34673-15546-46480-39591-32400-22155-07715-45994"
 
-    with sent_messages(core_client) as spy:
-        result = await tools.ha_get_device(device_id=dev.id)
+
+async def test_pre_provisioned_zwave_device_gets_no_node_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools: RegistryTools,
+    zwave_js: MockConfigEntry,
+) -> None:
+    """A SmartStart device provisioned with a name but not yet included has no
+    node: Core names it ``provision_<dsk>`` and its status read refuses. A
+    block of the DSK must not be reported as its node id."""
+    provisioned = await core_client.send_websocket_message(
+        {
+            "type": "zwave_js/provision_smart_start_node",
+            "entry_id": zwave_js.entry_id,
+            "qr_provisioning_information": {
+                "version": 1,
+                "securityClasses": [0],
+                "dsk": _DSK,
+                "genericDeviceClass": 1,
+                "specificDeviceClass": 1,
+                "installerIconType": 1,
+                "manufacturerId": 1,
+                "productType": 1,
+                "productId": 1,
+                "applicationVersion": "1.0",
+            },
+            "device_name": "Porch sensor",
+        }
+    )
+    assert provisioned["success"] is True
+    dev = dr.async_get(hass).async_get_device_by_identifier(
+        ("zwave_js", f"provision_{_DSK}"), zwave_js.entry_id
+    )
+    assert dev is not None
+
+    result = await tools.ha_get_device(device_id=dev.id)
 
     device = result["device"]
     assert device["integration_type"] == "zwave_js"
     assert "node_id" not in device
     assert "node_status" not in device
-    assert "zwave_js/node_status" not in [
-        call.args[0]["type"] for call in spy.call_args_list
+    assert result["warnings"] == [
+        f"Z-Wave node status unavailable: Node for device {dev.id} can't be found"
     ]
 
 
@@ -340,7 +372,7 @@ async def test_zha_device_gets_ieee_address_and_radio_metrics(
             f"{_HOME_ID}-{_NODE_ID}",
             "enrich_zwave_status",
             "zwave_js/node_status",
-            ("node_id", str(_NODE_ID)),
+            ("integration_type", "zwave_js"),
             "node_status",
             "Z-Wave node status",
         ),
