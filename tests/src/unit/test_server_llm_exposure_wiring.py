@@ -1,38 +1,50 @@
-"""Server-level coverage for the private LLM-API metadata middleware."""
+"""The private LLM-API metadata reaches only the catalog that consumes it (#2479).
+
+Only the custom component's conversation-agent LLM API reads the per-tool
+``_meta.ha_mcp`` stamp. The real server is built for each deployment shape and
+its ``tools/list`` is read over an MCP client session.
+"""
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import pytest
 
 from ha_mcp import config
-from ha_mcp.llm_exposure import LlmExposureMiddleware
-from ha_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.llm_exposure import META_NAMESPACE
+
+from ._real_server import build_server
 
 
 @pytest.fixture(autouse=True)
-def _reset_embedded_connection():
-    """Keep the process-global embedded registration isolated per case."""
-    config._reset_embedded_connection()
-    yield
-    config._reset_embedded_connection()
+def standalone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start each case as a standalone server, and leave no registration behind.
+
+    The embedded registration is process-global and only the component's
+    in-process entry sets it (``set_embedded_connection``), so the registry is
+    swapped for an empty one that ``monkeypatch`` puts back afterwards.
+    """
+    monkeypatch.setattr(config, "_EMBEDDED_CONNECTION", {})
 
 
-def _registered_llm_exposure_middleware(server: MagicMock) -> list[object]:
-    return [
-        args[0]
-        for name, args, _kwargs in server.mcp.mock_calls
-        if name == "add_middleware"
-        and args
-        and isinstance(args[0], LlmExposureMiddleware)
-    ]
+async def _stamped_tools(
+    monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient
+) -> tuple[int, int]:
+    """(listed tools, tools carrying the private stamp) as an MCP client sees them."""
+    server = build_server(monkeypatch, client)
+    async with Client(server.mcp) as session:
+        tools = await session.list_tools()
+    stamped = [tool for tool in tools if META_NAMESPACE in (tool.meta or {})]
+    return len(tools), len(stamped)
 
 
 @pytest.mark.parametrize("embedded_llm_api_enabled", [None, False])
-def test_private_metadata_middleware_is_absent_without_an_llm_api_consumer(
+async def test_private_metadata_is_absent_without_an_llm_api_consumer(
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
     embedded_llm_api_enabled: bool | None,
-):
+) -> None:
     """Standalone and LLM-API-disabled embedded catalogs stay unmodified."""
     if embedded_llm_api_enabled is not None:
         config.set_embedded_connection(
@@ -41,24 +53,21 @@ def test_private_metadata_middleware_is_absent_without_an_llm_api_consumer(
             llm_api_enabled=embedded_llm_api_enabled,
         )
 
-    server = MagicMock()
-    server.mcp = MagicMock()
-    server.settings.ha_tool_concurrency = 0
+    listed, stamped = await _stamped_tools(monkeypatch, core_client)
 
-    HomeAssistantSmartMCPServer._initialize_server(server)
-
-    assert not _registered_llm_exposure_middleware(server)
+    assert listed
+    assert stamped == 0
 
 
-def test_private_metadata_middleware_is_present_for_enabled_embedded_llm_api():
-    """The component's enabled conversation-agent API retains its stamp."""
+async def test_private_metadata_is_present_for_enabled_embedded_llm_api(
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The component's enabled conversation-agent API gets every tool stamped."""
     config.set_embedded_connection(
         "http://127.0.0.1:8123", "test-token", llm_api_enabled=True
     )
-    server = MagicMock()
-    server.mcp = MagicMock()
-    server.settings.ha_tool_concurrency = 0
 
-    HomeAssistantSmartMCPServer._initialize_server(server)
+    listed, stamped = await _stamped_tools(monkeypatch, core_client)
 
-    assert len(_registered_llm_exposure_middleware(server)) == 1
+    assert listed
+    assert stamped == listed
