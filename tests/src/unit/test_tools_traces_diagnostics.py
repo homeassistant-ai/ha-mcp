@@ -101,8 +101,13 @@ class TestGatherDiagnostics:
     async def test_a_ran_automation_reports_core_s_last_triggered(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        """Once a run sets last_triggered, diagnostics reports Core's own value."""
-        await _setup(hass, "automation", [_automation("test", "Test")])
+        """An automation that ran but keeps no traces reports Core's own
+        last_triggered, so the agent knows the run happened."""
+        await _setup(
+            hass,
+            "automation",
+            [_automation("test", "Test", trace={"stored_traces": 0})],
+        )
         hass.states.async_set("light.trigger", "on")
         await hass.async_block_till_done()
         state = hass.states.get("automation.test")
