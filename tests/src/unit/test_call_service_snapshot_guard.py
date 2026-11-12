@@ -17,10 +17,13 @@ from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import voluptuous as vol
-from homeassistant.components import websocket_api
+from homeassistant.components.hassio import const as hassio_const
+from homeassistant.components.hassio import websocket_api as hassio_websocket_api
+from homeassistant.components.hassio.handler import HassIO
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -30,6 +33,8 @@ from ha_mcp.tools.tools_service import ServiceTools
 from ._code_mode import run_custom_tool
 from ._tool_errors import _error
 
+# The Supervisor's address, as Core's hassio tests give it.
+SUPERVISOR = "127.0.0.1"
 SNAPSHOT_SERVICES = [
     ("hassio", "backup_partial"),
     ("backup", "create_automatic"),
@@ -79,33 +84,30 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
 
 
 @pytest.fixture
-async def backup_core(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Core's backup integration, plus a recording ``supervisor/api``.
+async def backup_core(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AiohttpClientMocker:
+    """Core's backup integration and Core's own ``supervisor/api``.
 
-    A unit test has no Supervisor, so the command Core's ``hassio`` registers
-    is one that records each request's endpoint and method and answers it.
+    A unit test has no Supervisor, so ``hassio``'s client and WebSocket API
+    are set up as its ``async_setup`` sets them up, and the Supervisor's HTTP
+    API at its address is answered by ``aioclient_mock``, as Core's own hassio
+    tests answer it. Core validates each command and builds each reply.
     """
     assert await async_setup_component(hass, "backup", {})
-    requests: list[dict[str, Any]] = []
-
-    @websocket_api.websocket_command(
-        {
-            vol.Required("type"): "supervisor/api",
-            vol.Required("endpoint"): str,
-            vol.Required("method"): str,
-        }
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "abcdefgh")
+    hass.data[hassio_const.DATA_COMPONENT] = HassIO(
+        hass.loop, async_get_clientsession(hass), SUPERVISOR
     )
-    @websocket_api.async_response
-    async def _supervisor_api(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        requests.append({"endpoint": msg["endpoint"], "method": msg["method"]})
-        connection.send_result(msg["id"], {"backups": []})
-
-    websocket_api.async_register_command(hass, _supervisor_api)
-    return requests
+    hassio_websocket_api.async_load_websocket_api(hass)
+    for path in ("/backups", "/v2/backups", "/backups_report"):
+        aioclient_mock.get(
+            f"http://{SUPERVISOR}{path}",
+            json={"result": "ok", "data": {"backups": []}},
+        )
+    return aioclient_mock
 
 
 class Spies(NamedTuple):
@@ -240,7 +242,7 @@ class TestWsCommandMode:
         self,
         settings: Settings,
         core_client: HomeAssistantClient,
-        backup_core: list[dict[str, Any]],
+        backup_core: AiohttpClientMocker,
         sent: Spies,
         monkeypatch: pytest.MonkeyPatch,
         command: str,
@@ -278,7 +280,7 @@ class TestWsCommandMode:
         self,
         settings: Settings,
         core_client: HomeAssistantClient,
-        backup_core: list[dict[str, Any]],
+        backup_core: AiohttpClientMocker,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(settings, "enable_snapshot_actions", False)
@@ -290,7 +292,9 @@ class TestWsCommandMode:
         )
 
         assert result["success"] is True
-        assert backup_core == [{"endpoint": "/backups_report", "method": "get"}]
+        assert [(method, str(url)) for method, url, *_ in backup_core.mock_calls] == [
+            ("get", f"http://{SUPERVISOR}/backups_report")
+        ]
 
 
 class TestCodeModeBridges:
@@ -353,7 +357,7 @@ class TestCodeModeBridges:
         self,
         settings: Settings,
         core_client: HomeAssistantClient,
-        backup_core: list[dict[str, Any]],
+        backup_core: AiohttpClientMocker,
         sent: Spies,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
