@@ -287,7 +287,6 @@ module = [
     "tests.src.unit.test_helper_input_validation",
     "tests.src.unit.test_helper_response_shape",
     "tests.src.unit.test_history_helpers",
-    "tests.src.unit.test_history_summary",
     "tests.src.unit.test_http_transport_options",
     "tests.src.unit.test_image_info",
     "tests.src.unit.test_individual_fetch_settings",

@@ -1,376 +1,169 @@
-"""Unit tests for Bugs 11 and 12 (issue #1150).
+"""Create, update and duplicate names in ``ha_config_set_helper`` (#1150).
 
-Bug 11: ``ha_config_set_helper`` previously inferred create-vs-update from which
-of ``name`` / ``helper_id`` was passed. Passing BOTH silently mode-switched to
-UPDATE, so a typo in helper_id surfaced as ``ENTITY_NOT_FOUND`` even though the
-caller had supplied a valid ``name``. The fix rejects the ambiguous call with
-``VALIDATION_INVALID_PARAMETER``.
+Bug 11: passing ``name`` and ``helper_id`` together is the rename pattern; it
+must update the helper, not be refused or turned into a create.
 
-Bug 12: HA's ``{type}/create`` endpoints auto-suffix duplicate names with
-``_2`` / ``_3`` / ..., so a "create" call against an existing name returns
-``success: True`` even though the caller actually got a duplicate entity. The
-fix queries the helper list first and raises ``VALIDATION_INVALID_PARAMETER``
-with the existing helper_id in the suggestion when the slug already exists.
+Bug 12: Core's ``<type>/create`` numbers a duplicate name (``_2``), so a
+create whose name an existing helper already has is refused before anything
+is sent, pointing at the existing helper's id.
+
+The tool runs on the server's own client against a real ``hass`` without the
+component, so the duplicate check reads Core's helper lists and config entries.
+The component's check is covered in ``test_storage_helper_native_real_core.py``.
 """
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+import uuid
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_helpers import flow
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
-# ---------------------------------------------------------------------------
-# Fixtures — local copy of the pattern used by test_helper_field_persistence.py.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def mock_client():
-    """Mock client. Tests configure ``send_websocket_message`` per-scenario."""
-    return MagicMock()
+from ._tool_errors import _error
 
 
 @pytest.fixture
-def register_tools(mock_client):
-    """Register helper config tools and return the captured tool functions."""
-    from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
-
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mock_mcp = MagicMock()
-    mock_mcp.add_tool = capture_add_tool
-    register_config_helper_tools(mock_mcp, mock_client)
-    return registered
+async def tools(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HelperConfigTools:
+    # ``config`` serves the registry and config-entry commands.
+    for domain in ("config", "input_boolean"):
+        assert await async_setup_component(hass, domain, {})
+    return HelperConfigTools(core_client)
 
 
-def _assert_invalid_param(excinfo, *, must_contain: str | None = None) -> None:
-    msg = str(excinfo.value)
-    assert "VALIDATION_INVALID_PARAMETER" in msg, (
-        f"expected VALIDATION_INVALID_PARAMETER, got: {msg!r}"
+def _name(base: str) -> str:
+    """A fresh name: Core restores a removed helper's registry entry by id."""
+    return f"{base} {uuid.uuid4().hex[:8]}"
+
+
+async def _stored(client: HomeAssistantClient) -> dict[str, str]:
+    """Core's stored input_booleans, id to name."""
+    listed = await client.send_websocket_message({"type": "input_boolean/list"})
+    assert listed["success"], listed
+    return {item["id"]: item["name"] for item in listed["result"]}
+
+
+async def test_name_with_helper_id_renames_the_helper(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> None:
+    """Bug 11: the rename pattern updates the helper it names."""
+    created = await tools.ha_config_set_helper(
+        helper_type="input_boolean", name=_name("Old Name"), wait=False
     )
-    if must_contain is not None:
-        assert must_contain in msg, (
-            f"expected {must_contain!r} in error message, got: {msg!r}"
-        )
+    (helper_id,) = await _stored(core_client)
+    new_name = _name("New Name")
 
-
-def _make_simple_handler(
-    *,
-    helper_type: str,
-    list_items: list[dict[str, Any]] | None = None,
-    unique_id: str = "abc123",
-):
-    """Build a side_effect for ``send_websocket_message`` for SIMPLE helpers.
-
-    ``list_items`` is what ``{type}/list`` should return (used to seed the
-    Bug 12 collision detector).
-    """
-    items = list_items if list_items is not None else []
-
-    async def ws_handler(msg: dict) -> dict:
-        msg_type = msg.get("type", "")
-
-        # Registry validators upstream of our checks must pass.
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/label_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/category_registry/list":
-            return {"success": True, "result": []}
-
-        # Collision detector + general listing.
-        if msg_type == f"{helper_type}/list":
-            # person/list returns {"storage": [...], "config": [...]}.
-            if helper_type == "person":
-                return {"success": True, "result": {"storage": items, "config": []}}
-            return {"success": True, "result": items}
-
-        if msg_type == "config/entity_registry/get":
-            return {
-                "success": True,
-                "result": {
-                    "entity_id": msg.get("entity_id"),
-                    "unique_id": unique_id,
-                    "platform": helper_type,
-                },
-            }
-
-        # Generic catch-all so the success path runs to completion.
-        if msg_type.endswith("/create") or msg_type.endswith("/update"):
-            return {
-                "success": True,
-                "result": {
-                    "id": unique_id,
-                    "entity_id": f"{helper_type}.{unique_id}",
-                    **{k: v for k, v in msg.items() if k != "type"},
-                },
-            }
-        if msg_type == "config/entity_registry/update":
-            return {
-                "success": True,
-                "result": {"entity_entry": {"entity_id": msg.get("entity_id")}},
-            }
-        return {"success": True, "result": {}}
-
-    return ws_handler
-
-
-def _make_flow_handler(
-    *,
-    helper_type: str,
-    config_entries: list[dict[str, Any]] | None = None,
-):
-    """Build a side_effect for flow-helper paths.
-
-    ``config_entries`` is what ``config_entries/get`` should return (used to
-    seed the Bug 12 collision detector for flow helpers).
-    """
-    entries = config_entries if config_entries is not None else []
-
-    async def ws_handler(msg: dict) -> dict:
-        msg_type = msg.get("type", "")
-
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/label_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/category_registry/list":
-            return {"success": True, "result": []}
-
-        if msg_type == "config_entries/get":
-            return {"success": True, "result": entries}
-
-        # The flow itself is mocked at a higher level (advance_flow);
-        # any leaked WS calls here just succeed-as-noop.
-        return {"success": True, "result": {}}
-
-    return ws_handler
-
-
-# ---------------------------------------------------------------------------
-# Bug 11 — both `name` and `helper_id` is ambiguous.
-# ---------------------------------------------------------------------------
-
-
-class TestBug11RenameOnUpdateIsAllowed:
-    """Bug 11 (issue #1150) — `name` AND `helper_id` together is the LEGITIMATE
-    rename pattern. The fix is NOT to reject this combination (which would break
-    the rename use case); the underlying problem of confusing ENTITY_NOT_FOUND
-    on a misspelled helper_id is mitigated by the existing per-type-update error
-    branch that already includes helpful context. These tests confirm rename
-    still works.
-    """
-
-    async def test_only_name_works_create_path(self, register_tools, mock_client):
-        """Control: passing only ``name`` proceeds (no ambiguity error)."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(helper_type="input_boolean")
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Brand New Helper",
-            )
-        assert result["success"] is True
-        assert result["action"] == "create"
-
-    async def test_only_helper_id_works_update_path(self, register_tools, mock_client):
-        """Control: passing only ``helper_id`` proceeds (no ambiguity error)."""
-        # Existing entry the update will load.
-        existing = [{"id": "abc123", "name": "OldName", "icon": "mdi:bell"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type="input_boolean", list_items=existing
-            )
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                helper_id="abc123",
-                icon="mdi:toggle-switch",
-            )
-        assert result["success"] is True
-        assert result["action"] == "update"
-
-    async def test_rename_via_update_with_both_name_and_helper_id(
-        self, register_tools, mock_client
-    ):
-        """Bug 11 fix: rename pattern (name + helper_id) MUST still work."""
-        existing = [{"id": "abc123", "name": "OldName", "icon": "mdi:bell"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type="input_boolean", list_items=existing
-            )
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="NewDisplayName",
-                helper_id="abc123",
-            )
-        assert result["success"] is True
-        assert result["action"] == "update"
-
-
-# ---------------------------------------------------------------------------
-# Bug 12 — name collision on create silently produced `_2`/`_3` duplicates.
-# ---------------------------------------------------------------------------
-
-
-class TestBug12NameCollisionSimpleHelpers:
-    """Creating a simple helper with an existing name must raise."""
-
-    @pytest.mark.parametrize(
-        "helper_type",
-        ["input_boolean", "counter", "input_number"],
+    result = await tools.ha_config_set_helper(
+        helper_type="input_boolean", name=new_name, helper_id=helper_id, wait=False
     )
-    async def test_name_collision_raises_with_existing_id(
-        self, register_tools, mock_client, helper_type
+
+    assert result["success"] is True
+    assert result["action"] == "update"
+    assert await _stored(core_client) == {helper_id: new_name}
+    assert hass.states.async_entity_ids("input_boolean") == [created["entity_id"]]
+
+
+async def test_create_with_an_existing_name_points_at_that_helper(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> None:
+    """Bug 12: Core would create a numbered duplicate instead."""
+    name = _name("Kitchen Light")
+    await tools.ha_config_set_helper(helper_type="input_boolean", name=name, wait=False)
+    (existing_id,) = await _stored(core_client)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(
+            helper_type="input_boolean", name=name, wait=False
+        )
+
+    error = _error(exc_info)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    # The suggestion steers the caller to an update of the existing helper.
+    assert any(f"helper_id={existing_id!r}" in s for s in error["suggestions"])
+    assert len(hass.states.async_entity_ids("input_boolean")) == 1
+
+
+async def test_create_with_a_new_name_beside_another_helper_is_not_refused(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> None:
+    await tools.ha_config_set_helper(
+        helper_type="input_boolean", name=_name("Kitchen Light"), wait=False
+    )
+
+    result = await tools.ha_config_set_helper(
+        helper_type="input_boolean", name=_name("Bedroom Light"), wait=False
+    )
+
+    assert result["action"] == "create"
+    assert len(hass.states.async_entity_ids("input_boolean")) == 2
+
+
+async def test_empty_name_is_refused_as_missing_not_as_a_duplicate(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    await tools.ha_config_set_helper(
+        helper_type="input_boolean", name=_name("Kitchen Light"), wait=False
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_helper(helper_type="input_boolean", name="")
+
+    message = str(exc_info.value)
+    assert "VALIDATION_INVALID_PARAMETER" in message
+    assert "already exists" not in message
+    assert len(hass.states.async_entity_ids("input_boolean")) == 1
+
+
+async def test_flow_helper_with_an_existing_title_is_refused_before_a_flow_opens(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    title = _name("Room Temp")
+    template = {"helper_type": "template", "menu_choice": "sensor", "wait": False}
+    await tools.ha_config_set_helper(
+        **template, config={"name": title, "state": "{{ 1 }}"}
+    )
+    (entry,) = hass.config_entries.async_entries("template")
+
+    with (
+        patch.object(flow, "advance_flow", wraps=flow.advance_flow) as advance,
+        pytest.raises(ToolError) as exc_info,
     ):
-        existing_id = "kitchen_light"
-        existing = [{"id": existing_id, "name": "Kitchen Light"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type=helper_type, list_items=existing
-            )
+        await tools.ha_config_set_helper(
+            **template, config={"name": title, "state": "{{ 2 }}"}
         )
 
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type=helper_type,
-                name="Kitchen Light",
-            )
-
-        _assert_invalid_param(excinfo, must_contain=existing_id)
-        # Suggestion text must steer the caller toward an UPDATE.
-        assert "helper_id" in str(excinfo.value)
-
-    async def test_unique_name_passes_collision_check(
-        self, register_tools, mock_client
-    ):
-        """Control: a truly new name should pass through to create."""
-        existing = [{"id": "kitchen_light", "name": "Kitchen Light"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(
-                helper_type="input_boolean", list_items=existing
-            )
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Bedroom Light",
-            )
-        assert result["success"] is True
-        assert result["action"] == "create"
-
-    async def test_empty_name_falls_through_to_required_check(
-        self, register_tools, mock_client
-    ):
-        """Empty `name` must raise the blank-name error, not a collision error."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_simple_handler(helper_type="input_boolean")
-        )
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="",
-            )
-        msg = str(excinfo.value)
-        assert "VALIDATION_INVALID_PARAMETER" in msg
-        # Existing required-check message — explicitly NOT a collision.
-        assert "already exists" not in msg
+    error = _error(exc_info)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert entry.entry_id in error["message"]
+    advance.assert_not_awaited()
+    assert hass.config_entries.flow.async_progress() == []
+    assert len(hass.config_entries.async_entries("template")) == 1
 
 
-class TestBug12NameCollisionFlowHelper:
-    """Creating a flow helper with an existing title must raise."""
+async def test_flow_helper_with_a_new_title_is_created(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    template = {"helper_type": "template", "menu_choice": "sensor", "wait": False}
+    await tools.ha_config_set_helper(
+        **template, config={"name": _name("Other Sensor"), "state": "{{ 1 }}"}
+    )
+    title = _name("Brand New Sensor")
 
-    async def test_template_collision_via_config_entries_get(
-        self, register_tools, mock_client
-    ):
-        existing_entry_id = "01J99XYZTEMPLATE"
-        existing_entries = [
-            {"entry_id": existing_entry_id, "title": "Room Temp", "domain": "template"},
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_flow_handler(
-                helper_type="template", config_entries=existing_entries
-            )
-        )
+    result = await tools.ha_config_set_helper(
+        **template, config={"name": title, "state": "{{ 2 }}"}
+    )
 
-        # The collision check fires before a flow is opened.
-        with (
-            patch(
-                "ha_mcp.tools.config_helpers.flow.advance_flow",
-                new_callable=AsyncMock,
-            ) as advance,
-            pytest.raises(ToolError) as excinfo,
-        ):
-            await register_tools["ha_config_set_helper"](
-                helper_type="template",
-                name="Room Temp",
-                menu_choice="sensor",
-                config={"state": "{{ states('sensor.x')|float }}"},
-            )
-
-        _assert_invalid_param(excinfo, must_contain=existing_entry_id)
-        advance.assert_not_awaited()
-
-    async def test_template_unique_name_passes(self, register_tools, mock_client):
-        """Control: a unique flow-helper name proceeds to the flow."""
-        existing_entries = [
-            {"entry_id": "EXISTING", "title": "Other Sensor", "domain": "template"},
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_make_flow_handler(
-                helper_type="template", config_entries=existing_entries
-            )
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.flow.advance_flow",
-            new_callable=AsyncMock,
-            return_value=(
-                "flow-1",
-                {
-                    "type": "create_entry",
-                    "result": {"entry_id": "NEWENTRY", "title": "Brand New Sensor"},
-                },
-                0,
-            ),
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="template",
-                name="Brand New Sensor",
-                menu_choice="sensor",
-                config={"state": "{{ states('sensor.x')|float }}"},
-                # The fake registry never lists the new entry's entities, so
-                # waiting would poll to the deadline without changing the result.
-                wait=False,
-            )
-        assert result["success"] is True
-        assert result["action"] == "create"
-        assert result["entry_id"] == "NEWENTRY"
+    assert result["success"] is True
+    assert result["action"] == "create"
+    (entry,) = [
+        e for e in hass.config_entries.async_entries("template") if e.title == title
+    ]
+    assert result["entry_id"] == entry.entry_id
