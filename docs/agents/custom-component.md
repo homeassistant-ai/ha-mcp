@@ -136,7 +136,8 @@ current stable, plus the active beta where a fallback keeps stable working.
 Releases between the minimum and current stable may lack features or behave
 differently; a user who keeps an older Home Assistant can install an older
 HA-MCP release. Do not add
-fallbacks or tests for them.
+fallbacks or tests for them; an older release is tested only to verify an
+update path.
 
 ## Two entries, one command surface
 
