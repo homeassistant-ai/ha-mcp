@@ -345,18 +345,17 @@ class EnergyTools:
         self,
         config: dict[str, Any],
         config_hash: str | dict[str, str],
-        *,
-        current_prefs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Hash-check, submit to Core, then report authoritative saved state.
 
         Core validates every submitted entry. Existing siblings are never checked
-        against a narrower local schema. The convenience path supplies its fresh
-        snapshot; the per-key form locks exactly the submitted keys.
+        against a narrower local schema. The hash is checked against a read made
+        here, just before the save, so a change made since the caller's read is
+        caught; the per-key form locks exactly the submitted keys.
         """
         try:
             command_payload("energy/save_prefs", config)
-            current_prefs = await self._resolve_current_prefs(current_prefs)
+            current_prefs: dict[str, Any] = (await self._get_prefs())["config"]
 
             self._check_config_hash(config, config_hash, current_prefs)
 
@@ -430,23 +429,6 @@ class EnergyTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
-
-    async def _resolve_current_prefs(
-        self, current_prefs: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        """Return ``current_prefs`` if supplied, else fetch a fresh snapshot.
-
-        Extracted from ``_set_prefs`` step 2 (snapshot acquisition).
-        Convenience modes pass their already-fetched snapshot in to skip
-        the re-read; external mode='set' callers fall through to a fresh
-        read here. Maps "No prefs" (never configured) to the empty default
-        so the hash-check works on fresh installations too.
-        """
-        if current_prefs is not None:
-            return current_prefs
-
-        config: dict[str, Any] = (await self._get_prefs())["config"]
-        return config
 
     @staticmethod
     def _check_config_hash(
@@ -900,11 +882,7 @@ class EnergyTools:
 
                 partial_config = {target_key: new_list}
                 try:
-                    set_result = await self._set_prefs(
-                        partial_config,
-                        current_hash,
-                        current_prefs=current_config,
-                    )
+                    set_result = await self._set_prefs(partial_config, current_hash)
                 except ToolError as exc:
                     # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
                     # Retry once with a fresh read in case of a benign race.

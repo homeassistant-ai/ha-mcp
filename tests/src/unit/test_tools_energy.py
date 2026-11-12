@@ -496,11 +496,6 @@ async def test_convenience_preview_does_not_write(
     assert not _sent(spy, "energy/save_prefs")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: convenience modes check the hash against their own snapshot, "
-    "so a concurrent change between read and save is never detected and is lost",
-)
 @pytest.mark.usefixtures("energy")
 async def test_convenience_write_keeps_a_concurrent_change_to_the_same_list(
     core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
@@ -528,6 +523,40 @@ async def test_convenience_write_keeps_a_concurrent_change_to_the_same_list(
     devices = (await _core_prefs(core_client))["device_consumption"]
     assert concurrent in devices
     assert {"stat_consumption": "sensor.new"} in devices
+
+
+@pytest.mark.usefixtures("energy")
+async def test_convenience_write_gives_up_rather_than_overwrite_a_busy_list(
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another client changes the list after each of the tool's reads: after
+    its one retry the tool reports the conflict and saves nothing of its own."""
+    real_get = tools_energy.get_energy_prefs
+    reads = 0
+    others: list[dict[str, str]] = []
+
+    async def every_snapshot_changed_elsewhere(client: HomeAssistantClient) -> Any:
+        nonlocal reads
+        reads += 1
+        snapshot = await real_get(client)
+        if reads % 2:
+            others.append({"stat_consumption": f"sensor.other_{reads}"})
+            await _save_elsewhere(client, device_consumption=[_FRIDGE, *others])
+        return snapshot
+
+    monkeypatch.setattr(
+        tools_energy, "get_energy_prefs", every_snapshot_changed_elsewhere
+    )
+
+    with pytest.raises(ToolError, match="RESOURCE_LOCKED"):
+        await EnergyTools(core_client).ha_manage_energy_prefs(
+            mode="add_device", stat_consumption="sensor.new"
+        )
+
+    assert (await _core_prefs(core_client))["device_consumption"] == [
+        _FRIDGE,
+        *others,
+    ]
 
 
 async def test_never_configured_install_reads_as_empty_prefs(
