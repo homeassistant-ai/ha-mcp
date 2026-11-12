@@ -8,6 +8,7 @@ directory, and the mandatory pre-write snapshot is real.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -265,15 +266,24 @@ async def test_parallel_writes_snapshot_and_write_one_at_a_time(
         )
     events: list[str] = []
     take_snapshot = manager.maybe_snapshot
+    second_snapshot = asyncio.Event()
 
     async def snapshot(*args: Any, **kwargs: Any) -> Any:
         events.append("snapshot")
+        if events.count("snapshot") == 2:
+            second_snapshot.set()
         return await take_snapshot(*args, **kwargs)
 
     async def service(*args: Any, **kwargs: Any) -> Any:
         written = args[1] in WRITE_SERVICES
         if written:
             events.append("write")
+            if events.count("write") == 1:
+                # Hold the first write open so the other call gets every chance
+                # to take its snapshot now; with the lock it waits instead.
+                with contextlib.suppress(TimeoutError):
+                    async with asyncio.timeout(0.2):
+                        await second_snapshot.wait()
         result = await call_mcp_tools_service(*args, **kwargs)
         if written:
             events.append("written")
