@@ -16,6 +16,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .helpers import core_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ async def search_related(
         warnings.append(f"related unavailable: {e}")
         return None
     if not result.get("success"):
-        reason = result.get("error") or "request failed"
+        reason = core_error_message(result.get("error") or "request failed")
         warnings.append(f"related unavailable: {reason}")
         return None
     related = result.get("result")

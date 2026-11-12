@@ -7,10 +7,6 @@ Core.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable
-from typing import Any
-
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
@@ -19,10 +15,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_categories import CategoryTools
 from ha_mcp.tools.tools_labels import LabelTools
+
+from ._tool_errors import rejected_call_body
 
 
 @pytest.fixture
@@ -41,25 +38,18 @@ async def categories(
     return CategoryTools(core_client)
 
 
-async def _tool_error(call: Awaitable[Any]) -> dict[str, Any]:
-    """The error payload of a tool call that must fail."""
-    with pytest.raises(ToolError) as excinfo:
-        _ = await call
-    error: dict[str, Any] = json.loads(str(excinfo.value))
-    return error
-
-
 async def test_label_update_without_a_name_keeps_the_name(
     hass: HomeAssistant, labels: LabelTools
 ) -> None:
     """Changing only a label's color does not make the caller restate its name."""
     label = lr.async_get(hass).async_create("Security", color="red")
 
-    await labels.ha_config_set_label(label_id=label.label_id, color="blue")
+    result = await labels.ha_config_set_label(label_id=label.label_id, color="blue")
 
     stored = lr.async_get(hass).async_get_label(label.label_id)
     assert stored is not None
     assert (stored.name, stored.color) == ("Security", "blue")
+    assert result["message"] == "Successfully updated label: Security"
 
 
 async def test_label_update_with_empty_values_clears_them(
@@ -85,24 +75,12 @@ async def test_label_create_without_a_name_reports_cores_refusal(
 ) -> None:
     """A create without a name is refused with Core's own reason, as an input
     error the caller can fix."""
-    error = await _tool_error(labels.ha_config_set_label(color="red"))
+    error = await rejected_call_body(labels.ha_config_set_label(color="red"))
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "name" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_format"
-
-
-async def test_label_name_conflict_reports_cores_reason(
-    hass: HomeAssistant, labels: LabelTools
-) -> None:
-    """A second label with a taken name fails with Core's reason and code, not a
-    generic failure."""
-    lr.async_get(hass).async_create("Security")
-
-    error = await _tool_error(labels.ha_config_set_label(name="Security"))
-
-    assert "already in use" in error["error"]["message"]
-    assert error["ha_error_code"] == "invalid_info"
+    assert "ha_config_get_label" in error["error"]["suggestion"]
 
 
 async def test_label_get_lists_what_carries_and_targets_the_label(
@@ -115,11 +93,29 @@ async def test_label_get_lists_what_carries_and_targets_the_label(
     area = ar.async_get(hass).async_create("Hall", labels={label.label_id})
     entity = er.async_get(hass).async_get_or_create("light", "demo", "hall_lamp")
     er.async_get(hass).async_update_entity(entity.entity_id, labels={label.label_id})
+    assert await async_setup_component(
+        hass,
+        "automation",
+        {
+            "automation": {
+                "id": "lock_up",
+                "alias": "Lock up",
+                "triggers": [{"trigger": "event", "event_type": "lock_up"}],
+                "actions": [
+                    {
+                        "action": "light.turn_off",
+                        "target": {"label_id": label.label_id},
+                    }
+                ],
+            }
+        },
+    )
 
     result = await labels.ha_config_get_label(label_id=label.label_id)
 
     assert result["related"]["area"] == [area.id]
     assert result["related"]["entity"] == [entity.entity_id]
+    assert result["related"]["automation"] == ["automation.lock_up"]
     assert "warnings" not in result
 
 
@@ -134,7 +130,7 @@ async def test_label_get_without_core_search_says_usage_is_unknown(
 
     assert result["label"]["label_id"] == label.label_id
     assert result["related"] is None
-    assert any("related" in w for w in result["warnings"])
+    assert result["warnings"] == ["related unavailable: Unknown command."]
 
 
 async def test_category_update_without_a_name_keeps_the_name(
@@ -143,7 +139,7 @@ async def test_category_update_without_a_name_keeps_the_name(
     """Changing only a category's icon does not make the caller restate its name."""
     category = cr.async_get(hass).async_create(scope="automation", name="Lighting")
 
-    await categories.ha_config_set_category(
+    result = await categories.ha_config_set_category(
         scope="automation", category_id=category.category_id, icon="mdi:lamp"
     )
 
@@ -152,6 +148,7 @@ async def test_category_update_without_a_name_keeps_the_name(
     )
     assert stored is not None
     assert (stored.name, stored.icon) == ("Lighting", "mdi:lamp")
+    assert result["message"] == "Successfully updated category: Lighting"
 
 
 async def test_category_update_with_an_empty_icon_clears_it(
@@ -177,16 +174,40 @@ async def test_category_update_with_an_empty_icon_clears_it(
 async def test_category_update_of_an_unknown_id_is_not_found(
     categories: CategoryTools,
 ) -> None:
-    """An update of a category Core does not hold is reported as not found, with
-    Core's reason."""
-    error = await _tool_error(
+    """An update of a category Core does not hold is reported as not found,
+    naming the id and scope that were looked up."""
+    error = await rejected_call_body(
         categories.ha_config_set_category(
             scope="automation", category_id="missing", icon="mdi:lamp"
         )
     )
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert "doesn't exist" in error["error"]["message"]
+    assert "'missing' not found in scope 'automation'" in error["error"]["message"]
+    assert any("ha_config_get_category" in s for s in error["error"]["suggestions"])
+
+
+async def test_category_name_conflict_is_not_reported_as_not_found(
+    hass: HomeAssistant, categories: CategoryTools
+) -> None:
+    """Core quotes a refused name in its message, so a taken name that reads like
+    Core's unknown-id text is still reported as the name refusal."""
+    registry = cr.async_get(hass)
+    registry.async_create(scope="automation", name="Category ID doesn't exist")
+    other = registry.async_create(scope="automation", name="Lighting")
+
+    error = await rejected_call_body(
+        categories.ha_config_set_category(
+            scope="automation",
+            category_id=other.category_id,
+            name="Category ID doesn't exist",
+        )
+    )
+
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "already in use" in error["error"]["message"]
+    assert error["ha_error_code"] == "invalid_info"
+    assert "ha_config_get_category" in error["error"]["suggestion"]
 
 
 async def test_category_create_without_a_name_reports_cores_refusal(
@@ -194,7 +215,7 @@ async def test_category_create_without_a_name_reports_cores_refusal(
 ) -> None:
     """A create without a name is refused with Core's own reason, as an input
     error the caller can fix."""
-    error = await _tool_error(categories.ha_config_set_category(scope="automation"))
+    error = await rejected_call_body(categories.ha_config_set_category(scope="automation"))
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "name" in error["error"]["message"]

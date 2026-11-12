@@ -208,7 +208,7 @@ class CategoryTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); empty string clears it",
+                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
@@ -270,20 +270,29 @@ class CategoryTools:
                 }
             context = {"name": name, "scope": scope, "category_id": category_id}
             # Core answers an unknown id with the generic ``invalid_info`` code, so
-            # its message is what tells it apart from a refused name.
+            # its exact message is what tells it apart from a refused name (which
+            # quotes the caller's name and could contain any text).
             reason = core_error_message(result.get("error", ""))
-            if "not found" in reason.lower() or "doesn't exist" in reason:
+            if reason == "Category ID doesn't exist":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Category not found: {reason}",
+                        f"Category {category_id!r} not found in scope {scope!r}: {reason}",
                         context={**context, "ha_error_code": result.get("error_code")},
                         suggestions=[
                             f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            "Check the scope: a category exists only in the scope it was created in",
                         ],
                     )
                 )
-            raise_core_refusal(f"Failed to {action} category", result, context=context)
+            raise_core_refusal(
+                f"Failed to {action} category",
+                result,
+                context=context,
+                suggestions=[
+                    f"Use ha_config_get_category('{scope}') to see the existing categories and their IDs",
+                ],
+            )
 
         except ToolError:
             raise

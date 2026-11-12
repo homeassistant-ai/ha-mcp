@@ -574,9 +574,12 @@ class LabelTools:
 
         Without a label_id: Lists all Home Assistant labels with their configurations.
         With a label_id: Returns that label and, as `related`, Home Assistant's
-        Related set for it: the areas, devices and entities that carry it, the
-        automations and scripts that target it, and the areas, devices, floors,
-        config entries and integrations those items belong to.
+        Related set for it: the areas, devices and entities that carry it (an
+        automation, script, scene, group or person that carries it is also listed
+        under its own key), the automations and scripts that target it, and the
+        areas, floors, devices, config entries and integrations of the carrying
+        items. `related` is None, with a warning, when Home Assistant cannot
+        answer; that does not mean the label is unused.
 
         EXAMPLES:
         - List all labels: ha_config_get_label()
@@ -690,21 +693,21 @@ class LabelTools:
         color: Annotated[
             str | None,
             Field(
-                description="Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733'); empty string clears it",
+                description="Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); empty string clears it",
+                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
         description: Annotated[
             str | None,
             Field(
-                description="Description of the label's purpose; empty string clears it",
+                description="Description of the label's purpose; '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
@@ -730,9 +733,9 @@ class LabelTools:
         for entities, devices, and areas.
 
         EXAMPLES:
-        - Create: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
+        - Create: ha_config_set_label(name="Security", color="red", icon="mdi:shield", description="Security-related devices")
         - Update: ha_config_set_label(label_id="my_label_id", color="blue")
-        - Create and apply to areas: ha_config_set_label("Site Home", areas=["kitchen", "living_room"])
+        - Create and apply to areas: ha_config_set_label(name="Site Home", areas=["kitchen", "living_room"])
 
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities,
         ha_set_device(labels=["label_id"]) for devices, or
@@ -752,6 +755,9 @@ class LabelTools:
                 f"Failed to {action} label",
                 result,
                 context={"name": name, "label_id": label_id},
+                suggestions=[
+                    "Use ha_config_get_label() to see the existing labels and their IDs",
+                ],
             )
 
         except ToolError:
@@ -791,9 +797,10 @@ class LabelTools:
 
         Removes the label from the label registry. Home Assistant also takes it off
         every entity, device and area that carries it. Automations and scripts that
-        target the label keep the reference, which then matches nothing;
-        ha_config_get_label(label_id) lists them under `related`. This cannot be
-        undone.
+        target the label keep the reference, which then matches nothing. To see
+        them, call ha_config_get_label(label_id) first: its `related` lists them,
+        together with the automations and scripts that only carry the label.
+        This cannot be undone.
 
         EXAMPLES:
         - Delete label: ha_config_remove_label("my_label_id")

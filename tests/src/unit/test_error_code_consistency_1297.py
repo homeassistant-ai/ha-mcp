@@ -299,8 +299,8 @@ class TestLabelMutationRoutesNotFoundToResourceNotFound:
 
 
 class TestCategoryMutationRoutesNotFoundToResourceNotFound:
-    """Category set-update / remove with a non-existent ``category_id`` must
-    surface ``RESOURCE_NOT_FOUND``.
+    """Category remove with a non-existent ``category_id`` must surface
+    ``RESOURCE_NOT_FOUND`` (set-update: test_label_category_tools_on_core.py).
     """
 
     @pytest.fixture
@@ -308,23 +308,6 @@ class TestCategoryMutationRoutesNotFoundToResourceNotFound:
         from ha_mcp.tools.tools_categories import CategoryTools
 
         return CategoryTools(mock_ws_client)
-
-    async def test_set_update_with_missing_category_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_category(
-                name="X", scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
 
     async def test_remove_with_missing_category_id(self, tools, mock_ws_client):
         mock_ws_client.send_websocket_message.return_value = {
