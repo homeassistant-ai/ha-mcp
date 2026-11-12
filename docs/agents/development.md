@@ -35,6 +35,10 @@ and serves the settings UI at `http://localhost:8086/mcp/settings`. Settings UI
 details are in
 [`src/ha_mcp/settings_ui/AGENTS.md`](../../src/ha_mcp/settings_ui/AGENTS.md).
 
+The repository-root checkout is where `master` is kept; feature work goes in
+`worktree/` per the root `AGENTS.md`, and `git worktree prune` removes stale
+worktree references.
+
 ## Test commands
 
 E2E tests live in `tests/src/e2e/` (not `tests/e2e/`), use testcontainers,
