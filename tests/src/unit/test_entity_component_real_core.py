@@ -3,19 +3,15 @@
 The component's ``entity_enrich`` and ``exposure`` commands answer here from
 the same ``hass`` as Core's own registry commands. A failure of an advertised
 command is one Core function the component calls raising Core's exception.
-No answer to it is staged through Core's own WebSocket API: the command is
-registered again with a handler that takes it and never replies, so the
-client's command timeout ends the wait, or with one that revokes the caller's
-token, so Core closes the connection.
+No answer to it is staged through Core's own WebSocket API
+(``_core_staging``).
 """
 
 from typing import Any
 
 import pytest
-import voluptuous as vol
-from homeassistant.components import websocket_api as core_websocket_api
 from homeassistant.components.homeassistant import exposed_entities as core_exposed
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -30,6 +26,7 @@ from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT, ENTITY_ENRICH_FUL
 from ha_mcp.tools.entity_exposure import WS_EXPOSURE
 from ha_mcp.tools.tools_entities import WS_ENTITY_ENRICH, EntityTools
 
+from ._core_staging import never_answers, revokes_the_token, served_by
 from ._tool_errors import _error
 
 
@@ -66,39 +63,6 @@ def power(hass: HomeAssistant) -> str:
 @pytest.fixture
 def tools(component_core_client: HomeAssistantClient) -> EntityTools:
     return EntityTools(component_core_client)
-
-
-@callback
-def _never_answers(
-    hass: HomeAssistant,
-    connection: core_websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """Takes the command and sends nothing back."""
-
-
-@callback
-def _revokes_the_token(
-    hass: HomeAssistant,
-    connection: core_websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """Revokes the caller's token, so Core closes the connection mid-command."""
-    assert connection.refresh_token_id is not None
-    token = hass.auth.async_get_refresh_token(connection.refresh_token_id)
-    assert token is not None
-    hass.auth.async_remove_refresh_token(token)
-
-
-def _served_by(
-    hass: HomeAssistant,
-    command: str,
-    handler: core_websocket_api.WebSocketCommandHandler,
-) -> None:
-    """Core serves ``command`` with ``handler`` in place of the component's."""
-    core_websocket_api.async_register_command(
-        hass, command, handler, vol.Schema({}, extra=vol.ALLOW_EXTRA)
-    )
 
 
 async def test_a_row_carries_the_name_home_assistant_shows(
@@ -189,7 +153,7 @@ async def test_an_enrich_command_timeout_keeps_cores_rows_and_warns(
     # The wait bounds every command of the call; an in-process Core answers
     # the others in milliseconds.
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1)
-    _served_by(hass, WS_ENTITY_ENRICH, _never_answers)
+    served_by(hass, WS_ENTITY_ENRICH, never_answers)
 
     result = await tools.ha_get_entity(entity_id=power)
 
@@ -204,7 +168,7 @@ async def test_an_exposure_command_timeout_is_the_tools_error(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
 ) -> None:
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1)
-    _served_by(hass, WS_EXPOSURE, _never_answers)
+    served_by(hass, WS_EXPOSURE, never_answers)
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_get_entity()
@@ -225,7 +189,7 @@ async def test_a_lost_connection_during_a_component_read_ends_the_call(
     """A dropped connection is the call's CONNECTION_FAILED, not a component
     failure: no warning over Core's rows, no SERVICE_CALL_FAILED naming the
     component."""
-    _served_by(hass, command, _revokes_the_token)
+    served_by(hass, command, revokes_the_token)
 
     with pytest.raises(ToolError) as exc_info:
         if command == WS_ENTITY_ENRICH:
