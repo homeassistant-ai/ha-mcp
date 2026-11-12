@@ -263,32 +263,33 @@ async def test_parallel_writes_snapshot_and_write_one_at_a_time(
             content="primary-color: red\n",
             file="themes/dark.yaml",
         )
-    order = MagicMock()
+    events: list[str] = []
+    take_snapshot = manager.maybe_snapshot
+
+    async def snapshot(*args: Any, **kwargs: Any) -> Any:
+        events.append("snapshot")
+        return await take_snapshot(*args, **kwargs)
+
+    async def service(*args: Any, **kwargs: Any) -> Any:
+        written = args[1] in WRITE_SERVICES
+        if written:
+            events.append("write")
+        result = await call_mcp_tools_service(*args, **kwargs)
+        if written:
+            events.append("written")
+        return result
 
     with (
-        patch.object(
-            manager, "maybe_snapshot", wraps=manager.maybe_snapshot
-        ) as snapshot,
-        _service_spy() as file_service,
-        patch.object(
-            tools_yaml_config,
-            "call_mcp_tools_service",
-            wraps=call_mcp_tools_service,
-        ) as yaml_service,
+        patch.object(manager, "maybe_snapshot", snapshot),
+        patch.object(tools_filesystem, "call_mcp_tools_service", service),
+        patch.object(tools_yaml_config, "call_mcp_tools_service", service),
     ):
-        order.attach_mock(snapshot, "snapshot")
-        order.attach_mock(file_service, "service")
-        order.attach_mock(yaml_service, "service")
         await asyncio.gather(
             files.ha_write_file(path="themes/dark.yaml", edits=EDITS), other
         )
 
-    events = [
-        name if name == "snapshot" else "write"
-        for name, args, _ in order.mock_calls
-        if name == "snapshot" or args[1] in WRITE_SERVICES
-    ]
-    assert events == ["snapshot", "write", "snapshot", "write"]
+    # Each write has finished before the next snapshot is taken.
+    assert events == ["snapshot", "write", "written"] * 2
 
 
 async def test_edits_cannot_probe_a_file_that_defines_a_hidden_item(

@@ -26,7 +26,14 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_helpers import flow
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
+from ._client_spies import sent_messages
 from ._tool_errors import _error
+
+
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """The template flow copies Core's template blueprints into it."""
+    return hass_tmp_config_dir
 
 
 @pytest.fixture
@@ -79,13 +86,16 @@ async def test_create_with_an_existing_name_points_at_that_helper(
     await tools.ha_config_set_helper(helper_type="input_boolean", name=name, wait=False)
     (existing_id,) = await _stored(core_client)
 
-    with pytest.raises(ToolError) as exc_info:
+    with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_helper(
             helper_type="input_boolean", name=name, wait=False
         )
 
     error = _error(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "input_boolean/create" not in [
+        call.args[0]["type"] for call in sent.await_args_list
+    ]
     # The suggestion steers the caller to an update of the existing helper.
     assert any(f"helper_id={existing_id!r}" in s for s in error["suggestions"])
     assert len(hass.states.async_entity_ids("input_boolean")) == 1

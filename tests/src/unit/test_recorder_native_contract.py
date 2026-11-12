@@ -7,10 +7,11 @@ tool shapes is the one Core's ``history/history_during_period`` returns.
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
+from homeassistant.components.recorder import history as recorder_history
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -97,6 +98,31 @@ async def test_history_rows_use_readable_names_and_keep_cores_values(
     if not minimal:
         # The attribute-only update: Core sends lc apart from lu.
         assert any("lc" in core_row for core_row in core_rows)
+
+
+@pytest.mark.usefixtures("history")
+async def test_history_rows_keep_a_field_a_later_core_adds(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A row field this Core does not send yet reaches the caller unchanged
+    instead of being dropped by the renaming."""
+    core_rows = recorder_history.get_significant_states
+
+    def with_future_field(*args: Any, **kwargs: Any) -> dict[str, list[Any]]:
+        rows: dict[str, list[Any]] = core_rows(*args, **kwargs)
+        return {
+            entity_id: [{**row, "future": {"opaque": [1]}} for row in states]
+            for entity_id, states in rows.items()
+        }
+
+    with patch.object(
+        recorder_history, "get_significant_states", side_effect=with_future_field
+    ):
+        result = await _history(core_client, NOVEMBER - 60, NOVEMBER + 180)
+
+    rows = result["data"]["entities"][0]["states"]
+    assert len(rows) > 1
+    assert all(row["future"] == {"opaque": [1]} for row in rows)
 
 
 @pytest.mark.usefixtures("history")

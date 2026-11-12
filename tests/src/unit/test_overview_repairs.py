@@ -43,13 +43,14 @@ def _raise(
     issue_id: str,
     *,
     ignored: bool = False,
+    fixable: bool = True,
     persistent: bool = False,
 ) -> None:
     ir.async_create_issue(
         hass,
         "demo",
         issue_id,
-        is_fixable=not ignored,
+        is_fixable=fixable,
         is_persistent=persistent,
         severity=ir.IssueSeverity.WARNING,
         translation_key="demo_issue",
@@ -72,13 +73,14 @@ async def test_dismissed_repairs_are_left_out_and_counted_apart(
     """By default only active repairs are listed and counted; the dismissed
     ones are reported as a separate count so an agent can opt in."""
     _raise(hass, "active_one")
+    _raise(hass, "active_unfixable", fixable=False)
     _raise(hass, "dismissed_one", ignored=True)
-    _raise(hass, "dismissed_two", ignored=True)
+    _raise(hass, "dismissed_two", ignored=True, fixable=False)
 
     result = await _overview(core_client)
 
-    assert result["repair_count"] == 1
-    assert _ids(result) == {"active_one"}
+    assert result["repair_count"] == 2
+    assert _ids(result) == {"active_one", "active_unfixable"}
     assert result["dismissed_repair_count"] == 2
 
 

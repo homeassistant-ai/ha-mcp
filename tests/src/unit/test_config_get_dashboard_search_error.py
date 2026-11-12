@@ -30,6 +30,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools import tools_config_dashboards
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
@@ -49,9 +50,11 @@ async def _search_without_answer(
             AsyncMock(side_effect=HomeAssistantConnectionError("Connection lost")),
         )
     else:
+        # The socket stops answering; the client turns that into its own
+        # no-answer error, as it does for a real command timeout.
         no_answer = patch.object(
-            client,
-            "send_websocket_message",
+            HomeAssistantWebSocketClient,
+            "send_command",
             AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
         )
     with no_answer, pytest.raises(ToolError) as exc_info:
@@ -94,7 +97,7 @@ class TestConfigGetDashboardSearchErrorHandling:
 
     @pytest.mark.parametrize(
         ("kind", "expected_code"),
-        [("dropped", "CONNECTION_FAILED"), ("timeout", "TIMEOUT_OPERATION")],
+        [("dropped", "CONNECTION_FAILED"), ("timeout", "CONNECTION_TIMEOUT")],
     )
     async def test_no_answer_kinds_produce_their_error_codes(
         self,

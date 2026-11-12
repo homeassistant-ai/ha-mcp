@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -141,24 +143,37 @@ async def test_area_listing_fails_when_states_get_no_answer(
 
 
 async def test_area_listing_cancelled_during_reads_propagates_cancellation(
-    core_client: HomeAssistantClient,
+    hass: HomeAssistant,
     search: SmartSearchTools,
     set_config: Callable[..., VisibilityConfig],
 ) -> None:
     """Cancelling the area search mid registry read cancels it instead of
     degrading to an empty registry."""
     set_config(enabled=False)
-    with patch.object(
-        core_client,
-        "send_websocket_message",
-        AsyncMock(wraps=core_client.send_websocket_message),
-    ) as send:
-        task = asyncio.create_task(search.get_entities_by_area(area_query="Kitchen"))
-        await asyncio.sleep(0)
-        assert {"type": "config/entity_registry/list"} in [
-            call.args[0] for call in send.call_args_list
-        ]
+    # Core's own handler still answers; the wrapper only marks the read in flight.
+    registry_read_received = asyncio.Event()
+    core_handler, schema = hass.data[websocket_api.DOMAIN][
+        "config/entity_registry/list"
+    ]
+
+    @callback
+    def note_registry_read(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        registry_read_received.set()
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(
+        hass, "config/entity_registry/list", note_registry_read, schema
+    )
+    task = asyncio.create_task(search.get_entities_by_area(area_query="Kitchen"))
+    try:
+        async with asyncio.timeout(5):
+            await registry_read_received.wait()
+    finally:
         task.cancel()
 
-        await asyncio.wait({task})
-        assert task.cancelled()
+    await asyncio.wait({task})
+    assert task.cancelled()
