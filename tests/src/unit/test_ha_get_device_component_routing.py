@@ -279,7 +279,7 @@ async def test_entity_id_lookup_resolves_then_device_get() -> None:
 @pytest.mark.asyncio
 async def test_missing_device_via_component_raises_not_found() -> None:
     """A component-reported missing device falls back to the LEGACY device list for
-    the not-found error's suggestions (device_get authoritatively said None)."""
+    the not-found error's valid ids (device_get authoritatively said None)."""
     ws = make_ws(
         "ha_mcp_tools/device_get",
         info_result=_CAPS_DEVICES,
@@ -294,7 +294,7 @@ async def test_missing_device_via_component_raises_not_found() -> None:
     assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
         excinfo.value
     )
-    # The legacy device list served the not-found suggestion.
+    # The legacy device list served the not-found error's valid ids.
     assert client.device_list_calls == 1
 
 

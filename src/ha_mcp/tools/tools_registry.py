@@ -239,13 +239,13 @@ async def _fetch_entity_rows(client: Any) -> list[dict[str, Any]]:
 
 
 async def _strict_entity_rows(client: Any) -> list[dict[str, Any]]:
-    """Full entity registry; raises SERVICE_CALL_FAILED on a failed read.
+    """Full entity registry; a failed read raises with :func:`ws_failure_code`'s code.
 
     The device-id resolver's fallback read. Unlike the tolerant
     :func:`_fetch_entity_rows` (whose callers treat a missing entity list as a
-    non-fatal degrade), a failed read here MUST surface as a service failure rather
-    than collapse to ``[]`` — otherwise the resolver would misreport a real entity
-    as ENTITY_NOT_FOUND when the read itself failed (a double transient failure:
+    non-fatal degrade), a failed read here MUST raise rather than collapse to
+    ``[]`` — otherwise the resolver would misreport a real entity as
+    ENTITY_NOT_FOUND when the read itself failed (a double transient failure:
     the targeted ``get`` failed, then this fallback list failed too).
     """
     entity_result = await client.send_websocket_message(
@@ -259,8 +259,8 @@ async def _strict_entity_rows(client: Any) -> list[dict[str, Any]]:
 async def _legacy_device_rows(client: Any) -> list[dict[str, Any]]:
     """Full device registry via the legacy ``config/device_registry/list``.
 
-    Raises SERVICE_CALL_FAILED when the read fails, preserving the prior
-    fatal-on-device-registry-failure contract.
+    A failed read raises with :func:`ws_failure_code`'s code, preserving the
+    prior fatal-on-device-registry-failure contract.
     """
     list_result = await client.send_websocket_message(
         {"type": "config/device_registry/list"}
@@ -296,8 +296,8 @@ async def _resolve_device_id_via_legacy(client: Any, entity_id: str) -> str:
     The whole-registry scan :func:`_resolve_device_id_for_entity` replaced, kept as
     the fallback for a transient failure of the targeted read so a real entity is
     never misreported as nonexistent. Uses the STRICT list read so a failure of
-    THIS fallback surfaces as a service failure rather than an empty list that would
-    itself misreport the entity as ENTITY_NOT_FOUND. Raises ENTITY_NOT_FOUND only
+    THIS fallback raises rather than returning an empty list that would itself
+    misreport the entity as ENTITY_NOT_FOUND. Raises ENTITY_NOT_FOUND only
     when the read succeeds and the entity is absent or carries no device (the same
     contract).
     """
@@ -359,7 +359,7 @@ async def _single_device_and_entities(
     ``[device]`` plus its entity map — both from ONE ``device_get(include_entities)``
     frame, so neither the device NOR the entity registry is dumped. Falls back to
     the legacy full device + entity registries (so a not-found error can still
-    suggest valid ids and the device's entities are still listed) when the device
+    list valid ids and the device's entities are still listed) when the device
     is absent (component said ``None``), the component can't serve device_get, or
     the component served the device but not the additive entities half (no
     ``entities`` key — an older device_get predating ``include_entities``): the
@@ -428,8 +428,9 @@ async def _lookup_device_for_remove(client: Any, device_id: str) -> dict[str, An
     """Return the raw device row for ``ha_remove_device``; raise if it does not exist.
 
     Uses the component's ``device_get`` for the single-device read when available
-    (no whole-registry dump), falling back to the legacy full list — also used to
-    build the not-found error's available-ids suggestion.
+    (no whole-registry dump), falling back to the legacy full list. An unknown id
+    raises through :func:`_raise_device_not_found`, which lists the first ten
+    ids of that list and reads Core's composite splits.
     """
     result = await fetch_device_via_component(client, device_id)
     if result is not None:
@@ -791,7 +792,8 @@ class RegistryTools:
                     "(id, names, manufacturer, model, areas, disabled_by, parent "
                     "and via device) with integration and radio hints. 'full': "
                     "the whole registry row with the same hints, plus the "
-                    "device's entity-registry rows."
+                    "device's entity-registry rows. List mode only; a "
+                    "single-device lookup ignores it."
                 ),
             ),
         ] = "summary",

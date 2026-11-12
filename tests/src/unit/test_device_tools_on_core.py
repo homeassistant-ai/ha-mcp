@@ -11,6 +11,7 @@ pops the ``remove`` command, and Core still writes the reply.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -125,6 +126,18 @@ async def test_single_lookup_lists_cores_linked_devices(
     assert result["device"]["linked_devices"] == [unifi.id]
     # A device without a radio read gets no warnings.
     assert "warnings" not in result
+
+
+async def test_single_lookup_ignores_summary_detail_level(
+    hass: HomeAssistant, tools: RegistryTools
+) -> None:
+    """``detail_level`` shapes the list only: a single lookup with
+    ``"summary"`` still returns Core's whole row."""
+    dev = _device(hass, "hue", identifiers={("hue", "0xAABB")})
+
+    result = await tools.ha_get_device(device_id=dev.id, detail_level="summary")
+
+    assert {"identifiers", "config_entries"} <= set(result["device"])
 
 
 async def test_refused_linked_devices_read_fails_the_lookup(
@@ -292,13 +305,8 @@ async def test_core_without_remove_passes_the_fallbacks_refusal_on(
     assert dr.async_get(hass).async_get(dev.id) is not None
 
 
-async def test_core_without_remove_detaches_the_devices_entry(
-    hass: HomeAssistant, tools: RegistryTools
-) -> None:
-    """Core before 2026.9 has no ``config/device_registry/remove``; the tool
-    detaches the device's config entry with ``remove_config_entry`` instead,
-    which removes the device. This Core is given no ``remove`` command."""
-
+async def _removable_device(hass: HomeAssistant) -> dr.DeviceEntry:
+    """A device of a set-up integration that lets Core remove its devices."""
     mock_integration(
         hass,
         MockModule(
@@ -311,12 +319,45 @@ async def test_core_without_remove_detaches_the_devices_entry(
     dev = _device(hass, "removable", identifiers={("removable", "1")})
     with mock_config_flow("removable", ConfigFlow):
         assert await hass.config_entries.async_setup(dev.config_entry_id)
+    return dev
+
+
+async def test_remove_removes_the_device_with_cores_remove(
+    hass: HomeAssistant, tools: RegistryTools, core_client: HomeAssistantClient
+) -> None:
+    """On Core with ``config/device_registry/remove``, that command removes the
+    device and the deprecated ``remove_config_entry`` is never sent."""
+    dev = await _removable_device(hass)
+
+    with sent_messages(core_client) as spy:
+        result = await tools.ha_remove_device(device_id=dev.id)
+
+    assert result["success"] is True
+    assert dr.async_get(hass).async_get(dev.id) is None
+    sent = [c.args[0]["type"] for c in spy.call_args_list]
+    assert "config/device_registry/remove" in sent
+    assert "config/device_registry/remove_config_entry" not in sent
+
+
+async def test_core_without_remove_detaches_the_devices_entry(
+    hass: HomeAssistant, tools: RegistryTools, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Core before 2026.9 has no ``config/device_registry/remove``; the tool
+    detaches the device's config entry with ``remove_config_entry`` instead,
+    which removes the device. This Core is given no ``remove`` command, and
+    the expected unknown-command answer logs no error."""
+    dev = await _removable_device(hass)
     hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
 
     result = await tools.ha_remove_device(device_id=dev.id)
 
     assert result["success"] is True
     assert dr.async_get(hass).async_get(dev.id) is None
+    assert not [
+        r
+        for r in caplog.records
+        if r.name.startswith("ha_mcp") and r.levelno >= logging.ERROR
+    ]
 
 
 @pytest.mark.parametrize(

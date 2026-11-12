@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -24,6 +24,8 @@ from pytest_homeassistant.common import MockConfigEntry
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_registry import RegistryTools
+
+from ._client_spies import sent_messages
 
 
 @pytest.fixture
@@ -147,11 +149,7 @@ class TestSetDeviceRegistryReferences:
         label = label_registry.async_create("Important")
         device_registry.async_update_device(device.id, labels={label.label_id})
 
-        with patch.object(
-            core_client,
-            "send_websocket_message",
-            wraps=core_client.send_websocket_message,
-        ) as sent:
+        with sent_messages(core_client) as sent:
             result = await tools.ha_set_device(device_id=device.id, labels=[])
 
         sent_types = [call.args[0]["type"] for call in sent.call_args_list]

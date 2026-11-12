@@ -123,17 +123,14 @@ class TestDeviceList:
 
         logger.info(f"Listed {count} devices successfully")
 
-        # If devices exist, verify structure
-        if devices:
-            device = devices[0]
-            expected_fields = ["id", "name", "manufacturer", "model"]
-            for field in expected_fields:
-                assert field in device, f"Device missing field: {field}"
-            # Summary mode should not include entities
-            assert "entities" not in device, "Summary mode should omit entities"
-            logger.info(
-                f"Sample device: {device.get('name')} ({device.get('id')[:8]}...)"
-            )
+        assert devices, f"The seed has devices: {list_data}"
+        device = devices[0]
+        expected_fields = ["id", "name", "manufacturer", "model"]
+        for field in expected_fields:
+            assert field in device, f"Device missing field: {field}"
+        # Summary mode should not include entities
+        assert "entities" not in device, "Summary mode should omit entities"
+        logger.info(f"Sample device: {device.get('name')} ({device.get('id')[:8]}...)")
 
     async def test_list_devices_filter_by_area(self, mcp_client):
         """Filter devices by area_id (positive, multi-match, and negative cases).
@@ -202,11 +199,7 @@ class TestDeviceList:
             d for d in all_data.get("devices", []) if d.get("manufacturer")
         ]
 
-        if not devices_with_mfr:
-            logger.info(
-                "No devices with manufacturers found, skipping manufacturer filter test"
-            )
-            pytest.skip("No devices with manufacturers in test environment")
+        assert devices_with_mfr, "The seed has a device with a manufacturer"
 
         manufacturer = devices_with_mfr[0]["manufacturer"]
         logger.info(f"Testing filter with manufacturer: {manufacturer}")
@@ -219,6 +212,7 @@ class TestDeviceList:
         filter_data = parse_mcp_result(filter_result)
 
         assert filter_data.get("success"), f"Failed to filter devices: {filter_data}"
+        assert filter_data["devices"], f"The filter matches its source: {filter_data}"
 
         # Verify all returned devices contain the manufacturer substring
         for device in filter_data.get("devices", []):
@@ -242,8 +236,7 @@ class TestDeviceList:
         data1 = parse_mcp_result(page1)
         assert data1.get("success"), f"Page 1 failed: {data1}"
 
-        if data1["total_count"] < 3:
-            pytest.skip("Not enough devices to test pagination")
+        assert data1["total_count"] >= 3, f"The seed has 3+ devices: {data1}"
 
         assert data1["count"] == 2
         assert data1["offset"] == 0
@@ -278,7 +271,8 @@ class TestDeviceList:
         assert data.get("detail_level") == "full"
 
         # Full mode should include entities per device
-        for device in data.get("devices", []):
+        assert data["devices"], f"The seed has devices: {data}"
+        for device in data["devices"]:
             assert "entities" in device, "Full mode should include entities"
 
         logger.info("Device full detail test passed")
@@ -315,9 +309,7 @@ class TestDeviceGet:
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
-        if not list_data.get("devices"):
-            logger.info("No devices found, skipping get device test")
-            pytest.skip("No devices in test environment")
+        assert list_data.get("devices"), f"The seed has devices: {list_data}"
 
         device_id = list_data["devices"][0]["id"]
         logger.info(f"Getting details for device: {device_id}")
@@ -473,22 +465,18 @@ async def test_device_registry_workflow(mcp_client):
     assert list_data.get("success"), f"Failed to list devices: {list_data}"
     logger.info(f"Listed {list_data['count']} devices")
 
-    # 2. If devices exist, get details for first one
-    if list_data.get("devices"):
-        device_id = list_data["devices"][0]["id"]
-        device_name = list_data["devices"][0]["name"]
+    # 2. Get details for the first one
+    assert list_data.get("devices"), f"The seed has devices: {list_data}"
+    device_id = list_data["devices"][0]["id"]
+    device_name = list_data["devices"][0]["name"]
 
-        get_result = await mcp_client.call_tool(
-            "ha_get_device",
-            {"device_id": device_id},
-        )
-        get_data = parse_mcp_result(get_result)
-        assert get_data.get("success"), f"Failed to get device: {get_data}"
-        logger.info(
-            f"Got device '{device_name}' with {get_data['entity_count']} entities"
-        )
-    else:
-        logger.info("No devices in test environment, workflow test partial")
+    get_result = await mcp_client.call_tool(
+        "ha_get_device",
+        {"device_id": device_id},
+    )
+    get_data = parse_mcp_result(get_result)
+    assert get_data.get("success"), f"Failed to get device: {get_data}"
+    logger.info(f"Got device '{device_name}' with {get_data['entity_count']} entities")
 
     logger.info("Basic device registry workflow test completed")
 
@@ -508,8 +496,7 @@ async def test_device_entity_independence(mcp_client):
     list_data = parse_mcp_result(list_result)
     assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
-    if not list_data.get("devices"):
-        pytest.skip("No devices in test environment")
+    assert list_data.get("devices"), f"The seed has devices: {list_data}"
 
     # Find a device with at least one entity
     device_with_entities = None
@@ -519,12 +506,12 @@ async def test_device_entity_independence(mcp_client):
             {"device_id": device["id"]},
         )
         get_data = parse_mcp_result(get_result)
-        if get_data.get("success") and get_data.get("entity_count", 0) > 0:
+        assert get_data.get("success"), f"Failed to get device: {get_data}"
+        if get_data.get("entity_count", 0) > 0:
             device_with_entities = get_data
             break
 
-    if not device_with_entities:
-        pytest.skip("No devices with entities in test environment")
+    assert device_with_entities, "The seed has a device with entities"
 
     device = device_with_entities["device"]
     entities = device["entities"]

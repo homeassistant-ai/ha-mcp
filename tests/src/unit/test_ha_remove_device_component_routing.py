@@ -7,7 +7,7 @@ snapshot ``ha_set_device`` also uses). Both single-device reads route through th
 component's ``device_get`` when available. These tests pin the body routing
 (component-hit, no whole-registry dump; legacy fallback on no-caps /
 ``unknown_command`` → invalidate; not-found falls back to the full list for the
-suggestion) AND the capture read routing at the ``_fetch_device`` seam.
+error's valid ids) AND the capture read routing at the ``_fetch_device`` seam.
 """
 
 from __future__ import annotations
@@ -184,9 +184,9 @@ async def test_body_unknown_command_invalidates_and_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
+async def test_body_not_found_falls_back_to_list_for_valid_ids() -> None:
     """A component-reported missing device falls back to the LEGACY list so the
-    not-found error can suggest valid ids (device_get authoritatively said None)."""
+    not-found error can list valid ids (device_get authoritatively said None)."""
     ws = make_ws(
         "ha_mcp_tools/device_get",
         info_result=_CAPS_DEVICES,
@@ -201,7 +201,7 @@ async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
     assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
         excinfo.value
     )
-    # The legacy device list served the not-found suggestion.
+    # The legacy device list served the not-found error's valid ids.
     assert client.device_list_calls == 1
 
 

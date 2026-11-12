@@ -1,8 +1,8 @@
 """
 Device Update E2E Tests
 
-ha_set_device: rename, labels, a call without fields, an unknown device id,
-and blank or quote-only names.
+ha_set_device: rename, labels, a call without fields, and blank or
+quote-only names.
 """
 
 import logging
@@ -33,9 +33,7 @@ class TestDeviceSet:
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
-        if not list_data.get("devices"):
-            logger.info("No devices found, skipping update test")
-            pytest.skip("No devices in test environment")
+        assert list_data.get("devices"), f"The seed has devices: {list_data}"
 
         device = list_data["devices"][0]
         device_id = device["id"]
@@ -77,9 +75,7 @@ class TestDeviceSet:
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
-        if not list_data.get("devices"):
-            logger.info("No devices found, skipping labels test")
-            pytest.skip("No devices in test environment")
+        assert list_data.get("devices"), f"The seed has devices: {list_data}"
 
         device_id = list_data["devices"][0]["id"]
 
@@ -160,8 +156,7 @@ class TestDeviceSet:
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list devices: {list_data}"
 
-        if not list_data.get("devices"):
-            pytest.skip("No devices in test environment")
+        assert list_data.get("devices"), f"The seed has devices: {list_data}"
 
         device_id = list_data["devices"][0]["id"]
 
