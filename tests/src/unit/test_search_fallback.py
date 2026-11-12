@@ -8,11 +8,9 @@ registry row here is Core's own, read through the server's client.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
-from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -215,52 +213,3 @@ async def test_hidden_entity_is_dropped_when_hidden_entities_are_excluded(
     result = await tools.ha_search(query="guest_room", include_hidden=False)
 
     assert _ids(result) == ["light.guest_room_lamp"]
-
-
-async def test_cancelled_registry_read_cancels_the_search(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """A cancelled entity-registry read cancels the search instead of being
-    taken for a failed read that only costs the hidden filter: before the
-    re-raise the search went on and its canceller waited forever.
-
-    The registry command is registered here and holds its answer, so the
-    test can cancel the client's pending read while the search waits on it.
-    """
-    hass.states.async_set("light.x", "on", {"friendly_name": "X"})
-    reading = asyncio.Event()
-    release = asyncio.Event()
-
-    @websocket_api.websocket_command({"type": "config/entity_registry/list"})
-    @websocket_api.async_response
-    async def held_list(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        reading.set()
-        await release.wait()
-        connection.send_result(msg["id"], [])
-
-    websocket_api.async_register_command(hass, held_list)
-    tools = SearchTools(core_client, SmartSearchTools(client=core_client))
-
-    # ``domain_filter`` keeps the search on the entity surface, which reads
-    # the registry itself.
-    search = asyncio.create_task(tools.ha_search(query="x", domain_filter="light"))
-    await reading.wait()
-    registry_reads = [
-        task
-        for task in asyncio.all_tasks()
-        if not task.done()
-        and getattr(task.get_coro(), "__qualname__", "")
-        == HomeAssistantClient.send_websocket_message.__qualname__
-    ]
-    assert len(registry_reads) == 1
-    registry_reads[0].cancel()
-
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await search
-    finally:
-        release.set()

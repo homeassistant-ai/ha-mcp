@@ -396,8 +396,8 @@ async def test_cancellation_propagates(
         await in_flight.wait()
         task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        await asyncio.wait({task})
+        assert task.cancelled()
 
 
 async def test_registry_rejection_returns_fallback_with_diagnostic_detail(

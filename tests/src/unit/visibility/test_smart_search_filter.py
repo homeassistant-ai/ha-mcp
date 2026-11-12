@@ -160,5 +160,5 @@ async def test_area_listing_cancelled_during_reads_propagates_cancellation(
         ]
         task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        await asyncio.wait({task})
+        assert task.cancelled()

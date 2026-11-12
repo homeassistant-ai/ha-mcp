@@ -251,5 +251,5 @@ async def test_overview_cancelled_during_states_read_propagates_cancellation(
         states.assert_called_once()
         task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        await asyncio.wait({task})
+        assert task.cancelled()

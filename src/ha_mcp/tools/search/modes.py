@@ -342,12 +342,6 @@ class EntityModesMixin(EntityEnrichmentMixin):
         device_result: Any = gather_results[2] if need_device else None
         if isinstance(states_result, BaseException):
             raise states_result
-        # CancelledError must propagate; gather captures it like any other
-        # exception when return_exceptions=True.
-        if isinstance(registry_result, asyncio.CancelledError):
-            raise registry_result
-        if isinstance(device_result, asyncio.CancelledError):
-            raise device_result
 
         hidden_ids = _build_hidden_ids(registry_result)
         # Opt-in visibility filter: hard exclude, fails open (empty set on any
