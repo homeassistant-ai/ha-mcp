@@ -377,7 +377,8 @@ def render_settings_html(request: Request | None = None) -> str:
     """Render the settings page every settings-page route serves.
 
     Substitutes theme preferences and the request-selected locale. Public
-    because the JS behaviour tests load the served page from here. The ``server-prefs`` head script carries a ``data-prefs`` attribute
+    because the JS behaviour tests load the served page from here.
+    The ``server-prefs`` head script carries a ``data-prefs`` attribute
     with a placeholder token; request-time substitution keeps
     ``_SETTINGS_HTML`` a static import-time constant (and keeps the script
     body itself parseable at rest for the script-surface tests). Values
