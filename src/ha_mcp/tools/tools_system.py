@@ -1120,8 +1120,8 @@ class SystemTools:
                 )
             )
 
-        health_info = event_response.get("event", {})
-        component_count = len(health_info) if isinstance(health_info, dict) else 0
+        health_info = event_response.get("event") or {}
+        component_count = len(health_info.get("data") or {})
 
         result: dict[str, Any] = {
             "success": True,
