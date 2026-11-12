@@ -25,11 +25,18 @@ The component is part of the native contract, not an exception to it. The
 `ha_mcp_tools` component runs inside Core, so a path through it reaches Core's
 own registries, schemas, collections, flows and processors directly, the way
 `ha_search` and the logbook read do. Prefer that path whenever the component
-gives in-process access to the Core object a tool wraps, and keep Core's
-REST/WebSocket API as the explicit fallback for an installation without the
-component. Gate the choice on the component's `capabilities` handshake, and
-update the component producer, server consumer, capability gate and fallback in
-the same pull request, on both component entry topologies. A path can be
+gives in-process access to the Core object a tool wraps. Gate the choice on
+the component's `capabilities` handshake, and update the component producer,
+server consumer, capability gate and any fallback in the same pull request, on
+both component entry topologies.
+
+What a tool already does without the component keeps working when the tool
+changes: its REST/WebSocket path stays as the fallback. That fallback may grow
+when Core's native REST/WebSocket endpoints already serve the new behaviour,
+but not by adding handwritten server code. A new feature or option that needs
+the component does not need a fallback. If Core's native endpoints serve it
+directly, it may get one; otherwise an installation without the component
+gets a hint or warning that the feature needs the component. A path can also be
 component-only by design when the fallback would be a copy of Core's rules:
 the reference check on automation, script and scene writes is one, since
 Core's API validates a config's trigger, condition and action lists and serves

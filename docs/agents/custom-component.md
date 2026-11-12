@@ -102,7 +102,8 @@ environment is separate from automated CI.
 The embedded server installs into Home Assistant's Python environment using
 Core's `package_constraints.txt`. The standalone `uv.lock` is not the embedded
 installation contract. For libraries shared with HA, keep package requirements as
-bounded compatibility ranges that admit supported Core versions. Preserve the
+bounded compatibility ranges that admit every Core release from the `hacs.json`
+minimum to the current beta. Preserve the
 standalone lock's selected versions when widening a range; widen or raise a
 floor only with compatibility evidence. Pydantic follows its major-version
 boundary; HTTPX is pre-1.0, so its minor-version boundary remains capped.
@@ -110,7 +111,7 @@ boundary; HTTPX is pre-1.0, so its minor-version boundary remains capped.
 Dependabot continues updating Pydantic and HTTPX for standalone, Docker, and
 app installations. Their standalone lock versions may advance independently
 of Core's pins while the package requirements still admit those pins. Review
-requirement changes against supported Core versions; an incompatible floor
+requirement changes against that range; an incompatible floor
 must fail alignment checks rather than silently strand embedded users.
 Renovate advances the Core E2E image, not these package requirements. Never
 fix an embedded resolver failure by dropping HA's constraints or eagerly
@@ -126,7 +127,17 @@ The minimum-version check does not prove transitive installability or runtime
 behavior there. These checks also do not cover every intervening release,
 every installed third-party integration, or future API compatibility.
 Keep the HACS minimum honest; passing current-Core E2E alone does not justify
-raising a dependency floor past versions older supported Core releases need.
+raising a dependency floor past what older releases need.
+
+The `hacs.json` minimum is the oldest Core that HA-MCP installs and runs on, not
+a supported or tested version. Support follows the
+[repository's Home Assistant version policy](../../AGENTS.md#testing-and-verification):
+current stable, plus the active beta where a fallback keeps stable working.
+Releases between the minimum and current stable may lack features or behave
+differently; a user who keeps an older Home Assistant can install an older
+HA-MCP release. Do not add
+fallbacks or tests for them; an older release is tested only to verify an
+update path.
 
 ## Two entries, one command surface
 
@@ -153,8 +164,11 @@ general capability list.
 
 When changing component-backed behavior:
 
-- Update the component producer, server consumer, capability gate, and legacy
-  fallback in the same pull request.
+- Update the component producer, server consumer and capability gate in the
+  same pull request, and the existing no-component fallback when the change
+  touches what it serves. A new component-backed feature needs no fallback;
+  the [native contracts](native-core-contracts.md#choose-the-authoritative-path)
+  say when one may grow.
 - Serve shared commands identically from both entry types.
 - Gate privileged or beta behavior on an explicit tools-entry signal.
 - Exercise both topologies, including the no-tools lanes described in

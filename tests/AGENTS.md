@@ -145,7 +145,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   for Home Assistant (the in-process server, an upstream), another integration
   through Core's `mock_integration`, and one function or constant on a real
   Core module when the test needs an answer Core cannot be made to give in a
-  unit test (a failure, a URL, another Core version's shape). Raise Core's
+  unit test (a failure, a URL, another Core version's shape). Another Core
+  version's shape is for the occasional case that needs it, such as a beta
+  change with a fallback to current stable or an update path; it is not a
+  per-PR check for older releases. Raise Core's
   real exceptions. A client method is replaced for one thing only: the client
   getting no answer at all (a dropped connection, a timeout), as
   `AsyncMock(side_effect=HomeAssistantConnectionError(...))`. An error reply
