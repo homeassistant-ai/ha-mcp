@@ -82,7 +82,6 @@ ignores:
   - "tests/src/unit/test_core_contract.py"
   - "tests/src/unit/test_dashboard_screenshot_provision.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
-  - "tests/src/unit/test_device_enrichment.py"
   - "tests/src/unit/test_embedded_server_stop.py"
   - "tests/src/unit/test_embedded_version_dist.py"
   - "tests/src/unit/test_entity_backup.py"
