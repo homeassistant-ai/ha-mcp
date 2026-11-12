@@ -120,9 +120,9 @@ def flow_text(
     """The string at ``component.<domain>.<key>`` with its placeholders filled.
 
     ``key`` continues from the domain, e.g. ``config.abort.<reason>``.
-    ``placeholders`` is the flow step's ``description_placeholders``; a
-    ``{name}`` with no value stays as written. ``None`` when Core ships no
-    string for the key.
+    ``placeholders`` fills the ``{name}`` fields, for example a flow step's
+    ``description_placeholders``; a ``{name}`` with no value stays as written.
+    ``None`` when Core ships no string for the key.
     """
     text = strings.get(f"component.{domain}.{key}")
     if not isinstance(text, str) or not text:

@@ -842,10 +842,7 @@ class SystemTools:
         want_matter: bool,
         want_themes: bool,
     ) -> list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]]:
-        """Build the list of ``(name, coroutine)`` WS-backed sections to gather.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
+        """Build the list of ``(name, coroutine)`` WS-backed sections to gather."""
         sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
         if want_repairs:
             sections.append(
@@ -897,8 +894,6 @@ class SystemTools:
     ) -> None:
         """Gather the WS-backed section coroutines and attribute each outcome to
         ``result[<section>]``, re-raising fatal exceptions.
-
-        Extracted verbatim from ``ha_get_system_health``.
         """
         if not sections:
             return
@@ -1209,10 +1204,10 @@ class SystemTools:
         """Fetch repair issues from Home Assistant's ``repairs/list_issues``.
 
         Core's own serialization and filter: active issues, without those of a
-        disabled config entry. Filters out user-dismissed ("ignored") repairs by
-        default to match the HA Repairs UI. Pass ``include_dismissed=True`` to
-        return all issues and report the dismissed count alongside the active
-        count. Each issue gets the title and description the Repairs page shows.
+        disabled config entry. User-dismissed ("ignored") repairs are left out by
+        default, as on the HA Repairs page, and ``dismissed_count`` counts them
+        when there are any; ``include_dismissed=True`` also returns them. Each
+        issue gets the title and description the Repairs page shows.
         """
         repairs: dict[str, Any] = {"issues": [], "count": 0}
         try:
@@ -1865,8 +1860,6 @@ class SystemTools:
         ``invalid``) plus ``errors`` and ``warnings``, each one string or null;
         only errors make the result ``invalid``. A backend failure surfaces as
         ``{"error": ...}`` without sinking the rest of ha_get_system_health.
-        Instance method (not @staticmethod) because it calls the REST client
-        (``self._client``), like the diagnostics path.
         """
         try:
             config_result: dict[str, Any] = await self._client.check_config()

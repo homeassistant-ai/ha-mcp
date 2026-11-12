@@ -721,7 +721,7 @@ class TestSystemToolsIntegration:
         assert config_data.get("success") is True, "Config check should succeed"
         config_check = config_data.get("config_check", {})
 
-        if config_check.get("is_valid"):
+        if config_check.get("result") == "valid":
             logger.info("Config is valid, proceeding with reload...")
 
             # Step 2: Reload automations
@@ -771,7 +771,7 @@ class TestSystemToolsIntegration:
             "(REST config_check degrades gracefully if the WS baseline is down)"
         )
         config_check = health_data.get("config_check", {})
-        assert "is_valid" in config_check, "config_check section should be present"
+        assert "result" in config_check, "config_check section should be present"
         # The WS health baseline may still be unavailable in minimal containers;
         # config_check does not depend on it.
         baseline_available = health_data.get("baseline_available", True)

@@ -252,7 +252,8 @@ async def test_thread_dataset_lifecycle_without_border_router(
     """Switch preferences and remove stale datasets through real HA commands.
 
     HA cannot clear the preferred dataset through its API. The final dataset
-    remains in the disposable HA fixture and is removed with fixture teardown.
+    remains in the disposable HA fixture and is removed with fixture teardown,
+    so ``ha_get_system_health`` must read it back as Core lists it.
     """
     # Valid synthetic dataset: channel 15, PAN 0x1234, no border router.
     dataset_tlv = (
@@ -336,3 +337,8 @@ async def test_thread_dataset_lifecycle_without_border_router(
         assert [
             (d["dataset_id"], d["preferred"]) for d in final["datasets"]["datasets"]
         ] == [(new_id, True)]
+        health = await mcp.call_tool_success(
+            "ha_get_system_health", {"include": "thread_network"}
+        )
+        core = await ha_client.send_websocket_message({"type": "thread/list_datasets"})
+        assert health["thread_network"]["datasets"] == core["result"]["datasets"]
