@@ -1,337 +1,331 @@
-"""Read enrichment must preserve data and native parameter-error semantics."""
+"""Read enrichment must preserve data and native parameter-error semantics.
 
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, Mock
+Statistics are imported into Core's recorder and read through
+``ha_get_history(source="statistics")``; unit resolution comes from the
+component's ``ha_mcp_tools/statistics_units`` where it is installed, and every
+row, rejection and contract is Core's.
+"""
+
+import json
+from contextlib import nullcontext
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.recorder import Recorder
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools import core_contract as component_contract
+from custom_components.ha_mcp_tools import websocket_api as component_ws
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import core_contract, response_helpers, tools_energy, tools_history
-from ha_mcp.tools.statistics_helpers import resolve_requested_units
-from ha_mcp.tools.statistics_resets import restore_reset_timestamps
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import websocket_manager
+from ha_mcp.tools.tools_energy import EnergyTools
+from ha_mcp.tools.tools_history import HistoryTools
+
+from ._client_spies import routing_spies, sent_messages
+from ._recorded_history import import_statistic, record_states, statistics
+
+START = datetime(2024, 1, 1, tzinfo=UTC)
+END = datetime(2024, 1, 2, tzinfo=UTC)
+LAST_RESET = datetime(2023, 12, 31, tzinfo=UTC)
+STATISTICS = "recorder/statistics_during_period"
+STATISTICS_UNITS = "ha_mcp_tools/statistics_units"
 
 
-@pytest.mark.asyncio
-async def test_unrequested_unit_class_keeps_native_display_unit(
-    monkeypatch: pytest.MonkeyPatch,
+async def _import(
+    hass: HomeAssistant,
+    statistic_id: str,
+    stored: str,
+    unit_class: str | None,
+    display: str | None = None,
 ) -> None:
-    from ha_mcp.tools import component_api
-
-    monkeypatch.setattr(
-        component_api, "get_component_caps", AsyncMock(return_value=None)
+    """One hour of a sum statistic with a reset, stored in ``stored``; its
+    state shows ``display`` (``stored`` by default)."""
+    hass.states.async_set(statistic_id, "1", {"unit_of_measurement": display or stored})
+    await import_statistic(
+        hass,
+        statistic_id,
+        stored,
+        unit_class,
+        [{"start": START, "last_reset": LAST_RESET, "sum": 1000.0}],
     )
-    water = {
-        "entity_id": "sensor.water",
-        "unit_of_measurement": "m³",
-        "unit_source": "recorder_metadata",
-        "statistics_metadata": {"unit_class": "volume"},
-    }
-    energy = {
-        "entity_id": "sensor.energy",
-        "unit_of_measurement": "kWh",
-        "unit_source": "recorder_metadata",
-        "statistics_metadata": {"unit_class": "energy"},
-    }
-    await resolve_requested_units(Mock(), [water, energy], {"energy": "MWh"})
-    assert water["unit_of_measurement"] == "m³"
-    assert water["unit_source"] == "recorder_metadata"
-    assert energy["unit_source"] == "unknown"
 
 
-@pytest.mark.asyncio
-async def test_unrequested_unchanged_class_needs_no_reset_query() -> None:
-    rows = {"sensor.water": [{"start": 1000, "last_reset": 900, "sum": 123}]}
-    metadata = {
-        "sensor.water": {
-            "unit_class": "volume",
-            "statistics_unit_of_measurement": "m³",
-            "display_unit_of_measurement": "m³",
+async def _core_last_reset(client: HomeAssistantClient, statistic_id: str) -> Any:
+    """The reset as Core stores it: read without any unit conversion."""
+    reply = await client.send_websocket_message(
+        {
+            "type": STATISTICS,
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+            "statistic_ids": [statistic_id],
+            "period": "hour",
+            "types": ["last_reset"],
+            "units": {},
         }
-    }
-    client = Mock(send_websocket_message=AsyncMock())
-    warnings = await restore_reset_timestamps(
-        client, rows, metadata, {"units": {"energy": "MWh"}}
     )
-    assert warnings == []
-    assert rows["sensor.water"][0]["last_reset"] == 900
-    client.send_websocket_message.assert_not_called()
+    assert reply["success"] is True
+    return reply["result"][statistic_id][0]["last_reset"]
 
 
-@pytest.mark.asyncio
-async def test_native_parameter_rejection_has_parameter_guidance() -> None:
-    client = Mock(
-        send_websocket_message=AsyncMock(
-            side_effect=[
-                {
-                    "success": False,
-                    "error": "invalid native units.energy",
-                    "error_code": "invalid_format",
-                },
-            ]
+def _reset_queries(sent: AsyncMock) -> list[dict[str, Any]]:
+    return [
+        call.args[0]
+        for call in sent.await_args_list
+        if call.args[0]["type"] == STATISTICS
+        and call.args[0].get("types") == ["last_reset"]
+    ]
+
+
+def _entities(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {entity["entity_id"]: entity for entity in result["data"]["entities"]}
+
+
+async def test_unrequested_unit_class_keeps_native_display_unit(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Without the component a requested unit cannot be confirmed, but only the
+    requested class loses its label."""
+    await _import(hass, "sensor.water", "m³", "volume")
+    await _import(hass, "sensor.energy", "kWh", "energy")
+
+    result = await statistics(
+        core_client,
+        ["sensor.water", "sensor.energy"],
+        START,
+        END,
+        statistic_types=["sum"],
+        core_options={"units": {"energy": "MWh"}},
+    )
+
+    entities = _entities(result)
+    assert entities["sensor.water"]["unit_of_measurement"] == "m³"
+    assert entities["sensor.water"]["unit_source"] == "recorder_metadata"
+    assert entities["sensor.energy"]["unit_source"] == "unknown"
+
+
+async def test_unrequested_unchanged_class_needs_no_reset_query(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import(hass, "sensor.water", "m³", "volume")
+    stored_reset = await _core_last_reset(core_client, "sensor.water")
+
+    with sent_messages(core_client) as sent:
+        result = await statistics(
+            core_client,
+            ["sensor.water"],
+            START,
+            END,
+            statistic_types=["sum", "last_reset"],
+            core_options={"units": {"energy": "MWh"}},
         )
-    )
-    start = datetime(2026, 1, 1, tzinfo=UTC)
+
+    assert "warnings" not in result
+    row = _entities(result)["sensor.water"]["statistics"][0]
+    assert row["last_reset"] == stored_reset
+    assert _reset_queries(sent) == []
+
+
+async def test_native_parameter_rejection_has_parameter_guidance(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core refuses the lowercase unit; the error is the caller's parameter,
+    not a statistic missing its state_class."""
+    await _import(hass, "sensor.energy", "kWh", "energy")
+
     with pytest.raises(ToolError) as raised:
-        await tools_history._fetch_statistics(
-            client,
+        await statistics(
+            core_client,
             ["sensor.energy"],
-            start,
-            start + timedelta(hours=1),
-            "hour",
-            ["sum"],
-            10,
-            0,
-            {"units": {"energy": "kwh"}},
+            START,
+            END,
+            statistic_types=["sum"],
+            core_options={"units": {"energy": "kwh"}},
         )
-    assert "VALIDATION_INVALID_PARAMETER" in str(raised.value)
-    assert "units.energy" in str(raised.value)
+
+    payload = json.loads(str(raised.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "units.energy" in payload["error"]["message"]
     assert "state_class" not in str(raised.value)
 
 
-@pytest.mark.asyncio
+Read = tuple[dict[str, Any], dict[str, Any]]
+
+
+async def _energy_get(hass: HomeAssistant, client: HomeAssistantClient) -> Read:
+    """The saved energy preferences with their contract: (response, payload)."""
+    assert await async_setup_component(hass, "energy", {})
+    saved = await client.send_websocket_message(
+        {"type": "energy/save_prefs", "energy_sources": []}
+    )
+    assert saved["success"] is True
+    prefs = (await client.send_websocket_message({"type": "energy/get_prefs"}))[
+        "result"
+    ]
+    result = await EnergyTools(client).ha_manage_energy_prefs(
+        mode="get", include_schema=True
+    )
+    assert result["config"] == prefs
+    return result, result
+
+
+async def _history_get(hass: HomeAssistant, client: HomeAssistantClient) -> Read:
+    """One recorded state with the history contract: (response, data)."""
+    assert await async_setup_component(hass, "history", {})
+    await record_states(hass, "sensor.energy", ("5", None, START.timestamp() + 60))
+    result = await HistoryTools(client).ha_get_history(
+        entity_ids=["sensor.energy"],
+        start_time=START.isoformat(),
+        end_time=END.isoformat(),
+        include_schema=True,
+        fields=["entities"],
+    )
+    payload = result["data"]
+    assert [row["state"] for row in payload["entities"][0]["states"]] == ["5"]
+    assert "warnings" not in payload
+    return result, payload
+
+
 @pytest.mark.parametrize("kind", ["history", "energy"])
 @pytest.mark.parametrize("failure", [False, True])
 async def test_optional_schema_preserves_reads_and_promotes_warnings(
-    monkeypatch: pytest.MonkeyPatch,
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
     kind: str,
     failure: bool,
 ) -> None:
-    contract = {"status": "available", "warnings": ["Description is incomplete"]}
-    lookup = AsyncMock(
-        side_effect=ToolError("schema discovery timed out") if failure else None,
-        return_value=contract,
+    """The read is kept whether the component describes Core's contract or
+    fails to; the contract's warnings move to the top-level list."""
+    # The component fails while describing Core's contract and answers an error.
+    fails = patch.object(
+        component_contract,
+        "describe_contract",
+        side_effect=HomeAssistantError("contract unavailable"),
     )
-    monkeypatch.setattr(core_contract, "core_contract", lookup)
-    client = Mock()
-    if kind == "energy":
-        tool = tools_energy.EnergyTools(client)
-        monkeypatch.setattr(
-            tool,
-            "_get_prefs",
-            AsyncMock(
-                return_value={
-                    "config": {"energy_sources": []},
-                    "config_hash": "unchanged",
-                }
-            ),
-        )
-        result = await tool.ha_manage_energy_prefs(mode="get", include_schema=True)
-        assert result["config"] == {"energy_sources": []}
-        assert result["config_hash"] == "unchanged"
-        payload = result
-    else:
-        monkeypatch.setattr(
-            tools_history,
-            "_fetch_history",
-            AsyncMock(
-                return_value={
-                    "entities": [
-                        {"entity_id": "sensor.energy", "states": [{"state": "5"}]}
-                    ],
-                }
-            ),
-        )
-        monkeypatch.setattr(
-            response_helpers,
-            "fetch_ha_timezone",
-            AsyncMock(return_value=("UTC", True)),
-        )
-        result = await tools_history.HistoryTools(client).ha_get_history(
-            entity_ids=["sensor.energy"],
-            start_time="1h",
-            include_schema=True,
-            fields=["entities"],
-        )
-        payload = result["data"]
-        assert payload["entities"][0]["states"] == [{"state": "5"}]
-        assert "warnings" not in payload
-        assert any(
-            "Could not fetch Home Assistant timezone" in w for w in result["warnings"]
-        )
-    assert any(
-        "schema" in w.lower() or "incomplete" in w.lower() for w in result["warnings"]
-    )
-    assert result["warnings"]
-    assert all(isinstance(warning, str) for warning in result["warnings"])
-    assert "warnings" not in payload["core_contract"]
-    assert payload["core_contract"]["status"] == (
-        "unavailable" if failure else "available"
-    )
+    read = _energy_get if kind == "energy" else _history_get
+    with fails if failure else nullcontext():
+        result, payload = await read(hass, component_core_client)
+
+    contract = payload["core_contract"]
+    assert "warnings" not in contract
+    assert contract["status"] == ("unavailable" if failure else "available")
+    assert all(isinstance(warning, str) for warning in result.get("warnings", []))
+    if failure:
+        assert contract["reason"] in result["warnings"]
+    elif contract["description_complete"] is False:
+        # Core's energy/save_prefs schema holds validators the component cannot
+        # describe; the component says so in the contract's warnings.
+        assert any("cannot be described" in warning for warning in result["warnings"])
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "unit_class,stored,output,needs_query",
-    [
-        (None, "USD", "USD", False),
-        ("energy", "kWh", "MWh", True),
-    ],
+    ("stored", "unit_class", "needs_query"),
+    [("USD", None, False), ("kWh", None, True)],
+    ids=["no-converter", "converter-found-by-unit"],
 )
 async def test_native_converter_controls_nullable_class_reset_recovery(
-    unit_class: str | None,
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
     stored: str,
-    output: str,
+    unit_class: str | None,
     needs_query: bool,
 ) -> None:
-    rows = {"sensor.test": [{"start": 1000, "last_reset": 900, "sum": 123}]}
-    metadata = {
-        "sensor.test": {
-            "unit_class": None,
-            "statistics_unit_of_measurement": stored,
-            "display_unit_of_measurement": stored,
-        }
-    }
-    resolved = {
-        "sensor.test": {
-            **metadata["sensor.test"],
-            "conversion_unit_class": unit_class,
-            "output_unit_of_measurement": output,
-        }
-    }
-    client = Mock(
-        send_websocket_message=AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"sensor.test": [{"start": 1000, "last_reset": 800}]},
-            }
+    """A statistic recorded without a unit class: Core's converter, which the
+    component reports, decides whether energy units apply and so whether the
+    reset must be re-read in the stored unit."""
+    await _import(hass, "sensor.test", stored, unit_class)
+    stored_reset = await _core_last_reset(component_core_client, "sensor.test")
+
+    with sent_messages(component_core_client) as sent:
+        result = await statistics(
+            component_core_client,
+            ["sensor.test"],
+            START,
+            END,
+            statistic_types=["sum", "last_reset"],
+            core_options={"units": {"energy": "MWh"}},
         )
+
+    assert "warnings" not in result
+    assert _entities(result)["sensor.test"]["statistics"][0]["last_reset"] == (
+        stored_reset
     )
-    assert (
-        await restore_reset_timestamps(
-            client,
-            rows,
-            metadata,
-            {"units": {"energy": "MWh"}},
-            resolved,
-        )
-        == []
-    )
-    assert rows["sensor.test"][0]["last_reset"] == (800 if needs_query else 900)
+    queries = _reset_queries(sent)
     if needs_query:
-        assert client.send_websocket_message.call_args.args[0]["units"] == {
-            "energy": "kWh"
-        }
+        assert [query["units"] for query in queries] == [{"energy": "kWh"}]
     else:
-        client.send_websocket_message.assert_not_called()
+        assert queries == []
 
 
-@pytest.mark.asyncio
-async def test_unknown_converter_can_recover_resets_in_unchanged_default_units() -> (
-    None
-):
-    rows = {"sensor.cost": [{"start": 1000, "last_reset": 900, "sum": 123}]}
-    metadata = {
-        "sensor.cost": {
-            "unit_class": None,
-            "statistics_unit_of_measurement": "USD",
-            "display_unit_of_measurement": "USD",
-        }
-    }
-    client = Mock(
-        send_websocket_message=AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"sensor.cost": [{"start": 1000, "last_reset": 800}]},
-            }
+async def test_unknown_converter_can_recover_resets_in_unchanged_default_units(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Without the component Core's default output is the stored unit, so the
+    reset is re-read with no unit option at all."""
+    await _import(hass, "sensor.cost", "USD", None)
+    stored_reset = await _core_last_reset(core_client, "sensor.cost")
+
+    with sent_messages(core_client) as sent:
+        result = await statistics(
+            core_client,
+            ["sensor.cost"],
+            START,
+            END,
+            statistic_types=["sum", "last_reset"],
+            core_options={"units": {"energy": "MWh"}},
         )
-    )
-    assert (
-        await restore_reset_timestamps(
-            client,
-            rows,
-            metadata,
-            {"units": {"energy": "MWh"}},
-        )
-        == []
-    )
-    assert rows["sensor.cost"][0]["last_reset"] == 800
-    assert client.send_websocket_message.call_args.args[0]["units"] == {}
+
+    assert not any("last_reset" in warning for warning in result["warnings"])
+    row = _entities(result)["sensor.cost"]["statistics"][0]
+    assert row["last_reset"] == stored_reset
+    assert [query["units"] for query in _reset_queries(sent)] == [{}]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("component", [True, False])
 async def test_default_conversion_recovers_null_class_reset_without_losing_unit(
-    monkeypatch: pytest.MonkeyPatch, component: bool
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    component: bool,
 ) -> None:
-    from ha_mcp.client import websocket_client
-    from ha_mcp.tools import component_api
-
-    start = datetime(2026, 1, 1, tzinfo=UTC)
-    metadata = {
-        "statistic_id": "sensor.energy",
-        "unit_class": None,
-        "statistics_unit_of_measurement": "kWh",
-        "display_unit_of_measurement": "Wh",
-    }
-    ws = Mock(
-        send_command=AsyncMock(
-            return_value={
-                "result": {
-                    "records": [
-                        {
-                            **metadata,
-                            "conversion_unit_class": "energy",
-                            "output_unit_of_measurement": "Wh",
-                        }
-                    ]
-                }
-            }
-        )
-    )
-    monkeypatch.setattr(
-        component_api,
-        "get_component_caps",
-        AsyncMock(
-            return_value=(
-                component_api.ComponentCaps(1, "test", frozenset({"core_contract"}), {})
-                if component
-                else None
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        websocket_client, "get_websocket_client", AsyncMock(return_value=ws)
-    )
-    client = Mock(
-        base_url="http://test",
-        token="test",
-        verify_ssl=True,
-        send_websocket_message=AsyncMock(
-            side_effect=[
-                {
-                    "success": True,
-                    "result": {
-                        "sensor.energy": [
-                            {"start": 1000, "sum": 1000, "last_reset": 900000}
-                        ]
-                    },
-                },
-                {"success": True, "result": [metadata]},
-                {
-                    "success": True,
-                    "result": {"sensor.energy": [{"start": 1000, "last_reset": 900}]},
-                },
-            ]
-        ),
-    )
-    result = await tools_history._fetch_statistics(
-        client,
-        ["sensor.energy"],
-        start,
-        start + timedelta(hours=1),
-        "hour",
-        ["sum", "last_reset"],
-        10,
-        0,
-    )
-    entity = result["entities"][0]
-    assert entity["unit_of_measurement"] == "Wh"
+    """Stored in kWh without a unit class and shown in Wh: Core converts to the
+    display unit. The component names the converter, so the reset is re-read in
+    kWh; without it the reset cannot be trusted and is left out."""
     if component:
-        assert entity["statistics"][0]["last_reset"] == 900
-        assert client.send_websocket_message.call_args.args[0]["units"] == {
-            "energy": "kWh"
-        }
+        component_ws.async_register_commands(hass)
+    await _import(hass, "sensor.energy", "kWh", None, display="Wh")
+    stored_reset = await _core_last_reset(core_client, "sensor.energy")
+    socket = await websocket_manager.get_client(
+        url=core_client.base_url, token=core_client.token, verify_ssl=False
+    )
+
+    with routing_spies(core_client, socket) as (legacy, pooled):
+        result = await statistics(
+            core_client,
+            ["sensor.energy"],
+            START,
+            END,
+            statistic_types=["sum", "last_reset"],
+        )
+
+    entity = _entities(result)["sensor.energy"]
+    assert entity["unit_of_measurement"] == "Wh"
+    resolved = [
+        call for call in pooled.call_args_list if call.args[0] == STATISTICS_UNITS
+    ]
+    if component:
+        assert entity["statistics"][0]["last_reset"] == stored_reset
+        assert [query["units"] for query in _reset_queries(legacy)] == [
+            {"energy": "kWh"}
+        ]
+        assert len(resolved) == 1
     else:
         assert "last_reset" not in entity["statistics"][0]
         assert result["warnings"]
-        ws.send_command.assert_not_called()
+        assert resolved == []
