@@ -570,7 +570,8 @@ def test_the_private_access_list_is_exactly_the_files_that_still_violate(
 # imports the style guide requires would trip it, and it takes no allowlist.
 # The vendored packages' `ha_mcp._vendor` path, the test trees' own helper
 # modules (relative or `tests.`) and dunder names stay out of it.
-_VENDORED_PATH = r"^ha_mcp\._vendor(\.[a-z][\w.]*)?$"
+# The vendored packages' import path; each segment after it is still checked.
+_VENDORED_PATH = r"^ha_mcp\._vendor(\.[a-z]\w*)*$"
 _PRIVATE_SEGMENT = r"(^|\.)_[A-Za-z0-9]"
 _PRIVATE_IMPORTS = {
     "id": "no-private-imports",
@@ -692,6 +693,16 @@ def _private_imports_rule(tmp_path: Path) -> Path:
             "import ha_mcp._vendor.fastmcp\n", False, id="import-vendored-path"
         ),
         pytest.param("import ha_mcp.config\n", False, id="import-public-module"),
+        pytest.param(
+            "from ha_mcp._vendor.mcp.shared._request_clock import RequestClock\n",
+            True,
+            id="vendored-private-module",
+        ),
+        pytest.param(
+            "import ha_mcp._vendor.mcp.shared._request_clock as clock\n",
+            True,
+            id="import-vendored-private-module",
+        ),
         pytest.param("from ._helpers import _local\n", False, id="relative-helper"),
         pytest.param(
             "from tests.src.unit._helpers import _local\n", False, id="test-helper"
