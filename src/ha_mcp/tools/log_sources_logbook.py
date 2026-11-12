@@ -291,6 +291,23 @@ class LogbookLogSourceMixin:
             end_time=end_time,
             context_id=context_id,
         )
+        if rest is None:
+            # get_logbook answers None only for a reply that was not a row
+            # list; an empty logbook is a real list, so this is a failure.
+            # Core's ``/logbook`` always answers a list, so this guards a
+            # non-conforming responder and no test can produce it.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The REST logbook reply was not a row list.",
+                    context={"source": "logbook", "transport": "rest"},
+                    suggestions=[
+                        "Retry the request; the REST logbook endpoint answered "
+                        + "with an unexpected payload",
+                        "Check the Home Assistant logs if it keeps happening",
+                    ],
+                )
+            )
         return rest, "rest"
 
     async def _fetch_logbook_component(
@@ -313,10 +330,14 @@ class LogbookLogSourceMixin:
         try:
             response = await self._client.send_websocket_message(message)
         except HomeAssistantCommandTimeout:
-            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+            self._raise_logbook_timeout(
+                command["start_time"], command.get("end_time") or ""
+            )
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
-                self._raise_logbook_timeout(command["start_time"], command["end_time"])
+                self._raise_logbook_timeout(
+                    command["start_time"], command.get("end_time") or ""
+                )
             if isinstance(exc.__cause__, HomeAssistantAuthError):
                 # The fallbacks would resend the rejected token.
                 exception_to_structured_error(exc)
@@ -348,10 +369,14 @@ class LogbookLogSourceMixin:
         try:
             response = await self._client.send_websocket_message(command)
         except HomeAssistantCommandTimeout:
-            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+            self._raise_logbook_timeout(
+                command["start_time"], command.get("end_time") or ""
+            )
         except HomeAssistantConnectionError as exc:
             if _wrapped_timeout(exc):
-                self._raise_logbook_timeout(command["start_time"], command["end_time"])
+                self._raise_logbook_timeout(
+                    command["start_time"], command.get("end_time") or ""
+                )
             if isinstance(exc.__cause__, HomeAssistantAuthError):
                 # A token rejected on connect is not a WebSocket outage.
                 exception_to_structured_error(
@@ -440,7 +465,7 @@ class LogbookLogSourceMixin:
                     context={"error_code": error_code},
                     suggestions=[
                         "Check that 'entity_id' uses 'domain.object_id' form, "
-                        "e.g. 'light.kitchen'"
+                        + "e.g. 'light.kitchen'"
                     ],
                 )
             )
@@ -558,7 +583,7 @@ class LogbookLogSourceMixin:
             transport_warnings = (
                 [
                     "State rows from the WebSocket fallback carry no 'name'; "
-                    "the ha_mcp_tools component supplies Core-resolved names."
+                    + "the ha_mcp_tools component supplies Core-resolved names."
                 ]
                 if missing_names
                 else []
