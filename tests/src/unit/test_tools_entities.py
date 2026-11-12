@@ -1496,7 +1496,7 @@ class TestHaSetEntityShowAs:
         self, mock_mcp, mock_client
     ):
         """If HA returns success=False with no usable error key, the error
-        message must NOT degrade to literal "{}" — _extract_ws_error's fallback
+        message must NOT degrade to literal "{}" — raise_core_refusal's fallback
         string surfaces instead.
         """
         fail = {"success": False}  # no error key at all
@@ -1512,7 +1512,7 @@ class TestHaSetEntityShowAs:
 
         body = json.loads(str(exc_info.value))
         msg = body["error"]["message"]
-        assert "no error detail returned by Home Assistant" in msg
+        assert msg.endswith(": Unknown error")
         # Critical: must NOT have rendered the empty dict literal.
         assert ": {}" not in msg
         assert "{}" not in msg.split(":", 1)[1]

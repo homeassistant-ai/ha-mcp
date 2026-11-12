@@ -79,10 +79,10 @@ from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-    ws_failure_code,
 )
 from .tool_hints import read_only_hints, write_hints
 
@@ -446,17 +446,17 @@ class EntityTools:
             entity_id.lower()
         )
         if not automatic:
-            if result.get("success"):
-                code = ErrorCode.ENTITY_NOT_FOUND
-                detail = "not in the entity registry"
-            else:
-                code, detail = ws_failure_code(result), _extract_ws_error(result)
+            what = f"No automatic entity_id for {entity_id}"
+            context = {"entity_id": entity_id}
+            suggestions = ["Use ha_search() to find valid entity IDs"]
+            if not result.get("success"):
+                raise_core_refusal(what, result, context, suggestions=suggestions)
             raise_tool_error(
                 create_error_response(
-                    code,
-                    f"No automatic entity_id for {entity_id}: {detail}",
-                    context={"entity_id": entity_id},
-                    suggestions=["Use ha_search() to find valid entity IDs"],
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"{what}: not in the entity registry",
+                    context=context,
+                    suggestions=suggestions,
                 )
             )
         return str(automatic)
@@ -483,7 +483,6 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                error_msg = _extract_ws_error(result)
                 suggestions = ["Verify the entity_id exists using ha_search()"]
                 if new_entity_id is not None:
                     suggestions.extend(
@@ -499,13 +498,11 @@ class EntityTools:
                             "Some entities may not support all update options",
                         ]
                     )
-                raise_tool_error(
-                    create_error_response(
-                        ws_failure_code(result),
-                        f"Failed to update entity: {error_msg}",
-                        context={"entity_id": entity_id},
-                        suggestions=suggestions,
-                    )
+                raise_core_refusal(
+                    "Failed to update entity",
+                    result,
+                    {"entity_id": entity_id},
+                    suggestions=suggestions,
                 )
 
             core_result = dict(result.get("result") or {})
@@ -544,7 +541,6 @@ class EntityTools:
             }
             opts_result = await self._client.send_websocket_message(opts_msg)
             if not opts_result.get("success"):
-                err_msg = _extract_ws_error(opts_result)
                 partial = bool(options_succeeded) or has_registry_updates
                 msg_prefix = (
                     "Partially updated entity; failed updating options for"
@@ -567,12 +563,10 @@ class EntityTools:
                 # as _build_expose_failure_context does.
                 if partial:
                     options_failure_context["entity_entry"] = entity_entry
-                raise_tool_error(
-                    create_error_response(
-                        ws_failure_code(opts_result),
-                        f"{msg_prefix} domain '{opts_domain}': {err_msg}",
-                        context=options_failure_context,
-                    )
+                raise_core_refusal(
+                    f"{msg_prefix} domain '{opts_domain}'",
+                    opts_result,
+                    options_failure_context,
                 )
             # HA returns the cumulative entity_entry on each per-domain
             # call, so last-call-wins reassignment leaves the final loop
@@ -1249,13 +1243,10 @@ class EntityTools:
         if not result.get("success"):
             if result.get("error_code") == "not_found":
                 raise _NotInRegistry(_extract_ws_error(result))
-            raise_tool_error(
-                create_error_response(
-                    ws_failure_code(result),
-                    f"Reading the registry entry of {eid} failed: "
-                    f"{_extract_ws_error(result)}",
-                    context={"entity_id": eid},
-                )
+            raise_core_refusal(
+                f"Reading the registry entry of {eid} failed",
+                result,
+                {"entity_id": eid},
             )
 
         return result.get("result") or {}

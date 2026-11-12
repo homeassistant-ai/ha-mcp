@@ -18,7 +18,6 @@ from ..client.rest_client import (
     HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
-from ..errors import create_error_response
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
@@ -27,7 +26,11 @@ from .component_api import (
     is_unknown_command,
 )
 from .entity_registry_reads import _NOT_IN_REGISTRY, _extract_ws_error, get_entries_raw
-from .helpers import get_entity_state_or_none, raise_tool_error, ws_failure_code
+from .helpers import (
+    core_error_message,
+    get_entity_state_or_none,
+    raise_core_refusal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +107,7 @@ async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         {"type": "homeassistant/expose_entity/list"}
     )
     if not result.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ws_failure_code(result),
-                f"Failed to get exposure settings: {result.get('error')}",
-            )
-        )
+        raise_core_refusal("Failed to get exposure settings", result)
     return (result.get("result") or {}).get("exposed_entities") or {}, {}
 
 
@@ -169,7 +167,7 @@ async def unregistered_lookup(
         # matches.
         raise HomeAssistantCommandError(
             "Command failed: reading the exposed entities failed: "
-            + _extract_ws_error(reply).removeprefix("Command failed: "),
+            + core_error_message(_extract_ws_error(reply)),
             code=reply.get("error_code"),
         )
     exposed_entities = (reply.get("result") or {}).get("exposed_entities") or {}

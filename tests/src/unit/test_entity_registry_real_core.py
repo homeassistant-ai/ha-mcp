@@ -82,6 +82,16 @@ def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return json.loads(str(exc_info.value))["error"]
 
 
+def _assert_cores_refusal(
+    exc_info: pytest.ExceptionInfo[ToolError], ha_error_code: str
+) -> None:
+    """Core's refusal keeps its code as ``ha_error_code`` and its message
+    without the client's ``Command failed:`` prefix."""
+    payload = json.loads(str(exc_info.value))
+    assert "Command failed" not in payload["error"]["message"]
+    assert payload["ha_error_code"] == ha_error_code
+
+
 def _device_entity(hass: HomeAssistant, original_name: str | None) -> er.RegistryEntry:
     """A sensor on a device, the shape the main-entity switch applies to."""
     config_entry = MockConfigEntry(domain="demo")
@@ -172,6 +182,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
     error = _error(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "is an invalid entity ID" in error["message"]
+    _assert_cores_refusal(exc_info, "invalid_format")
     assert _types(sent) == ["config/entity_registry/get_automatic_entity_ids"]
 
 
@@ -420,6 +431,7 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
     error = _error(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
+    _assert_cores_refusal(exc_info, "invalid_info")
 
 
 async def test_enabling_returns_cores_restart_answer(
@@ -448,6 +460,7 @@ async def test_an_unknown_assistant_is_refused_before_any_write(
         )
 
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    _assert_cores_refusal(exc_info, "invalid_format")
     entry = er.async_get(hass).async_get(lamp)
     assert entry is not None
     assert entry.name is None
@@ -560,6 +573,7 @@ async def test_entity_id_parts_are_cores_settings(
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_set_entity(entity_id_parts=["entity"])
     assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    _assert_cores_refusal(exc_info, "invalid_format")
     assert registry.settings.entity_id_parts == ("device", "entity")
 
     await tools.ha_set_entity(entity_id_parts=[])

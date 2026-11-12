@@ -16,8 +16,11 @@ from ..errors import ErrorCode, create_error_response
 from .entity_expose_batch import read_expose_new
 from .entity_exposure import list_exposures, read_exposure
 from .entity_param_parsing import _parse_expose_to_param
-from .entity_registry_reads import _extract_ws_error
-from .helpers import exception_to_structured_error, raise_tool_error, ws_failure_code
+from .helpers import (
+    exception_to_structured_error,
+    raise_core_refusal,
+    raise_tool_error,
+)
 
 _SETTINGS_GET = {"type": "config/entity_registry/settings/get"}
 
@@ -39,13 +42,7 @@ async def _registry_ws(
             context = {**context, "write_outcome_unknown": action}
         exception_to_structured_error(exc, context=context)
     if not reply.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ws_failure_code(reply),
-                f"{action} failed: {_extract_ws_error(reply)}",
-                context=context,
-            )
-        )
+        raise_core_refusal(f"{action} failed", reply, context)
     return reply.get("result")
 
 

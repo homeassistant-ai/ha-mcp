@@ -4,9 +4,8 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from ..errors import create_error_response
 from .entity_exposure import get_entries_or_unregistered
-from .helpers import raise_tool_error, ws_failure_code
+from .helpers import raise_core_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +33,11 @@ async def read_expose_new(client: Any, assistant: str) -> bool:
         expected_error_codes=frozenset({"invalid_format"}),
     )
     if not reply.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ws_failure_code(reply),
-                f"Checking assistant {assistant!r} failed: {reply.get('error')}",
-                context={"assistant": assistant},
-                suggestions=reply.get("suggestions"),
-            )
+        raise_core_refusal(
+            f"Checking assistant {assistant!r} failed",
+            reply,
+            {"assistant": assistant},
+            suggestions=reply.get("suggestions"),
         )
     return bool(reply["result"]["expose_new"])
 
