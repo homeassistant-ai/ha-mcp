@@ -47,7 +47,7 @@ async def _start_ha_auth(
 
 
 @pytest.mark.parametrize("scheme", ["Bearer", "bEaReR"])
-async def test_home_assistant_access_token_reaches_the_mcp_server(
+async def test_a_home_assistant_access_token_authenticates_without_reaching_upstream(
     hass: HomeAssistant,
     hass_client_no_auth: ClientSessionGenerator,
     hass_access_token: str,
@@ -57,8 +57,9 @@ async def test_home_assistant_access_token_reaches_the_mcp_server(
     upstream: Upstream,
     scheme: str,
 ) -> None:
-    """A valid Home Assistant access token is relayed to the MCP server, with
-    the auth scheme matched case-insensitively (RFC 7235)."""
+    """A valid Home Assistant access token authenticates the request, with the
+    auth scheme matched case-insensitively (RFC 7235); the token itself never
+    reaches the MCP server."""
     await _start_ha_auth(hass, fs_root, variant, upstream)
     client = await hass_client_no_auth()
 
@@ -70,6 +71,7 @@ async def test_home_assistant_access_token_reaches_the_mcp_server(
 
     assert response.status == 200
     assert len(upstream.requests) == 1
+    assert "authorization" not in {key.lower() for key in upstream.requests[0].headers}
 
 
 @pytest.mark.parametrize(

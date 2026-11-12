@@ -64,8 +64,13 @@ def _what_the_user_sees_while_restarting(
     issue_registry: ir.IssueRegistry,
     app: App,
     seen: dict[str, Any],
+    core: CoreLink,
+    upstream: Upstream,
 ) -> None:
     variant = app.variant
+    relayed_before = len(upstream.requests)
+    core.post(f"/api/webhook/{app.proxy_config()['webhook_id']}", b"{}")
+    seen["relayed"] = len(upstream.requests) - relayed_before
     seen["entries"] = in_core(hass, lambda: entry_states(hass, variant))
     seen["restart_marker"] = app.path(variant.oauth_marker).exists()
     seen["repair"] = in_core(
@@ -97,13 +102,14 @@ async def test_stale_component_code_takes_the_webhook_down(
     app.deploy_component()
     seen: dict[str, Any] = {}
     app.on_restart = lambda: _what_the_user_sees_while_restarting(
-        hass, hass_ws_client, issue_registry, app, seen
+        hass, hass_ws_client, issue_registry, app, seen, core, upstream
     )
 
     assert await run_main(hass, app) == 0
 
     assert app.restarts_awaited == 1
     assert seen["entries"] == []
+    assert seen["relayed"] == 0
     assert seen["restart_marker"] is True
     assert seen["repair"] is True
     assert f"{variant.domain}_oauth_stale" in seen["notifications"]
@@ -127,7 +133,7 @@ async def test_webhook_comes_back_once_core_runs_the_new_code(
     app.deploy_component()
     seen: dict[str, Any] = {}
     app.on_restart = lambda: _what_the_user_sees_while_restarting(
-        hass, hass_ws_client, issue_registry, app, seen
+        hass, hass_ws_client, issue_registry, app, seen, core, upstream
     )
     running: list[list[str]] = []
     app.clock.while_running = lambda: running.append(

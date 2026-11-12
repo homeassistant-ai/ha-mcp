@@ -86,16 +86,19 @@ async def test_truncated_secret_path_registers_no_webhook(
     upstream: Upstream,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A truncated secret (the failure seen in the wild) leaves no webhook
-    relaying to it and no session open."""
+    """A truncated secret (the failure seen in the wild) leaves the webhook id
+    free, nothing relaying to it, and no session open."""
     config = relay_config(upstream, target_url=upstream.target_url("private_ZZZZZZZ"))
     sessions = record_client_sessions(monkeypatch)
     entry = await start_proxy(hass, variant, fs_root, config)
+    # Core refuses a second handler for an id that is still registered.
+    webhook.async_register(hass, "other", "Other", WEBHOOK_ID, existing_webhook_handler)
     client = await hass_client_no_auth()
 
-    await client.post(WEBHOOK_PATH, data=b"{}")
+    response = await client.post(WEBHOOK_PATH, data=b"{}")
 
     assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert (await response.json())["handled_by"] == "existing"
     assert upstream.requests == []
     assert all(session.closed for session in sessions)
 

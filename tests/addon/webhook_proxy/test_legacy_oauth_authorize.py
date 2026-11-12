@@ -15,6 +15,7 @@ from ._legacy_oauth import (
     REDIRECT_URI,
     STATE,
     VERIFIER,
+    RenderedPage,
     get_json,
     redirect_query,
     s256,
@@ -126,10 +127,20 @@ async def test_consent_page_shows_the_destination_and_posts_the_request_back(
     assert response.status == 200
     assert response.content_type == "text/html"
     html = await response.text()
-    assert REDIRECT_URI in html
-    for field in ("client_id", "redirect_uri", "state", "code_challenge"):
-        assert f'name="{field}"' in html
-    assert 'action="/authorize"' in html
+    assert f"<code>{REDIRECT_URI}</code>" in html
+    page = RenderedPage(html)
+    assert ("form", {"method": "POST", "action": "/authorize"}) in page.tags
+    form = {
+        name: str(attrs.get("value") or "") for name, attrs in page.inputs().items()
+    }
+    assert set(form) == {"client_id", "redirect_uri", "state", "code_challenge"}
+
+    approval = await client.post(
+        "/authorize", data={**form, "action": "approve"}, allow_redirects=False
+    )
+
+    assert approval.status == 302
+    assert redirect_query(approval)["code"]
 
 
 async def test_consent_page_escapes_a_hostile_redirect_uri(
@@ -152,9 +163,11 @@ async def test_consent_page_escapes_a_hostile_redirect_uri(
     )
 
     assert response.status == 200
-    html = await response.text()
-    assert "<img src=x" not in html
-    assert "&lt;img src=x" in html
+    page = RenderedPage(await response.text())
+    redirect_input = page.inputs()["redirect_uri"]
+    assert redirect_input["value"] == hostile
+    assert set(redirect_input) == {"type", "name", "value"}
+    assert "img" not in {tag for tag, _attrs in page.tags}
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -222,3 +223,23 @@ async def post_webhook(
         data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
         headers=headers,
     )
+
+
+class RenderedPage(HTMLParser):
+    """The tags of a rendered page, read as a browser would parse them."""
+
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        self.tags: list[tuple[str, dict[str, str | None]]] = []
+        self.feed(html)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tags.append((tag, dict(attrs)))
+
+    def inputs(self) -> dict[str, dict[str, str | None]]:
+        """Each ``<input>`` by name, with all of its attributes."""
+        return {
+            str(attrs["name"]): attrs
+            for tag, attrs in self.tags
+            if tag == "input" and attrs.get("name")
+        }
