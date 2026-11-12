@@ -582,7 +582,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
 
     Require every emitted key to be either:
 
-    - in ``_ENTITIES_BRANCH_SKIP_KEYS`` (intentionally stripped by the
+    - in ``ENTITIES_BRANCH_SKIP_KEYS`` (intentionally stripped by the
       orchestrator), OR
     - in the ``documented_must_equal`` manifest for ``ha_search``
       (intentionally surfaced at the top level + listed in the
@@ -592,7 +592,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     Adding a new key to either bucket forces the contract decision
     explicitly; landing in neither raises this test.
     """
-    from ha_mcp.tools.search.response import _ENTITIES_BRANCH_SKIP_KEYS
+    from ha_mcp.tools.search.response import ENTITIES_BRANCH_SKIP_KEYS
 
     markers = frozenset({"results", "total_matches"})
     # _ha_search_entities is a dispatcher; response-shaped dicts live in
@@ -616,15 +616,15 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
 
     ha_search_spec = next(s for s in TOOL_SPECS if s["tool"] == "ha_search")
     documented = ha_search_spec["documented_must_equal"]
-    stripped = set(_ENTITIES_BRANCH_SKIP_KEYS)
+    stripped = set(ENTITIES_BRANCH_SKIP_KEYS)
 
     uncategorised = emitted - stripped - documented - _AUTO_RETAINED
     assert not uncategorised, (
         f"_ha_search_entities emits {sorted(uncategorised)!r} into its "
         f"sub-payload, but the orchestrator neither strips them (not in "
-        f"_ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
+        f"ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
         f"`Available keys:` enumeration / documented_must_equal manifest). "
-        f"Either add to _ENTITIES_BRANCH_SKIP_KEYS to strip, or add to the "
+        f"Either add to ENTITIES_BRANCH_SKIP_KEYS to strip, or add to the "
         f"manifest + docstring + _ALWAYS_KEEP_PROJECTION to surface."
     )
 
@@ -655,15 +655,15 @@ def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
 def test_overview_routing_sets_partition_every_documented_field() -> None:
     """Every public overview key belongs to exactly one collection path."""
     from ha_mcp.tools.search.overview import (
-        _OVERVIEW_AVAILABLE_FIELDS,
-        _OVERVIEW_ENTITY_FIELDS,
-        _OVERVIEW_INDEPENDENT_FIELDS,
+        OVERVIEW_AVAILABLE_FIELDS,
+        OVERVIEW_ENTITY_FIELDS,
+        OVERVIEW_INDEPENDENT_FIELDS,
     )
 
     documented = _extract_documented_keys("tools/tools_search.py", "ha_get_overview")
 
-    assert _OVERVIEW_INDEPENDENT_FIELDS.isdisjoint(_OVERVIEW_ENTITY_FIELDS)
-    assert documented == _OVERVIEW_AVAILABLE_FIELDS
+    assert OVERVIEW_INDEPENDENT_FIELDS.isdisjoint(OVERVIEW_ENTITY_FIELDS)
+    assert documented == OVERVIEW_AVAILABLE_FIELDS
 
 
 def test_tool_specs_covers_every_fields_using_tool() -> None:

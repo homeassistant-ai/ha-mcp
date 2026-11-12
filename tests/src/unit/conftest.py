@@ -132,14 +132,14 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
     from ha_mcp.utils.data_paths import get_data_dir
 
     get_data_dir.cache_clear()
-    _reset_global_settings()
+    reset_global_settings()
     yield
     get_data_dir.cache_clear()
-    _reset_global_settings()
+    reset_global_settings()
 
 
 def _uses_js_harness(module: object) -> bool:

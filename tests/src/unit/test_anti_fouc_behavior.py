@@ -32,11 +32,11 @@ def _extract_anti_fouc_body(source: str, *, label: str) -> str:
     return match.group(1)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def settings_ui_anti_fouc() -> str:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
+    from ha_mcp.settings_ui import render_settings_html
 
-    return _extract_anti_fouc_body(_SETTINGS_HTML, label="settings_ui")
+    return _extract_anti_fouc_body(render_settings_html(), label="settings_ui")
 
 
 @pytest.fixture(scope="module")

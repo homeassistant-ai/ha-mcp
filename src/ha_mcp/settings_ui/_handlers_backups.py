@@ -38,9 +38,9 @@ from ..backup_manager import (
 from ..backup_todo import TodoListNotLoaded
 from ..config import (
     BACKUP_OVERRIDE_FIELDS,
-    _reset_global_settings,
     get_backup_setting_origin,
     get_global_settings,
+    reset_global_settings,
 )
 from ..config_registry import SETTING_BOUNDS
 from ..errors import ErrorCode, create_error_response
@@ -557,7 +557,7 @@ def _apply_backup_config_file(clean: dict[str, Any]) -> JSONResponse:
     # File-mode auto-backup settings take effect immediately on the next
     # ``get_global_settings()`` read — no restart needed, hence
     # ``restart_required=False``.
-    _reset_global_settings()
+    reset_global_settings()
     return JSONResponse(
         {"success": True, "applied": clean, "mode": "file", "restart_required": False}
     )

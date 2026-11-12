@@ -20,8 +20,8 @@ from ha_mcp.config import (
     _ADVANCED_SETTINGS_BOUNDS,
     ADVANCED_SETTINGS_FIELDS,
     Settings,
-    _reset_global_settings,
     get_global_settings,
+    reset_global_settings,
 )
 
 # (settings field name, env alias, default, python type)
@@ -75,11 +75,11 @@ def test_knob_field_is_editable_in_advanced_search_section(field, env, default, 
 def test_env_var_flows_to_resolved_settings(field, env, default, ftype, monkeypatch):
     _clear_knob_envs(monkeypatch)
     monkeypatch.setenv(env, "3")
-    _reset_global_settings()
+    reset_global_settings()
     try:
         assert getattr(get_global_settings(), field) == ftype(3)
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.parametrize("field,env,default,ftype", KNOB_FIELDS)
@@ -90,11 +90,11 @@ def test_override_file_value_is_applied(
     ``feature_flags.json``; ``get_global_settings`` must apply them."""
     _clear_knob_envs(monkeypatch)
     (isolated_data_dir / "feature_flags.json").write_text(json.dumps({field: 2}))
-    _reset_global_settings()
+    reset_global_settings()
     try:
         assert getattr(get_global_settings(), field) == ftype(2)
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.parametrize("field,env,default,ftype", KNOB_FIELDS)

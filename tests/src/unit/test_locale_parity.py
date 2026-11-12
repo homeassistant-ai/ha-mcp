@@ -49,8 +49,8 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
 from ha_mcp.settings_ui._tools_meta import FEATURE_GATED_TOOLS, primary_tag
+from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 

@@ -20,8 +20,8 @@ except ImportError:
 ADDON_DIR = "homeassistant-addon"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_POLICY_PATH = _REPO_ROOT / "src/ha_mcp/settings_ui/_locale_policy.py"
-_POLICY_SPEC = importlib.util.spec_from_file_location("_locale_policy", _POLICY_PATH)
+_POLICY_PATH = _REPO_ROOT / "src/ha_mcp/settings_ui/locale_policy.py"
+_POLICY_SPEC = importlib.util.spec_from_file_location("locale_policy", _POLICY_PATH)
 if _POLICY_SPEC is None or _POLICY_SPEC.loader is None:  # pragma: no cover
     raise ImportError(f"cannot load locale policy from {_POLICY_PATH}")
 _POLICY = importlib.util.module_from_spec(_POLICY_SPEC)

@@ -1624,7 +1624,7 @@ class DevTools:
         Extracted verbatim from the inline branch: rejects env/addon-managed
         settings, removes any file override, and reports whether one existed.
         """
-        from ..config import _reset_global_settings
+        from ..config import reset_global_settings
 
         if origin == "env":
             raise_tool_error(
@@ -1646,7 +1646,7 @@ class DevTools:
         had_override = origin == "file"
         if had_override:
             await self._merge_file_override({setting: _REMOVE})
-            _reset_global_settings()
+            reset_global_settings()
         return {
             "success": True,
             "data": {
@@ -1676,8 +1676,8 @@ class DevTools:
         """
         from ..config import (
             BETA_FEATURE_FIELDS,
-            _reset_global_settings,
             get_global_settings,
+            reset_global_settings,
         )
 
         if value is None:
@@ -1754,7 +1754,7 @@ class DevTools:
             mode = "addon"
         else:
             await self._merge_file_override({setting: coerced})
-            _reset_global_settings()
+            reset_global_settings()
             mode = "file"
         return {
             "success": True,

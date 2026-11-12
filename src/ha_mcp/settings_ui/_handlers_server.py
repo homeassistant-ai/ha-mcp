@@ -28,7 +28,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .._version import get_version, is_embedded, is_running_in_addon
-from ..config import _reset_global_settings, get_global_settings
+from ..config import get_global_settings, reset_global_settings
 from ..errors import ErrorCode, create_error_response
 from . import _persistence, _supervisor
 
@@ -833,7 +833,7 @@ async def _save_feature_flags(
     # Publish the change so the same process picks it up on the next
     # ``get_global_settings()`` call. ``restart_required=True`` because
     # feature flags gate tool registration / transforms at startup.
-    _reset_global_settings()
+    reset_global_settings()
     return JSONResponse(
         {
             "success": True,

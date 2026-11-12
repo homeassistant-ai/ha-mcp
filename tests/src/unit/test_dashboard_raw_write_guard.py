@@ -4,9 +4,7 @@ Core's WebSocket API carries a recording ``ha_mcp_tools/dashboard_edit``
 command, so a refused edit is proved by the command never being called.
 """
 
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 import voluptuous as vol
@@ -16,8 +14,9 @@ from homeassistant.core import HomeAssistant
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.device_control import DeviceControlTools
-from ha_mcp.tools.tools_code import _SandboxBridge
 from ha_mcp.tools.tools_service import ServiceTools
+
+from ._code_mode import run_custom_tool
 
 
 @pytest.fixture
@@ -63,12 +62,12 @@ async def test_native_edit_cannot_bypass_dashboard_tool(
 async def test_native_edit_cannot_bypass_dashboard_tool_in_sandbox(
     core_client: HomeAssistantClient,
     dashboard_edit_calls: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bridge = _SandboxBridge(
-        MagicMock(), core_client, SimpleNamespace(code_mode_max_invocations=10)
-    )
-    result = await bridge.ws_send(
-        {"type": "ha_mcp_tools/dashboard_edit", "config": {"views": []}}
+    result = await run_custom_tool(
+        core_client,
+        monkeypatch,
+        "await ws_send({'type': 'ha_mcp_tools/dashboard_edit', 'config': {'views': []}})",
     )
     assert "blocked" in result.get("error", "")
     assert dashboard_edit_calls == []

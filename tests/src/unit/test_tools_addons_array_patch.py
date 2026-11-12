@@ -1,19 +1,20 @@
-"""Unit tests for the array_patch helper and ha_manage_app array_patch dispatch.
+"""Unit tests for ha_manage_app's array_patch mode.
 
-The helper (`_apply_array_ops`) is exercised directly with synthetic data —
-no addon, no httpx — so the operation semantics are isolated from the
-HTTP plumbing. The dispatch layer is exercised by mocking `_call_addon_api`
-so we verify that array_patch fetches with raw=True, applies ops, and
-posts the mutated array back exactly once.
+The app is this repository's own collaborator: `_call_addon_api` is replaced
+so the app serves an array on GET and records the POST. The operation
+semantics are read from what ha_manage_app posts back and the summary it
+returns; the dispatch tests also verify that array_patch fetches with
+raw=True, applies ops, and posts the mutated array back exactly once.
 """
 
+import copy
 import json
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_addons import _apply_array_ops
 
 
 def _parse_tool_error(exc: pytest.ExceptionInfo[ToolError]) -> dict:
@@ -46,8 +47,48 @@ def _registered_tool():
     return fn
 
 
+async def _patch_array(
+    tool: Any,
+    items: list[Any],
+    operations: list[dict[str, Any]],
+    *,
+    id_field: str = "id",
+    posted: list[Any] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Run array_patch on ``items`` served by the app.
+
+    Returns the array ha_manage_app posted back and the summary it reported;
+    every POST body is also appended to ``posted`` when given.
+    """
+    bodies: list[Any] = [] if posted is None else posted
+
+    async def app(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["method"] == "GET":
+            return {
+                "success": True,
+                "response": copy.deepcopy(items),
+                "addon_name": "Node-RED",
+                "slug": kwargs["slug"],
+                "status_code": 200,
+            }
+        bodies.append(kwargs["body"])
+        return {"success": True, "response": "rev-1", "status_code": 200}
+
+    with patch(
+        "ha_mcp.tools.tools_addons._call_addon_api",
+        new=AsyncMock(side_effect=app),
+    ):
+        result = await tool(
+            slug="a0d7b954_nodered",
+            path="/flows",
+            array_patch={"id_field": id_field, "operations": operations},
+        )
+    [body] = bodies
+    return body, result["summary"]
+
+
 # ---------------------------------------------------------------------------
-# _apply_array_ops — happy paths
+# array_patch operations — happy paths
 # ---------------------------------------------------------------------------
 
 
@@ -61,9 +102,10 @@ class TestApplyArrayOps:
             {"id": "n3", "type": "switch", "z": "tab2", "name": "Sense"},
         ]
 
-    def test_patch_updates_fields_in_place(self):
+    async def test_patch_updates_fields_in_place(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "patch", "id": "n1", "patches": {"name": "Renamed"}}],
             id_field="id",
@@ -72,9 +114,10 @@ class TestApplyArrayOps:
         assert n1["name"] == "Renamed"
         assert summary["patched"] == [{"id": "n1", "fields": ["name"]}]
 
-    def test_patch_preserves_unrelated_fields(self):
+    async def test_patch_preserves_unrelated_fields(self, _registered_tool):
         items = self._flows_fixture()
-        new, _ = _apply_array_ops(
+        new, _ = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "patch", "id": "n2", "patches": {"name": "X"}}],
             id_field="id",
@@ -83,9 +126,10 @@ class TestApplyArrayOps:
         assert n2["type"] == "function"
         assert n2["z"] == "tab1"
 
-    def test_delete_removes_single_item(self):
+    async def test_delete_removes_single_item(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "delete", "id": "n1"}],
             id_field="id",
@@ -93,9 +137,10 @@ class TestApplyArrayOps:
         assert "n1" not in {it["id"] for it in new}
         assert summary["deleted"] == [{"id": "n1"}]
 
-    def test_add_appends_new_item(self):
+    async def test_add_appends_new_item(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "add", "item": {"id": "n4", "type": "debug", "z": "tab1"}}],
             id_field="id",
@@ -103,9 +148,10 @@ class TestApplyArrayOps:
         assert {it["id"] for it in new} == {"tab1", "tab2", "n1", "n2", "n3", "n4"}
         assert summary["added"] == [{"id": "n4"}]
 
-    def test_delete_where_removes_all_matching(self):
+    async def test_delete_where_removes_all_matching(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "delete_where", "field": "z", "value": "tab1"}],
             id_field="id",
@@ -114,13 +160,16 @@ class TestApplyArrayOps:
         assert {it["id"] for it in new} == {"tab1", "tab2", "n3"}
         assert summary["deleted_where"] == [{"field": "z", "value": "tab1", "count": 2}]
 
-    def test_delete_where_field_absent_on_all_items_emits_warning(self):
+    async def test_delete_where_field_absent_on_all_items_emits_warning(
+        self, _registered_tool
+    ):
         """count=0 with a misspelled or unknown field is the silent-failure
         case — distinguish it from "field exists, value didn't match" by
         attaching a warning to the summary entry. Doesn't raise (preserves
         the deliberate best-effort semantics of delete_where)."""
         items = [{"id": "a"}, {"id": "b"}]
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "delete_where", "field": "zzz_misspelled", "value": "tab1"}],
             id_field="id",
@@ -131,11 +180,14 @@ class TestApplyArrayOps:
         assert entry.get("warnings"), f"Expected warnings list, got: {entry}"
         assert any("zzz_misspelled" in w for w in entry["warnings"])
 
-    def test_delete_where_field_present_but_no_match_no_warning(self):
+    async def test_delete_where_field_present_but_no_match_no_warning(
+        self, _registered_tool
+    ):
         """count=0 when the field exists on items but no value matched is
         not the silent-failure case — no warning, just count=0."""
         items = [{"id": "a", "z": "tab9"}, {"id": "b", "z": "tab9"}]
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "delete_where", "field": "z", "value": "tab1"}],
             id_field="id",
@@ -147,11 +199,12 @@ class TestApplyArrayOps:
             f"Unexpected warnings: {entry.get('warnings')}"
         )
 
-    def test_delete_where_against_empty_array_no_warning(self):
+    async def test_delete_where_against_empty_array_no_warning(self, _registered_tool):
         """Empty input array is not a typo signal — there are no items to
         check. Without this guard, `any(... for [])` is False and the typo
         warning would fire unconditionally."""
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             [],
             [{"op": "delete_where", "field": "z", "value": "tab1"}],
             id_field="id",
@@ -163,11 +216,14 @@ class TestApplyArrayOps:
             f"Unexpected warnings: {entry.get('warnings')}"
         )
 
-    def test_delete_where_against_non_dict_items_no_warning(self):
+    async def test_delete_where_against_non_dict_items_no_warning(
+        self, _registered_tool
+    ):
         """Arrays of scalars (or other non-dict items) are not a typo signal
         either — `field in it` is meaningless for non-dicts, so suggesting
         a typo would be misleading."""
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             [1, 2, "x"],
             [{"op": "delete_where", "field": "z", "value": "tab1"}],
             id_field="id",
@@ -179,9 +235,10 @@ class TestApplyArrayOps:
             f"Unexpected warnings: {entry.get('warnings')}"
         )
 
-    def test_delete_where_zero_matches_is_not_an_error(self):
+    async def test_delete_where_zero_matches_is_not_an_error(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "delete_where", "field": "z", "value": "ghost-tab"}],
             id_field="id",
@@ -189,9 +246,10 @@ class TestApplyArrayOps:
         assert len(new) == len(items)
         assert summary["deleted_where"][0]["count"] == 0
 
-    def test_operations_apply_in_order(self):
+    async def test_operations_apply_in_order(self, _registered_tool):
         items = self._flows_fixture()
-        new, summary = _apply_array_ops(
+        new, summary = await _patch_array(
+            _registered_tool,
             items,
             [
                 {"op": "delete", "id": "n1"},
@@ -207,12 +265,13 @@ class TestApplyArrayOps:
         assert len(summary["added"]) == 1
         assert len(summary["patched"]) == 1
 
-    def test_custom_id_field(self):
+    async def test_custom_id_field(self, _registered_tool):
         items = [
             {"slug": "thermostat-living", "value": 21},
             {"slug": "thermostat-bedroom", "value": 19},
         ]
-        new, _ = _apply_array_ops(
+        new, _ = await _patch_array(
+            _registered_tool,
             items,
             [{"op": "patch", "id": "thermostat-bedroom", "patches": {"value": 20}}],
             id_field="slug",
@@ -222,130 +281,162 @@ class TestApplyArrayOps:
 
 
 # ---------------------------------------------------------------------------
-# _apply_array_ops — validation failures
+# array_patch operations — validation failures
 # ---------------------------------------------------------------------------
 
 
 class TestApplyArrayOpsValidation:
-    def test_unknown_op_raises(self):
+    async def test_unknown_op_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops([], [{"op": "yeet", "id": "x"}], id_field="id")
+            await _patch_array(
+                _registered_tool, [], [{"op": "yeet", "id": "x"}], id_field="id"
+            )
         err = _parse_tool_error(exc)
         assert err["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_patch_missing_id_raises(self):
+    async def test_patch_missing_id_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [{"id": "a"}],
                 [{"op": "patch", "patches": {"name": "X"}}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_patch_unknown_id_raises(self):
+    async def test_patch_unknown_id_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [{"id": "a"}],
                 [{"op": "patch", "id": "ghost", "patches": {"name": "X"}}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "RESOURCE_NOT_FOUND"
 
-    def test_patch_non_dict_patches_raises(self):
+    async def test_patch_non_dict_patches_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [{"id": "a"}],
                 [{"op": "patch", "id": "a", "patches": "not a dict"}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_delete_unknown_id_raises(self):
+    async def test_delete_unknown_id_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
-                [{"id": "a"}], [{"op": "delete", "id": "ghost"}], id_field="id"
+            await _patch_array(
+                _registered_tool,
+                [{"id": "a"}],
+                [{"op": "delete", "id": "ghost"}],
+                id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "RESOURCE_NOT_FOUND"
 
-    def test_add_collision_raises(self):
+    async def test_add_collision_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [{"id": "a"}],
                 [{"op": "add", "item": {"id": "a", "type": "x"}}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "RESOURCE_ALREADY_EXISTS"
 
-    def test_add_missing_id_field_raises(self):
+    async def test_add_missing_id_field_raises(self, _registered_tool):
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops([], [{"op": "add", "item": {"type": "x"}}], id_field="id")
+            await _patch_array(
+                _registered_tool,
+                [],
+                [{"op": "add", "item": {"type": "x"}}],
+                id_field="id",
+            )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_add_with_empty_string_id_raises(self):
+    async def test_add_with_empty_string_id_raises(self, _registered_tool):
         """`id_field not in item` only checks key presence, not value validity.
         Empty-string ids enable cross-contamination with items that legitimately
         lack the id field (`dict.get(id_field)` returns `None`/`""`)."""
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
-                [], [{"op": "add", "item": {"id": "", "type": "x"}}], id_field="id"
+            await _patch_array(
+                _registered_tool,
+                [],
+                [{"op": "add", "item": {"id": "", "type": "x"}}],
+                id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_add_with_none_id_raises(self):
+    async def test_add_with_none_id_raises(self, _registered_tool):
         """Same rationale as empty-string: `id` cannot be None."""
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
-                [], [{"op": "add", "item": {"id": None, "type": "x"}}], id_field="id"
+            await _patch_array(
+                _registered_tool,
+                [],
+                [{"op": "add", "item": {"id": None, "type": "x"}}],
+                id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_add_with_integer_zero_id_is_accepted(self):
+    async def test_add_with_integer_zero_id_is_accepted(self, _registered_tool):
         """The check rejects `None` and whitespace-only strings only — non-string
         falsy ids like 0 / 0.0 / False stay valid by design. Pin this down so
         a future refactor to `if not new_id:` doesn't silently regress."""
-        new, summary = _apply_array_ops(
-            [], [{"op": "add", "item": {"id": 0, "type": "x"}}], id_field="id"
+        new, summary = await _patch_array(
+            _registered_tool,
+            [],
+            [{"op": "add", "item": {"id": 0, "type": "x"}}],
+            id_field="id",
         )
         assert summary["added"] == [{"id": 0}]
         assert new == [{"id": 0, "type": "x"}]
 
     @pytest.mark.parametrize("bad_id", [" ", "   ", "\t", "\n", " \t\n "])
-    def test_add_with_whitespace_only_id_raises(self, bad_id):
+    async def test_add_with_whitespace_only_id_raises(self, _registered_tool, bad_id):
         """Whitespace-only string ids would let later patch/delete ops match
         unrelated items (the same cross-contamination risk as the
         empty-string class). The guard catches the whole class via
         ``str.strip()``."""
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [],
                 [{"op": "add", "item": {"id": bad_id, "type": "x"}}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_patch_with_empty_patches_raises(self):
+    async def test_patch_with_empty_patches_raises(self, _registered_tool):
         """Empty `patches` is a silent no-op — reject up-front so the caller
         knows their op was meaningless."""
         with pytest.raises(ToolError) as exc:
-            _apply_array_ops(
+            await _patch_array(
+                _registered_tool,
                 [{"id": "a"}],
                 [{"op": "patch", "id": "a", "patches": {}}],
                 id_field="id",
             )
         assert _parse_tool_error(exc)["error"]["code"] == "VALIDATION_FAILED"
 
-    def test_delete_where_with_explicit_none_value_is_allowed(self):
+    async def test_delete_where_with_explicit_none_value_is_allowed(
+        self, _registered_tool
+    ):
         items = [
             {"id": "a", "z": None},
             {"id": "b", "z": "tab1"},
         ]
-        new, summary = _apply_array_ops(
-            items, [{"op": "delete_where", "field": "z", "value": None}], id_field="id"
+        new, summary = await _patch_array(
+            _registered_tool,
+            items,
+            [{"op": "delete_where", "field": "z", "value": None}],
+            id_field="id",
         )
         assert {it["id"] for it in new} == {"b"}
         assert summary["deleted_where"][0]["count"] == 1
 
-    def test_delete_where_none_value_does_not_delete_items_missing_field(self):
+    async def test_delete_where_none_value_does_not_delete_items_missing_field(
+        self, _registered_tool
+    ):
         # Items that don't have the field at all should NOT be deleted when value=None.
         # dict.get() returns None for missing keys, so without an explicit `field in it`
         # check, these items would be incorrectly matched.
@@ -354,29 +445,30 @@ class TestApplyArrayOpsValidation:
             {"id": "b"},  # field absent — must survive
             {"id": "c", "z": "tab1"},
         ]
-        new, summary = _apply_array_ops(
-            items, [{"op": "delete_where", "field": "z", "value": None}], id_field="id"
+        new, summary = await _patch_array(
+            _registered_tool,
+            items,
+            [{"op": "delete_where", "field": "z", "value": None}],
+            id_field="id",
         )
         assert {it["id"] for it in new} == {"b", "c"}
         assert summary["deleted_where"][0]["count"] == 1
 
-    def test_failure_midway_does_not_keep_partial_state_visible(self):
-        """Op that fails mid-stream raises before caller can POST.
-        The working list is mutated in memory but never returned, so the
-        server's view of the state is unchanged."""
-        items = [{"id": "a"}, {"id": "b"}]
+    async def test_failure_midway_posts_nothing(self, _registered_tool):
+        """An op that fails mid-stream raises before anything is posted, so
+        the earlier ops' in-memory edits never reach the app."""
+        posted: list[Any] = []
         with pytest.raises(ToolError):
-            _apply_array_ops(
-                items,
+            await _patch_array(
+                _registered_tool,
+                [{"id": "a"}, {"id": "b"}],
                 [
                     {"op": "patch", "id": "a", "patches": {"name": "ok"}},
                     {"op": "patch", "id": "ghost", "patches": {"name": "fail"}},
                 ],
-                id_field="id",
+                posted=posted,
             )
-        # Even though the helper mutated 'a' in its working copy, the test
-        # never received a (new_array, summary) tuple — the production
-        # dispatcher won't POST anything when a ToolError propagates.
+        assert posted == []
 
 
 # ---------------------------------------------------------------------------
@@ -751,18 +843,16 @@ class TestHaManageAddonRequestHeaders:
         assert "request_headers" in err["error"]["message"]
 
 
-class TestCallAddonApiHeaderMerge:
-    """Direct test of _call_addon_api's header-merge contract: caller headers
-    go in first, internal framing layered on top so it always wins on collision.
+class TestProxyHeaderMerge:
+    """The proxy's header-merge contract: caller headers go in first, internal
+    framing layered on top so it always wins on collision.
     """
 
     @pytest.mark.asyncio
-    async def test_internal_framing_overrides_caller_headers(self):
+    async def test_internal_framing_overrides_caller_headers(self, _registered_tool):
         """If a caller tries to override X-Ingress-Path / X-Hass-Source /
         Content-Type, the proxy's internal values must still win."""
         from unittest.mock import MagicMock
-
-        from ha_mcp.tools.tools_addons import _call_addon_api
 
         addon_info = {
             "success": True,
@@ -778,7 +868,7 @@ class TestCallAddonApiHeaderMerge:
         }
 
         # Capture the headers passed to httpx.request — same mocking pattern
-        # the existing _call_addon_api tests use.
+        # the other proxy tests use.
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = "ok"
@@ -807,13 +897,12 @@ class TestCallAddonApiHeaderMerge:
             )
             mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            await _call_addon_api(
-                client=AsyncMock(),
+            await _registered_tool(
                 slug="test",
                 path="/api/state",
                 method="POST",
                 body={"x": 1},
-                extra_headers={
+                request_headers={
                     "X-Ingress-Path": "/api/hassio_ingress/EVIL",
                     "X-Hass-Source": "spoofed",
                     "Content-Type": "application/x-attack",

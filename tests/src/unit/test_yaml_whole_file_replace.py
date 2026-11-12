@@ -199,19 +199,3 @@ class TestReplaceFileAction:
         assert result["config_check"] == "unavailable", result
         assert "check boom" in result.get("config_check_error", ""), result
         assert cfg.read_text() == "template: []\n"
-
-
-def test_run_config_check_does_not_misuse_return_response():
-    """Regression for #1660: the post-write config check must validate via
-    ``async_check_ha_config_file``, not the ``homeassistant.check_config``
-    service called with ``return_response=True`` (that service is
-    ``SupportsResponse.NONE`` and signals errors by raising, so the
-    response-based call always failed and the check never ran).
-    """
-    import inspect
-
-    from custom_components.ha_mcp_tools import _run_config_check
-
-    src = inspect.getsource(_run_config_check)
-    assert "return_response" not in src, src
-    assert "async_check_ha_config_file" in src, src

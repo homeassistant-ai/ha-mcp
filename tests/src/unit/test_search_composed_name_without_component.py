@@ -8,14 +8,21 @@ result and a requested ``name`` both have to say why.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.search.entities import _composed_name_notes
+from ha_mcp.tools.component_api import ENTITY_COMPOSED_NAME
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
+
+from ._search_tool import _setup_visibility_disabled
 
 
 @pytest.fixture
@@ -65,28 +72,61 @@ async def test_a_search_that_finds_something_carries_no_component_hint(
     )
 
 
-def test_a_component_that_predates_composed_names_is_told_apart_from_none() -> None:
+async def test_a_component_that_predates_composed_names_is_told_apart_from_none(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An outdated component is installed: the fix is an update, not an install."""
-    notes = _composed_name_notes(
-        name_served=False,
-        component="outdated",
-        name_requested=True,
-        nothing_found=True,
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    # A component from before composed names: it does not advertise them.
+    monkeypatch.setattr(
+        system,
+        "CAPABILITIES",
+        [cap for cap in system.CAPABILITIES if cap != ENTITY_COMPOSED_NAME],
+    )
+    hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen Light"})
+    tools = SearchTools(
+        component_core_client, SmartSearchTools(client=component_core_client)
     )
 
-    assert len(notes) == 2
-    assert all("update it" in note for note in notes)
-    assert not any("No ha_mcp_tools component detected" in note for note in notes)
+    data = await tools.ha_search(
+        query="nothing is called this", result_fields=["entity_id", "name"]
+    )
+
+    warnings = data.get("warnings", [])
+    assert sum("update it" in w for w in warnings) == 2, warnings
+    assert not any("No ha_mcp_tools component detected" in w for w in warnings)
 
 
-def test_an_empty_search_with_a_current_component_carries_no_hint() -> None:
+async def test_an_empty_search_with_a_current_component_carries_no_hint(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The legacy path answering beside a current component is not a missing one."""
-    assert (
-        _composed_name_notes(
-            name_served=False,
-            component="current",
-            name_requested=False,
-            nothing_found=True,
-        )
-        == []
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    # ``config`` serves the registry reads of the legacy path.
+    assert await async_setup_component(hass, "config", {})
+    hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen Light"})
+
+    def _fails(*args: Any, **kwargs: Any) -> None:
+        raise HomeAssistantError("boom")
+
+    # The current component's search fails, so the legacy path answers.
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api.search._search_entities",
+        _fails,
     )
+    tools = SearchTools(
+        component_core_client, SmartSearchTools(client=component_core_client)
+    )
+
+    data = await tools.ha_search(query="nothing is called this")
+
+    assert data["count"] == 0
+    warnings = data.get("warnings", [])
+    assert not any("No ha_mcp_tools component detected" in w for w in warnings)
+    assert not any("update it" in w for w in warnings)
