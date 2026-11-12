@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode
 
-from .bug_report_redaction import _sanitize_log_text
+from .bug_report_redaction import sanitize_log_text
 from .helpers import extract_tool_error_message
 
 # Last line of every generated issue body. A paste that lost its end, for
@@ -192,7 +192,7 @@ def _extract_error_messages(logs: list[dict[str, Any]]) -> list[str]:
             # Sanitized here: these lines also go into the pre-filled link,
             # which the agent cannot edit.
             error_messages.append(
-                f"[{timestamp}] {tool_name}: {_sanitize_log_text(str(error))}"
+                f"[{timestamp}] {tool_name}: {sanitize_log_text(str(error))}"
             )
 
     return error_messages
@@ -808,7 +808,7 @@ def _generate_bug_title(
         if error_msg:
             tool_name = log.get("tool_name", "unknown")
             message = " ".join(
-                _sanitize_log_text(extract_tool_error_message(error_msg)).split()
+                sanitize_log_text(extract_tool_error_message(error_msg)).split()
             )
             title = f"{tool_name}: {message}"
             break

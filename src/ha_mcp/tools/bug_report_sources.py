@@ -15,7 +15,7 @@ import httpx
 from .._version import is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import get_global_settings
-from .bug_report_redaction import KnownIdentifiers, _sanitize_log_text
+from .bug_report_redaction import KnownIdentifiers, sanitize_log_text
 from .coercion import ANSI_ESCAPE_RE
 from .helpers import get_connected_ws_client
 
@@ -75,7 +75,7 @@ async def _fetch_addon_logs() -> str:
             # Sanitizing before truncating prevents secrets that straddle the
             # truncation boundary from leaking through.
             cleaned = ANSI_ESCAPE_RE.sub("", resp.text)
-            sanitized = _sanitize_log_text(cleaned)
+            sanitized = sanitize_log_text(cleaned)
             if len(sanitized) > _ADDON_LOG_MAX_CHARS:
                 marker = (
                     f"[...truncated, showing last {_ADDON_LOG_MAX_CHARS} of "
@@ -123,7 +123,7 @@ async def _fetch_core_error_log(client: Any) -> str:
 
     # Strip ANSI, then sanitize, then truncate — sanitizing before truncating
     # keeps a secret straddling the cut boundary from leaking through.
-    sanitized = _sanitize_log_text(ANSI_ESCAPE_RE.sub("", page.text))
+    sanitized = sanitize_log_text(ANSI_ESCAPE_RE.sub("", page.text))
     if len(sanitized) > _CORE_LOG_MAX_CHARS:
         marker = (
             f"[...truncated, showing last {_CORE_LOG_MAX_CHARS} of "
@@ -184,7 +184,7 @@ class _UnsuccessfulReply(Exception):
 # wait is the command's own; the outer deadline also covers connecting, which
 # the pooled client bounds separately at about 20 s.
 _IDENTIFIER_READ_TIMEOUT_S = 10.0
-_IDENTIFIER_READ_DEADLINE_S = 15.0
+IDENTIFIER_READ_DEADLINE_S = 15.0
 
 
 async def _ws_result(client: Any, command: str) -> Any:
@@ -204,7 +204,7 @@ async def _read_identifiers(
     try:
         consume(
             await asyncio.wait_for(
-                _ws_result(client, command), timeout=_IDENTIFIER_READ_DEADLINE_S
+                _ws_result(client, command), timeout=IDENTIFIER_READ_DEADLINE_S
             )
         )
     except Exception as e:  # noqa: BLE001

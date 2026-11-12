@@ -2,229 +2,269 @@
 
 Replying first means Core's own refusals reach nobody, so anything Core would
 refuse the restart for is read before the reply (#2632).
+
+Core's own ``homeassistant.restart`` runs in every test, with its config check
+and its database-upgrade refusal; only the stop handler it ends with is the
+test's (``async_set_stop_handler``, Core's hook for that), so the test's Core
+records the restart instead of stopping.
 """
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock
+from collections.abc import Iterator
+from pathlib import Path
+from unittest.mock import patch
 
-import httpx
 import pytest
+from homeassistant.components.homeassistant import async_set_stop_handler
+from homeassistant.components.recorder import Recorder
+from homeassistant.config import SAFE_MODE_FILENAME
+from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import system_restart
 from ha_mcp.tools.tools_system import SystemTools
 
-_RECORDER_IDLE = {
-    "success": True,
-    "result": {"migration_in_progress": False, "migration_is_live": False},
-}
-_BACKUP_IDLE = {"success": True, "result": {"state": "idle"}}
+INVALID_CONFIG = "homeassistant: [\n"
 
 
-def _client(recorder: dict | None = None, backup: dict | None = None) -> AsyncMock:
-    client = AsyncMock()
-    client.check_config.return_value = {"result": "valid"}
-    replies = {
-        "recorder/info": recorder or _RECORDER_IDLE,
-        "backup/info": backup or _BACKUP_IDLE,
-    }
-    client.send_websocket_message.side_effect = lambda msg: replies[msg["type"]]
-    return client
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """A config dir whose ``configuration.yaml`` passes Core's check."""
+    (Path(hass_tmp_config_dir) / "configuration.yaml").write_text("", "utf-8")
+    return hass_tmp_config_dir
 
 
 @pytest.fixture(autouse=True)
-def _no_delay(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(system_restart, "_EMBEDDED_RESTART_DELAY_S", 0)
+def _no_delay(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(system_restart, "EMBEDDED_RESTART_DELAY_S", 0)
+    yield
+    assert not system_restart.RESTART_TASKS
 
 
-async def test_embedded_replies_before_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def embedded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client()
 
-    result = await SystemTools(client).ha_restart(confirm=True)
+
+@pytest.fixture
+async def restarts(hass: HomeAssistant, core_client: HomeAssistantClient) -> list[bool]:
+    """Core with its restart service and config check; returns each stop it
+    was asked for (True for a restart)."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "config", {})
+    stops: list[bool] = []
+
+    async def record_stop(hass: HomeAssistant, restart: bool) -> None:
+        stops.append(restart)
+
+    async_set_stop_handler(hass, record_stop)
+    return stops
+
+
+async def _set_up_backup(hass: HomeAssistant) -> None:
+    assert await async_setup_component(hass, "backup", {})
+    await hass.async_block_till_done()
+
+
+async def _deferred_restart() -> None:
+    await asyncio.gather(*system_restart.RESTART_TASKS)
+
+
+def _break_config(hass: HomeAssistant) -> None:
+    """Make ``configuration.yaml`` fail Core's check, without yielding to the
+    event loop (a deferred restart must not run in between)."""
+    Path(hass.config.path("configuration.yaml")).write_text(INVALID_CONFIG)
+
+
+def _safe_mode_requested(hass: HomeAssistant) -> bool:
+    return Path(hass.config.path(SAFE_MODE_FILENAME)).exists()
+
+
+@pytest.mark.usefixtures("embedded")
+async def test_embedded_replies_before_restart(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
+) -> None:
+    await _set_up_backup(hass)
+
+    result = await SystemTools(core_client).ha_restart(confirm=True)
 
     assert result["success"] is True
-    client.call_service.assert_not_awaited()
-    await asyncio.gather(*system_restart._RESTART_TASKS)
-    client.call_service.assert_awaited_once_with(
-        "homeassistant", "restart", {"safe_mode": False}
-    )
+    assert not any("database upgrade" in w for w in result["warnings"])
+    assert not any("running backup" in w for w in result["warnings"])
+    assert restarts == []
+    await _deferred_restart()
+    assert restarts == [True]
+    assert not _safe_mode_requested(hass)
 
 
-def _raise_from(cause: Exception) -> HomeAssistantConnectionError:
-    try:
-        raise HomeAssistantConnectionError(f"HTTP error: {cause}") from cause
-    except HomeAssistantConnectionError as err:
-        return err
+def _restart_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == system_restart.__name__]
 
 
-async def _run_failing_restart(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
-) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client()
-    client.call_service.side_effect = error
-    await SystemTools(client).ha_restart(confirm=True)
-    await asyncio.gather(*system_restart._RESTART_TASKS)
-
-
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_lost_reply_logs_one_line(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    error = _raise_from(
-        httpx.RemoteProtocolError("Server disconnected without sending a response.")
-    )
+    async def stop_before_replying(hass: HomeAssistant, restart: bool) -> None:
+        # Stopping cancels the request that asked for it, as Core's shutdown
+        # does: the client never gets a reply.
+        raise asyncio.CancelledError
+
+    async_set_stop_handler(hass, stop_before_replying)
 
     with caplog.at_level(logging.WARNING, logger=system_restart.__name__):
-        await _run_failing_restart(monkeypatch, error)
+        await SystemTools(core_client).ha_restart(confirm=True)
+        await _deferred_restart()
 
-    (record,) = caplog.records
+    (record,) = _restart_records(caplog)
     assert record.levelno == logging.WARNING
     assert "dispatched" in record.getMessage()
     assert record.exc_info is None
 
 
-async def test_embedded_connect_error_keeps_traceback(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.usefixtures("embedded")
+async def test_embedded_refused_restart_keeps_traceback(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    error = _raise_from(httpx.ConnectError("Connection refused"))
-
+    """A deferred restart Core refuses never happened; the log keeps why."""
     with caplog.at_level(logging.WARNING, logger=system_restart.__name__):
-        await _run_failing_restart(monkeypatch, error)
+        await SystemTools(core_client).ha_restart(confirm=True)
+        # The configuration breaks between the reply and the restart, so
+        # Core's own check refuses it.
+        _break_config(hass)
+        await _deferred_restart()
 
-    (record,) = caplog.records
+    (record,) = _restart_records(caplog)
     assert "failed" in record.getMessage()
     assert record.exc_info is not None
+    assert restarts == []
 
 
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_invalid_config_does_not_schedule(
+    hass: HomeAssistant, core_client: HomeAssistantClient, restarts: list[bool]
+) -> None:
+    _break_config(hass)
+
+    with pytest.raises(ToolError, match="Configuration is invalid"):
+        await SystemTools(core_client).ha_restart(confirm=True)
+
+    assert not system_restart.RESTART_TASKS
+    assert restarts == []
+
+
+async def test_external_awaits_restart_call(
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client()
-    client.check_config.return_value = {"result": "invalid", "errors": ["bad"]}
-
-    with pytest.raises(Exception, match="Configuration is invalid"):
-        await SystemTools(client).ha_restart(confirm=True)
-
-    assert not system_restart._RESTART_TASKS
-    client.call_service.assert_not_awaited()
-
-
-async def test_external_awaits_restart_call(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    client = _client()
 
-    result = await SystemTools(client).ha_restart(confirm=True)
+    result = await SystemTools(core_client).ha_restart(confirm=True)
 
     assert result["success"] is True
-    client.call_service.assert_awaited_once_with(
-        "homeassistant", "restart", {"safe_mode": False}
-    )
-    assert not system_restart._RESTART_TASKS
+    assert restarts == [True]
+    assert not system_restart.RESTART_TASKS
 
 
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_db_upgrade_is_refused_not_reported_as_scheduled(
-    monkeypatch: pytest.MonkeyPatch,
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client(
-        recorder={
-            "success": True,
-            "result": {"migration_in_progress": True, "migration_is_live": False},
-        }
-    )
+    await _set_up_backup(hass)
 
-    with pytest.raises(ToolError, match="database upgrade"):
-        await SystemTools(client).ha_restart(confirm=True)
+    # A unit-test recorder cannot be mid-upgrade; Core sets this flag while
+    # it migrates the database.
+    with (
+        patch.object(recorder_mock, "migration_in_progress", True),
+        pytest.raises(ToolError, match="database upgrade"),
+    ):
+        await SystemTools(core_client).ha_restart(confirm=True)
 
-    assert not system_restart._RESTART_TASKS
-    client.call_service.assert_not_awaited()
+    assert not system_restart.RESTART_TASKS
+    assert restarts == []
 
 
-@pytest.mark.parametrize(
-    "recorder",
-    [
-        {"success": False, "error": "Unknown command."},
-        {"success": True, "result": {"recording": True}},
-    ],
-    ids=["command-failed", "no-migration-field"],
-)
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_unreadable_recorder_restarts_and_says_unchecked(
-    monkeypatch: pytest.MonkeyPatch, recorder: dict
+    hass: HomeAssistant, core_client: HomeAssistantClient, restarts: list[bool]
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client(recorder=recorder)
+    """Without the recorder Core does not answer ``recorder/info``."""
+    await _set_up_backup(hass)
 
-    result = await SystemTools(client).ha_restart(confirm=True)
+    result = await SystemTools(core_client).ha_restart(confirm=True)
 
     assert result["success"] is True
     assert any("database upgrade" in w for w in result["warnings"])
-    await asyncio.gather(*system_restart._RESTART_TASKS)
-    client.call_service.assert_awaited_once()
+    await _deferred_restart()
+    assert restarts == [True]
 
 
-async def test_safe_mode_reaches_core(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    client = _client()
-
-    await SystemTools(client).ha_restart(confirm=True, safe_mode=True)
-
-    client.call_service.assert_awaited_once_with(
-        "homeassistant", "restart", {"safe_mode": True}
-    )
-
-
-async def test_embedded_safe_mode_warns_server_stays_down(
+async def test_safe_mode_reaches_core(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    restarts: list[bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client()
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
 
-    result = await SystemTools(client).ha_restart(confirm=True, safe_mode=True)
+    await SystemTools(core_client).ha_restart(confirm=True, safe_mode=True)
+
+    assert restarts == [True]
+    assert _safe_mode_requested(hass)
+
+
+@pytest.mark.usefixtures("embedded")
+async def test_embedded_safe_mode_warns_server_stays_down(
+    hass: HomeAssistant, core_client: HomeAssistantClient, restarts: list[bool]
+) -> None:
+    result = await SystemTools(core_client).ha_restart(confirm=True, safe_mode=True)
 
     assert any("next restarted normally" in w for w in result["warnings"])
-    await asyncio.gather(*system_restart._RESTART_TASKS)
-    client.call_service.assert_awaited_once_with(
-        "homeassistant", "restart", {"safe_mode": True}
-    )
+    await _deferred_restart()
+    assert restarts == [True]
+    assert _safe_mode_requested(hass)
 
 
-@pytest.mark.parametrize(
-    "state", ["create_backup", "receive_backup", "restore_backup", "blocked"]
-)
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_busy_backup_is_refused_not_reported_as_scheduled(
-    monkeypatch: pytest.MonkeyPatch, state: str
+    hass: HomeAssistant, core_client: HomeAssistantClient, restarts: list[bool]
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client(backup={"success": True, "result": {"state": state}})
+    """Core's backup manager stays ``blocked`` until Home Assistant has
+    started."""
+    hass.set_state(CoreState.starting)
+    await _set_up_backup(hass)
 
-    with pytest.raises(ToolError, match=state):
-        await SystemTools(client).ha_restart(confirm=True)
+    with pytest.raises(ToolError, match="blocked"):
+        await SystemTools(core_client).ha_restart(confirm=True)
 
-    assert not system_restart._RESTART_TASKS
-    client.call_service.assert_not_awaited()
+    assert not system_restart.RESTART_TASKS
+    assert restarts == []
 
 
-@pytest.mark.parametrize(
-    "backup",
-    [
-        {"success": False, "error": "Unknown command."},
-        {"success": True, "result": {"backups": []}},
-    ],
-    ids=["command-failed", "no-state-field"],
-)
+@pytest.mark.usefixtures("embedded")
 async def test_embedded_unreadable_backup_restarts_and_says_unchecked(
-    monkeypatch: pytest.MonkeyPatch, backup: dict
+    core_client: HomeAssistantClient, restarts: list[bool]
 ) -> None:
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    client = _client(backup=backup)
-
-    result = await SystemTools(client).ha_restart(confirm=True)
+    """Without ``backup`` Core does not answer ``backup/info``."""
+    result = await SystemTools(core_client).ha_restart(confirm=True)
 
     assert result["success"] is True
     assert any("running backup" in w for w in result["warnings"])
-    await asyncio.gather(*system_restart._RESTART_TASKS)
-    client.call_service.assert_awaited_once()
+    await _deferred_restart()
+    assert restarts == [True]
