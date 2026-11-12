@@ -37,7 +37,7 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
-from ha_mcp.tools.tools_addons import _supervisor_api_call
+from ha_mcp.tools.tools_addons import AddOnTools, get_addon_info
 
 _APP_SUPPORT = "Check that this installation supports apps (add-ons)."
 
@@ -150,6 +150,34 @@ async def _connection_drop(
         yield client
 
 
+async def _restart(client: HomeAssistantClient) -> None:
+    """Restart the app through ha_manage_app: a Supervisor POST."""
+    await AddOnTools(client).manage_addon(
+        slug="core_mosquitto",
+        path=None,
+        method="GET",
+        body=None,
+        debug=False,
+        port=None,
+        offset=0,
+        limit=None,
+        websocket=False,
+        wait_for_close=True,
+        message_limit=None,
+        message_offset=0,
+        summarize=True,
+        python_transform=None,
+        options=None,
+        network=None,
+        boot=None,
+        auto_update=None,
+        watchdog=None,
+        array_patch=None,
+        request_headers=None,
+        action="restart",
+    )
+
+
 async def _call(
     monkeypatch: pytest.MonkeyPatch,
     hass: HomeAssistant,
@@ -157,15 +185,14 @@ async def _call(
     scenario: Scenario,
     method: str = "POST",
 ) -> dict[str, Any]:
+    """The error a Supervisor write (restart) or read (app info) reports."""
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    endpoint = (
-        "/addons/core_mosquitto/restart"
-        if method == "POST"
-        else "/addons/core_mosquitto/info"
-    )
     async with scenario(hass, client) as failing:
         with pytest.raises(ToolError) as exc_info:
-            await _supervisor_api_call(failing, endpoint, method=method)
+            if method == "POST":
+                await _restart(failing)
+            else:
+                await get_addon_info(failing, "core_mosquitto")
     return json.loads(str(exc_info.value))
 
 

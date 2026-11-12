@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client
-from ha_mcp._vendor.fastmcp.tools.base import _default_title
 
 HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
@@ -57,7 +56,9 @@ async def test_every_tool_declares_all_hints_and_a_title(
             else {}
         )
         gaps = [hint for hint in HINTS if hint not in declared]
-        if not tool.title or tool.title == _default_title(tool.name):
+        # read_only_hints()/write_hints() carry the hand-written title; without
+        # one FastMCP derives it from the name.
+        if not declared.get("title"):
             gaps.append("title")
         if gaps:
             missing[tool.name] = gaps

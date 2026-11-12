@@ -1342,7 +1342,7 @@
   {
     "name": "ha_get_device",
     "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
-    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
+    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (Core's whole row, its entity rows and linked_devices):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -1357,12 +1357,12 @@
         },
         "integration": {
           "type": "str | None",
-          "description": "Filter devices by integration: 'zha', 'zigbee2mqtt', 'zwave_js', 'mqtt', 'hue', etc.",
+          "description": "Filter by the integration that owns the device (its config entry's domain), e.g. 'zha', 'zwave_js', 'mqtt', 'hue'; 'zigbee2mqtt' selects the Zigbee2MQTT devices within MQTT.",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Filter devices by area ID (e.g., 'living_room')",
+          "description": "Filter devices by area ID (e.g., 'living_room'); matches effective_area_id, so a child device without an area of its own matches its parent's",
           "default": null
         },
         "manufacturer": {
@@ -1390,7 +1390,7 @@
         "detail_level": {
           "type": "Literal['summary', 'full']",
           "default": "summary",
-          "description": "'summary': basic device info and protocol identifiers. 'full': in list mode also include each device's entities. Single-device lookups always return full detail, including radio metrics, node status and Matter diagnostics."
+          "description": "'summary': the main fields of each device's registry row (id, names, manufacturer, model, areas, disabled_by, parent and via device) with integration and radio hints. 'full': the whole registry row with the same hints, plus the device's entity-registry rows. List mode only; a single-device lookup ignores it."
         }
       }
     },

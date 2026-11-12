@@ -1,6 +1,5 @@
 """A refused app port must explain listener setup before blaming routing."""
 
-from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -9,10 +8,44 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.tools_addons import _call_addon_api, _call_addon_ws
+from ha_mcp.tools.tools_addons import AddOnTools
 
 from ._addon_tool_helpers import RUNNING_ADDON_INFO
 from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
+
+
+async def _proxy(
+    client: HomeAssistantClient,
+    slug: str,
+    *,
+    websocket: bool,
+    port: int | None,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Proxy ``/`` of the app through ha_manage_app, as an agent does."""
+    return await AddOnTools(client).manage_addon(
+        slug=slug,
+        path="/",
+        method="GET",
+        body=body,
+        debug=False,
+        port=port,
+        offset=0,
+        limit=None,
+        websocket=websocket,
+        wait_for_close=True,
+        message_limit=None,
+        message_offset=0,
+        summarize=True,
+        python_transform=None,
+        options=None,
+        network=None,
+        boot=None,
+        auto_update=None,
+        watchdog=None,
+        array_patch=None,
+        request_headers=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -37,12 +70,10 @@ async def test_refused_app_port_explains_listener_setup(
         patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         patch("ha_mcp.tools.tools_addons.websockets.connect") as mock_ws_connect,
     ):
-        call: Callable[..., Awaitable[dict[str, Any]]]
         if websocket:
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
                 side_effect=OSError("Connection refused")
             )
-            call = _call_addon_ws
         else:
             mock_http_client = AsyncMock()
             mock_http_client.request.side_effect = httpx.ConnectError(
@@ -51,10 +82,9 @@ async def test_refused_app_port_explains_listener_setup(
             mock_httpx.return_value.__aenter__ = AsyncMock(
                 return_value=mock_http_client
             )
-            call = _call_addon_api
 
         with pytest.raises(ToolError) as exc_info:
-            await call(core_client, slug, "/", port=port)
+            await _proxy(core_client, slug, websocket=websocket, port=port)
 
     result = _parse_tool_error(exc_info)
     assert result["error"]["code"] == "CONNECTION_FAILED"
@@ -96,7 +126,7 @@ async def test_connect_timeout_preserves_route_guidance(
         http_client.request.side_effect = httpx.ConnectTimeout("connect timed out")
         mock_httpx.return_value.__aenter__ = AsyncMock(return_value=http_client)
         with pytest.raises(ToolError) as exc_info:
-            await _call_addon_api(core_client, "test_addon", "/", port=port)
+            await _proxy(core_client, "test_addon", websocket=False, port=port)
 
     result = _parse_tool_error(exc_info)
     guidance = " ".join(
@@ -130,23 +160,24 @@ async def test_app_timeout_does_not_change_listener_auth(
         patch("ha_mcp.tools.tools_addons.httpx.AsyncClient") as mock_httpx,
         patch("ha_mcp.tools.tools_addons.websockets.connect") as mock_ws_connect,
     ):
-        call: Callable[..., Awaitable[dict[str, Any]]]
         if websocket:
             ws = AsyncMock()
             ws.send.side_effect = TimeoutError("send timed out")
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=ws)
-            call = _call_addon_ws
         else:
             mock_http_client = AsyncMock()
             mock_http_client.request.side_effect = httpx.ReadTimeout("read timed out")
             mock_httpx.return_value.__aenter__ = AsyncMock(
                 return_value=mock_http_client
             )
-            call = _call_addon_api
 
         with pytest.raises(ToolError) as exc_info:
-            await call(
-                core_client, "5c53de3b_esphome", "/", port=port, body={"command": "run"}
+            await _proxy(
+                core_client,
+                "5c53de3b_esphome",
+                websocket=websocket,
+                port=port,
+                body={"command": "run"},
             )
 
     result = _parse_tool_error(exc_info)

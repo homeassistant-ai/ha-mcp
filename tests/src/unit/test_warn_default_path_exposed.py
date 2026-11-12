@@ -1,4 +1,4 @@
-"""Tests for the ``_warn_if_default_path_exposed`` startup warning.
+"""Tests for the default-path startup warning of ``ha-mcp-web``.
 
 Predicate: warn iff the run is **not** containerized AND ``MCP_SECRET_PATH``
 is the default ``/mcp`` AND the bind host is non-loopback. The container
@@ -15,9 +15,23 @@ import logging
 
 import pytest
 
-from ha_mcp.__main__ import _warn_if_default_path_exposed
+from ._main_web import start_main_web
 
 _WARNING_LOGGER = "ha_mcp.__main__"
+
+
+def _default_path_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    host: str,
+    path: str | None = None,
+) -> list[logging.LogRecord]:
+    """The default-path warnings of an ``ha-mcp-web`` start on ``host``/``path``."""
+    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
+        start_main_web(
+            monkeypatch, MCP_HOST=host, MCP_PORT="8086", MCP_SECRET_PATH=path
+        )
+    return [r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()]
 
 
 @pytest.fixture(autouse=True)
@@ -26,8 +40,8 @@ def _not_in_container(monkeypatch) -> None:
 
     These tests run wherever pytest runs — including inside a container on
     CI — so the container check must be neutralized to keep the host-based
-    cases deterministic. Container behavior is exercised explicitly in
-    ``test_no_warn_in_container_even_on_lan_bind``.
+    cases deterministic. Container behavior is exercised against the real
+    container signals in ``test_is_running_in_container.py``.
     """
     monkeypatch.setattr("ha_mcp.__main__._is_running_in_container", lambda: False)
 
@@ -48,10 +62,10 @@ def _not_in_container(monkeypatch) -> None:
         "*",
     ],
 )
-def test_warns_on_default_path_non_loopback_host(host: str, caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
-        _warn_if_default_path_exposed(host, 8086, "/mcp")
-    records = [r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()]
+def test_warns_on_default_path_non_loopback_host(
+    host: str, monkeypatch, caplog
+) -> None:
+    records = _default_path_warnings(monkeypatch, caplog, host)
     assert len(records) >= 1, (
         f"expected warning for non-loopback host {host!r}, got none"
     )
@@ -72,47 +86,24 @@ def test_warns_on_default_path_non_loopback_host(host: str, caplog) -> None:
         "ip6-localhost",
     ],
 )
-def test_no_warn_on_default_path_loopback_host(host: str, caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
-        _warn_if_default_path_exposed(host, 8086, "/mcp")
-    assert not [
-        r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
-    ], f"unexpected warning for loopback host {host!r}"
+def test_no_warn_on_default_path_loopback_host(host: str, monkeypatch, caplog) -> None:
+    assert not _default_path_warnings(monkeypatch, caplog, host), (
+        f"unexpected warning for loopback host {host!r}"
+    )
 
 
 @pytest.mark.parametrize(
     "host",
     ["0.0.0.0", "127.0.0.1", "192.168.1.50", "localhost"],
 )
-def test_no_warn_on_custom_path_any_host(host: str, caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
-        _warn_if_default_path_exposed(host, 8086, "/private_abc123")
-    assert not [
-        r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
-    ], f"unexpected warning for custom path on host {host!r}"
+def test_no_warn_on_custom_path_any_host(host: str, monkeypatch, caplog) -> None:
+    assert not _default_path_warnings(monkeypatch, caplog, host, "/private_abc123"), (
+        f"unexpected warning for custom path on host {host!r}"
+    )
 
 
-def test_no_warn_in_container_even_on_lan_bind(monkeypatch, caplog) -> None:
-    """A container that binds 0.0.0.0 on the default path must stay silent.
-
-    This is the Docker false-positive guard: inside a container the bind is
-    always 0.0.0.0 regardless of the host-side ``docker -p`` mapping, so the
-    warning would be noise on every containerized deployment.
-    """
-    monkeypatch.setattr("ha_mcp.__main__._is_running_in_container", lambda: True)
-    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
-        _warn_if_default_path_exposed("0.0.0.0", 8086, "/mcp")
-    assert not [
-        r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
-    ], "containerized run should not emit the default-path warning"
-
-
-def test_warning_text_names_both_hardening_levers(caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
-        _warn_if_default_path_exposed("0.0.0.0", 8086, "/mcp")
-    [record] = [
-        r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
-    ]
+def test_warning_text_names_both_hardening_levers(monkeypatch, caplog) -> None:
+    [record] = _default_path_warnings(monkeypatch, caplog, "0.0.0.0")
     msg = record.getMessage()
     assert "MCP_HOST=127.0.0.1" in msg
     assert "MCP_SECRET_PATH" in msg

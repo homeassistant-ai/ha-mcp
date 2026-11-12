@@ -267,8 +267,8 @@ _NON_CARD_CHILD_KEYS = ("elements",)
 # The card_type value that selects view badges, which are not cards.
 _BADGE_CARD_TYPE = "badge"
 # Bound on card nesting levels against pathological configs; real dashboards
-# nest a handful.
-_MAX_CARD_DEPTH = 50
+# nest a handful. Public so tests can build a config at the boundary.
+MAX_CARD_DEPTH = 50
 # Bound on non-card nesting inside one card, which keeps the recursive split far
 # below Python's recursion limit even at the card bound.
 _MAX_NODE_DEPTH = 100
@@ -513,17 +513,17 @@ def _walk_card(
     container only.
 
     Only a dict carrying a ``type`` key is matched as a card. Subtrees past
-    ``_MAX_CARD_DEPTH`` card levels are recorded in ``frame.gaps.truncation``;
+    ``MAX_CARD_DEPTH`` card levels are recorded in ``frame.gaps.truncation``;
     cards carrying ``_NON_CARD_CHILD_KEYS`` in ``frame.gaps.uncovered``.
     """
     if not isinstance(card, dict):
         if frame.criteria.can_match_cards():
             frame.gaps.unread.append(jq_prefix)
         return []
-    if frame.depth > _MAX_CARD_DEPTH:
+    if frame.depth > MAX_CARD_DEPTH:
         logger.warning(
             "Card-search depth bound (%d) exceeded at %s; not descending further",
-            _MAX_CARD_DEPTH,
+            MAX_CARD_DEPTH,
             jq_prefix,
         )
         frame.gaps.truncation.append(jq_prefix)

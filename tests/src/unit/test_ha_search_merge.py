@@ -14,8 +14,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.search.entities import _validate_entity_search_params
 from ha_mcp.tools.search.response import (
     _ALWAYS_KEEP_PROJECTION,
-    _ENTITIES_BRANCH_SKIP_KEYS,
     _INTENT_SKIP_WARNING,
+    ENTITIES_BRANCH_SKIP_KEYS,
     _compute_eligibility,
     _emit_intent_skip_warning,
     _finalize_partial_state,
@@ -901,7 +901,7 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
         "warnings": ["seeded warning"],
     }
     response: dict = {"success": True, "query": "kitchen", "warnings": []}
-    _merge_payload_metadata(response, payload, skip_keys=_ENTITIES_BRANCH_SKIP_KEYS)
+    _merge_payload_metadata(response, payload, skip_keys=ENTITIES_BRANCH_SKIP_KEYS)
 
     # Stripped keys must not appear at top level.
     must_strip = {
@@ -916,7 +916,7 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
     leaked = sorted(must_strip & set(response))
     assert not leaked, (
         f"entity sub-payload context keys leaked into top-level response: {leaked}; "
-        "extend _ENTITIES_BRANCH_SKIP_KEYS"
+        "extend ENTITIES_BRANCH_SKIP_KEYS"
     )
 
     # E2E-pinned keys are intentionally kept (documented + always-keep).
@@ -954,10 +954,10 @@ def test_entity_context_keys_not_in_always_keep_projection() -> None:
     semantic positions.
     """
     pagination_plumbing = {"results", "total_matches", "has_more", "next_offset"}
-    context_only = set(_ENTITIES_BRANCH_SKIP_KEYS) - pagination_plumbing
+    context_only = set(ENTITIES_BRANCH_SKIP_KEYS) - pagination_plumbing
     overlap = context_only & set(_ALWAYS_KEEP_PROJECTION)
     assert not overlap, (
-        f"entity context keys appear in both _ENTITIES_BRANCH_SKIP_KEYS and "
+        f"entity context keys appear in both ENTITIES_BRANCH_SKIP_KEYS and "
         f"_ALWAYS_KEEP_PROJECTION: {overlap} — a fields= projection would "
         "resurrect them after the orchestrator strip, undoing the fix"
     )

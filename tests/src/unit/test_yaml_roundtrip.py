@@ -5,10 +5,9 @@ from __future__ import annotations
 from io import StringIO
 
 import pytest
+from annotatedyaml.loader import FastSafeLoader
 
 from custom_components.ha_mcp_tools.yaml_rt import (
-    _HA_TAGS,
-    _TaggedScalar,
     find_yaml_key_files,
     make_yaml,
     yaml_dumps,
@@ -72,21 +71,15 @@ class TestSecretTag:
 
     def test_secret_value(self):
         ry, data = _load("api_key: !secret my_api_key\n")
-        assert isinstance(data["api_key"], _TaggedScalar)
         assert data["api_key"].tag == "!secret"
         assert data["api_key"].value == "my_api_key"
-
-    def test_tagged_scalar_str(self):
-        ts = _TaggedScalar("!secret", "my_api_key")
-        assert str(ts) == "my_api_key"
+        assert str(data["api_key"]) == "my_api_key"
 
     def test_tagged_scalar_equality(self):
-        a = _TaggedScalar("!secret", "key1")
-        b = _TaggedScalar("!secret", "key1")
-        c = _TaggedScalar("!secret", "key2")
-        assert a == b
-        assert a != c
-        assert a != "key1"
+        _ry, data = _load("a: !secret key1\nb: !secret key1\nc: !secret key2\n")
+        assert data["a"] == data["b"]
+        assert data["a"] != data["c"]
+        assert data["a"] != "key1"
 
 
 class TestIncludeTag:
@@ -121,9 +114,18 @@ class TestEnvVarTag:
 
 
 class TestCoreTagDiscovery:
-    def test_tags_come_from_core_loader(self):
-        assert "!input" in _HA_TAGS
-        assert tuple(sorted(_HA_TAGS)) == _HA_TAGS
+    def test_every_tag_core_loads_survives_a_round_trip(self):
+        """A tag Core's YAML loader knows is written back as it was read, so an
+        edit never drops or resolves one Core would have honoured."""
+        tags = [
+            tag
+            for tag in FastSafeLoader.yaml_constructors
+            if isinstance(tag, str) and tag.startswith("!")
+        ]
+        assert "!input" in tags
+        for tag in tags:
+            ry, data = _load(f"value: {tag} source\n")
+            assert f"{tag} source" in yaml_dumps(ry, data), tag
 
 
 class TestInputTag:
@@ -131,7 +133,6 @@ class TestInputTag:
 
     def test_input_tag_preserved(self):
         ry, data = _load("target: !input target_entity\n")
-        assert isinstance(data["target"], _TaggedScalar)
         assert data["target"].tag == "!input"
         out = yaml_dumps(ry, data)
         assert "!input target_entity" in out

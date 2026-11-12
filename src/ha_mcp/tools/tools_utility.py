@@ -23,7 +23,12 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
+from .helpers import (
+    core_error_message,
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+)
 from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
@@ -46,10 +51,6 @@ CONDITION_ERROR_SUGGESTIONS = [
 # Core rejects a render that outlives its ``timeout`` with this message (code
 # ``template_error``, which it also uses for other template failures).
 HA_RENDER_TIMEOUT_TEXT = "Exceeded maximum execution time"
-
-
-def _command_error_message(exc: HomeAssistantCommandError) -> str:
-    return str(exc).removeprefix("Command failed: ")
 
 
 def _render_outcome(
@@ -299,7 +300,7 @@ class UtilityTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_FAILED,
-                    _command_error_message(exc),
+                    core_error_message(exc),
                     context={"condition": condition, "ha_error_code": exc.code},
                     suggestions=CONDITION_ERROR_SUGGESTIONS,
                 )

@@ -1,8 +1,8 @@
-"""Unit tests for native extended-dict trace formatting.
+"""A detailed trace is Core's own extended dict for the run.
 
-The dict under test is Core's own ``trace/get`` answer for a stored
-``AutomationTrace``: its extended dict holds the automation short dict
-(including ``trigger``), the raw step trace and the run's config/context.
+``ha_get_automation_traces`` reads a stored ``AutomationTrace`` from Core;
+the run's extended dict holds the automation short dict (including
+``trigger``), the raw step trace and the run's config/context.
 """
 
 from __future__ import annotations
@@ -13,11 +13,13 @@ import pytest
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.trace import async_store_trace
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.trace import TraceElement
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import WebSocketGenerator
 
-from ha_mcp.tools.tools_traces import _format_detailed_trace
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_traces import TraceTools
 
 from ._component_core import ws_result
 
@@ -28,6 +30,11 @@ async def trace(
 ) -> dict[str, Any]:
     """Core's extended dict for one stored automation run, read over its API."""
     assert await async_setup_component(hass, "trace", {})
+    # Core's config component serves the registry lookup of automation.test.
+    assert await async_setup_component(hass, "config", {})
+    er.async_get(hass).async_get_or_create(
+        "automation", "automation", "uid_1", suggested_object_id="test"
+    )
     run = AutomationTrace(
         "uid_1",
         {"alias": "Trace capture", "mode": "single"},
@@ -57,16 +64,27 @@ async def trace(
     )
 
 
-class TestFormatDetailedTrace:
+async def _detail(
+    client: HomeAssistantClient, run_id: str, **options: Any
+) -> dict[str, Any]:
+    """``ha_get_automation_traces`` for one run of automation.test."""
+    options.setdefault("entity_id", "automation.test")
+    result: dict[str, Any] = await TraceTools(client).ha_get_automation_traces(
+        run_id=run_id, **options
+    )
+    return result
+
+
+class TestDetailedTrace:
     async def test_extended_dict_passes_through_unchanged(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
     ) -> None:
-        result = _format_detailed_trace("automation.test", trace["run_id"], trace)
+        result = await _detail(core_client, trace["run_id"])
 
         assert result["success"] is True
         assert result["entity_id"] == "automation.test"
         assert result["run_id"] == trace["run_id"]
-        assert result["trace"] is trace["trace"]
+        assert result["trace"] == trace["trace"]
         assert result["config"] == trace["config"]
         assert result["blueprint_inputs"] == trace["blueprint_inputs"]
         assert result["trigger"] == trace["trigger"]
@@ -82,10 +100,10 @@ class TestFormatDetailedTrace:
         assert "action_trace" not in result
         assert "config_summary" not in result
 
-    async def test_sections_keep_top_level_keys(self, trace: dict[str, Any]) -> None:
-        result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections="trace,config"
-        )
+    async def test_sections_keep_top_level_keys(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        result = await _detail(core_client, trace["run_id"], sections="trace,config")
 
         assert set(result) == {
             "success",
@@ -98,12 +116,10 @@ class TestFormatDetailedTrace:
         }
 
     async def test_a_section_the_run_lacks_is_a_warning(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
     ) -> None:
         """A requested name this run does not have is reported, not rejected."""
-        result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections="unique_id"
-        )
+        result = await _detail(core_client, trace["run_id"], sections="unique_id")
 
         assert "unique_id" not in result
         assert len(result["warnings"]) == 1
@@ -113,51 +129,45 @@ class TestFormatDetailedTrace:
         assert listed == set(trace)
 
     async def test_a_present_metadata_key_is_not_a_warning(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
     ) -> None:
         """Core and tool keys the run carries satisfy their own section request."""
-        result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections="success,run_id"
-        )
+        result = await _detail(core_client, trace["run_id"], sections="success,run_id")
 
         assert result["success"] is True
         assert result["run_id"] == trace["run_id"]
         assert "warnings" not in result
 
     async def test_a_conditional_core_key_the_run_lacks_is_a_warning(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
     ) -> None:
         """Core adds ``error`` only to a failed run; a successful run warns."""
         assert "error" not in trace
 
-        result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections="trace,error"
-        )
+        result = await _detail(core_client, trace["run_id"], sections="trace,error")
 
-        assert result["trace"] is trace["trace"]
+        assert result["trace"] == trace["trace"]
         assert "error" not in result
         assert "error" in result["warnings"][0]
 
     @pytest.mark.parametrize("sections", ["", "   "])
     async def test_whitespace_sections_returns_the_full_dict(
-        self, trace: dict[str, Any], sections: str
+        self, trace: dict[str, Any], core_client: HomeAssistantClient, sections: str
     ) -> None:
-        result = _format_detailed_trace(
-            "automation.test", trace["run_id"], trace, sections=sections
-        )
+        result = await _detail(core_client, trace["run_id"], sections=sections)
 
-        assert result["trace"] is trace["trace"]
+        assert result["trace"] == trace["trace"]
         assert result["config"] == trace["config"]
         assert result["blueprint_inputs"] == trace["blueprint_inputs"]
         assert "warnings" not in result
 
     async def test_sections_keep_domain_and_item_metadata(
-        self, trace: dict[str, Any]
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
     ) -> None:
-        result = _format_detailed_trace(
-            None,
+        result = await _detail(
+            core_client,
             trace["run_id"],
-            trace,
+            entity_id=None,
             domain="automation",
             item_id="uid_1",
             sections="trace",

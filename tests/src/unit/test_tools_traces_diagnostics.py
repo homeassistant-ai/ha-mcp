@@ -21,7 +21,6 @@ from ha_mcp.tools.automation_registry_details import (
 )
 from ha_mcp.tools.component_automation import automation_lookup
 from ha_mcp.tools.tools_traces import TraceTools
-from ha_mcp.tools.trace_diagnostics import _gather_diagnostics
 
 _TRIGGER = {"platform": "state", "entity_id": "light.trigger"}
 _ACTION = [{"event": "trace_test"}]
@@ -35,6 +34,16 @@ def _automation(automation_id: str, alias: str, **extra: Any) -> dict[str, Any]:
         "action": _ACTION,
         **extra,
     }
+
+
+async def _diagnose(
+    client: HomeAssistantClient, entity_id: str
+) -> tuple[dict[str, Any], list[str]]:
+    """The diagnostics and warnings ``ha_get_automation_traces`` returns for an
+    automation or script Core holds no traces for."""
+    result = await TraceTools(client).ha_get_automation_traces(entity_id=entity_id)
+    diagnostics: dict[str, Any] = result["diagnostics"]
+    return diagnostics, list(result.get("warnings", []))
 
 
 async def _setup(hass: HomeAssistant, component: str, config: Any) -> None:
@@ -78,9 +87,7 @@ class TestGatherDiagnostics:
         assert state is not None
         assert state.attributes["last_triggered"] is None
 
-        result, warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["entity_exists"] is True
         assert result["entity_enabled"] is True
@@ -94,8 +101,13 @@ class TestGatherDiagnostics:
     async def test_a_ran_automation_reports_core_s_last_triggered(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        """Once a run sets last_triggered, diagnostics reports Core's own value."""
-        await _setup(hass, "automation", [_automation("test", "Test")])
+        """An automation that ran but keeps no traces reports Core's own
+        last_triggered, so the agent knows the run happened."""
+        await _setup(
+            hass,
+            "automation",
+            [_automation("test", "Test", trace={"stored_traces": 0})],
+        )
         hass.states.async_set("light.trigger", "on")
         await hass.async_block_till_done()
         state = hass.states.get("automation.test")
@@ -103,9 +115,7 @@ class TestGatherDiagnostics:
         last_triggered = state.attributes["last_triggered"]
         assert last_triggered is not None
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["last_triggered"] == last_triggered.isoformat()
 
@@ -119,9 +129,7 @@ class TestGatherDiagnostics:
             [{"alias": "No Key", "trigger": [_TRIGGER], "action": _ACTION}],
         )
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.no_key", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.no_key")
 
         assert result["trace_key_available"] is False
         assert "unique_id" in result["suggestion"]
@@ -139,9 +147,7 @@ class TestGatherDiagnostics:
         )
         await hass.async_block_till_done()
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["entity_enabled"] is False
         assert result["loaded"] is False
@@ -159,9 +165,7 @@ class TestGatherDiagnostics:
             [_automation("test", "Test", initial_state=False)],
         )
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["entity_enabled"] is False
         assert result["loaded"] is True
@@ -177,9 +181,7 @@ class TestGatherDiagnostics:
         hass.states.async_set("automation.test", "unavailable")
         await hass.async_block_till_done()
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["entity_state"] == "unavailable"
         assert "unavailable" in result["suggestion"].lower()
@@ -192,9 +194,7 @@ class TestGatherDiagnostics:
     ) -> None:
         await _setup(hass, "automation", [_automation("test", "Test")])
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.typo", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.typo")
 
         assert result["entity_exists"] is False
         assert result["trace_key_available"] is False
@@ -212,9 +212,7 @@ class TestGatherDiagnostics:
             [_automation("test", "Test", trace={"stored_traces": 0})],
         )
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["trace_storage_enabled"] is False
         assert "stored_traces" in result["suggestion"]
@@ -237,9 +235,7 @@ class TestGatherDiagnostics:
             ],
         )
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.bad", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.bad")
 
         assert result["validation"] is not None
         assert result["validation"]["status"].startswith("failed")
@@ -251,9 +247,7 @@ class TestGatherDiagnostics:
     ) -> None:
         hass.states.async_set("automation.test", "on")
 
-        result, _warnings = await _gather_diagnostics(
-            component_core_client, "automation.test", "automation"
-        )
+        result, _warnings = await _diagnose(component_core_client, "automation.test")
 
         assert result["trace_storage_enabled"] is None
 
@@ -269,9 +263,7 @@ class TestGatherDiagnostics:
             {"test": {"sequence": [{"event": "trace_test"}]}},
         )
 
-        result, warnings = await _gather_diagnostics(
-            component_core_client, "script.test", "script"
-        )
+        result, warnings = await _diagnose(component_core_client, "script.test")
 
         assert result["entity_exists"] is True
         assert result["trace_key_available"] is True

@@ -31,36 +31,6 @@ async def edit_yaml(hass: HomeAssistant) -> EditYaml:
     return await make_edit_yaml(hass)
 
 
-class TestParseYamlPathThemes:
-    """Theme yaml_path validation: single segment without dots."""
-
-    @pytest.fixture(scope="class")
-    def parse(self):
-        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
-
-        return _parse_and_validate_yaml_path
-
-    def test_accepts_simple_theme_name(self, parse):
-        kind, parts, err = parse("my-theme", is_theme=True)
-        assert err is None
-        assert kind == "theme"
-        assert parts == ("my-theme",)
-
-    def test_accepts_theme_name_with_numbers(self, parse):
-        kind, parts, err = parse("theme2024", is_theme=True)
-        assert err is None
-        assert kind == "theme"
-
-    def test_rejects_dotted_theme_name(self, parse):
-        _, _, err = parse("my.theme", is_theme=True)
-        assert err is not None
-        assert "cannot contain dots" in err
-
-    def test_rejects_empty_theme_name(self, parse):
-        _, _, err = parse("", is_theme=True)
-        assert err is not None
-
-
 class TestThemeEditHandler:
     """Component handler tests for themes/*.yaml editing."""
 
@@ -366,6 +336,20 @@ class TestThemeEditHandler:
 
         assert result["success"] is False
         assert "cannot contain dots" in result["error"]
+
+    async def test_theme_empty_name_rejected(self, edit_yaml: EditYaml) -> None:
+        result = await edit_yaml(
+            {
+                "file": "themes/no-name.yaml",
+                "action": "add",
+                "yaml_path": "",
+                "content": "primary-color: '#000000'",
+                "backup": False,
+            }
+        )
+
+        assert result["success"] is False
+        assert "non-empty" in result["error"]
 
     async def test_theme_path_traversal_blocked(self, edit_yaml: EditYaml) -> None:
         result = await edit_yaml(

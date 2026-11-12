@@ -9,13 +9,13 @@ read by other users on the host.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import stat
 
 import pytest
 
 from ha_mcp.policy.decision_pin import (
-    _DIGEST_BYTES,
     MAX_HASH_ITERATIONS,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
@@ -32,15 +32,16 @@ from ha_mcp.policy.decision_pin import (
     verify_pin,
 )
 
-DIGEST_B64 = base64.b64encode(b"\x00" * _DIGEST_BYTES).decode("ascii")
+# The stored algorithm is pbkdf2_sha256, so a real derivation is exactly one
+# SHA-256 digest long.
+DIGEST_BYTES = hashlib.sha256().digest_size
+DIGEST_B64 = base64.b64encode(b"\x00" * DIGEST_BYTES).decode("ascii")
 SALT_B64 = base64.b64encode(b"\x00" * 16).decode("ascii")
 # One byte off in either direction. A digest that is merely close to the right
 # length is the case a "too short to be plausible" check would wave through,
 # and it can no more be what a derivation returned than a three-byte one can.
-LONG_DIGEST_B64 = base64.b64encode(b"\x00" * (_DIGEST_BYTES + 1)).decode("ascii")
-SHORT_BY_ONE_DIGEST_B64 = base64.b64encode(b"\x00" * (_DIGEST_BYTES - 1)).decode(
-    "ascii"
-)
+LONG_DIGEST_B64 = base64.b64encode(b"\x00" * (DIGEST_BYTES + 1)).decode("ascii")
+SHORT_BY_ONE_DIGEST_B64 = base64.b64encode(b"\x00" * (DIGEST_BYTES - 1)).decode("ascii")
 
 
 @pytest.fixture(autouse=True)

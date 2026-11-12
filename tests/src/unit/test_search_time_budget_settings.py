@@ -17,8 +17,8 @@ from ha_mcp.config import (
     _ADVANCED_SETTINGS_BOUNDS,
     ADVANCED_SETTINGS_FIELDS,
     Settings,
-    _reset_global_settings,
     get_global_settings,
+    reset_global_settings,
 )
 
 # (settings field name, env alias, default)
@@ -73,11 +73,11 @@ def test_budget_field_is_editable_float_in_advanced_search_section(field, env, d
 def test_env_var_flows_to_resolved_settings(field, env, default, monkeypatch):
     _clear_budget_envs(monkeypatch)
     monkeypatch.setenv(env, "45")
-    _reset_global_settings()
+    reset_global_settings()
     try:
         assert getattr(get_global_settings(), field) == 45.0
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
@@ -90,11 +90,11 @@ def test_override_file_value_is_applied(
 
     _clear_budget_envs(monkeypatch)
     (isolated_data_dir / "feature_flags.json").write_text(json.dumps({field: 55.0}))
-    _reset_global_settings()
+    reset_global_settings()
     try:
         assert getattr(get_global_settings(), field) == 55.0
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
@@ -110,11 +110,11 @@ def test_out_of_range_override_file_value_is_rejected(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({field: bad_value})
     )
-    _reset_global_settings()
+    reset_global_settings()
     try:
         assert getattr(get_global_settings(), field) == default
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 @pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)

@@ -19,7 +19,7 @@ import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
-from ha_mcp.config import _reset_global_settings
+from ha_mcp.config import reset_global_settings
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
 # These tests exercise the search tools a search-mode connection gets.
@@ -198,11 +198,11 @@ def toolsearch_server(
     monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
     monkeypatch.delenv("HOMEASSISTANT_TOKEN", raising=False)
     monkeypatch.setattr(server_module, "server_lifespan", _no_lifespan)
-    _reset_global_settings()
+    reset_global_settings()
     try:
         yield server_module.HomeAssistantSmartMCPServer(client=MagicMock(spec=[]))
     finally:
-        _reset_global_settings()
+        reset_global_settings()
 
 
 async def _hidden_hits(

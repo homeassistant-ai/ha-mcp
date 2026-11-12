@@ -24,13 +24,13 @@ def isolate_edit_backups(
         yield
         return
 
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
 
     # HA_MCP_CONFIG_DIR alone does not override an existing legacy backup folder.
     try:
         with monkeypatch.context() as isolated:
             isolated.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
-            _reset_global_settings()
+            reset_global_settings()
             yield
     finally:
-        _reset_global_settings()
+        reset_global_settings()

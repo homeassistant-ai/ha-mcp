@@ -216,7 +216,7 @@ async def _save_allowlist(value: str) -> tuple[int, dict[str, Any]]:
 
     from starlette.requests import Request
 
-    from ha_mcp.settings_ui._handlers_advanced import build_advanced_handlers
+    from ha_mcp.settings_ui import build_settings_handlers
 
     body = json.dumps({"ipv6_allowed_networks": value}).encode()
 
@@ -224,7 +224,7 @@ async def _save_allowlist(value: str) -> tuple[int, dict[str, Any]]:
         return {"type": "http.request", "body": body}
 
     request = Request({"type": "http", "method": "POST", "headers": []}, receive)
-    response = await build_advanced_handlers(None)["save_advanced_settings"](request)
+    response = await build_settings_handlers(None)["save_advanced_settings"](request)
     return response.status_code, json.loads(response.body)
 
 

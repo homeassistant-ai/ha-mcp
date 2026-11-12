@@ -16,7 +16,7 @@ from starlette.requests import Request
 
 from ha_mcp.policy.approval_queue import Decision
 from ha_mcp.policy.model import PredicateOp
-from ha_mcp.settings_ui import _render_settings_html
+from ha_mcp.settings_ui import render_settings_html
 from ha_mcp.settings_ui._i18n import (
     CATALOGS,
     DEFAULT_LOCALE,
@@ -27,7 +27,7 @@ from ha_mcp.settings_ui._i18n import (
     select_locale,
     serialize_payload,
 )
-from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
+from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
 
 def _shipped_locales() -> list[str]:
@@ -509,7 +509,7 @@ def _request(
 
 
 def test_render_uses_home_assistant_language_hint() -> None:
-    html = _render_settings_html(_request(query=b"ha_lang=ru-RU"))
+    html = render_settings_html(_request(query=b"ha_lang=ru-RU"))
 
     assert '<html lang="ru" dir="ltr">' in html
     assert '"locale":"ru"' in html
@@ -518,7 +518,7 @@ def test_render_uses_home_assistant_language_hint() -> None:
 
 
 def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
-    html = _render_settings_html(
+    html = render_settings_html(
         _request(
             query=b"ha_lang=en",
             cookie="ha_mcp_locale=ru",

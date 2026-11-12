@@ -35,7 +35,7 @@ from translate_locales import (  # noqa: E402
     _validate,
 )
 
-from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES  # noqa: E402
+from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES  # noqa: E402
 
 _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 # Catalogs that carry translated text. A catalog with no `messages` yet has no

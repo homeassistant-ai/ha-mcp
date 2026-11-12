@@ -209,7 +209,14 @@ Two more checks run on these trees, each with a list under the same rules:
   member access. Setting a private attribute on a Core object forces a state
   Core never produces, and calling a private function skips the entry point a
   user reaches: go through the public command or tool.
-  `test_core_reply_rules.py` keeps these lists exact too.
+  `test_core_reply_rules.py` keeps these lists exact too. Importing the name
+  (`from module import _name`, or any name from a private module such as
+  `ha_mcp._internal`) skips the entry point the same way and SLF001 does not
+  see it, so the same test fails a file that is on none of these lists and
+  still imports one. The vendored packages' import path (`ha_mcp._vendor`) and
+  the test trees' own helper modules are exempt; a private name inside a
+  vendored package is not. A file still on a
+  list loses its private imports when it is converted.
 - mypy checks both trees against Core's real types
   (`uv run python scripts/mypy_tests_exact.py`). A `None` or a placeholder
   assigned where Core declares a type is an error wherever mypy knows the
