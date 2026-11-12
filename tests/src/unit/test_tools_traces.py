@@ -23,37 +23,12 @@ from pytest_homeassistant.typing import WebSocketGenerator
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
-from ha_mcp.tools.tools_traces import (
-    TraceTools,
-    _format_trace_list,
-    _resolve_trace_item_id,
-)
-from ha_mcp.tools.trace_lookup import _raise_trace_ws_failure, resolve_context_trace
+from ha_mcp.tools.tools_traces import TraceTools
+from ha_mcp.tools.trace_lookup import resolve_context_trace
 
 from ._component_core import ws_result
 
 _STORED_TRACES = 10
-
-# The context each trace command's failure carries into its structured error,
-# as the list, detail and context call sites build it.
-_COMMAND_CONTEXTS: dict[str, dict[str, Any]] = {
-    "trace/list": {
-        "entity_id": "automation.test",
-        "domain": "automation",
-        "item_id": "uid_1",
-    },
-    "trace/get": {
-        "entity_id": "automation.test",
-        "domain": "automation",
-        "item_id": "uid_1",
-        "run_id": "r1",
-    },
-    "trace/contexts": {
-        "context_id": "ctx-1",
-        "domain": "automation",
-        "item_id": "uid_1",
-    },
-}
 
 
 @pytest.fixture
@@ -99,26 +74,30 @@ class TestFormatTraceList:
     """The list response Core's rows page into."""
 
     async def test_diagnostics_accompany_only_an_empty_list(
-        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        registry_api: None,
     ) -> None:
-        """Diagnostics describe an empty list and never a populated one."""
-        diagnostics = {
-            "entity_exists": True,
-            "entity_enabled": True,
-            "trace_storage_enabled": True,
-            "last_triggered": "2025-11-30T15:00:00Z",
-            "suggestion": "Traces may have been cleared.",
-        }
+        """Diagnostics explain why an automation has no traces, and never
+        accompany a populated list or a list asked for by item id."""
+        er.async_get(hass).async_get_or_create(
+            "automation", "automation", "uid_1", suggested_object_id="test"
+        )
+        assert await async_setup_component(hass, "trace", {})
+        tools = TraceTools(core_client)
+
+        empty = await tools.ha_get_automation_traces(entity_id="automation.test")
+        by_item = await tools.ha_get_automation_traces(
+            domain="automation", item_id="uid_1"
+        )
         await _store(hass, _run("r1"))
-        rows = await _core_rows(hass, hass_ws_client)
+        populated = await tools.ha_get_automation_traces(entity_id="automation.test")
 
-        empty = _format_trace_list("automation.test", [], 10, diagnostics)
-        no_diagnostics = _format_trace_list("automation.test", [], 10)
-        populated = _format_trace_list("automation.test", rows, 10, diagnostics)
-
-        assert empty["diagnostics"] == diagnostics
-        assert no_diagnostics["trace_count"] == 0
-        assert "diagnostics" not in no_diagnostics
+        assert empty["trace_count"] == 0
+        assert empty["diagnostics"]["entity_exists"] is True
+        assert by_item["trace_count"] == 0
+        assert "diagnostics" not in by_item
         assert populated["trace_count"] == 1
         assert "diagnostics" not in populated
 
@@ -147,7 +126,7 @@ class TestFormatTraceList:
     async def test_pages_traces(
         self,
         hass: HomeAssistant,
-        hass_ws_client: WebSocketGenerator,
+        core_client: HomeAssistantClient,
         freezer: FrozenDateTimeFactory,
         limit: int,
         offset: int,
@@ -166,10 +145,13 @@ class TestFormatTraceList:
             traces.append(_run(f"run_{i}"))
             freezer.tick(timedelta(minutes=1))
         await _store(hass, *traces)
-        rows = await _core_rows(hass, hass_ws_client)
 
-        result = _format_trace_list(
-            "automation.test", rows, limit, offset=offset, order=order
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            domain="automation",
+            item_id="uid_1",
+            limit=limit,
+            offset=offset,
+            order=order,
         )
 
         assert [trace["run_id"] for trace in result["traces"]] == expected_run_ids
@@ -180,20 +162,25 @@ class TestFormatTraceList:
         assert result["has_more"] is has_more
 
     async def test_list_preserves_core_short_dict_fields(
-        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        core_client: HomeAssistantClient,
     ) -> None:
         """Every field Core's trace/list returns reaches the caller unchanged."""
         await _store(hass, _run("r1"))
         core_rows = await _core_rows(hass, hass_ws_client)
 
-        result = _format_trace_list("automation.test", core_rows, 10)
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            domain="automation", item_id="uid_1"
+        )
 
         assert result["traces"] == core_rows
 
     async def test_list_orders_mixed_not_triggered_by_core_start_time(
         self,
         hass: HomeAssistant,
-        hass_ws_client: WebSocketGenerator,
+        core_client: HomeAssistantClient,
         freezer: FrozenDateTimeFactory,
     ) -> None:
         """Run and not-triggered traces page in Core's timestamp order."""
@@ -206,10 +193,14 @@ class TestFormatTraceList:
             traces.append(_run(run_id, not_triggered=not_triggered))
             freezer.tick(timedelta(minutes=1))
         await _store(hass, *traces)
-        rows = await _core_rows(hass, hass_ws_client)
 
-        newest = _format_trace_list("automation.test", rows, 2)
-        oldest = _format_trace_list("automation.test", rows, 2, order="oldest")
+        tools = TraceTools(core_client)
+        newest = await tools.ha_get_automation_traces(
+            domain="automation", item_id="uid_1", limit=2
+        )
+        oldest = await tools.ha_get_automation_traces(
+            domain="automation", item_id="uid_1", limit=2, order="oldest"
+        )
 
         assert [trace["run_id"] for trace in newest["traces"]] == [
             "run_newest",
@@ -259,51 +250,46 @@ class TestTraceToolOptions:
         )
 
 
-class TestResolveTraceItemId:
-    """``_resolve_trace_item_id`` reads Core's entity registry."""
+class TestTraceItemResolution:
+    """An entity id is resolved through Core's entity registry to the key
+    Core stores its traces under."""
 
-    async def test_resolves_the_registry_unique_id(
+    async def test_the_registry_unique_id_selects_the_stored_runs(
         self,
+        hass: HomeAssistant,
         entity_registry: er.EntityRegistry,
         core_client: HomeAssistantClient,
         registry_api: None,
     ) -> None:
-        """Core's registry row holds the unique_id traces are stored under."""
-        entry = entity_registry.async_get_or_create("automation", "test", "uid_42")
+        """Core stores an automation's runs under its unique_id, not under the
+        entity id's object id."""
+        entry = entity_registry.async_get_or_create(
+            "automation", "automation", "uid_1", suggested_object_id="renamed"
+        )
+        await _store(hass, _run("r1"))
 
-        item_id = await _resolve_trace_item_id(
-            core_client, entry.entity_id, "fallback_obj"
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            entity_id=entry.entity_id
         )
 
-        assert item_id == "uid_42"
+        assert [trace["run_id"] for trace in result["traces"]] == ["r1"]
 
     async def test_an_entity_core_does_not_know_falls_back_to_the_object_id(
-        self, core_client: HomeAssistantClient, registry_api: None
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, registry_api: None
     ) -> None:
-        """A registry miss leaves the object_id so the trace fetch reports it."""
-        item_id = await _resolve_trace_item_id(
-            core_client, "automation.missing", "fallback_obj"
+        """A registry miss reads the runs stored under the entity's object id."""
+        run = AutomationTrace(
+            "uid_1", {"alias": "Trace capture"}, None, Context(id="ctx-fallback")
+        )
+        run.run_id = "fallback_run"
+        run.finished()
+        await _store(hass, run)
+
+        result = await TraceTools(core_client).ha_get_automation_traces(
+            entity_id="automation.uid_1"
         )
 
-        assert item_id == "fallback_obj"
-
-    async def test_a_dead_transport_falls_back_to_the_object_id(
-        self,
-        core_client: HomeAssistantClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A client that gets no answer also leaves the object_id."""
-        monkeypatch.setattr(
-            core_client,
-            "send_websocket_message",
-            AsyncMock(side_effect=HomeAssistantConnectionError("down")),
-        )
-
-        item_id = await _resolve_trace_item_id(
-            core_client, "automation.test", "fallback_obj"
-        )
-
-        assert item_id == "fallback_obj"
+        assert [trace["run_id"] for trace in result["traces"]] == ["fallback_run"]
 
 
 class TestResolveContextTrace:
@@ -351,52 +337,47 @@ class TestTraceFetchFailures:
         assert error["error"]["code"] == "CONNECTION_FAILED"
 
     @pytest.mark.parametrize(
-        ("command", "error", "code"),
+        ("trace_store", "call", "context"),
         [
             pytest.param(
-                "trace/list",
-                "Invalid command",
-                "SERVICE_CALL_FAILED",
-                id="list-command-error",
+                False,
+                {"domain": "automation", "item_id": "uid_1"},
+                {"domain": "automation", "item_id": "uid_1"},
+                id="list-without-a-trace-store",
             ),
             pytest.param(
-                "trace/get",
-                "The trace could not be found",
-                "SERVICE_CALL_FAILED",
-                id="detail-not-found",
+                True,
+                {"domain": "automation", "item_id": "uid_1", "run_id": "no_such_run"},
+                {"domain": "automation", "item_id": "uid_1", "run_id": "no_such_run"},
+                id="detail-of-a-missing-run",
             ),
             pytest.param(
-                "trace/contexts",
-                "Failed to connect to Home Assistant",
-                "CONNECTION_FAILED",
-                id="connection-shaped-answer",
-            ),
-            pytest.param(
-                "trace/contexts",
-                "WebSocket connection to Home Assistant closed while waiting for a response",
-                "CONNECTION_FAILED",
-                id="transport-shaped-answer",
-            ),
-            pytest.param(
-                "trace/contexts",
-                "Unknown command.",
-                "SERVICE_CALL_FAILED",
-                id="contexts-command-error",
+                False,
+                {"domain": "automation", "item_id": "uid_1", "context_id": "ctx-1"},
+                {"domain": "automation", "item_id": "uid_1", "context_id": "ctx-1"},
+                id="context-without-a-trace-store",
             ),
         ],
     )
-    def test_ws_failure_is_classified_by_its_message(
-        self, command: str, error: str, code: str
+    async def test_a_trace_command_core_refuses_keeps_its_context(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        trace_store: bool,
+        call: dict[str, Any],
+        context: dict[str, Any],
     ) -> None:
-        """A command's error answer keeps its context and picks its error code."""
-        context = _COMMAND_CONTEXTS[command]
+        """Core's error answer to a trace command is a service failure that
+        names what was asked for."""
+        if trace_store:
+            await _store(hass)
 
         with pytest.raises(ToolError) as exc_info:
-            _raise_trace_ws_failure(error, context)
+            await TraceTools(core_client).ha_get_automation_traces(**call)
 
         payload = json.loads(str(exc_info.value))
         assert payload["success"] is False
-        assert payload["error"]["code"] == code
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert {key: payload[key] for key in context} == context
 
     @pytest.mark.parametrize(
