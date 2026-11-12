@@ -4,19 +4,15 @@ The handler tests call the service on a real ``hass`` whose config directory
 is the test's ``tmp_path``.
 """
 
+import json
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 import yaml
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mcp_tools import (
-    SERVICE_EDIT_YAML_CONFIG,
-)
 from custom_components.ha_mcp_tools.const import (
     DASHBOARD_URL_PATH_PATTERN,
-    DOMAIN,
     RESERVED_DASHBOARD_URL_PATHS,
 )
 
@@ -98,14 +94,51 @@ class TestReservedDashboardUrlPaths:
         assert isinstance(RESERVED_DASHBOARD_URL_PATHS, frozenset)
 
 
-class TestValidateDashboardFilename:
+async def _write_error(
+    edit_yaml: EditYaml,
+    yaml_path: str,
+    *,
+    file: str = "configuration.yaml",
+    content: str = "x: 1\n",
+    extra_allowed_keys: list[str] | None = None,
+) -> str | None:
+    """The error ``edit_yaml_config`` answers for an add, or None once it wrote."""
+    result = await edit_yaml(
+        {
+            "file": file,
+            "action": "add",
+            "yaml_path": yaml_path,
+            "content": content,
+            "extra_allowed_keys": extra_allowed_keys or [],
+        }
+    )
+    return None if result["success"] else str(result["error"])
+
+
+def _allowed_keys(error: str | None) -> set[str]:
+    """The keys a generic "not in the allowed list" refusal names."""
+    assert error is not None and "Allowed keys: " in error, error
+    listed = error.split("Allowed keys: ", 1)[1].split(". For YAML-mode", 1)[0]
+    return set(listed.split(", "))
+
+
+# Valid content per packages-only key (automation/scene are lists, script a map).
+_PACKAGES_CONTENT = {
+    "automation": "- id: x\n  alias: x\n  trigger: []\n  action: []\n",
+    "script": "my_script:\n  sequence: []\n",
+    "scene": "- id: x\n  name: x\n  entities: {}\n",
+}
+
+
+class TestDashboardFilename:
     """`filename:` value in a YAML-mode dashboard entry must stay under dashboards/."""
 
-    @pytest.fixture(scope="class")
-    def validate(self):
-        from custom_components.ha_mcp_tools import _validate_dashboard_filename
-
-        return _validate_dashboard_filename
+    @staticmethod
+    async def _error(edit_yaml: EditYaml, filename: str) -> str | None:
+        entry = f"mode: yaml\ntitle: x\nfilename: {json.dumps(filename)}\n"
+        return await _write_error(
+            edit_yaml, "lovelace.dashboards.fn-check", content=entry
+        )
 
     @pytest.mark.parametrize(
         "filename",
@@ -115,8 +148,10 @@ class TestValidateDashboardFilename:
             "dashboards/energy-2026.yaml",
         ],
     )
-    def test_accepts_valid_filenames(self, validate, filename):
-        err = validate(filename)
+    async def test_accepts_valid_filenames(
+        self, edit_yaml: EditYaml, filename: str
+    ) -> None:
+        err = await self._error(edit_yaml, filename)
         assert err is None, f"{filename} should be valid, got: {err}"
 
     @pytest.mark.parametrize(
@@ -133,96 +168,65 @@ class TestValidateDashboardFilename:
             "dashboards/main",  # no extension
         ],
     )
-    def test_rejects_invalid_filenames(self, validate, filename):
-        err = validate(filename)
+    async def test_rejects_invalid_filenames(
+        self, edit_yaml: EditYaml, filename: str
+    ) -> None:
+        err = await self._error(edit_yaml, filename)
         assert err is not None, f"{filename} should be rejected"
-        assert isinstance(err, str)
+        assert "filename" in err
 
 
-class TestParseYamlPath:
-    """yaml_path must accept either a single allowed key OR
+class TestYamlPathShapes:
+    """yaml_path must be either a single allowed key OR
     a 3-segment dotted path 'lovelace.dashboards.<url_path>'."""
 
-    @pytest.fixture(scope="class")
-    def parse(self):
-        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
-
-        return _parse_and_validate_yaml_path
-
-    def test_accepts_single_allowed_key(self, parse):
-        kind, parts, err = parse("template")
-        assert err is None
-        assert kind == "single"
-        assert parts == ("template",)
-
-    def test_accepts_lovelace_dashboards_dotted(self, parse):
-        kind, parts, err = parse("lovelace.dashboards.energy-dash")
-        assert err is None
-        assert kind == "lovelace_dashboard"
-        assert parts == ("lovelace", "dashboards", "energy-dash")
-
-    def test_rejects_unknown_single_key(self, parse):
-        # Genuinely unknown, not denylisted – a YAML_KEY_DENYLIST member
-        # gets the categorical deny message instead of this one.
-        _, _, err = parse("zigbee2mqtt")
+    @pytest.mark.parametrize(
+        ("yaml_path", "says"),
+        [
+            # Genuinely unknown, not denylisted – a YAML_KEY_DENYLIST member
+            # gets the categorical deny message instead of this one.
+            ("zigbee2mqtt", "not in the allowed list"),
+            ("lovelace", ""),
+            ("lovelace.mode", "lovelace.dashboards.<url_path>"),
+            ("lovelace.dashboards", ""),
+            ("lovelace.dashboards.foo.bar", ""),
+            ("lovelace.dashboards.UPPER", ""),
+            ("homeassistant.customize", ""),
+        ],
+    )
+    async def test_rejects_unsupported_yaml_path(
+        self, edit_yaml: EditYaml, yaml_path: str, says: str
+    ) -> None:
+        err = await _write_error(edit_yaml, yaml_path)
         assert err is not None
-        assert "not in the allowed list" in err
-
-    def test_rejects_bare_lovelace(self, parse):
-        _, _, err = parse("lovelace")
-        assert err is not None
-
-    def test_rejects_lovelace_mode(self, parse):
-        _, _, err = parse("lovelace.mode")
-        assert err is not None
-        assert "lovelace.dashboards.<url_path>" in err
-
-    def test_rejects_lovelace_dashboards_without_url_path(self, parse):
-        _, _, err = parse("lovelace.dashboards")
-        assert err is not None
-
-    def test_rejects_too_many_segments(self, parse):
-        _, _, err = parse("lovelace.dashboards.foo.bar")
-        assert err is not None
-
-    def test_rejects_reserved_url_path(self, parse):
-        _, _, err = parse("lovelace.dashboards.lovelace")
-        assert err is not None
-        assert "reserved" in err.lower()
-
-    def test_rejects_invalid_url_path_format(self, parse):
-        _, _, err = parse("lovelace.dashboards.UPPER")
-        assert err is not None
-
-    def test_rejects_other_dotted_path(self, parse):
-        _, _, err = parse("homeassistant.customize")
-        assert err is not None
+        assert says in err
 
 
-class TestParseYamlPathPackagesOnly:
+class TestPackagesOnlyKeys:
     """PACKAGES_ONLY_YAML_KEYS (automation/script/scene) gating.
 
-    Accepted only when is_package=True; in configuration.yaml the rejection
+    Accepted only in a packages file; in configuration.yaml the rejection
     must point at the storage-mode tools, not just dump the generic
     allowlist.
     """
 
-    @pytest.fixture(scope="class")
-    def parse(self):
-        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
-
-        return _parse_and_validate_yaml_path
-
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
-    def test_accepts_packages_only_key_when_is_package(self, parse, key):
-        kind, parts, err = parse(key, is_package=True)
+    async def test_accepts_packages_only_key_in_a_package(
+        self, edit_yaml: EditYaml, key: str
+    ) -> None:
+        err = await _write_error(
+            edit_yaml,
+            key,
+            file=f"packages/{key}.yaml",
+            content=_PACKAGES_CONTENT[key],
+        )
         assert err is None
-        assert kind == "single"
-        assert parts == (key,)
 
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
-    def test_rejects_packages_only_key_in_configuration_yaml(self, parse, key):
-        _, _, err = parse(key, is_package=False)
+    async def test_rejects_packages_only_key_in_configuration_yaml(
+        self, edit_yaml: EditYaml, key: str
+    ) -> None:
+        err = await _write_error(edit_yaml, key, content=_PACKAGES_CONTENT[key])
         assert err is not None
         assert "packages/*.yaml" in err
         # Spell each tool name out individually — an agent reading the
@@ -231,68 +235,49 @@ class TestParseYamlPathPackagesOnly:
         assert "ha_config_set_script" in err
         assert "ha_config_set_scene" in err
 
-    def test_default_is_package_false(self, parse):
-        # Omitting is_package must behave like is_package=False — no silent
-        # acceptance of PACKAGES_ONLY keys through positional callers.
-        _, _, err = parse("automation")
-        assert err is not None
-        assert "packages/*.yaml" in err
-
-    def test_union_list_in_generic_error_when_is_package(self, parse):
+    async def test_union_list_in_generic_error_in_a_package(
+        self, edit_yaml: EditYaml
+    ) -> None:
         # Unknown single key inside a package file: error must enumerate both
         # ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS so the user sees the
         # full surface they can pick from. The probe key must be genuinely
         # unknown – a YAML_KEY_DENYLIST member takes the deny branch instead
         # and never reaches this generic dump.
-        _, _, err = parse("zigbee2mqtt", is_package=True)
-        assert err is not None
-        assert "automation" in err
-        assert "script" in err
-        assert "scene" in err
+        err = await _write_error(edit_yaml, "zigbee2mqtt", file="packages/x.yaml")
+        assert {"automation", "script", "scene"} <= _allowed_keys(err)
 
-    def test_generic_error_excludes_packages_only_when_not_package(self, parse):
+    async def test_generic_error_excludes_packages_only_in_configuration_yaml(
+        self, edit_yaml: EditYaml
+    ) -> None:
         # Unknown single key against configuration.yaml: allowlist must NOT
         # include PACKAGES_ONLY keys — listing them would mislead the user
         # into thinking they can rename their key to one of those.
-        _, _, err = parse("zigbee2mqtt", is_package=False)
-        assert err is not None
-        assert "automation" not in err
-        assert "script" not in err
-        assert "scene" not in err
+        err = await _write_error(edit_yaml, "zigbee2mqtt")
+        assert not {"automation", "script", "scene"} & _allowed_keys(err)
 
 
-class TestParseYamlPathExtraAllowedKeys:
+class TestExtraAllowedKeys:
     """Operator-configured extra write keys and the deny floor (#1887).
 
     ``extra_allowed_keys`` widens what a single-segment yaml_path may name;
     ``YAML_KEY_DENYLIST`` is the floor that widening can never cross.
     """
 
-    @pytest.fixture(scope="class")
-    def parse(self):
-        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
-
-        return _parse_and_validate_yaml_path
-
-    def test_rejects_unknown_key_without_extra_allowed(self, parse):
-        _, _, err = parse("alert2")
-        assert err is not None
-
-    @pytest.mark.parametrize("is_package", [False, True])
-    def test_accepts_extra_key_in_both_file_kinds(self, parse, is_package):
+    @pytest.mark.parametrize("file", ["configuration.yaml", "packages/extra.yaml"])
+    async def test_accepts_extra_key_in_both_file_kinds(
+        self, edit_yaml: EditYaml, file: str
+    ) -> None:
         # The filed case (alert2) reads from a package fragment, but the
         # setting is not packages-scoped – configuration.yaml counts too.
-        kind, parts, err = parse(
-            "alert2",
-            is_package=is_package,
-            extra_allowed_keys=frozenset({"alert2"}),
+        err = await _write_error(
+            edit_yaml, "alert2", file=file, extra_allowed_keys=["alert2"]
         )
         assert err is None
-        assert kind == "single"
-        assert parts == ("alert2",)
 
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
-    def test_extra_key_does_not_lift_packages_only_restriction(self, parse, key):
+    async def test_extra_key_does_not_lift_packages_only_restriction(
+        self, edit_yaml: EditYaml, key: str
+    ) -> None:
         """An extra key must not make a packages-only key writable in
         configuration.yaml (#1887).
 
@@ -302,52 +287,57 @@ class TestParseYamlPathExtraAllowedKeys:
         automation/script/scene while the per-key toggle governing them is off,
         since that toggle only gates packages targets.
         """
-        _, _, err = parse(key, extra_allowed_keys=frozenset({key}))
+        err = await _write_error(
+            edit_yaml, key, content=_PACKAGES_CONTENT[key], extra_allowed_keys=[key]
+        )
         assert err is not None
         assert "packages/*.yaml" in err
         assert f"ha_config_set_{key}" in err
 
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
-    def test_packages_only_key_still_reaches_package_files(self, parse, key):
+    async def test_packages_only_key_listed_as_extra_still_reaches_packages(
+        self, edit_yaml: EditYaml, key: str
+    ) -> None:
         """The restriction above must not narrow the packages path itself:
-        inside packages/*.yaml these keys stay acceptable, with or without the
-        operator listing them."""
-        for extra in (frozenset(), frozenset({key})):
-            kind, parts, err = parse(key, is_package=True, extra_allowed_keys=extra)
-            assert err is None, f"{key} with extra={extra}: {err}"
-            assert kind == "single"
-            assert parts == (key,)
+        inside packages/*.yaml these keys stay acceptable when the operator
+        lists them too."""
+        err = await _write_error(
+            edit_yaml,
+            key,
+            file=f"packages/{key}.yaml",
+            content=_PACKAGES_CONTENT[key],
+            extra_allowed_keys=[key],
+        )
+        assert err is None
 
-    def test_generic_error_lists_extra_keys(self, parse):
+    async def test_generic_error_lists_extra_keys(self, edit_yaml: EditYaml) -> None:
         # An operator who added a key must see it in the allowed-keys dump,
         # otherwise the error contradicts their own configuration.
-        _, _, err = parse("nosuchkey", extra_allowed_keys=frozenset({"alert2"}))
-        assert err is not None
-        assert "alert2" in err
+        err = await _write_error(edit_yaml, "nosuchkey", extra_allowed_keys=["alert2"])
+        assert "alert2" in _allowed_keys(err)
 
+    @pytest.mark.parametrize("file", ["configuration.yaml", "packages/x.yaml"])
     @pytest.mark.parametrize("key", ["homeassistant", "http", "frontend", "lovelace"])
-    def test_denylist_key_rejected_even_when_extra_allowed(self, parse, key):
+    async def test_denylist_key_rejected_even_when_extra_allowed(
+        self, edit_yaml: EditYaml, key: str, file: str
+    ) -> None:
         # The floor must win over the operator's own list – this is the
         # whole point of it being non-operator-extendable.
-        _, _, err = parse(key, extra_allowed_keys=frozenset({key}))
+        err = await _write_error(edit_yaml, key, file=file, extra_allowed_keys=[key])
         assert err is not None
         assert "never be edited" in err
         # The operator configured this key on purpose; without this sentence
         # the message never answers "why is my key being ignored".
         assert "cannot be lifted" in err
 
-    @pytest.mark.parametrize("key", ["homeassistant", "http", "frontend", "lovelace"])
-    def test_denylist_key_rejected_in_packages_too(self, parse, key):
-        _, _, err = parse(key, is_package=True, extra_allowed_keys=frozenset({key}))
-        assert err is not None
-        assert "never be edited" in err
-
-    def test_denylist_error_is_distinct_from_generic_allowlist_dump(self, parse):
+    async def test_denylist_error_is_distinct_from_generic_allowlist_dump(
+        self, edit_yaml: EditYaml
+    ) -> None:
         # A denied key must not be answered with "here are the keys you may
         # use instead" – that reads as "pick another key", hiding that this
         # one is categorically refused.
-        _, _, deny_err = parse("http")
-        _, _, generic_err = parse("nosuchkey")
+        deny_err = await _write_error(edit_yaml, "http")
+        generic_err = await _write_error(edit_yaml, "nosuchkey")
         assert deny_err is not None and generic_err is not None
         assert deny_err != generic_err
         assert "not in the allowed list" not in deny_err
@@ -357,9 +347,8 @@ class TestYamlKeyDenylistContract:
     """Invariants the deny floor relies on (#1887)."""
 
     def test_denylist_disjoint_from_allow_sets(self):
-        # ``_parse_and_validate_yaml_path`` checks the denylist first, so an
-        # overlap would silently make an allowed key unreachable rather than
-        # failing loudly here.
+        # The service checks the denylist first, so an overlap would silently
+        # make an allowed key unreachable rather than failing loudly here.
         from custom_components.ha_mcp_tools.const import (
             ALLOWED_YAML_KEYS,
             PACKAGES_ONLY_YAML_KEYS,
@@ -369,24 +358,25 @@ class TestYamlKeyDenylistContract:
         overlap = YAML_KEY_DENYLIST & (ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS)
         assert not overlap, f"denylisted keys also marked allowed: {overlap}"
 
-    def test_caller_extra_keys_drop_denylisted_entries(
-        self, hass: HomeAssistant
+    async def test_caller_extra_keys_drop_denylisted_entries(
+        self, edit_yaml: EditYaml
     ) -> None:
-        from custom_components.ha_mcp_tools import _caller_extra_allowed_keys
-
-        call = ServiceCall(
-            hass,
-            DOMAIN,
-            SERVICE_EDIT_YAML_CONFIG,
-            {"extra_allowed_keys": ["alert2", "http", "", "homeassistant"]},
+        """A denylisted or empty extra key never widens the allowed list a
+        refusal names."""
+        err = await _write_error(
+            edit_yaml,
+            "nosuchkey",
+            extra_allowed_keys=["alert2", "http", "", "homeassistant"],
         )
-        assert _caller_extra_allowed_keys(call) == frozenset({"alert2"})
+        allowed = _allowed_keys(err)
+        assert "alert2" in allowed
+        assert not {"http", "", "homeassistant"} & allowed
 
-    def test_caller_extra_keys_default_empty(self, hass: HomeAssistant) -> None:
-        from custom_components.ha_mcp_tools import _caller_extra_allowed_keys
+    async def test_caller_extra_keys_default_empty(self, edit_yaml: EditYaml) -> None:
+        from custom_components.ha_mcp_tools.const import ALLOWED_YAML_KEYS
 
-        call = ServiceCall(hass, DOMAIN, SERVICE_EDIT_YAML_CONFIG, {})
-        assert _caller_extra_allowed_keys(call) == frozenset()
+        err = await _write_error(edit_yaml, "nosuchkey")
+        assert _allowed_keys(err) == set(ALLOWED_YAML_KEYS)
 
 
 class TestPostActionTableContract:
@@ -741,13 +731,6 @@ class TestHandleEditYamlConfigPackagesGate:
     even if the wrapper's client-side gate were bypassed (defense in depth).
     Mirrors the wrapper-side coverage in test_yaml_config_tool.py."""
 
-    # Per-key valid content (automation/scene are lists, script is a map).
-    _CONTENT: ClassVar[dict[str, str]] = {
-        "automation": "- id: x\n  alias: x\n  trigger: []\n  action: []\n",
-        "script": "my_script:\n  sequence: []\n",
-        "scene": "- id: x\n  name: x\n  entities: {}\n",
-    }
-
     @pytest.mark.parametrize("key", ["automation", "script", "scene"])
     async def test_disabled_key_rejected_server_side(
         self, edit_yaml: EditYaml, key: str
@@ -760,7 +743,7 @@ class TestHandleEditYamlConfigPackagesGate:
                 "file": f"packages/{key}.yaml",
                 "action": "add",
                 "yaml_path": key,
-                "content": self._CONTENT[key],
+                "content": _PACKAGES_CONTENT[key],
                 "backup": False,
                 "disabled_packages_keys": [key],
             }
@@ -777,7 +760,7 @@ class TestHandleEditYamlConfigPackagesGate:
                 "file": "packages/things.yaml",
                 "action": "add",
                 "yaml_path": "script",
-                "content": self._CONTENT["script"],
+                "content": _PACKAGES_CONTENT["script"],
                 "backup": False,
                 "disabled_packages_keys": ["automation"],
             }
@@ -797,7 +780,7 @@ class TestHandleEditYamlConfigPackagesGate:
                 "file": "configuration.yaml",
                 "action": "add",
                 "yaml_path": "automation",
-                "content": self._CONTENT["automation"],
+                "content": _PACKAGES_CONTENT["automation"],
                 "backup": False,
                 "disabled_packages_keys": ["automation"],
             }
@@ -815,7 +798,7 @@ class TestHandleEditYamlConfigPackagesGate:
                 "file": "packages/automations.yaml",
                 "action": "add",
                 "yaml_path": "automation",
-                "content": self._CONTENT["automation"],
+                "content": _PACKAGES_CONTENT["automation"],
                 "backup": False,
                 "disabled_packages_keys": ["automatoin"],  # typo
             }
@@ -830,25 +813,25 @@ class TestHandleEditYamlConfigPackagesGate:
                 "file": "packages/automations.yaml",
                 "action": "add",
                 "yaml_path": "automation",
-                "content": self._CONTENT["automation"],
+                "content": _PACKAGES_CONTENT["automation"],
                 "backup": False,
             }
         )
         assert result["success"] is True, result
 
     def test_flag_map_matches_packages_only_keys(self):
-        """The wrapper's ``_YAML_PACKAGES_FLAG_BY_KEY`` must stay in lockstep
+        """The wrapper's ``YAML_PACKAGES_FLAG_BY_KEY`` must stay in lockstep
         with the component's ``PACKAGES_ONLY_YAML_KEYS`` (no import-time
         coupling exists), and every mapped flag must be a real ``Settings``
         field. Otherwise a packages-only key silently becomes ungated, or
         ``_disabled_packages_keys`` raises at runtime."""
         from custom_components.ha_mcp_tools.const import PACKAGES_ONLY_YAML_KEYS
         from ha_mcp.config import Settings
-        from ha_mcp.tools.tools_yaml_config import _YAML_PACKAGES_FLAG_BY_KEY
+        from ha_mcp.tools.tools_yaml_config import YAML_PACKAGES_FLAG_BY_KEY
 
-        assert set(_YAML_PACKAGES_FLAG_BY_KEY) == set(PACKAGES_ONLY_YAML_KEYS)
-        for flag in _YAML_PACKAGES_FLAG_BY_KEY.values():
+        assert set(YAML_PACKAGES_FLAG_BY_KEY) == set(PACKAGES_ONLY_YAML_KEYS)
+        for flag in YAML_PACKAGES_FLAG_BY_KEY.values():
             assert flag in Settings.model_fields, (
-                f"{flag} is mapped in _YAML_PACKAGES_FLAG_BY_KEY but is not a "
+                f"{flag} is mapped in YAML_PACKAGES_FLAG_BY_KEY but is not a "
                 "Settings field"
             )

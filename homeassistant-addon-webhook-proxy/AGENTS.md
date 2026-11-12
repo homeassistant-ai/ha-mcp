@@ -95,16 +95,17 @@ manual fallback):
    direct stable repair.
 
 ## Testing
-`tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse
-`_webhook_proxy_variant` fixture rebinds `PROXY_ADDON_DIR`/`CURRENT`, so every test runs
-once as `[stable]` and once as `[dev]`. CI runs `tests/addon/`, so the dev code is
-exercised on every PR — that is what makes it safe to develop on the dev flavor before
-promoting. When you add a variant-specific VALUE — a path, slug, domain, or route base —
-add it to the `WEBHOOK_PROXY_VARIANTS` table rather than hard-coding it in a test. A
-variant-specific CAPABILITY is the opposite: feature-detect it from the flavor's own
-source, the way `_ha_auth_supported`, `_none_autoapprove_supported`, and
-`_rfc9207_iss_supported` already do. The promote transform copies code but never edits
-this test file, so a capability recorded as a table boolean stays `False` for stable
+The tests in `tests/addon/webhook_proxy/` run on real Home Assistant Core and are
+parametrized over BOTH flavors: the autouse `variant` fixture in its `conftest.py` runs
+every test once as `[stable]` and once as `[dev]`, and the `component` fixture loads the
+flavor's component as a custom integration that Core sets up. CI runs `tests/addon/`, so
+the dev code is exercised on every PR — that is what makes it safe to develop on the dev
+flavor before promoting. When you add a variant-specific VALUE — a path, slug, domain, or
+route base — add it to `Variant` in `_variants.py` rather than hard-coding it in a test.
+A variant-specific CAPABILITY is the opposite: feature-detect it from the flavor's own
+source, the way `ha_auth_supported`, `none_autoapprove_supported`, and
+`rfc9207_iss_supported` in `_variants.py` already do. The promote transform copies code
+but never edits these tests, so a capability recorded as a table boolean stays `False` for stable
 after the code arrives, and the promote PR then asserts the old surface against the new
 one. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
 separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev-side

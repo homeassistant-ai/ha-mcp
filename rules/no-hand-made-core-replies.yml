@@ -271,7 +271,6 @@ ignores:
   - "tests/src/unit/test_tools_resources_patch.py"
   - "tests/src/unit/test_tools_system.py"
   - "tests/src/unit/test_tools_todo.py"
-  - "tests/src/unit/test_tools_traces.py"
   - "tests/src/unit/test_tools_updates.py"
   - "tests/src/unit/test_tools_utility_error_log_records.py"
   - "tests/src/unit/test_tools_utility_error_log_structured.py"

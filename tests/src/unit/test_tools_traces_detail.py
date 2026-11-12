@@ -1,635 +1,183 @@
-"""Unit tests for tools_traces detailed trace formatting."""
+"""A detailed trace is Core's own extended dict for the run.
 
-from typing import Any, ClassVar
+``ha_get_automation_traces`` reads a stored ``AutomationTrace`` from Core;
+the run's extended dict holds the automation short dict (including
+``trigger``), the raw step trace and the run's config/context.
+"""
 
-from ha_mcp.tools.tools_traces import _filter_trace_sections, _format_detailed_trace
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from homeassistant.components.automation.trace import AutomationTrace
+from homeassistant.components.trace import async_store_trace
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.trace import TraceElement
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import WebSocketGenerator
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_traces import TraceTools
+
+from ._component_core import ws_result
 
 
-class TestFormatDetailedTrace:
-    """Test _format_detailed_trace function."""
+@pytest.fixture
+async def trace(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> dict[str, Any]:
+    """Core's extended dict for one stored automation run, read over its API."""
+    assert await async_setup_component(hass, "trace", {})
+    # Core's config component serves the registry lookup of automation.test.
+    assert await async_setup_component(hass, "config", {})
+    er.async_get(hass).async_get_or_create(
+        "automation", "automation", "uid_1", suggested_object_id="test"
+    )
+    run = AutomationTrace(
+        "uid_1",
+        {"alias": "Trace capture", "mode": "single"},
+        {"target": "light.one"},
+        Context(id="ctx-1"),
+    )
+    run.set_trigger_description("event 'go'")
+    trigger = TraceElement({"trigger": {"event": {"data": {"go": False}}}}, "trigger/0")
+    condition = TraceElement({"trigger": {"id": "evt_trig"}}, "condition/0")
+    condition.set_result(result=False, state="below", wanted_state="above")
+    action = TraceElement({"trigger": {"id": "evt_trig"}}, "action/0")
+    action.set_result(params={"domain": "light"})
+    action.set_error(RuntimeError("service failed"))
+    run.set_trace(
+        {"trigger/0": [trigger], "condition/0": [condition], "action/0": [action]}
+    )
+    run.finished()
+    async_store_trace(hass, run, stored_traces=5)
 
-    def test_format_flat_trace_structure(self):
-        """Test parsing of Home Assistant's flat path-based trace structure."""
+    client = await hass_ws_client(hass)
+    return await ws_result(
+        client,
+        "trace/get",
+        domain="automation",
+        item_id="uid_1",
+        run_id=run.run_id,
+    )
 
-        # Data structure as provided by user
-        trace_data = {
-            "timestamp": {
-                "start": "2026-01-29T23:05:00.345824+00:00",
-                "finish": "2026-01-29T23:05:00.356669+00:00",
-            },
-            "state": "stopped",
-            "trigger": "time",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "timestamp": "2026-01-29T23:05:00.345915+00:00",
-                        "changed_variables": {
-                            "trigger": {
-                                "platform": "time",
-                                "description": "time",
-                                "entity_id": None,
-                            }
-                        },
-                    }
-                ],
-                "action/0": [
-                    {
-                        "path": "action/0",
-                        "timestamp": "2026-01-29T23:05:00.346301+00:00",
-                        "result": {"params": {"domain": "light", "service": "turn_on"}},
-                    }
-                ],
-                "action/0/0": [
-                    {
-                        "path": "action/0/0",
-                        "timestamp": "2026-01-29T23:05:00.347072+00:00",
-                        "child_id": {
-                            "domain": "script",
-                            "item_id": "set_brightness_chambre",
-                            "run_id": "04e0241d",
-                        },
-                        "result": {"params": {"domain": "script"}},
-                    }
-                ],
-            },
-            "config": {"alias": "Lumières Chambre 18h05", "mode": "single"},
-        }
 
-        result = _format_detailed_trace("automation.test", "run_123", trace_data)
+async def _detail(
+    client: HomeAssistantClient, run_id: str, **options: Any
+) -> dict[str, Any]:
+    """``ha_get_automation_traces`` for one run of automation.test."""
+    options.setdefault("entity_id", "automation.test")
+    result: dict[str, Any] = await TraceTools(client).ha_get_automation_traces(
+        run_id=run_id, **options
+    )
+    return result
 
-        assert result["success"] is True
-        assert result["automation_id"] == "automation.test"
-        assert result["run_id"] == "run_123"
 
-        # Verify Trigger
-        assert "trigger" in result
-        assert result["trigger"]["platform"] == "time"
-        assert result["trigger"]["description"] == "time"
-
-        # Verify Actions
-        assert "action_trace" in result
-        actions = result["action_trace"]
-        assert len(actions) == 2
-
-        # Sort order should be preserved (action/0 then action/0/0)
-        assert actions[0]["path"] == "action/0"
-        assert actions[1]["path"] == "action/0/0"
-
-        # Verify content of actions
-        assert actions[0]["result"]["params"]["service"] == "turn_on"
-        assert actions[1]["child_id"]["item_id"] == "set_brightness_chambre"
-
-    def test_format_template_trigger_with_null_states(self) -> None:
-        """Preserve null states from time-driven template trigger traces."""
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {
-                            "trigger": {
-                                "platform": "template",
-                                "description": "time change or manual update via template",
-                                "entity_id": None,
-                                "from_state": None,
-                                "to_state": None,
-                            }
-                        },
-                    }
-                ]
-            },
-        }
-
-        result = _format_detailed_trace("automation.test", "run_123", trace_data)
+class TestDetailedTrace:
+    async def test_extended_dict_passes_through_unchanged(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        result = await _detail(core_client, trace["run_id"])
 
         assert result["success"] is True
-        assert result["trigger"] == {
-            "platform": "template",
-            "description": "time change or manual update via template",
-            "entity_id": None,
-            "from_state": None,
-            "to_state": None,
+        assert result["entity_id"] == "automation.test"
+        assert result["run_id"] == trace["run_id"]
+        assert result["trace"] == trace["trace"]
+        assert result["config"] == trace["config"]
+        assert result["blueprint_inputs"] == trace["blueprint_inputs"]
+        assert result["trigger"] == trace["trigger"]
+        # Core keeps a condition's state/wanted_state inside the step's result.
+        condition = result["trace"]["condition/0"][0]
+        assert condition["result"] == {
+            "result": False,
+            "state": "below",
+            "wanted_state": "above",
         }
-
-    def test_format_template_trigger_with_state_objects(self) -> None:
-        """Preserve state strings from entity-driven template trigger traces."""
-        trace_data = {
-            "trace": {
-                "trigger/0": [
-                    {
-                        "changed_variables": {
-                            "trigger": {
-                                "platform": "template",
-                                "from_state": {"state": "off"},
-                                "to_state": {"state": "on"},
-                            }
-                        }
-                    }
-                ]
-            }
-        }
-
-        result = _format_detailed_trace("automation.test", "run_123", trace_data)
-
-        assert result["trigger"]["from_state"] == "off"
-        assert result["trigger"]["to_state"] == "on"
-
-    def test_format_legacy_trace_structure(self):
-        """Test fallback parsing of potential legacy trace structure (lists)."""
-
-        trace_data = {
-            "timestamp": "2026-01-29T23:05:00",
-            "state": "stopped",
-            "trace": {
-                "trigger": [
-                    {
-                        "path": "trigger/0",
-                        "variables": {
-                            "trigger": {
-                                "platform": "state",
-                                "description": "state change",
-                            }
-                        },
-                    }
-                ],
-                "action": [{"path": "action/0", "result": {"executed": True}}],
-            },
-        }
-
-        result = _format_detailed_trace("automation.legacy", "run_456", trace_data)
-
-        assert result["success"] is True
-
-        # Verify Trigger
-        assert result["trigger"]["platform"] == "state"
-
-        # Verify Actions
-        assert len(result["action_trace"]) == 1
-        assert result["action_trace"][0]["result"]["executed"] is True
-
-    def test_format_mixed_variables_location(self):
-        """Test that variables are found whether in 'variables' or 'changed_variables'."""
-
-        trace_data = {
-            "trace": {
-                "trigger/0": [
-                    {"variables": {"trigger": {"platform": "variables_key"}}}
-                ],
-                "trigger/1": [
-                    {
-                        "changed_variables": {
-                            "trigger": {"platform": "changed_variables_key"}
-                        }
-                    }
-                ],
-            }
-        }
-
-        # Test finding in 'variables' (legacy/standard)
-        result1 = _format_detailed_trace(
-            "auto.1", "1", {"trace": {"trigger/0": trace_data["trace"]["trigger/0"]}}
-        )
-        assert result1["trigger"]["platform"] == "variables_key"
-
-        # Test finding in 'changed_variables' (new flat format)
-        result2 = _format_detailed_trace(
-            "auto.2", "2", {"trace": {"trigger/0": trace_data["trace"]["trigger/1"]}}
-        )
-        assert result2["trigger"]["platform"] == "changed_variables_key"
-
-    def test_variable_deduplication_identical_steps(self):
-        """Variables duplicated across steps should only appear at the first occurrence.
-
-        Reproduces issue #683: blueprint automations with 200+ steps can have
-        identical variables at every step, causing 100KB+ of duplication.
-        """
-        shared_vars = {
-            "foo": "bar",
-            "mqtt_data": {"topic": "frigate/events", "payload": "large_payload_here"},
-            "blueprint_input": {"camera": "camera.front", "notify_device": "phone"},
-        }
-
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "timestamp": "2026-01-01T00:00:00Z",
-                        "changed_variables": {"trigger": {"platform": "mqtt"}},
-                    }
-                ],
-                # 5 action steps with identical variables
-                **{
-                    f"action/{i}": [
-                        {
-                            "path": f"action/{i}",
-                            "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
-                            "result": {"executed": True},
-                            "variables": shared_vars.copy(),
-                        }
-                    ]
-                    for i in range(5)
-                },
-            },
-        }
-
-        result = _format_detailed_trace(
-            "automation.test_dedup", "run_dedup", trace_data
-        )
-
-        actions = result["action_trace"]
-        assert len(actions) == 5
-
-        # First action should have variables
-        assert "variables" in actions[0]
-        assert actions[0]["variables"]["foo"] == "bar"
-
-        # Subsequent actions with identical variables should NOT have them
-        for action in actions[1:]:
-            assert "variables" not in action, (
-                f"Step {action['path']} has duplicated variables that should have been deduplicated"
-            )
-
-    def test_variable_deduplication_changed_variables_included(self):
-        """Variables should appear at steps where they actually changed."""
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {"trigger": {"platform": "state"}},
-                    }
-                ],
-                "action/0": [
-                    {
-                        "path": "action/0",
-                        "timestamp": "2026-01-01T00:00:01Z",
-                        "variables": {"counter": 1, "status": "running"},
-                    }
-                ],
-                "action/1": [
-                    {
-                        "path": "action/1",
-                        "timestamp": "2026-01-01T00:00:02Z",
-                        "variables": {"counter": 1, "status": "running"},  # Same
-                    }
-                ],
-                "action/2": [
-                    {
-                        "path": "action/2",
-                        "timestamp": "2026-01-01T00:00:03Z",
-                        "variables": {"counter": 2, "status": "running"},  # Changed!
-                    }
-                ],
-                "action/3": [
-                    {
-                        "path": "action/3",
-                        "timestamp": "2026-01-01T00:00:04Z",
-                        "variables": {
-                            "counter": 2,
-                            "status": "running",
-                        },  # Same as action/2
-                    }
-                ],
-            },
-        }
-
-        result = _format_detailed_trace(
-            "automation.test_changed", "run_changed", trace_data
-        )
-
-        actions = result["action_trace"]
-        assert len(actions) == 4
-
-        # action/0: first occurrence, variables included
-        assert "variables" in actions[0]
-        assert actions[0]["variables"]["counter"] == 1
-
-        # action/1: same as action/0, no variables
-        assert "variables" not in actions[1]
-
-        # action/2: counter changed, variables included
-        assert "variables" in actions[2]
-        assert actions[2]["variables"]["counter"] == 2
-
-        # action/3: same as action/2, no variables
-        assert "variables" not in actions[3]
-
-    def test_variable_deduplication_trigger_vars_still_skipped(self):
-        """Variables containing 'trigger' key should still be skipped (shown in trigger section)."""
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {"trigger": {"platform": "state"}},
-                    }
-                ],
-                "action/0": [
-                    {
-                        "path": "action/0",
-                        "variables": {
-                            "trigger": {"platform": "state"},
-                            "other": "data",
-                        },
-                    }
-                ],
-                "action/1": [
-                    {
-                        "path": "action/1",
-                        "variables": {"useful_var": "value"},
-                    }
-                ],
-            },
-        }
-
-        result = _format_detailed_trace(
-            "automation.test_trigger_skip", "run_1", trace_data
-        )
-
-        actions = result["action_trace"]
-
-        # action/0 has trigger in variables -> skipped entirely
-        assert "variables" not in actions[0]
-
-        # action/1 has useful variables -> included
-        assert "variables" in actions[1]
-        assert actions[1]["variables"]["useful_var"] == "value"
-
-    def test_deduplicate_false_preserves_all_variables(self):
-        """When deduplicate=False, all steps should retain their full variables."""
-        shared_vars = {
-            "foo": "bar",
-            "mqtt_data": {"topic": "frigate/events", "payload": "large_payload_here"},
-        }
-
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "timestamp": "2026-01-01T00:00:00Z",
-                        "changed_variables": {"trigger": {"platform": "mqtt"}},
-                    }
-                ],
-                **{
-                    f"action/{i}": [
-                        {
-                            "path": f"action/{i}",
-                            "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
-                            "result": {"executed": True},
-                            "variables": shared_vars.copy(),
-                        }
-                    ]
-                    for i in range(5)
-                },
-            },
-        }
-
-        result = _format_detailed_trace(
-            "automation.test_no_dedup", "run_no_dedup", trace_data, deduplicate=False
-        )
-
-        actions = result["action_trace"]
-        assert len(actions) == 5
-
-        # Every action step should have its variables preserved
-        for action in actions:
-            assert "variables" in action, (
-                f"Step {action['path']} should have variables when deduplicate=False"
-            )
-            assert action["variables"]["foo"] == "bar"
-
-    def test_detailed_includes_logbook_entries(self):
-        """When detailed=True, logbook_entries from the trace should be included."""
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {"trigger": {"platform": "state"}},
-                    }
-                ],
-                "action/0": [
-                    {
-                        "path": "action/0",
-                        "result": {"executed": True},
-                    }
-                ],
-            },
-            "logbook_entries": [
-                {
-                    "when": "2026-01-01T00:00:01Z",
-                    "entity_id": "light.test",
-                    "state": "on",
-                },
-                {
-                    "when": "2026-01-01T00:00:02Z",
-                    "entity_id": "light.test",
-                    "state": "off",
-                },
-            ],
-            "context": {"id": "ctx_123", "parent_id": None, "user_id": None},
-        }
-
-        # Default mode: no logbook entries
-        result_default = _format_detailed_trace("automation.test", "run_1", trace_data)
-        assert "logbook_entries" not in result_default
-        assert "context" not in result_default
-
-        # Detailed mode: logbook entries and context included
-        result_detailed = _format_detailed_trace(
-            "automation.test", "run_1", trace_data, detailed=True
-        )
-        assert "logbook_entries" in result_detailed
-        assert len(result_detailed["logbook_entries"]) == 2
-        assert "context" in result_detailed
-        assert result_detailed["context"]["id"] == "ctx_123"
-
-    def test_script_paths_matched_as_actions(self):
-        """Script-style paths (numeric, sequence/) should be captured as actions."""
-        trace_data = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {"trigger": {"platform": "event"}},
-                    }
-                ],
-                "0": [
-                    {
-                        "path": "0",
-                        "timestamp": "2026-01-01T00:00:01Z",
-                        "result": {"executed": True},
-                    }
-                ],
-                "1": [
-                    {
-                        "path": "1",
-                        "timestamp": "2026-01-01T00:00:02Z",
-                        "result": {"executed": True},
-                    }
-                ],
-                "0/repeat/sequence/0": [
-                    {
-                        "path": "0/repeat/sequence/0",
-                        "timestamp": "2026-01-01T00:00:03Z",
-                        "result": {"executed": True},
-                    }
-                ],
-                "sequence/0": [
-                    {
-                        "path": "sequence/0",
-                        "timestamp": "2026-01-01T00:00:04Z",
-                        "result": {"executed": True},
-                    }
-                ],
-            },
-        }
-
-        result = _format_detailed_trace("script.test_paths", "run_1", trace_data)
-
-        actions = result["action_trace"]
-        paths = [a["path"] for a in actions]
-        assert "0" in paths
-        assert "1" in paths
-        assert "0/repeat/sequence/0" in paths
-        assert "sequence/0" in paths
-
-    def test_condition_step_error_surfaced(self):
-        """HA 2026.7 always records template errors on the failing step —
-        the condition formatter must not drop them."""
-        trace = {
-            "state": "stopped",
-            "trace": {
-                "condition/0": [
-                    {
-                        "path": "condition/0",
-                        "result": {"result": None},
-                        "error": "TemplateError: 'x' is undefined",
-                    }
-                ]
-            },
-        }
-        result = _format_detailed_trace("automation.x", "1", trace)
-        assert (
-            result["condition_results"][0]["error"] == "TemplateError: 'x' is undefined"
-        )
-
-    def test_trigger_step_error_surfaced(self):
-        trace = {
-            "state": "stopped",
-            "trace": {
-                "trigger/0": [
-                    {
-                        "path": "trigger/0",
-                        "changed_variables": {"trigger": {"platform": "template"}},
-                        "error": "TemplateError: bad template",
-                    }
-                ]
-            },
-        }
-        result = _format_detailed_trace("automation.x", "1", trace)
-        assert result["trigger"]["error"] == "TemplateError: bad template"
-
-    def test_condition_step_without_error_has_no_error_key(self):
-        trace = {
-            "state": "stopped",
-            "trace": {
-                "condition/0": [{"path": "condition/0", "result": {"result": True}}]
-            },
-        }
-        result = _format_detailed_trace("automation.x", "1", trace)
-        assert "error" not in result["condition_results"][0]
-
-
-class TestFilterTraceSections:
-    """Test _filter_trace_sections function."""
-
-    FULL_RESULT: ClassVar[dict[str, Any]] = {
-        "success": True,
-        "automation_id": "automation.x",
-        "run_id": "1",
-        "timestamp": {"start": "t0"},
-        "state": "stopped",
-        "trigger": {"platform": "time"},
-        "condition_results": [{"result": True}],
-        "action_trace": [{"path": "action/0"}],
-        "config_summary": {"alias": "Test"},
-        "error": "boom",
-        "logbook_entries": [{"name": "Test"}],
-        "context": {"id": "ctx1"},
-    }
-
-    def test_single_section_keeps_only_that_section_plus_metadata(self):
-        result = _filter_trace_sections(dict(self.FULL_RESULT), "actions")
-
-        assert "action_trace" in result
-        for dropped in (
-            "trigger",
-            "condition_results",
-            "config_summary",
-            "error",
-            "logbook_entries",
-            "context",
-        ):
-            assert dropped not in result
-        for metadata_key in (
-            "success",
-            "automation_id",
-            "run_id",
-            "timestamp",
-            "state",
-        ):
-            assert metadata_key in result
-
-    def test_comma_separated_sections_keeps_all_requested(self):
-        result = _filter_trace_sections(dict(self.FULL_RESULT), "trigger,conditions")
-
-        assert "trigger" in result
-        assert "condition_results" in result
-        for dropped in (
-            "action_trace",
-            "config_summary",
-            "error",
-            "logbook_entries",
-            "context",
-        ):
-            assert dropped not in result
-
-    def test_unknown_section_is_silently_dropped(self):
-        result = _filter_trace_sections(dict(self.FULL_RESULT), "not_a_real_section")
-
-        for key in (
-            "trigger",
-            "condition_results",
-            "action_trace",
-            "config_summary",
-            "error",
-            "logbook_entries",
-            "context",
-        ):
-            assert key not in result
-        for metadata_key in (
-            "success",
-            "automation_id",
-            "run_id",
-            "timestamp",
-            "state",
-        ):
-            assert metadata_key in result
-
-    def test_whitespace_and_case_are_normalized(self):
-        result = _filter_trace_sections(dict(self.FULL_RESULT), " Actions , Trigger ")
-
-        assert "action_trace" in result
-        assert "trigger" in result
+        assert "state" not in condition
         assert "condition_results" not in result
+        assert "action_trace" not in result
+        assert "config_summary" not in result
+
+    async def test_sections_keep_top_level_keys(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        result = await _detail(core_client, trace["run_id"], sections="trace,config")
+
+        assert set(result) == {
+            "success",
+            "entity_id",
+            "run_id",
+            "domain",
+            "item_id",
+            "trace",
+            "config",
+        }
+
+    async def test_a_section_the_run_lacks_is_a_warning(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        """A requested name this run does not have is reported, not rejected."""
+        result = await _detail(core_client, trace["run_id"], sections="unique_id")
+
+        assert "unique_id" not in result
+        assert len(result["warnings"]) == 1
+        warning = result["warnings"][0]
+        assert "unique_id" in warning
+        listed = set(warning.split("This run has: ", 1)[1].split(", "))
+        assert listed == set(trace)
+
+    async def test_a_present_metadata_key_is_not_a_warning(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        """Core and tool keys the run carries satisfy their own section request."""
+        result = await _detail(core_client, trace["run_id"], sections="success,run_id")
+
+        assert result["success"] is True
+        assert result["run_id"] == trace["run_id"]
+        assert "warnings" not in result
+
+    async def test_a_conditional_core_key_the_run_lacks_is_a_warning(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        """Core adds ``error`` only to a failed run; a successful run warns."""
+        assert "error" not in trace
+
+        result = await _detail(core_client, trace["run_id"], sections="trace,error")
+
+        assert result["trace"] == trace["trace"]
+        assert "error" not in result
+        assert "error" in result["warnings"][0]
+
+    @pytest.mark.parametrize("sections", ["", "   "])
+    async def test_whitespace_sections_returns_the_full_dict(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient, sections: str
+    ) -> None:
+        result = await _detail(core_client, trace["run_id"], sections=sections)
+
+        assert result["trace"] == trace["trace"]
+        assert result["config"] == trace["config"]
+        assert result["blueprint_inputs"] == trace["blueprint_inputs"]
+        assert "warnings" not in result
+
+    async def test_sections_keep_domain_and_item_metadata(
+        self, trace: dict[str, Any], core_client: HomeAssistantClient
+    ) -> None:
+        result = await _detail(
+            core_client,
+            trace["run_id"],
+            entity_id=None,
+            domain="automation",
+            item_id="uid_1",
+            sections="trace",
+        )
+
+        assert set(result) == {
+            "success",
+            "run_id",
+            "domain",
+            "item_id",
+            "trace",
+        }
+        assert "entity_id" not in result

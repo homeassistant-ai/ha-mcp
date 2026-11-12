@@ -125,7 +125,7 @@ def _load_theme_prefs() -> dict[str, str]:
         # Hand-edited values outside the offered sets are dropped on load
         # AND overwritten by the next save's RMW merge — leave a trail so
         # the edit's author can see why their value never sticks. Warn
-        # once per key per process: _render_settings_html() calls this on
+        # once per key per process: render_settings_html() calls this on
         # every page view, and a permanently stale key (e.g. left behind
         # by a future version) must not spam the log forever (#1574
         # review).

@@ -7,19 +7,21 @@ import pytest
 
 from ha_mcp.__main__ import ProbeAccessLogFilter, register_browser_landing
 from ha_mcp._vendor.fastmcp import FastMCP
-from ha_mcp.browser_landing import _registered_landing_paths
 
 
 @pytest.fixture(autouse=True)
-def _clear_landing_registry():
-    """Clear the registered-paths set and access-log filters between tests."""
-    _registered_landing_paths.clear()
-    yield
-    _registered_landing_paths.clear()
+def _clear_access_log_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a uvicorn access logger without probe filters.
+
+    Registration is remembered per server instance, and every test builds its
+    own, so only the process-wide uvicorn logger needs putting back.
+    """
     access_logger = logging.getLogger("uvicorn.access")
-    access_logger.filters = [
-        f for f in access_logger.filters if not isinstance(f, ProbeAccessLogFilter)
-    ]
+    monkeypatch.setattr(
+        access_logger,
+        "filters",
+        [f for f in access_logger.filters if not isinstance(f, ProbeAccessLogFilter)],
+    )
 
 
 @pytest.fixture

@@ -969,18 +969,19 @@ dimension. What it covers:
   When such a key belongs to a hidden script, scene or automation — including
   a renamed one whose key no longer matches its entity_id — the
   `ha_config_get_*` / `ha_config_set_*` / `ha_config_remove_*` call, a
-  `ha_get_automation_traces` call for `script.<storage key>`, or a
-  `ha_call_service` with `domain: script` and that key as `service`, is
-  concealed as not-found too. A script or automation body that calls
-  `script.<storage key>`, a raw `trace/*` command or result naming the key,
-  and an `ha_read_file` / `ha_config_get_yaml` read of a file that defines a
-  hidden item are refused. A file defines one through a top-level key of
-  `scripts.yaml`, an `id` in `scenes.yaml` / `automations.yaml`, or a
-  `script:` / `scene:` / `automation:` section elsewhere (a package). The
-  whole file is checked, even when only a `tail_lines` or `yaml_path` slice
-  is asked for. A helper that merely shares a hidden script's key stays
-  readable. Because keys and ids now count, enforce mode can also refuse a
-  read that only shares a hidden entity's key or id.
+  `ha_get_automation_traces` call for `script.<storage key>` or with `domain`
+  and `item_id` naming a hidden script or automation, or a `ha_call_service`
+  with `domain: script` and that key as `service`, is concealed as not-found
+  too. A script or automation body that calls `script.<storage key>`, a raw
+  `trace/*` command or result naming the key, and an `ha_read_file` /
+  `ha_config_get_yaml` read of a file that defines a hidden item are refused.
+  A file defines one through a top-level key of `scripts.yaml`, an `id` in
+  `scenes.yaml` / `automations.yaml`, or a `script:` / `scene:` /
+  `automation:` section elsewhere (a package). The whole file is checked,
+  even when only a `tail_lines` or `yaml_path` slice is asked for. A helper
+  that merely shares a hidden script's key stays readable. Because keys and
+  ids now count, enforce mode can also refuse a read that only shares a
+  hidden entity's key or id.
   An automation's bare `identifier` is only ever read as its config `id`.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
@@ -1019,10 +1020,16 @@ if the entity registry (or the config file itself) cannot be loaded, the server
 falls back to the last good read from this session — and with none available,
 tool calls are refused rather than risk leaking a restricted entity. If no
 config can be read, `ha_report_issue` follows its safe unrestricted default;
-if a last-good config opted it in, it fails closed too. The hidden set is cached
-for ~30s, so an area/label membership change in Home Assistant can take up to
-that long to take effect for the area/label dimensions (a config edit in the
-settings UI applies on the next call).
+if a last-good config opted it in, it fails closed too.
+
+For ordinary tool calls the resolved hidden set is cached for ~30s, so an
+area/label membership change in Home Assistant can take up to that long to take
+effect for the area/label dimensions (a config edit in the settings UI applies
+on the next call). Trace queries are the exception: `ha_get_automation_traces`
+and a `trace/*` `ws_command` through `ha_call_service` re-read the entity
+registry on every call, so an automation or script registered since the last
+read still has its trace key concealed. That forced read has no last-good
+fallback: when it fails, the trace call is refused.
 
 Because refuse-on-contact applies to the *whole* hidden set, broad hide
 dimensions make refusals frequent: with the default `diagnostic`/`config`

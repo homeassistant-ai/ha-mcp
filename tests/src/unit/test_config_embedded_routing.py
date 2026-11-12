@@ -36,7 +36,7 @@ def _clean_env(monkeypatch):
     # exercised get_global_settings() can't leak the in-memory url/token into a
     # later test's Settings.
     config._reset_embedded_connection()
-    config._reset_global_settings()
+    config.reset_global_settings()
 
 
 def _a_backup_env_name() -> str:
@@ -185,13 +185,13 @@ class TestEmbeddedConnection:
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
 
         config.set_embedded_connection("http://127.0.0.1:8123", "tok-mem")
-        config._reset_global_settings()
+        config.reset_global_settings()
         settings = config.get_global_settings()
         assert settings.homeassistant_url == "http://127.0.0.1:8123"
         assert settings.homeassistant_token == "tok-mem"
 
         # Settings-UI reset+rebuild re-applies the registered connection.
-        config._reset_global_settings()
+        config.reset_global_settings()
         rebuilt = config.get_global_settings()
         assert rebuilt.homeassistant_url == "http://127.0.0.1:8123"
         assert rebuilt.homeassistant_token == "tok-mem"
@@ -207,7 +207,7 @@ class TestEmbeddedConnection:
         monkeypatch.delenv("HOMEASSISTANT_TOKEN", raising=False)
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
 
-        config._reset_global_settings()
+        config.reset_global_settings()
         stale = config.get_global_settings()  # built first, sentinel connection
         assert stale.homeassistant_url == config.OAUTH_MODE_URL
 

@@ -14,11 +14,11 @@ import pytest
 @pytest.fixture(autouse=True)
 def _reset_settings_singleton():
     """Force ``get_global_settings`` to re-read environment in each test."""
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     yield
-    _reset_global_settings()
+    reset_global_settings()
 
 
 class TestSettingsDefault:

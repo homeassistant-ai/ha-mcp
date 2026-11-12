@@ -14,7 +14,3 @@ extend-select = ["SLF001"]
 
 [lint.extend-per-file-ignores]
 "test_addon_startup.py" = ["SLF001"]
-"test_webhook_proxy.py" = ["SLF001"]
-"test_webhook_proxy_catalog.py" = ["SLF001"]
-"test_webhook_proxy_cloudhook.py" = ["SLF001"]
-"test_webhook_proxy_metadata.py" = ["SLF001"]

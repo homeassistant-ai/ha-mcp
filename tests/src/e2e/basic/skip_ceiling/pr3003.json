@@ -1,0 +1,7 @@
+{
+  "reason": "#2632 (automation traces) now marks the two parent/multi-run context tests in tests/src/e2e/workflows/automation/test_traces_context.py with requires_component_surface. Resolving a triggering (parent) context and listing the other runs that share one context need the component's in-process trace-store scan; Core's trace/contexts map only holds each run's own context, so those calls fail without it. Both skip at collection on the two no-tools lanes without an active server entry (plain container, HAOS inaddon) and run everywhere else. The logbook and own-context calls merged into test_event_context_resolves_to_triggered_run ride the same marker; their no-component behaviour is unit-tested in tests/src/unit/test_tools_traces_logbook.py and test_tools_traces_context.py.",
+  "deltas": {
+    "container_no_tools": 2,
+    "haos_inaddon_no_tools": 2
+  }
+}

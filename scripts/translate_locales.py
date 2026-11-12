@@ -82,7 +82,7 @@ from ha_mcp.settings_ui._i18n import (  # noqa: E402
     _PLACEHOLDER_RE,
     _TAG_LIKE_RE,
 )
-from ha_mcp.settings_ui._locale_policy import is_best_effort_locale  # noqa: E402
+from ha_mcp.settings_ui.locale_policy import is_best_effort_locale  # noqa: E402
 
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 COMPONENT_DIR = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"

@@ -27,7 +27,7 @@ logger = logging.getLogger("ha_mcp.config")
 # INFO log so we don't spam addon logs on every Settings rebuild
 # now that the cascade-clear is gone and the file may carry truthy
 # sub-flag values long-term. Reset alongside
-# the Settings singleton in ``_reset_global_settings``.
+# the Settings singleton in ``reset_global_settings``.
 _BETA_GATE_LOGGED: set[str] = set()
 
 

@@ -1,4 +1,7 @@
-"""Maintenance policy for intentionally best-effort locale catalogs."""
+"""Maintenance policy for intentionally best-effort locale catalogs.
+
+Public: the catalog loader, the locale scripts and the tests share it.
+"""
 
 from __future__ import annotations
 

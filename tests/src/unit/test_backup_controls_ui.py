@@ -15,9 +15,9 @@ from ._settings_ui_dom import DEFAULT_FETCHES
 def test_backup_controls_show_action_limits_and_save_both_values(
     is_addon: bool,
 ) -> None:
-    from ha_mcp.settings_ui import _render_settings_html
+    from ha_mcp.settings_ui import render_settings_html
 
-    page = _render_settings_html(
+    page = render_settings_html(
         Request({"type": "http", "query_string": b"", "headers": []})
     )
     fields = [

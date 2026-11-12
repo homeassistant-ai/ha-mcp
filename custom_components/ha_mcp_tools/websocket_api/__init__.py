@@ -143,6 +143,14 @@ the info handshake carries no capability entry:
   the handler sends finished bytes instead of encoding on the event loop; the
   server's ``ha_get_logs`` logbook source prefers this command and keeps
   ``/api/logbook`` + ``logbook/get_events`` as its fallbacks.
+* ``ha_mcp_tools/trace_context`` — Core's live trace store scanned in process
+  for a run whose own context or ``context.parent_id`` matches the requested
+  context, preferring a real run over a not-triggered diagnostic and returning
+  the trace's ``as_extended_dict()`` (the frontend's trace-view/Download shape).
+  The server's ``ha_get_automation_traces`` prefers this command and keeps
+  Core's public ``trace/contexts`` (a run's own context) as its
+  component-absent fallback; a parent context there is a not-found that names
+  this command.
 * ``ha_mcp_tools/search`` (``search_visibility`` capability) — the search command
   additionally accepts a raw ``visibility`` config dict; when present it excludes
   the server's opt-in hidden entities before counts/pagination (the pure
@@ -314,7 +322,7 @@ code lives in the submodules:
 * ``registry``, ``secrets``, ``assist`` and ``flow_domains``: shared registry, secret-scrub, Assist exposure and flow-helper domain helpers.
 * ``search``, ``search_config``, ``search_score`` and ``visibility``: ``ha_mcp_tools/search``.
 * ``overview``, ``services``, ``lookups``, ``config_entries``, ``registries``,
-  ``dashboards`` and ``logbook``: the read commands.
+  ``dashboards``, ``logbook`` and ``trace_context``: the read commands.
 * ``system``: ``info``, ``system_snapshot``, ``server_entry``, ``server_entry_update`` and ``template_diagnose``.
 * ``call_service`` and ``bulk``: the write commands.
 * ``oauth_callbacks``: read and replace the none-mode OAuth callback allowlist.
@@ -400,6 +408,7 @@ from .schemas import (
     _states_schema,
     _system_snapshot_schema,
     _template_diagnose_schema,
+    _trace_context_schema,
 )
 from .seam import PreSerializedResult
 from .search import _do_search, _search_prep
@@ -413,6 +422,7 @@ from .system import (
     _server_entry_update_prep,
     _template_diagnose_prep,
 )
+from .trace_context import _do_trace_context, _trace_context_prep
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -494,6 +504,9 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # the live process: the recorder read lives in the async prep, the
         # pure formatter only wraps the rows.
         (_logbook_events_schema(), _do_logbook_events, _logbook_events_prep),
+        # Core's live trace store: one in-process pass matches a run's own
+        # context or a triggering parent context across every stored item.
+        (_trace_context_schema(), _do_trace_context, _trace_context_prep),
         (_server_entry_schema(), _do_server_entry, None),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``

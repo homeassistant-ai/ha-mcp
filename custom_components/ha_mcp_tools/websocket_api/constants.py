@@ -19,6 +19,7 @@ from .. import (
 )
 from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
+from . import trace_context as _trace_context
 
 __all__ = [
     "ALL_SEARCH_TYPES",
@@ -77,6 +78,7 @@ __all__ = [
     "WS_STATES",
     "WS_SYSTEM_SNAPSHOT",
     "WS_TEMPLATE_DIAGNOSE",
+    "WS_TRACE_CONTEXT",
     "_SPLIT_RE",
 ]
 
@@ -102,6 +104,7 @@ WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_LOGBOOK_EVENTS = f"{WS_API_PREFIX}/logbook_events"
+WS_TRACE_CONTEXT = f"{WS_API_PREFIX}/trace_context"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
 WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_EVENT = f"{WS_API_PREFIX}/call_event"
@@ -187,6 +190,7 @@ CAPABILITIES: list[str] = [
     # entity names) with the entity/device/context filter set; the server's
     # ``ha_get_logs`` logbook source prefers it and falls back to REST/WS.
     *_logbook.CAPABILITIES,
+    *_trace_context.CAPABILITIES,
     # A flag, not a standalone command: gates the optional ``visibility`` param
     # the server may pass to ``ha_mcp_tools/search`` so an old component that
     # would ignore the param is never sent it (param-sniffing is banned for

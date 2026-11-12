@@ -33,9 +33,6 @@ files:
   - "tests/addon/**"
 ignores:
   - "tests/addon/test_backup_controls.py"
-  - "tests/addon/test_webhook_proxy_catalog.py"
-  - "tests/addon/test_webhook_proxy_cloudhook.py"
-  - "tests/addon/test_webhook_proxy_metadata.py"
   - "tests/src/unit/test_action_and_collision.py"
   - "tests/src/unit/test_action_discriminator.py"
   - "tests/src/unit/test_automation_errors.py"
