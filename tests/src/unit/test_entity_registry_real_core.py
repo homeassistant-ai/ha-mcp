@@ -181,6 +181,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
 
     error = _error(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["message"].startswith("No automatic entity_id for not an id: ")
     assert "is an invalid entity ID" in error["message"]
     _assert_cores_refusal(exc_info, "invalid_format")
     assert _types(sent) == ["config/entity_registry/get_automatic_entity_ids"]

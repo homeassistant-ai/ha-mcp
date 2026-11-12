@@ -441,16 +441,14 @@ class EntityTools:
                 "entity_ids": [entity_id],
             }
         )
+        what = f"No automatic entity_id for {entity_id}"
+        context = {"entity_id": entity_id}
+        suggestions = ["Use ha_search() to find valid entity IDs"]
+        if not result.get("success"):
+            raise_core_refusal(what, result, context, suggestions=suggestions)
         # Core lowercases the ids it is sent and keys its reply so.
-        automatic = result.get("success") and (result.get("result") or {}).get(
-            entity_id.lower()
-        )
+        automatic = (result.get("result") or {}).get(entity_id.lower())
         if not automatic:
-            what = f"No automatic entity_id for {entity_id}"
-            context = {"entity_id": entity_id}
-            suggestions = ["Use ha_search() to find valid entity IDs"]
-            if not result.get("success"):
-                raise_core_refusal(what, result, context, suggestions=suggestions)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.ENTITY_NOT_FOUND,

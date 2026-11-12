@@ -175,9 +175,28 @@ class TestRegistryWideRead:
             "cloud.google_assistant": 1,
         }
         assert "expose_new_entities" not in result
+        # Plain Core has no names or areas to join in; the component does.
+        assert "entity_info" not in result
         assert _types(sent) == [_SETTINGS_GET, _LIST]
         settings = await core_client.send_websocket_message({"type": _SETTINGS_GET})
         assert result["settings"] == settings["result"]
+
+    async def test_the_component_list_joins_the_entity_info(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        core_exposed.async_expose_entity(hass, "conversation", "light.kitchen", True)
+
+        result = await EntityTools(component_core_client).ha_get_entity()
+
+        assert result["exposed_entities"] == {"light.kitchen": {"conversation": True}}
+        assert result["entity_info"] == {
+            "light.kitchen": {
+                "domain": "light",
+                "area": None,
+                "floor": None,
+                "labels": [],
+            }
+        }
 
     async def test_exposed_to_lists_one_assistant_with_its_flag(
         self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
@@ -207,7 +226,11 @@ class TestRegistryWideRead:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity()
 
-        assert "Service unavailable" in _error(exc_info)["message"]
+        body = _body(exc_info)
+        assert body["error"]["message"] == (
+            "Failed to get exposure settings: Service unavailable"
+        )
+        assert body["ha_error_code"] == "home_assistant_error"
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -299,7 +322,12 @@ class TestEntityWithoutRegistryEntry:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(entity_id=_BAD_ID)
 
-        assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        body = _body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["error"]["message"].startswith(
+            f"Reading the registry entry of {_BAD_ID} failed: Entity ID {_BAD_ID} "
+        )
+        assert body["ha_error_code"] == "invalid_format"
         assert _types(sent) == ["config/entity_registry/get"]
 
 
@@ -722,9 +750,11 @@ class TestEntityWriteFailure:
 
         body = _body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "Options refused" in body["error"]["message"]
+        assert body["error"]["message"] == (
+            "Failed to update options for domain 'light': Options refused"
+        )
+        assert body["ha_error_code"] == "invalid_info"
         assert body["partial"] is False
         assert body["options_succeeded"] == {}
-        assert "Partially" not in body["error"]["message"]
         # No write applied: an entry here would read as the entity's settings.
         assert "entity_entry" not in body

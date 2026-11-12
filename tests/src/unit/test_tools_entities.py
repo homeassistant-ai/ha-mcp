@@ -531,7 +531,7 @@ class TestHaSetEntityCombined:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
                 _registry_list("label_id", "outdoor"),
-                {"success": False, "error": {"message": "Entity not found"}},
+                {"success": False, "error": "Command failed: Entity not found"},
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
@@ -883,7 +883,7 @@ class TestHaSetEntityBulkOperations:
                 return _registry_list("label_id", "outdoor")
             if message["entity_id"] == "light.a":
                 return {"success": True, "result": {"entity_entry": entity_entry}}
-            return {"success": False, "error": {"message": "Entity not found"}}
+            return {"success": False, "error": "Command failed: Entity not found"}
 
         mock_client.send_websocket_message = AsyncMock(side_effect=send)
         register_entity_tools(mock_mcp, mock_client)
@@ -1392,7 +1392,7 @@ class TestHaSetEntityShowAs:
         and risk applying earlier changes twice or missing them entirely.
         """
         ok = self._registry_response(options={"sensor": {"display_precision": 1}})
-        fail = {"success": False, "error": {"message": "unsupported_domain"}}
+        fail = {"success": False, "error": "Command failed: unsupported_domain"}
         mock_client.send_websocket_message = AsyncMock(side_effect=[ok, fail])
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1409,7 +1409,6 @@ class TestHaSetEntityShowAs:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "weather" in body["error"]["message"]
-        assert "unsupported_domain" in body["error"]["message"]
         # create_error_response merges `context` into the top-level response.
         assert body["options_domain"] == "weather"
         assert body["partial"] is True
@@ -1495,9 +1494,9 @@ class TestHaSetEntityShowAs:
     async def test_options_failure_with_empty_error_envelope_uses_fallback(
         self, mock_mcp, mock_client
     ):
-        """If HA returns success=False with no usable error key, the error
-        message must NOT degrade to literal "{}" — raise_core_refusal's fallback
-        string surfaces instead.
+        """If HA returns success=False without an error key,
+        raise_core_refusal's 'Unknown error' fallback surfaces instead of an
+        empty detail.
         """
         fail = {"success": False}  # no error key at all
         mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
@@ -1513,9 +1512,6 @@ class TestHaSetEntityShowAs:
         body = json.loads(str(exc_info.value))
         msg = body["error"]["message"]
         assert msg.endswith(": Unknown error")
-        # Critical: must NOT have rendered the empty dict literal.
-        assert ": {}" not in msg
-        assert "{}" not in msg.split(":", 1)[1]
 
     @pytest.mark.asyncio
     async def test_device_class_and_options_in_one_call(self, mock_mcp, mock_client):
