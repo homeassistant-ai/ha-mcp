@@ -199,7 +199,7 @@ class _ClosingFakeWebSocket:
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    def __aiter__(self) -> "_ClosingFakeWebSocket":
+    def __aiter__(self) -> _ClosingFakeWebSocket:
         return self
 
     async def __anext__(self) -> str:

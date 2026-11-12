@@ -20,7 +20,7 @@ class _FakeContainer:
         self.error = error
         self.log_kwargs: dict[str, Any] = {}
 
-    def get_wrapped_container(self) -> "_FakeContainer":
+    def get_wrapped_container(self) -> _FakeContainer:
         return self
 
     def logs(self, **kwargs: Any) -> bytes:

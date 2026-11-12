@@ -2043,7 +2043,7 @@ class _SilentSocket:
     async def send(self, _message: str) -> None:
         return None
 
-    def __aiter__(self) -> "_SilentSocket":
+    def __aiter__(self) -> _SilentSocket:
         return self
 
     async def __anext__(self) -> str:
@@ -2078,7 +2078,7 @@ class TestConnectCancellation:
         first_closed, second_closed = asyncio.Event(), asyncio.Event()
         sockets = iter((_SilentSocket(first_closed), _SilentSocket(second_closed)))
 
-        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+        async def _connect(*_args, **_kwargs) -> _SilentSocket:
             return next(sockets)
 
         monkeypatch.setattr(wsc.websockets, "connect", _connect)
@@ -2115,7 +2115,7 @@ class TestConnectCancellation:
 
         closed = asyncio.Event()
 
-        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+        async def _connect(*_args, **_kwargs) -> _SilentSocket:
             return _SilentSocket(closed)
 
         monkeypatch.setattr(wsc.websockets, "connect", _connect)

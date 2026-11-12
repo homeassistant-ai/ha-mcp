@@ -13,6 +13,7 @@ e.g. fields populated from package metadata).
 """
 
 import ast
+import importlib
 import json
 import sys
 from collections.abc import Sequence
@@ -20,8 +21,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import create_model
 from pydantic.fields import FieldInfo
 
+from ha_mcp import config_settings
 from ha_mcp.config import (
     ADVANCED_SETTINGS_FIELDS,
     BACKUP_OVERRIDE_FIELDS,
@@ -29,7 +32,6 @@ from ha_mcp.config import (
     Settings,
 )
 from ha_mcp.config_meta import AppOption, Setting
-from ha_mcp.config_registry import _check_setting
 
 _EN_CATALOG = (
     Path(__file__).resolve().parents[3]
@@ -112,16 +114,25 @@ def test_every_env_aliased_setting_is_surfaced_or_allowlisted() -> None:
     ],
 )
 def test_impossible_setting_metadata_fails_at_import(
-    annotation: type, setting: Setting, problem: str
+    annotation: type,
+    setting: Setting,
+    problem: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Metadata the registries and start.py cannot act on would be a silent
     no-op at runtime: a range nothing reads, a UI row rendered into no
     section, a beta flag the master gate cannot reach, an app option
     start.py cannot check. Import must fail instead."""
     field = FieldInfo(annotation=annotation, default=0, alias="SOME_ENV")
+    field.metadata.append(setting)
+    probe = create_model(
+        "ProbeSettings", __base__=Settings, some_field=(annotation, field)
+    )
+    monkeypatch.setattr(config_settings, "Settings", probe)
+    monkeypatch.delitem(sys.modules, "ha_mcp.config_registry")
 
-    with pytest.raises(RuntimeError, match=problem):
-        _check_setting("some_field", field, setting)
+    with pytest.raises(RuntimeError, match=f"Settings.some_field has .*{problem}"):
+        importlib.import_module("ha_mcp.config_registry")
 
 
 # ---------------------------------------------------------------------------
@@ -424,11 +435,11 @@ async def test_get_advanced_tells_the_ui_which_saves_need_a_restart(
     once at startup; the screenshot engine URL is read per capture."""
     from unittest.mock import MagicMock
 
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
     from ha_mcp.settings_ui import build_settings_handlers
 
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    _reset_global_settings()
+    reset_global_settings()
     handlers = build_settings_handlers(server=None)
     body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
     rows = {row["field"]: row for row in body["fields"]}

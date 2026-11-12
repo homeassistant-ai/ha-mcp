@@ -407,9 +407,9 @@ def test_master_off_forces_beta_subflags_false_even_with_file_overrides(
         )
     )
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_beta_features is False
@@ -431,9 +431,9 @@ def test_master_on_allows_beta_subflag_file_overrides(
         )
     )
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_beta_features is True
@@ -451,9 +451,9 @@ def test_master_env_var_off_overrides_subflag_env_var(
     monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
     monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "true")
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_beta_features is False
@@ -480,9 +480,9 @@ def test_master_in_addon_mode_reads_override_file(
         )
     )
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_beta_features is True
@@ -517,9 +517,9 @@ def test_yaml_packages_subflags_read_from_override_file_in_addon_mode(
         )
     )
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_yaml_config_editing is True
@@ -547,9 +547,9 @@ def test_yaml_packages_subflags_forced_off_when_master_off(
         )
     )
 
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
 
     assert s.enable_beta_features is False
@@ -635,9 +635,9 @@ def test_get_feature_flag_origin_beta_master_file_override_in_addon(
 def test_advanced_override_applies_int_field(isolated_data_dir, monkeypatch) -> None:
     _clear_all_feature_envs(monkeypatch)
     (isolated_data_dir / "feature_flags.json").write_text(json.dumps({"timeout": 90}))
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().timeout == 90
 
 
@@ -648,9 +648,9 @@ def test_advanced_override_applies_str_field_with_choices(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"log_level": "DEBUG"})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().log_level == "DEBUG"
 
 
@@ -659,9 +659,9 @@ def test_advanced_override_applies_float_field(isolated_data_dir, monkeypatch) -
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"code_mode_max_duration": 60.0})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     # enable_beta_features is False default, but code_mode_max_duration
     # isn't a beta sub-flag (it's a numeric tuning param), so it
     # applies regardless.
@@ -678,9 +678,9 @@ def test_advanced_override_skips_display_only_fields(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"homeassistant_url": "http://attacker"})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().homeassistant_url != "http://attacker"
 
 
@@ -689,9 +689,9 @@ def test_advanced_override_rejects_out_of_bounds_int(
 ) -> None:
     _clear_all_feature_envs(monkeypatch)
     (isolated_data_dir / "feature_flags.json").write_text(json.dumps({"timeout": -5}))
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     # Out-of-bounds value silently ignored, field stays at default (30).
     assert get_global_settings().timeout == 30
 
@@ -703,9 +703,9 @@ def test_advanced_override_rejects_invalid_choice(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"log_level": "BANANAS"})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     # Invalid choice silently ignored, log_level stays at default (INFO).
     assert get_global_settings().log_level == "INFO"
 
@@ -719,9 +719,9 @@ def test_advanced_override_str_field_with_null_byte_rejected(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"mcp_server_name": "foo\x00bar"})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
     # Null-byte value silently ignored, field stays at default ("ha-mcp").
     assert s.mcp_server_name == "ha-mcp"
@@ -740,9 +740,9 @@ def test_old_override_file_with_subflag_no_master_force_false(
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"enable_lite_docstrings": True})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
     assert s.enable_beta_features is False
     assert s.enable_lite_docstrings is False  # forced off by master
@@ -755,9 +755,9 @@ def test_old_override_file_unknown_keys_ignored(isolated_data_dir, monkeypatch) 
     (isolated_data_dir / "feature_flags.json").write_text(
         json.dumps({"future_flag_v99": True, "enable_beta_features": True})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
     assert s.enable_beta_features is True
 
@@ -774,9 +774,9 @@ def test_backup_override_dir_rejects_null_byte(isolated_data_dir, monkeypatch) -
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"auto_backup_dir": "/tmp/evil\x00bar"})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
     assert s.auto_backup_dir == ""  # default — null-byte value silently dropped
 
@@ -789,9 +789,9 @@ def test_backup_override_lookahead_rejects_out_of_range(
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"auto_backup_calendar_lookahead_days": 9999})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     s = get_global_settings()
     assert s.auto_backup_calendar_lookahead_days == 7  # field default
 
@@ -804,9 +804,9 @@ def test_backup_override_lookahead_accepts_in_range(
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"auto_backup_calendar_lookahead_days": 30})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().auto_backup_calendar_lookahead_days == 30
 
 
@@ -877,9 +877,9 @@ def test_backup_override_enable_snapshot_delete_accepts_bool(
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"enable_snapshot_delete": True})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().enable_snapshot_delete is True
 
 
@@ -891,9 +891,9 @@ def test_backup_override_min_age_days_rejects_out_of_range(
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"snapshot_delete_min_age_days": 9999})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().snapshot_delete_min_age_days == 7  # field default
 
 
@@ -905,9 +905,9 @@ def test_backup_override_min_age_days_accepts_in_range(
     (isolated_data_dir / "backup_settings.json").write_text(
         json.dumps({"snapshot_delete_min_age_days": 30})
     )
-    from ha_mcp.config import _reset_global_settings, get_global_settings
+    from ha_mcp.config import get_global_settings, reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
     assert get_global_settings().snapshot_delete_min_age_days == 30
 
 

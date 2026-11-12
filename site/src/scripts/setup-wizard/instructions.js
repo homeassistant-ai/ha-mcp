@@ -102,7 +102,7 @@ function pushDeployment(ctx, instructions) {
           <h3 class="instruction-title">Start HTTP Server (uvx) - PowerShell</h3>
           <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
 $env:HOMEASSISTANT_TOKEN="{{HOMEASSISTANT_TOKEN}}"
-${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
+${secretPathEnv}uvx --python 3.14 --from ha-mcp@latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${healthzNote}${secretPathNote}${lanHardeningNote}
         </div>`;
       } else {
@@ -111,7 +111,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           <h3 class="instruction-title">Start HTTP Server (uvx)</h3>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
-${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
+${secretPathEnv}uvx --python 3.14 --from ha-mcp@latest ha-mcp-web</code></pre>
           <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${healthzNote}${secretPathNote}${lanHardeningNote}
         </div>`;
       }
@@ -195,7 +195,7 @@ volumes:
           <pre class="code-block text-xs"><code>MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw</code></pre>
           <p class="text-xs text-slate-500 mt-2">Defaults: port <code>9583</code>, 128-bit random secret path, persisted across restarts.</p>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-3">
-            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No access token here.</strong> The app authenticates behind the secret path in the URL. Don't also configure the local/stdio version for the same client (a <code>uvx ha-mcp@latest</code> entry with <code>HOMEASSISTANT_URL</code> / <code>HOMEASSISTANT_TOKEN</code>) — running the app and the stdio version together is a known cause of connection hangs.</p>
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No access token here.</strong> The app authenticates behind the secret path in the URL. Don't also configure the local/stdio version for the same client (a <code>uvx --python 3.14 ha-mcp@latest</code> entry with <code>HOMEASSISTANT_URL</code> / <code>HOMEASSISTANT_TOKEN</code>) — running the app and the stdio version together is a known cause of connection hangs.</p>
           </div>
         </div>`;
     } else if (derivedDeployment === 'ha-component') {

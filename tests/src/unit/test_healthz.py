@@ -4,9 +4,11 @@ import httpx
 import pytest
 
 from ha_mcp import browser_landing
-from ha_mcp.__main__ import ProbeAccessLogFilter, _healthz_enabled
+from ha_mcp.__main__ import ProbeAccessLogFilter
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.browser_landing import register_healthz
+
+from ._main_web import start_main_web
 
 
 @pytest.mark.asyncio
@@ -80,13 +82,18 @@ async def test_healthz_not_registered_by_default():
         ("no", False),
     ],
 )
-def test_healthz_enabled_env_values(monkeypatch, value, expected):
+@pytest.mark.asyncio
+async def test_ha_mcp_web_serves_healthz_per_mcp_healthz(monkeypatch, value, expected):
     """MCP_HEALTHZ accepts the usual truthy spellings and defaults off."""
-    if value:
-        monkeypatch.setenv("MCP_HEALTHZ", value)
-    else:
-        monkeypatch.delenv("MCP_HEALTHZ", raising=False)
-    assert _healthz_enabled() is expected
+    start = start_main_web(monkeypatch, MCP_HEALTHZ=value or None)
+    app = start.mcp.http_app(path="/mcp", stateless_http=True)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/healthz")
+
+    assert resp.status_code == (200 if expected else 404)
 
 
 def _access_record(method: str, path: str, status: int):

@@ -9,6 +9,7 @@ answers-while-blind shape the detector fix exists to prevent.
 """
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,10 +20,14 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.config_write_helpers import fetch_entity_category
+from ha_mcp.tools.device_enrichment import (
+    enrich_matter_diagnostics,
+    enrich_zha_metrics,
+    enrich_zwave_status,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._base import _SearchBase
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-from ha_mcp.tools.tools_registry import _get_single_device_result
 from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.tools.tools_services import _get_service_translations
 from ha_mcp.tools.util_helpers import get_logger_levels
@@ -330,65 +335,42 @@ class TestIdentifierResolversFailLoud:
 class TestDeviceEnrichmentReportsSkips:
     """Radio enrichment is best-effort, but a device answered without
     ``radio_metrics`` because the transport died must not look like a device
-    whose radio reports none. The skip is named at the top level, not nested
-    under ``device`` where a caller reading the payload would miss it.
+    whose radio reports none. Where ``ha_get_device`` puts the warning is
+    pinned on real Core in ``test_device_tools_on_core.py``.
     """
 
-    @staticmethod
-    def _zha_device() -> dict[str, Any]:
-        return {
-            "id": "dev-1",
-            "name": "Kitchen sensor",
-            "identifiers": [["zha", "aa:bb"]],
-            "connections": [],
-        }
-
+    @pytest.mark.parametrize(
+        "enrich, args, field, key",
+        [
+            (enrich_zha_metrics, (), "ZHA radio metrics", "radio_metrics"),
+            (enrich_zwave_status, ("dev-1",), "Z-Wave node status", "node_status"),
+            (
+                enrich_matter_diagnostics,
+                ("dev-1",),
+                "Matter node diagnostics",
+                "node_diagnostics",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_dead_transport_names_the_skipped_enrichment(self) -> None:
+    async def test_dead_transport_names_the_skipped_enrichment(
+        self,
+        enrich: Callable[..., Awaitable[None]],
+        args: tuple[str, ...],
+        field: str,
+        key: str,
+    ) -> None:
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
             side_effect=HomeAssistantConnectionError("ws gone")
         )
+        device_info: dict[str, Any] = {"id": "dev-1"}
+        warnings: list[str] = []
 
-        with patch(
-            "ha_mcp.tools.tools_registry._get_device_info",
-            return_value={
-                "device_id": "dev-1",
-                "integration_type": "zha",
-                "ieee_address": "aa:bb",
-            },
-        ):
-            result = await _get_single_device_result(
-                client, "dev-1", None, [self._zha_device()], {}
-            )
+        await enrich(client, *args, device_info, warnings)
 
-        assert result["success"] is True
-        assert any("ZHA radio metrics unavailable" in w for w in result["warnings"])
-        # Contract: top-level list[str], never nested under ``device``.
-        assert isinstance(result["warnings"], list)
-        assert "warnings" not in result["device"]
-
-    @pytest.mark.asyncio
-    async def test_healthy_enrichment_adds_no_warning(self) -> None:
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": [{"ieee": "aa:bb", "lqi": 200}]}
-        )
-
-        with patch(
-            "ha_mcp.tools.tools_registry._get_device_info",
-            return_value={
-                "device_id": "dev-1",
-                "integration_type": "zha",
-                "ieee_address": "aa:bb",
-            },
-        ):
-            result = await _get_single_device_result(
-                client, "dev-1", None, [self._zha_device()], {}
-            )
-
-        assert "warnings" not in result
-        assert result["device"]["radio_metrics"]["lqi"] == 200
+        assert warnings == [f"{field} unavailable: ws gone"]
+        assert key not in device_info
 
 
 class TestEmptyResultVersusUnaskedQuestion:
@@ -530,40 +512,6 @@ class TestReviewRoundTwoGaps:
 
         payload = json.loads(str(excinfo.value))
         assert payload["error"]["code"] == "CONNECTION_FAILED"
-
-    @pytest.mark.parametrize(
-        "integration_type, ws_type, field",
-        [
-            ("zwave_js", "zwave_js/node_status", "Z-Wave node status"),
-            ("matter", "matter/node_diagnostics", "Matter node diagnostics"),
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_zwave_and_matter_enrichers_report_skips(
-        self, integration_type: str, ws_type: str, field: str
-    ) -> None:
-        """Only the ZHA enricher was exercised in round one."""
-        from ha_mcp.tools.tools_registry import _get_single_device_result
-
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        device = {"id": "dev-1", "name": "Node", "identifiers": [], "connections": []}
-
-        with patch(
-            "ha_mcp.tools.tools_registry._get_device_info",
-            return_value={
-                "device_id": "dev-1",
-                "integration_type": integration_type,
-                "node_id": 7,
-            },
-        ):
-            result = await _get_single_device_result(
-                client, "dev-1", None, [device], {}
-            )
-
-        assert any(f"{field} unavailable" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_logger_levels_records_an_answered_rejection(self) -> None:

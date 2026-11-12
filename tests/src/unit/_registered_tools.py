@@ -58,7 +58,7 @@ def all_registered_tools() -> dict[str, Any]:
     CI, where the beta master toggle is off. Env is restored afterward.
     """
     from ha_mcp._vendor.fastmcp import FastMCP
-    from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+    from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
     from ha_mcp.tools.registry import EXPLICIT_MODULES
     from ha_mcp.utils.data_paths import get_data_dir
 
@@ -94,7 +94,7 @@ def all_registered_tools() -> dict[str, Any]:
         saved_env["HA_MCP_CONFIG_DIR"] = os.environ.get("HA_MCP_CONFIG_DIR")
         os.environ["HA_MCP_CONFIG_DIR"] = isolated_config.name
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         assert get_data_dir() == pathlib.Path(isolated_config.name), (
             "the isolation did not take: the guardrail would read persisted "
             "local state instead of an empty directory"
@@ -108,5 +108,5 @@ def all_registered_tools() -> dict[str, Any]:
             else:
                 os.environ[env_var] = prev
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         isolated_config.cleanup()

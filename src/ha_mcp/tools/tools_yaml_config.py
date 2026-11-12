@@ -61,7 +61,7 @@ _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 # wrapper. The parity invariant (keys == PACKAGES_ONLY_YAML_KEYS, and
 # every value is a real Settings field) is enforced by
 # test_yaml_dashboards.py::test_flag_map_matches_packages_only_keys.
-_YAML_PACKAGES_FLAG_BY_KEY = {
+YAML_PACKAGES_FLAG_BY_KEY = {
     "automation": "enable_yaml_packages_automation",
     "script": "enable_yaml_packages_script",
     "scene": "enable_yaml_packages_scene",
@@ -105,12 +105,12 @@ def _disabled_packages_keys(settings: Any) -> list[str]:
     irrelevant on the wire.
 
     Uses ``getattr`` without a default so a future rename that breaks the
-    ``_YAML_PACKAGES_FLAG_BY_KEY`` → ``Settings`` mapping raises loudly
+    ``YAML_PACKAGES_FLAG_BY_KEY`` → ``Settings`` mapping raises loudly
     instead of silently treating the key as disabled (a dead toggle).
     """
     return sorted(
         key
-        for key, flag in _YAML_PACKAGES_FLAG_BY_KEY.items()
+        for key, flag in YAML_PACKAGES_FLAG_BY_KEY.items()
         if not getattr(settings, flag)
     )
 

@@ -27,7 +27,7 @@ Home Assistant language code used across every corresponding file:
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
 <!-- Keep the following marker line intact; locale parity tests parse it. -->
-The current code set `az`, `cs`, `de`, `eo`, `es`, `fr`, `hu`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`, and `zh-Hant` names every file:
+The current code set `az`, `cs`, `de`, `eo`, `es`, `fr`, `hu`, `it`, `ko`, `nl`, `pl`, `ru`, `sr`, `sr-Latn`, `sv`, `tlh`, `zh-Hans`, and `zh-Hant` names every file:
 the parity test keeps this documentation aligned with the shipped catalogs.
 
 Klingon (`tlh`) is the one best-effort exception. Its catalogs may be edited
@@ -80,21 +80,21 @@ or constructed — needs no pipeline change.
   rejected when the catalog loads.
 - `messages`: interface labels, help text, notices, and runtime messages. Keys
   may be omitted — English is the per-key fallback at runtime — but see the
-  share limit below before leaving a catalog half-finished. Omitting is the
-  only way to say "not translated yet": a key that is present but blank is
-  rejected when the catalog loads, because the runtime resolves by key
-  presence, so an empty value would win over English and render as nothing.
+  share limit below before leaving a catalog half-finished. A key that is
+  present but blank is rejected when the catalog loads, because the runtime
+  resolves by key presence, so an empty value would win over English and render as nothing.
 - `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
-  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
-  here too, but dropping the key is not the escape hatch it is for `messages` —
-  the exact key set forbids that. A heading you have not translated yet keeps
-  the English tag as its value.
+  tag. Blank is rejected here too.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
-  name. The key set is not optional and exact in the same way; either field on
-  its own may be left out, but a missing one counts as untranslated against the
+  name. Either field on its own may be left out, but a missing one counts
+  as untranslated against the
   share limit below. Blank is rejected here too, for the same reason.
 
-Keep the keys and `{placeholders}` unchanged in every section.
+Keep the keys and `{placeholders}` unchanged in every section. Omitting is
+the only way to say "not translated yet": the sync fills missing keys and
+retranslates a present value only when its English changes. A new catalog
+may omit `tool_groups` or `tools`, or leave out entries it has not translated;
+the exact key sets are checked after the sync, not in PR CI.
 
 `messages` values carry two further rules, both enforced when the catalog
 loads rather than by a named test — breaking one raises a `ValueError` at
@@ -114,10 +114,6 @@ In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
 is named):
 
 - Every surface carries the same set of language codes.
-- Settings UI `messages` may omit keys because English is the per-key
-  fallback, but a locale may not carry a key absent from `en.json`: nothing
-  can render it. `tool_groups` and `tools` must instead match the renderable
-  keys exactly.
 - Every decided `Decision` outcome (all but `pending`) and every
   `PredicateOp` operator has a word in every catalog, non-blank — and in every
   catalog but `en.json` not still spelled the way the backend does
@@ -156,6 +152,8 @@ In the post-merge `locale-sync.yml` workflow only (the same files, gated behind
 `LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges without
 these, and the daily sync owes them afterwards):
 
+- Settings UI `messages` may not carry a key absent from `en.json`: nothing
+  can render it.
 - `tool_groups` and `tools` name exactly the renderable groups and tools.
   The check parses the registered tool set from source rather than trusting
   generated `tools.json`, so a broken generator cannot validate its own stale

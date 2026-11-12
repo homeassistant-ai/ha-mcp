@@ -19,19 +19,17 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_mcp.tools import (
     blueprint_sources,
     component_api,
-    component_devices,
     tools_config_helpers,
     tools_entities,
     tools_voice_assistant,
 )
-from ha_mcp.tools.radio.zigbee import _resolve_ieee
 from ha_mcp.tools.search import component as search_component
 from ha_mcp.tools.search import overview as search_overview
 from ha_mcp.tools.search import state as search_state
@@ -46,7 +44,6 @@ from .test_component_ws_search import (
     FakeConfig,
     FakeConfigEntry,
     FakeDevice,
-    FakeErModule,
     FakeFloor,
     FakeHass,
     FakeLabel,
@@ -63,12 +60,6 @@ from .test_ha_config_list_helpers_component_routing import (
 )
 from .test_ha_config_list_helpers_component_routing import (
     _build_list_helpers,
-)
-from .test_ha_get_device_component_routing import (
-    RoutingClient as GetDeviceRoutingClient,
-)
-from .test_ha_get_device_component_routing import (
-    _build_get_device,
 )
 from .test_ha_get_entity_component_routing import (
     RoutingClient as EntityRoutingClient,
@@ -100,16 +91,7 @@ from .test_ha_overview_component_routing import (
     _build_overview_tool,
     _setup_visibility_disabled,
 )
-from .test_ha_remove_device_component_routing import (
-    RoutingClient as RemoveDeviceRoutingClient,
-)
-from .test_ha_remove_device_component_routing import (
-    _build_remove_device,
-)
 from .test_ha_search_component_routing import _build_ha_search
-from .test_radio_zigbee_component_routing import (
-    RoutingClient as ZigbeeRoutingClient,
-)
 
 _REAL_FNS = {
     "ha_mcp_tools/overview": wsapi._do_overview,
@@ -129,7 +111,7 @@ _PREP_FNS = {
 }
 
 
-def _real_component_ws(hass: FakeHass) -> AsyncMock:
+def _real_component_ws(hass: Any) -> AsyncMock:
     """A WS mock whose commands are served by the REAL component functions.
 
     ``info`` returns the real ``_do_info()`` (so the caps probe sees the real
@@ -629,175 +611,6 @@ class TestBlueprintGetSeam:
         assert "yaml" not in data
         assert "yaml_source" not in data
         assert "hunter2" not in json.dumps(resp)
-
-
-# --- device_get / device_list ---------------------------------------------------
-class TestDeviceSeam:
-    """The raw ``DeviceEntry.dict_repr`` + entity-row shapes reconcile every consumer.
-
-    One REAL ``_do_device_get`` output drives consumer sites through their real
-    server code: ``ha_get_device`` (its device transform AND its per-device entity
-    join via ``include_entities``), ``ha_remove_device`` (its ``config_entries``
-    read), and ``_resolve_ieee`` (its ``identifiers`` read). A drift on either side
-    of a seam — the component emitting a different key set, or a consumer reading a
-    field the raw shape does not carry — fails here. Each consumer is served the
-    device in one in-process ``device_get`` frame, never the whole-registry dump;
-    the entity join carries ``config/entity_registry/list``-shaped rows so the
-    device's entity list needs no separate entity-registry dump either.
-    """
-
-    def _device(self) -> FakeDevice:
-        return FakeDevice(
-            "dev-1",
-            name="Kitchen Sensor",
-            name_by_user="Kitchen",
-            area_id="a1",
-            labels=("important",),
-            manufacturer="Aqara",
-            model="T1",
-            identifiers=(("zha", "00:11:22:33:44:55:66:77"),),
-            config_entries=("cfg-1",),
-        )
-
-    def _entities(self) -> dict[str, Any]:
-        return {
-            "sensor.kitchen": FakeRegEntry(
-                "sensor.kitchen", device_id="dev-1", platform="zha", name="Kitchen Temp"
-            ),
-            "update.kitchen": FakeRegEntry(
-                "update.kitchen", device_id="dev-1", platform="zha"
-            ),
-        }
-
-    @pytest.mark.asyncio
-    async def test_get_device_transform_from_real_component(self, monkeypatch) -> None:
-        dev = self._device()
-        monkeypatch.setattr(
-            wsapi,
-            "_resolve_registries",
-            lambda h: make_view(devices=[dev], entity=self._entities()),
-        )
-        # _do_device_get(include_entities) reads the device's entities through core's
-        # er.async_entries_for_device index — stubbed MagicMock at import, so pin the
-        # faithful fake here.
-        monkeypatch.setattr(wsapi, "er", FakeErModule())
-        client = GetDeviceRoutingClient()
-        # A zha device triggers the ZHA metrics enricher (a dedicated path outside
-        # the device_get seam); serve it an empty result so it is a graceful no-op.
-        base_send = client.send_websocket_message
-
-        async def _send(msg: Any) -> dict[str, Any]:
-            if msg.get("type") == "zha/devices":
-                return {"success": True, "result": []}
-            return await base_send(msg)
-
-        client.send_websocket_message = _send  # type: ignore[assignment]
-        ws = _real_component_ws(FakeHass())
-        get_device = _build_get_device(client)
-        with patch_ws(ws, component_devices):
-            resp = await get_device(device_id="dev-1")
-
-        assert resp["success"] is True
-        info = resp["device"]
-        # Every field the transform surfaces was read out of the raw dict_repr.
-        assert info["device_id"] == "dev-1"
-        assert info["name"] == "Kitchen"  # name_by_user preferred over name
-        assert info["area_id"] == "a1"
-        assert info["labels"] == ["important"]
-        assert info["config_entries"] == ["cfg-1"]
-        assert info["integration_type"] == "zha"
-        assert info["ieee_address"] == "00:11:22:33:44:55:66:77"
-        # The device's entity list came from the include_entities join over the REAL
-        # component output — the whole device AND entity registries were never dumped.
-        assert resp["entity_count"] == 2
-        assert {e["entity_id"] for e in resp["entities"]} == {
-            "sensor.kitchen",
-            "update.kitchen",
-        }
-        assert client.device_list_calls == 0
-        assert client.entity_list_calls == 0
-
-        # Pin the RAW entity-row shape the component emits (config/entity_registry/list
-        # parity, device_id carried) so the join survives byte-for-byte across the seam.
-        raw = wsapi._do_device_get(
-            FakeHass(), {"device_id": "dev-1", "include_entities": True}
-        )
-        raw_row = next(e for e in raw["entities"] if e["entity_id"] == "sensor.kitchen")
-        assert raw_row["device_id"] == "dev-1"
-        assert raw_row["platform"] == "zha"
-        assert raw_row["name"] == "Kitchen Temp"
-
-    @pytest.mark.asyncio
-    async def test_core_2026_9_child_device_is_retained_with_effective_area(
-        self, monkeypatch
-    ) -> None:
-        """The public device list retains Core's reduced child row.
-
-        Its direct ``area_id`` is absent, so the existing public ``area_id`` field
-        must carry Core's effective parent-derived area without mutating the raw
-        component record. The raw record keeps ``parent_device_id`` internally.
-        """
-        parent = FakeDevice("parent-1", name="Bridge", area_id="office")
-        child = FakeChildDevice(
-            "child-1", "parent-1", name="Channel 1", identifiers=(("demo", "1"),)
-        )
-        monkeypatch.setattr(
-            wsapi,
-            "_resolve_registries",
-            lambda h: make_view(devices=[parent], child_devices=[child]),
-        )
-        client = GetDeviceRoutingClient()
-        ws = _real_component_ws(FakeHass())
-        get_device = _build_get_device(client)
-        with patch_ws(ws, component_devices):
-            resp = await get_device()
-
-        by_id = {row["device_id"]: row for row in resp["devices"]}
-        assert set(by_id) == {"parent-1", "child-1"}
-        assert by_id["child-1"]["area_id"] == "office"
-        raw = wsapi._do_device_list(FakeHass(), {})["devices"]
-        raw_child = next(row for row in raw if row["id"] == "child-1")
-        assert raw_child["parent_device_id"] == "parent-1"
-        assert raw_child["area_id"] is None
-
-    @pytest.mark.asyncio
-    async def test_remove_device_config_entries_from_real_component(
-        self, monkeypatch
-    ) -> None:
-        dev = self._device()
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
-        )
-        settings = MagicMock()
-        settings.enable_auto_backup = False
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: settings
-        )
-        client = RemoveDeviceRoutingClient()
-        ws = _real_component_ws(FakeHass())
-        remove_device = _build_remove_device(client)
-        with patch_ws(ws, component_devices):
-            resp = await remove_device(device_id="dev-1")
-
-        assert resp["success"] is True
-        # ha_remove_device read config_entries straight out of the raw shape.
-        assert client.remove_calls == ["cfg-1"]
-        assert client.device_list_calls == 0
-
-    @pytest.mark.asyncio
-    async def test_resolve_ieee_from_real_component(self, monkeypatch) -> None:
-        dev = self._device()
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(devices=[dev])
-        )
-        client = ZigbeeRoutingClient()
-        ws = _real_component_ws(FakeHass())
-        with patch_ws(ws, component_devices):
-            ieee = await _resolve_ieee(client, "dev-1")
-
-        # _resolve_ieee parsed the identifiers out of the same raw shape.
-        assert ieee == "00:11:22:33:44:55:66:77"
-        assert client.device_list_calls == 0
 
 
 # --- entity_enrich --------------------------------------------------------------

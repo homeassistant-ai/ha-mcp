@@ -13,7 +13,7 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.config import _reset_global_settings, get_global_settings
+from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 RENAMED = "sensor.renamed_example"
@@ -55,7 +55,7 @@ async def test_alias_deletion_captures_before_remove_and_restores_exact_snapshot
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
     monkeypatch.setenv("AUTO_BACKUP_RETAIN_PER_ENTITY", "5")
     monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
-    _reset_global_settings()
+    reset_global_settings()
     manager = bm.get_backup_manager(component_core_client, get_global_settings())
     assert await async_setup_component(hass, "config", {})
 

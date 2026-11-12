@@ -1,13 +1,13 @@
 """Routing tests for ``ha_remove_device`` over the ``ha_mcp_tools`` component gate.
 
 ``ha_remove_device`` fetched the ENTIRE device registry twice for one delete — once
-in its body to read the device's ``config_entries``, and again in the
+in its body to look the device up, and again in the
 ``@with_auto_backup`` capture (``backup_manager._fetch_device``, the same pre-write
 snapshot ``ha_set_device`` also uses). Both single-device reads route through the
 component's ``device_get`` when available. These tests pin the body routing
 (component-hit, no whole-registry dump; legacy fallback on no-caps /
 ``unknown_command`` → invalidate; not-found falls back to the full list for the
-suggestion) AND the capture read routing at the ``_fetch_device`` seam.
+error's valid ids) AND the capture read routing at the ``_fetch_device`` seam.
 """
 
 from __future__ import annotations
@@ -37,20 +37,19 @@ _CAPS_DEVICES = {
 }
 
 
-def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
+def _raw_device(device_id: str) -> dict[str, Any]:
+    return {
         "id": device_id,
         "name": f"Device {device_id}",
         "name_by_user": "Orphan",
         "area_id": None,
         "labels": [],
         "config_entries": ["cfg-1"],
+        "config_entry_id": "cfg-1",
         "connections": [],
         "identifiers": [["hue", "0xAABB"]],
         "disabled_by": None,
     }
-    base.update(overrides)
-    return base
 
 
 class RoutingClient:
@@ -64,14 +63,18 @@ class RoutingClient:
         self.device_list_calls = 0
         self.remove_calls: list[str] = []
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self, msg: dict[str, Any], **_kwargs: Any
+    ) -> dict[str, Any]:
         msg_type = msg.get("type")
         if msg_type == "config/device_registry/list":
             self.device_list_calls += 1
             return {"success": True, "result": list(self._devices)}
-        if msg_type == "config/device_registry/remove_config_entry":
-            self.remove_calls.append(msg["config_entry_id"])
-            return {"success": True}
+        if msg_type == "config/device_registry/remove":
+            self.remove_calls.append(msg["device_id"])
+            return {"success": True, "result": None}
+        if msg_type == "config/device_registry/list_composite_splits":
+            return {"success": True, "result": {}}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -123,8 +126,8 @@ def _device_get_calls(ws: Any) -> list[Any]:
 # --- body routing ---------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_body_served_by_component() -> None:
-    """The body reads the device via device_get and removes its config entries;
-    the whole device registry is never dumped."""
+    """The body reads the device via device_get and removes it with Core's
+    ``remove``; the whole device registry is never dumped."""
     ws = make_ws(
         "ha_mcp_tools/device_get",
         info_result=_CAPS_DEVICES,
@@ -137,35 +140,10 @@ async def test_body_served_by_component() -> None:
         resp = await remove_device(device_id="dev-1")
 
     assert resp["success"] is True
-    assert resp["config_entries_removed"] == 1
-    assert client.remove_calls == ["cfg-1"]
+    assert resp["device_name"] == "Orphan"
+    assert client.remove_calls == ["dev-1"]
     assert client.device_list_calls == 0
     assert len(_device_get_calls(ws)) == 1
-
-
-@pytest.mark.asyncio
-async def test_child_singular_config_entry_is_used_for_removal() -> None:
-    child = _raw_device(
-        "child-1",
-        parent_device_id="parent-1",
-        config_entry_id="cfg-child",
-    )
-    child.pop("config_entries")
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": child},
-    )
-    client = RoutingClient()
-    remove_device = _build_remove_device(client)
-
-    with patch_ws(ws, component_devices):
-        resp = await remove_device(device_id="child-1")
-
-    assert resp["success"] is True
-    assert resp["config_entries_removed"] == 1
-    assert client.remove_calls == ["cfg-child"]
-    assert client.device_list_calls == 0
 
 
 @pytest.mark.asyncio
@@ -206,9 +184,9 @@ async def test_body_unknown_command_invalidates_and_falls_back() -> None:
 
 
 @pytest.mark.asyncio
-async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
+async def test_body_not_found_falls_back_to_list_for_valid_ids() -> None:
     """A component-reported missing device falls back to the LEGACY list so the
-    not-found error can suggest valid ids (device_get authoritatively said None)."""
+    not-found error can list valid ids (device_get authoritatively said None)."""
     ws = make_ws(
         "ha_mcp_tools/device_get",
         info_result=_CAPS_DEVICES,
@@ -223,7 +201,7 @@ async def test_body_not_found_falls_back_to_list_for_suggestions() -> None:
     assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
         excinfo.value
     )
-    # The legacy device list served the not-found suggestion.
+    # The legacy device list served the not-found error's valid ids.
     assert client.device_list_calls == 1
 
 

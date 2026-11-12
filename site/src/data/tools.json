@@ -1342,7 +1342,7 @@
   {
     "name": "ha_get_device",
     "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
-    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
+    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (Core's whole row, its entity rows and linked_devices):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -1357,12 +1357,12 @@
         },
         "integration": {
           "type": "str | None",
-          "description": "Filter devices by integration: 'zha', 'zigbee2mqtt', 'zwave_js', 'mqtt', 'hue', etc.",
+          "description": "Filter by the integration that owns the device (its config entry's domain), e.g. 'zha', 'zwave_js', 'mqtt', 'hue'; 'zigbee2mqtt' selects the Zigbee2MQTT devices within MQTT.",
           "default": null
         },
         "area_id": {
           "type": "str | None",
-          "description": "Filter devices by area ID (e.g., 'living_room')",
+          "description": "Filter devices by area ID (e.g., 'living_room'); matches effective_area_id, so a child device without an area of its own matches its parent's",
           "default": null
         },
         "manufacturer": {
@@ -1390,7 +1390,7 @@
         "detail_level": {
           "type": "Literal['summary', 'full']",
           "default": "summary",
-          "description": "'summary': basic device info and protocol identifiers. 'full': in list mode also include each device's entities. Single-device lookups always return full detail, including radio metrics, node status and Matter diagnostics."
+          "description": "'summary': the main fields of each device's registry row (id, names, manufacturer, model, areas, disabled_by, parent and via device) with integration and radio hints. 'full': the whole registry row with the same hints, plus the device's entity-registry rows. List mode only; a single-device lookup ignores it."
         }
       }
     },
@@ -2386,16 +2386,32 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed (for 'choose', which branch was taken), any\nerrors, and variable values during execution. Home Assistant keeps\nonly the most recent runs of each automation or script (its\nstored_traces setting), so older runs are not available. The 'state'\nfield shows 'stopped' (completed), 'running', or an error state.\n\nUSAGE MODES:\n1. List recent traces (omit run_id): returns a summary of recent runs\n   with timestamps, triggers, and status. Use `offset` to page deeper\n   when `has_more` is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n2. Get a detailed trace (provide run_id): full execution details\n   including trigger info, condition results, action trace with timing,\n   and context variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Add logbook entries and context metadata: detailed=True. Script-style\n   action paths (sequence/, numeric) are always matched regardless of\n   this flag.\n4. Variables at every step (trigger sets and null entries are still\n   omitted): deduplicate=False.",
+    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed, any errors, and variable values during\nexecution. Home Assistant keeps only the most recent runs of each\nautomation or script (its stored_traces setting), so older runs are\nnot available.\n\nDo not use this tool for general log history or recorder statistics;\nuse `ha_get_logs` for logs and `ha_get_history` for history/statistics.\n\nUSAGE MODES:\n1. List recent traces (omit run_id and context_id).\n   ha_get_automation_traces(\"automation.motion_light\")\n   ha_get_automation_traces(domain=\"automation\")\n2. Get a detailed trace (provide run_id): returns Core's extended trace\n   dict unchanged, including config, raw step trace, context, errors\n   and variables. Pass `sections` to keep only named top-level keys\n   (plus 'logbook' for the run's logbook); a requested name the run\n   lacks is reported in `warnings` and the run's own keys are listed.\n   An empty `sections` string means omitted.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n   ha_get_automation_traces(domain=\"automation\", item_id=\"uid\", run_id=\"...\")\n3. Resolve a trace by context (provide context_id): the response\n   selects Core's run for that context and reports `context_match` as\n   `trace` or `parent`. With the ha_mcp_tools component,\n   `context_other_matches` lists the other runs that matched the\n   context id (own or triggering parent); Core's own `trace/contexts`\n   keeps one run per context id. A context Core does not hold is\n   reported as not found with a hint that the component resolves\n   triggering (parent) contexts.\n   ha_get_automation_traces(context_id=\"01J...\")\n\nRESPONSE FIELDS:\n- A detail response is Core's extended `trace/get` dict: `config`,\n  `trace`, `context`, `timestamp`, `state`, `error`,\n  `script_execution`, `blueprint_inputs` and any run-specific fields.\n- `success`, `run_id`, `domain` and `item_id` identify the run.\n  `entity_id` is present when the caller supplied it; a context-only\n  lookup returns Core's `domain`/`item_id` instead of inventing one.\n- `context_match` is `trace` or `parent`; `context_scanned` reports\n  how many stored runs the ha_mcp_tools component inspected while\n  resolving the context id, and is 0 when Core's own-context map\n  answered.\n- `logbook_entries`, `logbook_transport`, `logbook_total` and\n  `logbook_truncated` describe the run's logbook rows.",
     "inputSchema": {
       "properties": {
-        "automation_id": {
-          "type": "str",
-          "description": "Automation or script entity_id (e.g., 'automation.motion_light' or 'script.morning_routine')"
+        "entity_id": {
+          "type": "str | None",
+          "description": "Automation or script entity_id. Omit when resolving a context-only lookup.",
+          "default": null
+        },
+        "domain": {
+          "type": "Literal['automation', 'script'] | None",
+          "description": "List recent traces across every automation or script when entity_id is omitted. Required with item_id.",
+          "default": null
+        },
+        "item_id": {
+          "type": "str | None",
+          "description": "Core's trace item id from a list row or context resolution. Use with domain and run_id when no entity_id is available.",
+          "default": null
         },
         "run_id": {
           "type": "str | None",
           "description": "Specific trace run_id to retrieve detailed trace.",
+          "default": null
+        },
+        "context_id": {
+          "type": "str | None",
+          "description": "Context id to resolve to its trace. Accepts the trace run's own `context.id` or, with the ha_mcp_tools component, the context id of the event or service call that triggered it. Mutually exclusive with run_id.",
           "default": null
         },
         "limit": {
@@ -2407,19 +2423,14 @@
             "le": 50
           }
         },
-        "deduplicate": {
-          "type": "bool",
-          "description": "Deduplicate variables across action steps. Set to False to record the variables at every step; steps whose variables carry 'trigger', and null-valued entries, are omitted either way.",
-          "default": true
-        },
         "detailed": {
           "type": "bool",
-          "description": "Include extra diagnostic data: logbook entries and context metadata.",
+          "description": "Include the run's logbook entries in the detail response.",
           "default": false
         },
         "sections": {
           "type": "str | None",
-          "description": "Comma-separated list of trace sections to return. Valid values: trigger, conditions, actions, config, error, logbook, context. Omit to return all sections. Example: 'actions' or 'trigger,conditions'.",
+          "description": "Comma-separated top-level keys from Core's extended trace dict to return, plus 'logbook' for the run's logbook. Available keys depend on the run; examples: 'trace', 'config', 'context', 'error', 'logbook'. A requested name this run lacks is reported in 'warnings'. Omit, or pass an empty string, to return Core's full extended dict.",
           "default": null
         },
         "offset": {
@@ -2435,10 +2446,7 @@
           "description": "Order traces are returned in. 'newest' returns most-recent first; 'oldest' returns chronological-first.",
           "default": "newest"
         }
-      },
-      "required": [
-        "automation_id"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": true,
@@ -4709,7 +4717,7 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, python_upgrade_hint, instructions."
+          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
         }
       }
     },

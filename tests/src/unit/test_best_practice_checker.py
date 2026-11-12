@@ -1696,12 +1696,10 @@ class TestTwoRouteWarningSuffix:
 
     @staticmethod
     def _first_warning(prefix=None):
-        from ha_mcp.tools.best_practice_checker import (
-            _DEFAULT_SKILL_PREFIX,
-            check_automation_config,
-        )
+        from ha_mcp.tools.best_practice_checker import check_automation_config
 
-        skill_prefix = prefix if prefix is not None else _DEFAULT_SKILL_PREFIX
+        # No prefix given: the checker's own default, as every tool call gets.
+        overrides = {} if prefix is None else {"skill_prefix": prefix}
         result = check_automation_config(
             {
                 "condition": [
@@ -1712,7 +1710,7 @@ class TestTwoRouteWarningSuffix:
                 ],
                 "action": [],
             },
-            skill_prefix=skill_prefix,
+            **overrides,
         )
         assert result, "expected at least one warning"
         return result[0]

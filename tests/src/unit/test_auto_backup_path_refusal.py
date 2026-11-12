@@ -32,8 +32,9 @@ from ha_mcp.backup_manager import (
 )
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.auto_backup import PathNotAllowedError, with_auto_backup
-from ha_mcp.tools.backup import _edits_diff, _edits_restore
 from ha_mcp.tools.backup_on_demand import capture_on_demand
+
+from ._backup_restore_helpers import backup_tool
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
 
@@ -150,12 +151,12 @@ def _capture_failure() -> MandatoryBackupError:
     ],
 )
 async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
-    action: str, err: BaseException
+    action: str, err: BaseException, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run = _edits_diff if action == "diff" else _edits_restore
+    tool = backup_tool(monkeypatch, _manager(err))
 
     with pytest.raises(ToolError) as exc:
-        await run(_manager(err), "edits", action, "file-x")
+        await tool(scope="edits", action=action, backup_name="file-x")
 
     payload = _payload(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

@@ -145,7 +145,7 @@
         "src/ha_mcp/_vendor/requirements.txt"
       ],
       "constraints": {
-        "python": ">=3.13,<3.14"
+        "python": ">=3.14,<3.15"
       },
       "postUpgradeTasks": {
         "commands": [
@@ -178,7 +178,7 @@
       ],
       "groupName": "vendored fastmcp",
       "constraints": {
-        "python": ">=3.13,<3.14"
+        "python": ">=3.14,<3.15"
       },
       "postUpgradeTasks": {
         "commands": [

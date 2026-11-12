@@ -35,8 +35,7 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-ignores:
-  - "tests/addon/test_webhook_proxy.py"
+ignores: []
 message: |
   Annotate the Core fixtures a test or fixture takes with their real types
   (`hass: HomeAssistant`, `core_client: HomeAssistantClient`,

@@ -97,7 +97,7 @@ def test_copilot_cli_docker_stdio_steps_use_the_docker_command(
     _, instructions = _stdio_output(setup_script, wizard_vars, "copilot-cli", "docker")
 
     assert "docker run --rm -i" in instructions, instructions[:600]
-    assert "uvx ha-mcp@latest" not in instructions, instructions[:600]
+    assert "ha-mcp@latest" not in instructions, instructions[:600]
 
 
 def test_docker_stdio_settings_hint_does_not_point_at_host_files(

@@ -129,13 +129,13 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
         candidate = Path(path) if path.startswith("/") else base / path
         real = candidate.resolve()
         base_real = base.resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return _UNREADABLE_BLUEPRINT
     if not (real == base_real or real.is_relative_to(base_real)):
         return _UNREADABLE_BLUEPRINT
     try:
         text = real.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return _UNREADABLE_BLUEPRINT
     try:
         # Instance form (not yaml.load) mirrors the component's existing
@@ -146,7 +146,7 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
             parsed = loader.get_single_data()
         finally:
             loader.dispose()
-    except (ValueError, yaml.YAMLError):
+    except ValueError, yaml.YAMLError:
         return _BlueprintFile(text, None)
     return _BlueprintFile(text, parsed if isinstance(parsed, dict) else None)
 
@@ -221,8 +221,8 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
         and isinstance(entry_row.get("parent_device_id"), str)
     ):
         # Additive internal transport metadata. The raw child ``dict_repr`` stays
-        # byte-identical to Core while the server can expose its existing area_id
-        # field using Core's effective placement without a whole-registry read.
+        # byte-identical to Core while the server can report Core's effective
+        # placement as effective_area_id without a whole-registry read.
         result["effective_area_id"] = _effective_device_area_id(view, entry)
     if include_entities:
         result["entities"] = _device_entities(view, device_id) if device_id else []

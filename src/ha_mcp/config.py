@@ -61,7 +61,6 @@ __all__ = [
     "Settings",
     "_coerce_advanced_override_value",
     "_read_feature_flag_override_file",
-    "_reset_global_settings",
     "_settings",
     "get_backup_setting_origin",
     "get_embedded_config_dir",
@@ -75,7 +74,7 @@ __all__ = [
 ]
 
 
-def parse_extra_yaml_write_keys(settings: "Settings") -> list[str]:
+def parse_extra_yaml_write_keys(settings: Settings) -> list[str]:
     """Parse ``extra_yaml_write_keys`` into a clean key list (#1887).
 
     Whitespace and empty entries are dropped and the result is deduplicated
@@ -124,7 +123,7 @@ def set_embedded_connection(
     server entry inside its server worker thread, before the server is
     constructed, so the loopback URL
     and admin token reach ``Settings`` in memory instead of through ``os.environ``.
-    The values survive ``_reset_global_settings()``: the settings-UI reset+rebuild
+    The values survive ``reset_global_settings()``: the settings-UI reset+rebuild
     path re-applies them on the next ``get_global_settings()`` call.
 
     Also applies to an ALREADY-BUILT singleton: importing ``ha_mcp`` runs the
@@ -205,14 +204,14 @@ def should_emit_llm_api_metadata() -> bool:
 def _reset_embedded_connection() -> None:
     """Drop the registered embedded connection (test seam).
 
-    Sibling to :func:`_reset_global_settings`; lets suites that exercise the
+    Sibling to :func:`reset_global_settings`; lets suites that exercise the
     in-process token channel isolate state between tests. Not used in production —
     the connection is registered once per worker thread and is meant to persist.
     """
     _EMBEDDED_CONNECTION.clear()
 
 
-def _apply_embedded_connection(settings: "Settings") -> None:
+def _apply_embedded_connection(settings: Settings) -> None:
     """Apply the in-process embedded HA connection (url/token/verify_ssl) if registered.
 
     No-op outside embedded mode. Plain ``setattr`` (``validate_assignment`` is off
@@ -236,7 +235,7 @@ def get_global_settings() -> Settings:
 
     Applies override files at first read so web-UI edits take effect
     on the next ``get_global_settings()`` call after
-    ``_reset_global_settings()`` is called by the POST handler:
+    ``reset_global_settings()`` is called by the POST handler:
 
     - Feature flags persisted to ``<data_dir>/feature_flags.json``
     - Auto-backup settings persisted to ``<data_dir>/backup_settings.json``
@@ -256,26 +255,16 @@ def get_global_settings() -> Settings:
 
 
 def reset_global_settings() -> None:
-    """Public seam to drop the cached settings singleton.
+    """Drop the cached settings singleton so the next read rebuilds it.
 
     The in-process (embedded) server calls this at every start: a config-entry
     reload reuses the same Python process, so without an explicit reset the
     singleton built on the FIRST start would keep serving stale feature-flag /
     override values forever (the add-on gets fresh settings for free from its
-    process restart).
-    """
-    _reset_global_settings()
-
-
-def _reset_global_settings() -> None:
-    """Drop the cached settings singleton.
-
-    Test seam so suites that mutate env vars can force a re-read
-    without reaching into module-private state. Also used by the
-    feature-flag and auto-backup settings POST handlers to publish a
-    freshly edited override file value to runtime consumers
-    (``get_global_settings`` is the only documented read path; the
-    ``@with_auto_backup`` decorator reads it per tool call).
+    process restart). The settings POST handlers call it to publish a freshly
+    edited override file value to runtime consumers (``get_global_settings`` is
+    the only documented read path; the ``@with_auto_backup`` decorator reads it
+    per tool call), and tests that mutate env vars call it to force a re-read.
     """
     global _settings
     _settings = None

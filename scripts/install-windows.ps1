@@ -86,7 +86,7 @@ $JsonConfig = @"
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"],
+      "args": ["--python", "3.14", "--refresh", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "$DemoUrl",
         "HOMEASSISTANT_TOKEN": "$DemoToken"
@@ -129,7 +129,7 @@ Write-Host ""
 Write-Host "Step 3: Pre-downloading ha-mcp..." -ForegroundColor Yellow
 Write-Host "  This speeds up Claude Desktop startup..."
 try {
-    & uvx --python 3.13 --refresh ha-mcp@latest --version 2>&1 | Out-Null
+    & uvx --python 3.14 --refresh ha-mcp@latest --version 2>&1 | Out-Null
     Write-Host "  Dependencies cached" -ForegroundColor Green
 } catch {
     Write-Host "  Pre-download skipped (will download on first use)" -ForegroundColor Yellow

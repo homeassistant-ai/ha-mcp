@@ -22,15 +22,15 @@ from typing import Any
 import pytest
 from homeassistant.core import HomeAssistant
 
-from ha_mcp.client.rest_client import (
-    _MAX_REQUEST_ATTEMPTS,
-    HomeAssistantAPIError,
-    HomeAssistantClient,
-)
+from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantClient
 
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
+
+# An outage longer than any retry budget: the gateway is still failing when
+# the client gives up.
+LONG_OUTAGE = 10
 
 
 def _backoffs(caplog: pytest.LogCaptureFixture) -> int:
@@ -64,13 +64,18 @@ async def test_raw_request_retries_transient_502_then_succeeds(
 
 @pytest.mark.asyncio
 async def test_raw_request_exhausts_retries_then_raises(
-    gateway_client: HomeAssistantClient, gateway: Gateway
+    gateway_client: HomeAssistantClient,
+    gateway: Gateway,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    gateway.outages = [503] * (_MAX_REQUEST_ATTEMPTS + 1)
+    gateway.outages = [503] * LONG_OUTAGE
     with pytest.raises(HomeAssistantAPIError) as exc:
         await gateway_client.get_states()
     assert exc.value.status_code == 503
-    assert len(gateway.requests) == _MAX_REQUEST_ATTEMPTS
+    # The retries are bounded: the client stops while the outage lasts, and
+    # backs off before every attempt but the first.
+    assert 1 < len(gateway.requests) < LONG_OUTAGE
+    assert _backoffs(caplog) == len(gateway.requests) - 1
 
 
 @pytest.mark.asyncio
@@ -139,7 +144,7 @@ async def test_no_write_is_ever_gateway_retried(
     never reached the backend. It does not: a replay can fire an event twice,
     run a script twice, or turn a completed DELETE into a misleading 404.
     """
-    gateway.outages = [status] * _MAX_REQUEST_ATTEMPTS
+    gateway.outages = [status] * LONG_OUTAGE
     with pytest.raises(HomeAssistantAPIError) as exc:
         await _WRITES[method](gateway_client)
     assert exc.value.status_code == status
@@ -159,7 +164,7 @@ async def test_the_config_flow_submit_is_not_replayed(
     specified" — a definitive-looking 4xx that hides a first attempt which may
     already have committed.
     """
-    gateway.outages = [status] * _MAX_REQUEST_ATTEMPTS
+    gateway.outages = [status] * LONG_OUTAGE
     with pytest.raises(HomeAssistantAPIError):
         await gateway_client.submit_config_flow_step("flow-1", {"host": "192.0.2.1"})
     assert len(gateway.requests) == 1

@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from .helpers import core_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ async def enrich_zha_metrics(
                 }
         else:
             warnings.append(
-                f"ZHA radio metrics unavailable: {zha_result.get('error') or 'request failed'}"
+                f"ZHA radio metrics unavailable: {core_error_message(zha_result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -41,7 +42,7 @@ async def enrich_zha_metrics(
     ) as e:
         logger.warning(
             "Could not fetch ZHA radio metrics for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"ZHA radio metrics unavailable: {e}")
@@ -72,7 +73,7 @@ async def enrich_zwave_status(
             }
         else:
             warnings.append(
-                f"Z-Wave node status unavailable: {zwave_result.get('error') or 'request failed'}"
+                f"Z-Wave node status unavailable: {core_error_message(zwave_result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -82,7 +83,7 @@ async def enrich_zwave_status(
     ) as e:
         logger.warning(
             "Could not fetch Z-Wave node status for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"Z-Wave node status unavailable: {e}")
@@ -117,7 +118,7 @@ async def enrich_matter_diagnostics(
             }
         else:
             warnings.append(
-                f"Matter node diagnostics unavailable: {result.get('error') or 'request failed'}"
+                f"Matter node diagnostics unavailable: {core_error_message(result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -127,7 +128,7 @@ async def enrich_matter_diagnostics(
     ) as e:
         logger.warning(
             "Could not fetch Matter node diagnostics for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"Matter node diagnostics unavailable: {e}")

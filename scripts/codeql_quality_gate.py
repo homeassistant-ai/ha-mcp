@@ -502,6 +502,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/clear-text-storage-sensitive-data",
+        "tests/addon/webhook_proxy/_start.py",
+        "as clear text",
+        "",
+        "Test harness writing the app options the Supervisor would write to "
+        "/data/options.json, under the test's temporary directory; the OAuth "
+        "client secrets in them are throwaway test values that start.py reads.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
         "homeassistant-addon-webhook-proxy/mcp_proxy/oauth.py",
         "as clear text",
         "",

@@ -21,6 +21,7 @@ from typing import ClassVar, get_args
 import pytest
 
 from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._locale_catalogs import catalog_messages
 from ._settings_ui_dom import (
     _TOP_LEVEL_ELEMENT_IDS,
     DEFAULT_FETCHES,
@@ -42,9 +43,9 @@ def _assert_min_dom_covers_handlers() -> None:
     maintainer would have to dig through ``result.errors`` to find the
     actual root cause.
     """
-    from ha_mcp.settings_ui import _SETTINGS_HTML
+    from ha_mcp.settings_ui import render_settings_html
 
-    script = extract_script_body(_SETTINGS_HTML)
+    script = extract_script_body(render_settings_html())
     # Top-level (not indented) getElementById(...) calls — handlers
     # bound at script load time. Indented calls are inside functions
     # and only run when those functions execute, which our tests
@@ -83,7 +84,7 @@ class TestLocalizationBehavior:
         tools: dict[str, dict[str, str]] | None = None,
         tool_groups: dict[str, str] | None = None,
     ) -> str:
-        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+        from ha_mcp.settings_ui import build_payload, serialize_payload
 
         catalog = build_payload(locale)
         if tools:
@@ -349,7 +350,7 @@ class TestTranslationHtmlSanitization:
 
     @staticmethod
     def _dom_with_catalog(messages: dict[str, str], extra_html: str = "") -> str:
-        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+        from ha_mcp.settings_ui import build_payload, serialize_payload
 
         catalog = build_payload("en")
         catalog["messages"].update(messages)
@@ -570,7 +571,7 @@ class TestVersionFooter:
         deployment_mode: str,
         translated_label: str,
     ) -> None:
-        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+        from ha_mcp.settings_ui import build_payload, serialize_payload
 
         catalog = build_payload("fr")
         catalog["messages"].update(
@@ -1216,7 +1217,7 @@ class TestPolicyTabFlow:
                 continue
             try:
                 body = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if (
@@ -1288,7 +1289,7 @@ class TestPolicyTabFlow:
                 continue
             try:
                 body = json.loads(f.get("body", ""))
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if (
@@ -2067,7 +2068,7 @@ class TestPolicyTabFlow:
 
 def _localized_policy_dom(locale: str) -> str:
     """Policy-tab DOM carrying ``locale``'s catalog as the i18n payload."""
-    from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+    from ha_mcp.settings_ui import build_payload, serialize_payload
 
     payload = serialize_payload(build_payload(locale))
     element = f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
@@ -2081,10 +2082,12 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     here as new cases instead of as untested copy.
     """
     from ha_mcp.policy.approval_queue import Decision
-    from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
-    from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
+    from ha_mcp.settings_ui import build_payload, select_locale
+    from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
-    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE} - BEST_EFFORT_LOCALES)
+    default = select_locale()
+    served = {language["code"] for language in build_payload(default)["languages"]}
+    locales = sorted(served - {default} - BEST_EFFORT_LOCALES)
     outcomes = sorted(set(get_args(Decision)) - {"pending"})
     # Both sides are discovered, so either emptying out collects zero cases
     # and the class below passes without driving the handler once.
@@ -2397,8 +2400,6 @@ class TestAlreadyDecidedCopy:
     def test_alert_shows_the_catalog_word_and_never_the_enum(
         self, settings_script: str, locale: str, outcome: str
     ) -> None:
-        from ha_mcp.settings_ui._i18n import CATALOGS
-
         fetches = {
             **DEFAULT_FETCHES,
             "/api/policy/approve": {
@@ -2419,7 +2420,7 @@ class TestAlreadyDecidedCopy:
             f"expected the single 409 alert; got {result.alerts}"
         )
         alert = result.alerts[0]
-        messages = CATALOGS[locale]["messages"]
+        messages = catalog_messages(locale)
         word = messages[f"policies.pending.decision.{outcome}"]
         # Whole sentence, not containment: the host a containment check
         # searches is that same catalog value with the word already
@@ -2492,12 +2493,10 @@ class TestDecideUnavailableCopy:
     def test_flag_known_off_shows_the_translated_off_message(
         self, settings_script: str
     ) -> None:
-        from ha_mcp.settings_ui._i18n import CATALOGS
-
         result = self._decide_under_503(settings_script, enabled=False)
         _assert_clean_init(result)
 
-        expected = CATALOGS["it"]["messages"]["policies.pending.disabled"]
+        expected = catalog_messages("it")["policies.pending.disabled"]
         assert result.alerts == [expected], (
             f"expected the Italian off-message {expected!r}; got {result.alerts}. "
             "A user who simply turned the feature off is being told to read the "
@@ -2528,8 +2527,6 @@ class TestDecideUnavailableCopy:
         server message to the branch, so it would shadow the catalog line and
         alert a bare ``HTTP 503`` in every language.
         """
-        from ha_mcp.settings_ui._i18n import CATALOGS
-
         result = self._decide_under_503(
             settings_script,
             enabled=True,
@@ -2540,7 +2537,7 @@ class TestDecideUnavailableCopy:
         )
         _assert_clean_init(result)
 
-        expected = CATALOGS["it"]["messages"]["policies.pending.unavailable"]
+        expected = catalog_messages("it")["policies.pending.unavailable"]
         assert result.alerts == [expected], (
             f"expected the Italian unavailable line {expected!r}; got "
             f"{result.alerts}. Anything else here is untranslated text — or the "
@@ -4059,12 +4056,13 @@ class TestBetaBlockRendersAtBottom:
         Asserted against the production HTML (the header lives in the
         static panel-server markup, not in any JS-rendered container).
         """
-        from ha_mcp.settings_ui import _SETTINGS_HTML
+        from ha_mcp.settings_ui import render_settings_html
 
-        assert "Beta features (dangerous)" in _SETTINGS_HTML, (
+        page = render_settings_html()
+        assert "Beta features (dangerous)" in page, (
             "beta section heading copy missing or changed in production HTML"
         )
-        assert "beta-section-title" in _SETTINGS_HTML, (
+        assert "beta-section-title" in page, (
             "beta section title class missing in production HTML"
         )
 
@@ -5407,7 +5405,7 @@ class TestReadOnlyModeToggle:
                 continue
             try:
                 body = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
             flags = body.get("flags") if isinstance(body, dict) else None
             if isinstance(flags, dict) and flags.get("read_only_mode") is True:
@@ -6544,11 +6542,12 @@ class TestGoogleFontsRemoved:
     """
 
     def test_settings_html_has_no_google_fonts_or_preconnect(self) -> None:
-        from ha_mcp.settings_ui import _SETTINGS_HTML
+        from ha_mcp.settings_ui import render_settings_html
 
-        assert "fonts.googleapis.com" not in _SETTINGS_HTML
-        assert "fonts.gstatic.com" not in _SETTINGS_HTML
-        assert "preconnect" not in _SETTINGS_HTML
+        page = render_settings_html()
+        assert "fonts.googleapis.com" not in page
+        assert "fonts.gstatic.com" not in page
+        assert "preconnect" not in page
 
 
 class TestAriaLabelledbyOnRenderedInputs:
