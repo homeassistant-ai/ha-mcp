@@ -1,5 +1,4 @@
-"""
-Update management tools for Home Assistant MCP server.
+"""Update management tools for Home Assistant MCP server.
 
 This module provides tools for listing available updates, getting release notes,
 and retrieving system version information.
@@ -29,6 +28,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .tool_hints import write_hints
+from .update_capabilities import can_install_update
 from .update_categories import categorize_update, update_platforms
 
 logger = logging.getLogger(__name__)
@@ -460,7 +460,7 @@ class UpdateTools:
                 "latest_version": attributes.get("latest_version"),
                 "release_summary": attributes.get("release_summary"),
                 "release_url": attributes.get("release_url"),
-                "can_install": not attributes.get("in_progress", False),
+                "can_install": can_install_update(attributes),
                 "in_progress": attributes.get("in_progress", False),
                 "supports_release_notes": _supports_release_notes(
                     entity_id, attributes
@@ -551,7 +551,7 @@ class UpdateTools:
             "latest_version": latest_version,
             "release_summary": attributes.get("release_summary"),
             "release_url": attributes.get("release_url"),
-            "can_install": not attributes.get("in_progress", False),
+            "can_install": can_install_update(attributes),
             "in_progress": attributes.get("in_progress", False),
             "skipped_version": attributes.get("skipped_version"),
             "auto_update": attributes.get("auto_update", False),

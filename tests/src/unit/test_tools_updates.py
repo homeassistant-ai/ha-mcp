@@ -413,12 +413,20 @@ class TestManageUpdatesDispatch:
             {
                 "entity_id": "update.addon_a",
                 "state": "on",
-                "attributes": {"title": "Add-on A", "in_progress": False},
+                "attributes": {
+                    "title": "Add-on A",
+                    "in_progress": False,
+                    "supported_features": 1,
+                },
             },
             {
                 "entity_id": "update.addon_b",
                 "state": "on",
-                "attributes": {"title": "Add-on B", "in_progress": True},
+                "attributes": {
+                    "title": "Add-on B",
+                    "in_progress": True,
+                    "supported_features": 1,
+                },
             },
         ]
         client = MagicMock()
