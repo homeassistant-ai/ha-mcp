@@ -570,44 +570,77 @@ def test_the_private_access_list_is_exactly_the_files_that_still_violate(
 # imports the style guide requires would trip it, and it takes no allowlist.
 # The vendored packages' `ha_mcp._vendor` path, the test trees' own helper
 # modules (relative or `tests.`) and dunder names stay out of it.
+_VENDORED_PATH = r"^ha_mcp\._vendor(\.[a-z][\w.]*)?$"
+_PRIVATE_SEGMENT = r"(^|\.)_[A-Za-z0-9]"
 _PRIVATE_IMPORTS = {
     "id": "no-private-imports",
     "language": "python",
     "rule": {
-        "all": [
-            {"kind": "import_from_statement"},
-            {"not": {"has": {"field": "module_name", "kind": "relative_import"}}},
-            {"not": {"regex": r"^from\s+(tests|__future__)\b"}},
+        "any": [
             {
-                "any": [
-                    # from ha_mcp.x import _name (vendored packages included:
-                    # a test reaches them the way the code uses them)
+                "all": [
+                    {"kind": "import_from_statement"},
+                    {
+                        "not": {
+                            "has": {"field": "module_name", "kind": "relative_import"}
+                        }
+                    },
+                    {"not": {"regex": r"^from\s+(tests|__future__)\b"}},
+                    {
+                        "any": [
+                            # from ha_mcp.x import _name (vendored packages
+                            # included: a test reaches them the way the code
+                            # uses them)
+                            {
+                                "has": {
+                                    "kind": "dotted_name",
+                                    "regex": "^_[A-Za-z0-9]",
+                                    "stopBy": "end",
+                                }
+                            },
+                            # from ha_mcp._internal_module import name
+                            {
+                                "all": [
+                                    {
+                                        "has": {
+                                            "field": "module_name",
+                                            "regex": _PRIVATE_SEGMENT,
+                                        }
+                                    },
+                                    {
+                                        "not": {
+                                            "has": {
+                                                "field": "module_name",
+                                                "regex": _VENDORED_PATH,
+                                            }
+                                        }
+                                    },
+                                ]
+                            },
+                        ]
+                    },
+                ]
+            },
+            # import ha_mcp._internal_module as m
+            {
+                "all": [
+                    {"kind": "import_statement"},
+                    {"not": {"regex": r"^import\s+tests\b"}},
                     {
                         "has": {
                             "kind": "dotted_name",
-                            "regex": "^_[A-Za-z0-9]",
+                            "regex": _PRIVATE_SEGMENT,
                             "stopBy": "end",
                         }
                     },
-                    # from ha_mcp._internal_module import name; `ha_mcp._vendor`
-                    # is the vendored packages' import path, not a private module
                     {
-                        "all": [
-                            {
-                                "has": {
-                                    "field": "module_name",
-                                    "regex": r"(^|\.)_[A-Za-z0-9]",
-                                }
-                            },
-                            {
-                                "not": {
-                                    "has": {
-                                        "field": "module_name",
-                                        "regex": r"^ha_mcp\._vendor(\.[a-z][\w.]*)?$",
-                                    }
-                                }
-                            },
-                        ]
+                        "not": {
+                            "has": {
+                                "kind": "dotted_name",
+                                "regex": _VENDORED_PATH,
+                                "stopBy": "end",
+                            }
+                        }
                     },
                 ]
             },
@@ -650,6 +683,15 @@ def _private_imports_rule(tmp_path: Path) -> Path:
             True,
             id="vendored-private-name",
         ),
+        pytest.param(
+            "import ha_mcp.settings_ui._handlers as h\n",
+            True,
+            id="import-private-module",
+        ),
+        pytest.param(
+            "import ha_mcp._vendor.fastmcp\n", False, id="import-vendored-path"
+        ),
+        pytest.param("import ha_mcp.config\n", False, id="import-public-module"),
         pytest.param("from ._helpers import _local\n", False, id="relative-helper"),
         pytest.param(
             "from tests.src.unit._helpers import _local\n", False, id="test-helper"

@@ -9,7 +9,6 @@ covered through both write paths in test_helper_config_fold.py.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from typing import Any
@@ -150,22 +149,22 @@ async def test_item_vanishing_before_the_update_reports_like_the_read(
     """Core's not_found on <type>/update is the same missing item the stored
     read reports as CONFIG_NOT_FOUND, so the caller sees one code for it."""
     counter_id = await _stored_counter(hass, core_client)
-    deletions: list[asyncio.Task[dict[str, Any]]] = []
+    deletions: list[dict[str, Any]] = []
+    read = update.stored_item
 
-    def delete_after_the_read(*args: Any) -> dict[str, Any]:
-        # Runs once the stored item has been read and before counter/update is
-        # sent: the deletion reaches Core first, so Core answers the update.
+    async def delete_after_the_read(*args: Any) -> dict[str, Any]:
+        # The tool has read the stored item; Core deletes it before the update
+        # is sent, so Core itself answers the update.
+        stored = await read(*args)
         deletions.append(
-            hass.async_create_task(
-                core_client.send_websocket_message(
-                    {"type": "counter/delete", "counter_id": counter_id}
-                )
+            await core_client.send_websocket_message(
+                {"type": "counter/delete", "counter_id": counter_id}
             )
         )
-        return merged_update(*args)
+        return stored
 
     with (
-        patch.object(update, "merged_update", delete_after_the_read),
+        patch.object(update, "stored_item", delete_after_the_read),
         pytest.raises(ToolError) as exc_info,
     ):
         await HelperConfigTools(core_client).ha_config_set_helper(
@@ -174,5 +173,5 @@ async def test_item_vanishing_before_the_update_reports_like_the_read(
             name="Renamed",
             wait=False,
         )
-    assert [(await task)["success"] for task in deletions] == [True]
+    assert [deleted["success"] for deleted in deletions] == [True]
     assert json.loads(str(exc_info.value))["error"]["code"] == "CONFIG_NOT_FOUND"

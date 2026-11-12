@@ -12,8 +12,10 @@ from custom_components.ha_mcp_tools.yaml_rt import make_yaml
 
 def _keeps_quotes(ry: YAML) -> bool:
     buf = StringIO()
-    ry.dump({"key": '"quoted_value"'}, buf)
-    return '"quoted_value"' in buf.getvalue()
+    # A plain string holding quote characters is quoted on dump either way; a
+    # loaded double-quoted scalar keeps its quotes only with preserve_quotes.
+    ry.dump(ry.load('key: "quoted_value"\n'), buf)
+    return 'key: "quoted_value"' in buf.getvalue()
 
 
 def test_make_yaml_singleton_in_same_thread():

@@ -56,6 +56,11 @@ async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
         {key: value for key, value in row.items() if key in COMPACT_LOGBOOK_FIELDS}
         for row in full
     ]
+    # What a debugging agent needs from each row survives the cut.
+    turned_on = [row for row in compact if row.get("entity_id") == "light.living_room"]
+    assert turned_on
+    assert turned_on[-1]["state"] == "on"
+    assert turned_on[-1]["when"]
 
 
 async def test_an_empty_logbook_compacts_to_no_entries(
