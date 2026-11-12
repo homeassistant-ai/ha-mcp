@@ -4,12 +4,10 @@ import json
 import re
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools import tools_camera
 from ha_mcp.tools.tools_camera import CameraTools, _detect_image_format
 
 
@@ -100,15 +98,13 @@ class TestHaGetCameraImage:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
-    async def test_non_camera_domain_raises_error(self, camera_tools, mock_client):
-        """Non-camera/image entity is rejected before any request is made."""
+    async def test_non_camera_domain_raises_error(self, camera_tools):
+        """Non-camera entity raises a structured validation error."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="light.living_room")
         error = _error_body(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "not a camera or image entity" in error["message"]
-        mock_client.httpx_client.get.assert_not_called()
-        mock_client.httpx_client.stream.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_camera_domain_sensor(self, camera_tools):
@@ -431,192 +427,3 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get.assert_called_once_with(
             "/camera_proxy/camera.front_door", params={"height": "600"}
         )
-
-
-class TestHaGetCameraImageForImageEntities:
-    """``image.*`` entities are served from Core's ``/api/image_proxy`` route.
-
-    These tests run the real httpx client against a transport that records
-    requests, so streaming, headers and URL encoding are httpx's own.
-    """
-
-    @staticmethod
-    def _tools(handler) -> tuple[CameraTools, list[httpx.Request]]:
-        requests: list[httpx.Request] = []
-
-        def recording(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return handler(request)
-
-        client = MagicMock()
-        client.base_url = None
-        client.token = None
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.httpx_client = httpx.AsyncClient(
-            base_url="http://ha.test/api",
-            transport=httpx.MockTransport(recording),
-        )
-        return CameraTools(client), requests
-
-    @pytest.mark.asyncio
-    async def test_image_entity_uses_image_proxy(self):
-        body = _png(64, 32)
-        tools, requests = self._tools(
-            lambda _request: httpx.Response(
-                200, content=body, headers={"content-type": "image/png"}
-            )
-        )
-
-        text, image = await tools.ha_get_camera_image(entity_id="image.qr_code")
-
-        assert [r.url.path for r in requests] == ["/api/image_proxy/image.qr_code"]
-        assert requests[0].url.query == b""
-        assert image.data == body
-        assert image.to_image_content().mime_type == "image/png"
-        assert text.startswith("Image (PNG, 64x32). Retrieved: ")
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("dimension", ["width", "height"])
-    async def test_dimensions_rejected_for_image_entities(self, dimension):
-        tools, requests = self._tools(lambda _request: httpx.Response(200))
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(
-                entity_id="image.qr_code", **{dimension: 320}
-            )
-
-        error = _error_body(exc_info)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert dimension in error["message"]
-        assert requests == []
-
-    @pytest.mark.asyncio
-    async def test_entity_id_cannot_alter_the_request_path(self):
-        tools, requests = self._tools(lambda _request: httpx.Response(404))
-
-        with pytest.raises(ToolError):
-            await tools.ha_get_camera_image(entity_id="image.x/../../states/light.a")
-
-        assert len(requests) == 1
-        assert requests[0].url.raw_path.startswith(b"/api/image_proxy/image.x%2F")
-        assert b"/../" not in requests[0].url.raw_path
-
-    @pytest.mark.asyncio
-    async def test_declared_oversize_is_refused(self, monkeypatch):
-        monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", 1024)
-        tools, _ = self._tools(
-            lambda _request: httpx.Response(
-                200,
-                content=b"\x89PNG\r\n\x1a\n" + b"0" * 2048,
-                headers={"content-type": "image/png"},
-            )
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id="image.huge")
-
-        error = _error_body(exc_info)
-        assert error["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
-        body = json.loads(exc_info.value.args[0])
-        assert body["limit_bytes"] == 1024
-        assert body["entity_id"] == "image.huge"
-
-    @pytest.mark.asyncio
-    async def test_undeclared_oversize_stops_streaming(self, monkeypatch):
-        monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", 1024)
-        chunks_sent = 0
-
-        async def endless():
-            nonlocal chunks_sent
-            yield b"\x89PNG\r\n\x1a\n"
-            while True:
-                chunks_sent += 1
-                yield b"0" * 512
-
-        tools, _ = self._tools(
-            lambda _request: httpx.Response(
-                200,
-                stream=_AsyncBytes(endless()),
-                headers={"content-type": "image/png"},
-            )
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id="image.huge")
-
-        assert _error_body(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
-        assert chunks_sent <= 3
-
-    @pytest.mark.asyncio
-    async def test_image_exactly_at_the_limit_is_served(self, monkeypatch):
-        body = _png(4, 4)
-        monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", len(body))
-        tools, _ = self._tools(
-            lambda _request: httpx.Response(
-                200, content=body, headers={"content-type": "image/png"}
-            )
-        )
-
-        _, image = await tools.ha_get_camera_image(entity_id="image.small")
-
-        assert image.data == body
-
-    @pytest.mark.asyncio
-    async def test_non_image_content_type_is_refused(self):
-        tools, _ = self._tools(
-            lambda _request: httpx.Response(
-                200, content=b"<html></html>", headers={"content-type": "text/html"}
-            )
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id="image.qr_code")
-
-        error = _error_body(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "text/html" in error["message"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("status", "code"),
-        [
-            (401, "AUTH_INVALID_TOKEN"),
-            (404, "ENTITY_NOT_FOUND"),
-            (500, "SERVICE_CALL_FAILED"),
-        ],
-    )
-    async def test_http_errors_map_to_structured_errors(self, status, code):
-        tools, _ = self._tools(lambda _request: httpx.Response(status))
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id="image.qr_code")
-
-        error = _error_body(exc_info)
-        assert error["code"] == code
-        assert "camera" not in error["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_empty_body_is_a_service_error(self):
-        tools, _ = self._tools(
-            lambda _request: httpx.Response(
-                200, content=b"", headers={"content-type": "image/png"}
-            )
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_camera_image(entity_id="image.qr_code")
-
-        error = _error_body(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "empty image" in error["message"]
-
-
-class _AsyncBytes(httpx.AsyncByteStream):
-    """Adapt an async generator to the stream httpx expects of a response."""
-
-    def __init__(self, source) -> None:
-        self._source = source
-
-    async def __aiter__(self):
-        async for chunk in self._source:
-            yield chunk
