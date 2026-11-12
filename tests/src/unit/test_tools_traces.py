@@ -13,12 +13,13 @@ from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
-from freezegun.api import FrozenDateTimeFactory
+from freezegun import freeze_time
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.trace import async_store_trace
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant.typing import WebSocketGenerator
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -51,6 +52,20 @@ def _run(run_id: str, *, not_triggered: bool = False) -> AutomationTrace:
     trace.set_trigger_description("state change")
     trace.finished()
     return trace
+
+
+def _runs_a_minute_apart(*runs: tuple[str, bool]) -> list[AutomationTrace]:
+    """Runs whose start timestamps are a minute apart, oldest first.
+
+    Only their creation is frozen: the event loop reads the same clock, and the
+    client's connection waits never wake while it stands still.
+    """
+    built = []
+    with freeze_time(dt_util.utcnow() - timedelta(hours=1)) as clock:
+        for run_id, not_triggered in runs:
+            built.append(_run(run_id, not_triggered=not_triggered))
+            clock.tick(timedelta(minutes=1))
+    return built
 
 
 async def _store(hass: HomeAssistant, *traces: AutomationTrace) -> None:
@@ -127,7 +142,6 @@ class TestFormatTraceList:
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
-        freezer: FrozenDateTimeFactory,
         limit: int,
         offset: int,
         order: Literal["newest", "oldest"],
@@ -136,15 +150,13 @@ class TestFormatTraceList:
     ) -> None:
         """limit/offset/order select one window of Core's sorted rows.
 
-        The clock moves a minute between runs, so Core's own start timestamps
-        order them ``run_0``..``run_4`` regardless of the order ``trace/list``
+        The runs start a minute apart, so Core's own start timestamps order
+        them ``run_0``..``run_4`` regardless of the order ``trace/list``
         returns.
         """
-        traces = []
-        for i in range(5):
-            traces.append(_run(f"run_{i}"))
-            freezer.tick(timedelta(minutes=1))
-        await _store(hass, *traces)
+        await _store(
+            hass, *_runs_a_minute_apart(*((f"run_{i}", False) for i in range(5)))
+        )
 
         result = await TraceTools(core_client).ha_get_automation_traces(
             domain="automation",
@@ -181,18 +193,16 @@ class TestFormatTraceList:
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
-        freezer: FrozenDateTimeFactory,
     ) -> None:
         """Run and not-triggered traces page in Core's timestamp order."""
-        traces = []
-        for run_id, not_triggered in (
-            ("run_oldest", False),
-            ("not_triggered_middle", True),
-            ("run_newest", False),
-        ):
-            traces.append(_run(run_id, not_triggered=not_triggered))
-            freezer.tick(timedelta(minutes=1))
-        await _store(hass, *traces)
+        await _store(
+            hass,
+            *_runs_a_minute_apart(
+                ("run_oldest", False),
+                ("not_triggered_middle", True),
+                ("run_newest", False),
+            ),
+        )
 
         tools = TraceTools(core_client)
         newest = await tools.ha_get_automation_traces(
