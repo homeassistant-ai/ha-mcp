@@ -394,19 +394,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "for CodeQL's heuristic to have correctly caught. mypy already "
         "confirms this file is clean under that typing.",
     ),
-    # Pinned to the one def line by its code substring, so a genuinely
-    # mixed-returns function elsewhere in tools_entities.py still fails.
-    (
-        "py/mixed-returns",
-        "src/ha_mcp/tools/tools_entities.py",
-        "Mixing implicit and explicit returns",
-        "def _parse_set_entity_ids(",
-        "False positive: every branch of _parse_set_entity_ids returns or goes "
-        "through raise_tool_error, typed '-> NoReturn' (see helpers.py). CodeQL "
-        "loses that once a test calls ha_set_entity directly on the real "
-        "client (test_registry_name_clearing.py); mypy confirms the function "
-        "has no implicit None return.",
-    ),
     # ---- Security-suite entries (the workflow also gates the default
     # <language>-code-scanning suites; see codeql-quality.yml header). Entries
     # whose message substring is generic ("as clear text", "hashing algorithm")
