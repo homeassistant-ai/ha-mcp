@@ -578,9 +578,9 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
             except asyncio.CancelledError:
                 continue  # Repeated cancellation must not release the lock early.
             except Exception:  # noqa: BLE001
-                break  # Consume the worker failure below; preserve cancellation.
-        if not worker.cancelled():
-            worker.exception()
+                break  # Log the worker failure below; preserve cancellation.
+        if not worker.cancelled() and (err := worker.exception()) is not None:
+            logger.warning("Backup I/O failed after cancellation", exc_info=err)
         raise
 
 

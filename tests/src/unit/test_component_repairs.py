@@ -349,8 +349,9 @@ def test_token_repair_catalog_explains_every_refusal(catalog_path: str) -> None:
         assert step["error"][reason]
 
 
-# --- server_package_install_failed (#2427): reinstall the server and its ------
-# dependencies, the only fix for a dependency another integration downgraded
+# --- server_package_install_failed (#2427) -------------------------------------
+# Reinstall the server and its dependencies, the only fix for a dependency
+# another integration downgraded.
 
 
 @pytest.fixture

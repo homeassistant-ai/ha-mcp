@@ -46,12 +46,15 @@ async def emit_approval_result_as(
     from ..client.rest_client import HomeAssistantClient
     from .events import emit_approval_result
 
-    # Credentials read the way ``approval_ws_client`` reads them,
-    # and for the same reason: this runs in a bus handler, not in a
-    # request, so in OAuth mode ``server.client`` resolves to nobody
-    # and the proxy raises rather than handing back a usable client.
-    # A fresh REST client over the snapshot keeps the result going
-    # out as the same identity the request was announced with.
+    # Credentials come from ``server.client`` for the same reason as in
+    # ``approval_ws_client``: in OAuth mode it is a proxy to the current
+    # request's client. This runs in a bus handler, not in a request,
+    # so the proxy resolves to nobody and raises rather than handing
+    # back a usable client. Unlike there, that failure is caught and
+    # logged on purpose: the decision is already applied, and only its
+    # result event is lost. A fresh REST client over the snapshot keeps
+    # the result going out as the same identity the request was
+    # announced with.
     client = server.client
     url: str | None
     token_value: str | None

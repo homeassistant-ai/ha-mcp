@@ -14,6 +14,7 @@ installed.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -22,6 +23,8 @@ from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
 from .hacs_backend import StoreApi, is_owned_directory_refusal
 from .helpers import raise_tool_error
+
+logger = logging.getLogger(__name__)
 
 MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
 MIRROR_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
@@ -72,6 +75,7 @@ async def installed_own_records(
     try:
         response = await ws_client.send_command(api.command("list"))
     except HomeAssistantCommandError, HomeAssistantCommandTimeout:
+        logger.debug("Could not list the store's repositories", exc_info=True)
         return None
     listed = response.get("result") if isinstance(response, dict) else None
     repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]

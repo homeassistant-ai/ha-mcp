@@ -428,7 +428,7 @@ async def test_refresh_timeout_explains_the_possible_wakeup_queue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real bridge wraps the command deadline in a connection error."""
-    # The server's own command deadline, cut so the test does not wait 30 s.
+    # ha-mcp's WebSocket command deadline, cut so the test does not wait 30 s.
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 0.2)
 
     with patch.object(socket, "send_command", wraps=socket.send_command) as spy:

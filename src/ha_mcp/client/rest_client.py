@@ -797,7 +797,7 @@ class HomeAssistantClient:
             return {"changed_states": [], "service_response": result.get("response")}
         return []
 
-    async def get_services(self) -> dict[str, Any]:
+    async def get_services(self) -> list[dict[str, Any]]:
         """Get all available services."""
         logger.debug("Fetching available services")
         return await self._request("GET", "/services")

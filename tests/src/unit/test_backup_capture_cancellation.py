@@ -82,6 +82,7 @@ async def test_cancelled_capture_waits_for_writer_before_next_safety_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     loop_errors: list[dict[str, Any]],
+    caplog: pytest.LogCaptureFixture,
     worker_fails: bool,
 ) -> None:
     manager = bm.get_backup_manager(
@@ -139,3 +140,11 @@ async def test_cancelled_capture_waits_for_writer_before_next_safety_capture(
     # An unretrieved worker failure is reported when its future is collected.
     gc.collect()
     assert loop_errors == []
+    if worker_fails:
+        assert any(
+            r.name == bm.__name__
+            and r.levelname == "WARNING"
+            and r.exc_info is not None
+            and isinstance(r.exc_info[1], OSError)
+            for r in caplog.records
+        ), caplog.text

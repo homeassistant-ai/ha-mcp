@@ -236,7 +236,8 @@ async def test_a_disabled_hacs_is_unknown_not_clean(
     _file_issue(hass)
     entry = store_entry(hass, "hacs", ConfigEntryState.LOADED)
     hacs = await build_manager(hass, hass_storage, entry, restore=False)
-    # HACS names its own reason (a failed restore); only "disabled" is read.
+    # Real HACS uses its own restore reason, which Core's enum lacks; any
+    # reason sets ``system.disabled``, the only field the check reads.
     hacs.system.disabled_reason = DisabledReason.RATE_LIMIT
     hass.data["hacs"] = hacs
 

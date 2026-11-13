@@ -230,7 +230,7 @@ async def collect_known_identifiers(
     """
     hosts: set[str] = set()
     addresses: set[str] = set()
-    _add_url_host(getattr(client, "base_url", None), hosts, addresses)
+    _add_url_host(client.base_url, hosts, addresses)
 
     def _urls(urls: Any) -> None:
         for key in ("internal", "external", "cloud"):

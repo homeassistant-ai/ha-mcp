@@ -29,7 +29,7 @@ def error_of(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     return error
 
 
-# What Core reloads after each write: the views keep these two files.
+# configuration.yaml includes the two files Core's config views write and reload.
 _CONFIGURATION = {
     "configuration.yaml": (
         "automation: !include automations.yaml\nscript: !include scripts.yaml\n"
