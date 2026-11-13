@@ -104,10 +104,12 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
-from .backup_label_category import fetch_category as _fetch_category
-from .backup_label_category import fetch_label as _fetch_label
-from .backup_label_category import restore_category as _restore_category
-from .backup_label_category import restore_label as _restore_label
+from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
+from .backup_registry_items import fetch_category as _fetch_category
+from .backup_registry_items import fetch_label as _fetch_label
+from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
+from .backup_registry_items import restore_category as _restore_category
+from .backup_registry_items import restore_label as _restore_label
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -2259,58 +2261,6 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
         service_data["entities"] = config["entities"]
     group_set = {"type": "call_service", "domain": "group", "service": "set"}
     return await _ws_send(client, {**group_set, "service_data": service_data})
-
-
-# Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
-
-
-async def _fetch_area_or_floor(client: Any, entity_id: str) -> Any:
-    kind, _, real_id = entity_id.partition(":")
-    if not real_id:
-        return None
-    # Same component-first routing as ``_fetch_label`` / ``_fetch_category``.
-    from .tools.component_registries import fetch_registries_via_component
-
-    if kind == "area":
-        component_result = await fetch_registries_via_component(client, ["area"])
-        if component_result is not None:
-            items = component_result.get("areas") or []
-        else:
-            items = _require_list(
-                await _ws_send(client, {"type": "config/area_registry/list"}),
-                "config/area_registry/list",
-            )
-        for item in items:
-            if item.get("area_id") == real_id:
-                return {"kind": "area", **item}
-    elif kind == "floor":
-        component_result = await fetch_registries_via_component(client, ["floor"])
-        if component_result is not None:
-            items = component_result.get("floors") or []
-        else:
-            items = _require_list(
-                await _ws_send(client, {"type": "config/floor_registry/list"}),
-                "config/floor_registry/list",
-            )
-        for item in items:
-            if item.get("floor_id") == real_id:
-                return {"kind": "floor", **item}
-    return None
-
-
-async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any:
-    kind, _, real_id = entity_id.partition(":")
-    payload = _strip_readonly(config, "kind", "area_id", "floor_id")
-    if kind == "area":
-        payload["type"] = "config/area_registry/update"
-        payload["area_id"] = real_id
-    elif kind == "floor":
-        payload["type"] = "config/floor_registry/update"
-        payload["floor_id"] = real_id
-    else:
-        raise ValueError(f"Unknown area/floor kind: {kind!r}")
-    async with registry_update_lock(kind, real_id):
-        return await _ws_send(client, payload)
 
 
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates

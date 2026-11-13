@@ -579,12 +579,13 @@ async def _edits_diff(
     if diff.get("entity_missing"):
         # ``restore_snapshot`` outcome on a missing entity is
         # domain-dependent: upsert paths (automation, script,
-        # dashboard, label, category) recreate it, but helper
-        # restores go through ``<domain>/update`` WS commands
+        # dashboard, label, category, area, floor) recreate it, but
+        # helper restores go through ``<domain>/update`` WS commands
         # that expect the entity to exist and would surface a
-        # WS error if it does not. A recreated category gets a
-        # new id, so its snapshot keeps reporting the entity
-        # missing. Hedge rather than promise one specific outcome.
+        # WS error if it does not. A recreated item can get a new
+        # id (a category always, a renamed label, area or floor), so
+        # its snapshot keeps reporting the entity missing. Hedge
+        # rather than promise one specific outcome.
         warnings.append(
             "Entity is missing from HA; restore behaviour is "
             "domain-dependent (upsert paths recreate it; "
