@@ -170,11 +170,6 @@ class TestATokenOnTheWrongSource:
         assert gatewayd.requests == []
 
 
-def warnings_of(out: dict[str, Any]) -> list[str]:
-    warnings: list[str] = out.get("warnings", [])
-    return warnings
-
-
 @pytest.fixture
 def error_log_file(hass: HomeAssistant, tmp_path: Path) -> None:
     """Name the file Core serves at /api/error_log, as its logging setup does.
@@ -194,7 +189,7 @@ class TestIgnoredParameterOnCore:
         self, error_log_file: None, core_client: HomeAssistantClient
     ):
         out = await ask(core_client, source="error_log", slug=None, hours_back=3)
-        assert any("'hours_back' only applies" in w for w in warnings_of(out))
+        assert any("'hours_back' only applies" in w for w in out.get("warnings", []))
 
 
 @pytest.mark.usefixtures("clock")
@@ -211,7 +206,7 @@ class TestIgnoredParameterWarning:
     ):
         gatewayd.load(per_minute(10))
         out = await ask(in_app_client, source=source, slug=slug, hours_back=3)
-        assert not any("hours_back" in w for w in warnings_of(out))
+        assert not any("hours_back" in w for w in out.get("warnings", []))
 
     @pytest.mark.parametrize(("hours_back", "search"), [(None, None), (2, "needle")])
     async def test_offset_where_the_journal_cannot_page_is_flagged(
@@ -229,7 +224,7 @@ class TestIgnoredParameterWarning:
             offset=50,
             limit=50,
         )
-        assert any("'offset'" in w for w in warnings_of(out))
+        assert any("'offset'" in w for w in out.get("warnings", []))
 
     async def test_an_integer_offset_on_a_page_read_is_not_flagged(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
@@ -243,7 +238,7 @@ class TestIgnoredParameterWarning:
             offset=50,
             limit=50,
         )
-        assert not any("offset" in w for w in warnings_of(out))
+        assert not any("offset" in w for w in out.get("warnings", []))
 
     async def test_a_token_with_a_search_is_flagged(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
@@ -258,4 +253,4 @@ class TestIgnoredParameterWarning:
             limit=500,
             offset=first["next_offset"],
         )
-        assert any("'offset'" in w for w in warnings_of(out))
+        assert any("'offset'" in w for w in out.get("warnings", []))
