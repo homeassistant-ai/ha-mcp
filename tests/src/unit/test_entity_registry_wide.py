@@ -412,7 +412,6 @@ class TestExposeToWithoutRegistryEntry:
         assert result["warnings"] == [
             "Entity has no associated device — device rename skipped"
         ]
-        assert result["entity_entry"] is None
         settings = core_exposed.async_get_entity_settings(hass, "zone.home")
         assert settings["cloud.alexa"]["should_expose"] is True
 

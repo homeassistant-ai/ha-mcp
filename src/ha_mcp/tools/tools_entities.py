@@ -566,7 +566,7 @@ class EntityTools:
         """Rename the associated device. Returns (device_rename_result, entity_entry).
 
         ``new_device_name`` is already normalized: None means no rename.
-        ``entity_entry`` is None for an entity without a registry entry.
+        The returned ``entity_entry`` is None for an entity without a registry entry.
         """
         if new_device_name is None:
             return None, entity_entry

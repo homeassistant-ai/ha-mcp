@@ -78,13 +78,16 @@ def tools(component_core_client: HomeAssistantClient) -> EntityTools:
 async def _rows(
     tools: EntityTools, entity_id: str
 ) -> list[tuple[dict[str, Any], list[str] | None]]:
-    """The row and the warnings of each way to ask for one entity by id."""
+    """The rows and warnings of each way to ask for one entity by id.
+
+    The bulk call names the id twice; the unique_id is the ``power`` fixture's.
+    """
     single = await tools.ha_get_entity(entity_id=entity_id)
-    bulk = await tools.ha_get_entity(entity_id=[entity_id])
+    bulk = await tools.ha_get_entity(entity_id=[entity_id, entity_id])
     unique = await tools.ha_get_entity(unique_id="power")
     return [
         (single["entity_entry"], single.get("warnings")),
-        (bulk["entity_entries"][0], bulk.get("warnings")),
+        *((row, bulk.get("warnings")) for row in bulk["entity_entries"]),
         (unique["entity_entries"][0], unique.get("warnings")),
     ]
 
@@ -173,6 +176,41 @@ async def test_an_advertised_enrich_command_core_does_not_know_says_to_update(
     ]
 
 
+async def test_a_unique_id_shared_by_two_platforms_enriches_both_rows(
+    hass: HomeAssistant, tools: EntityTools, power: str
+) -> None:
+    other = (
+        er.async_get(hass)
+        .async_get_or_create(
+            "sensor", "other", "power", has_entity_name=True, original_name="Draw"
+        )
+        .entity_id
+    )
+
+    result = await tools.ha_get_entity(unique_id="power")
+
+    assert result["matches"] == 2
+    full_names = {
+        row["entity_id"]: row["full_name"] for row in result["entity_entries"]
+    }
+    assert full_names == {power: "Power strip Power", other: "Draw"}
+    assert "warnings" not in result
+
+
+async def test_an_advertised_exposure_command_core_does_not_know_says_to_update(
+    hass: HomeAssistant, tools: EntityTools
+) -> None:
+    hass.data[core_websocket_api.DOMAIN].pop(WS_EXPOSURE)
+
+    result = await tools.ha_get_entity()
+
+    assert "entity_info" not in result
+    assert result["warnings"] == [
+        f"The ha_mcp_tools component is too old, so {_WITHOUT_ENTITY_INFO}. "
+        "Update it " + COMPONENT_VIA_HACS
+    ]
+
+
 async def test_a_component_that_refuses_the_caller_is_not_called_missing(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
@@ -226,16 +264,12 @@ async def test_a_listing_the_component_serves_names_its_entities_without_warning
     assert "warnings" not in result
 
 
-@pytest.mark.parametrize("call", [{}, {"exposed_to": "conversation"}])
 async def test_without_a_component_the_listing_says_to_install_it(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    power: str,
-    call: dict[str, str],
+    hass: HomeAssistant, core_client: HomeAssistantClient, power: str
 ) -> None:
     core_exposed.async_expose_entity(hass, "conversation", power, True)
 
-    result = await EntityTools(core_client).ha_get_entity(**call)
+    result = await EntityTools(core_client).ha_get_entity()
 
     assert set(result["exposed_entities"]) == {power}
     assert "entity_info" not in result

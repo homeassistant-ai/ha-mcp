@@ -97,25 +97,19 @@ async def read_exposure(
     ``expose_entity/list`` plus an ``entity_info`` enrichment (names/areas), so
     a caller needs no second ha_search to name an exposed entity. Otherwise
     reads Core's list, with no ``entity_info``, and the warning says why: no
-    component answered (install it), it predates the command (update it), or
-    it could not be asked (``_fetch_exposure_via_component``).
+    component answered (install it), it is too old for the command (update
+    it), or the probe could not be asked.
     """
     # Strict, so a refused or failed probe is not taken for no component.
-    warning: str | None
     try:
         caps = await get_component_caps(client, strict=True)
     except ComponentDiscoveryError as exc:
-        component = None
         warning = component_unasked_warning(exc, _WITHOUT_ENTITY_INFO)
     else:
         component = await _fetch_exposure_via_component(client)
-        warning = (
-            None
-            if component is not None
-            else component_unusable_warning(caps, _WITHOUT_ENTITY_INFO)
-        )
-    if component is not None:
-        return component["exposed_entities"], component["entity_info"], None
+        if component is not None:
+            return component["exposed_entities"], component["entity_info"], None
+        warning = component_unusable_warning(caps, _WITHOUT_ENTITY_INFO)
     result = await client.send_websocket_message(
         {"type": "homeassistant/expose_entity/list"}
     )
