@@ -186,6 +186,7 @@ async def test_one_unanswered_chunk_keeps_the_other_chunks_aliases(
     target = entity_ids[0]
     held = asyncio.Event()
     release = asyncio.Event()
+    answered = asyncio.Event()
     core_handler, schema = hass.data[websocket_api.DOMAIN][GET_ENTRIES]
 
     async def hold_one_other_chunk(
@@ -196,7 +197,10 @@ async def test_one_unanswered_chunk_keeps_the_other_chunks_aliases(
         if target not in msg["entity_ids"] and not held.is_set():
             held.set()
             await release.wait()
-        core_handler(core, connection, msg)
+            core_handler(core, connection, msg)
+            answered.set()
+        else:
+            core_handler(core, connection, msg)
 
     websocket_api.async_register_command(
         hass, GET_ENTRIES, websocket_api.async_response(hold_one_other_chunk), schema
@@ -208,7 +212,13 @@ async def test_one_unanswered_chunk_keeps_the_other_chunks_aliases(
     try:
         result = await _search(core_client, "nickname0000")
     finally:
+        # Answer the held request while the client's socket is still open.
         release.set()
+        if held.is_set():
+            async with asyncio.timeout(5):
+                await answered.wait()
+            # Core writes replies in order: the pong means the held reply is out.
+            await core_client.send_websocket_message({"type": "ping"})
 
     assert held.is_set()
     top = result["matches"][0]

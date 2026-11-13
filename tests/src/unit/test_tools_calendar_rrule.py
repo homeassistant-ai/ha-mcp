@@ -64,7 +64,7 @@ async def writable(
 
 def _created(create: MagicMock | AsyncMock) -> list[dict[str, Any]]:
     """The event fields of each create Core handed the calendar."""
-    return [call.kwargs for call in create.await_args_list]
+    return [dict(call.kwargs) for call in create.await_args_list]
 
 
 def _spy(

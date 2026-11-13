@@ -19,7 +19,6 @@ from homeassistant.components.calendar.const import DATA_COMPONENT
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
-from httpx2 import Response
 from pytest_homeassistant.common import MockConfigEntry, get_test_config_dir
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
@@ -64,7 +63,7 @@ async def remote_calendar(hass: HomeAssistant, name: str, ics: str) -> CalendarE
     """Core's Remote Calendar ``name``, read once from a URL serving ``ics``."""
     url = f"https://calendar.example/{slugify(name)}.ics"
     with respx.mock:
-        respx.get(url).mock(return_value=Response(200, text=ics))
+        respx.get(url).respond(200, text=ics)
         return await _set_up_calendar(
             hass, "remote_calendar", name, url=url, verify_ssl=True
         )

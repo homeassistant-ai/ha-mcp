@@ -285,6 +285,7 @@ async def test_timed_out_and_failed_configs_of_one_type_are_reported_apart(
     await _yaml_scripts(hass, 2)
     held = asyncio.Event()
     release = asyncio.Event()
+    answered = asyncio.Event()
     core_handler, schema = hass.data[websocket_api.DOMAIN][REGISTRY_GET]
 
     async def hold_s0_lookup(
@@ -295,7 +296,10 @@ async def test_timed_out_and_failed_configs_of_one_type_are_reported_apart(
         if msg["entity_id"] == "script.s0":
             held.set()
             await release.wait()
-        core_handler(core, connection, msg)
+            core_handler(core, connection, msg)
+            answered.set()
+        else:
+            core_handler(core, connection, msg)
 
     websocket_api.async_register_command(
         hass, REGISTRY_GET, websocket_api.async_response(hold_s0_lookup), schema
@@ -307,7 +311,13 @@ async def test_timed_out_and_failed_configs_of_one_type_are_reported_apart(
     try:
         reason = await _reason(search, "script")
     finally:
+        # Answer the held lookup while the client's socket is still open.
         release.set()
+        if held.is_set():
+            async with asyncio.timeout(5):
+                await answered.wait()
+            # Core writes replies in order: the pong means the held reply is out.
+            await core_client.send_websocket_message({"type": "ping"})
 
     assert held.is_set()
     timed_out = _fragment(reason, "1 script(s) not scanned (per-id fetch timed out")
