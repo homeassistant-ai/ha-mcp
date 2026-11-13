@@ -85,9 +85,9 @@ a timeout or a malformed result) is treated as a missing component. The tool
 takes the route it takes without the component, and gives the same warning to
 install or update it where that route returns less. Do not add a separate
 error, code path or test for a failing read. A fallback that already exists
-stays; do not remove it. The logbook read is the one exception: its bridge
-errors and timeouts surface instead of falling back, and a timed-out read is
-not run again as a second recorder query.
+stays; do not remove it. The logbook read is the one exception: apart from
+`unknown_command`, its bridge errors and timeouts surface instead of falling
+back, and a timed-out read is not run again as a second recorder query.
 
 This covers reads only. What a write does when its bridge command fails is
 that tool's own rule, because a write that may have run cannot simply be
