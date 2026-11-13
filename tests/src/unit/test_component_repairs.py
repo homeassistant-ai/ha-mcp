@@ -10,6 +10,7 @@ process is replaced, through Core's ``async_set_stop_handler``.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.ha_mcp_tools.const import (
     DATA_ADMIN_TOKEN,
@@ -46,7 +48,11 @@ from custom_components.ha_mcp_tools.store_records import (
     MIRROR_REPOSITORY,
 )
 
-from ._marketplace_records import loaded_marketplace, stored_record
+from ._marketplace_records import (
+    loaded_marketplace,
+    stored_record,
+    unload_marketplace,
+)
 from ._server_entry import add_server_entry, replace_server, set_up
 
 CATALOGS = [
@@ -460,6 +466,13 @@ def test_package_repair_catalog_has_its_fix_flow(catalog_path: str) -> None:
 # --- Two store listings claim the integration (#2993) -------------------------
 
 
+@pytest.fixture
+async def unloads_marketplace(hass: HomeAssistant) -> AsyncIterator[None]:
+    """Unload the Marketplace the test loads once the test is done."""
+    yield
+    await unload_marketplace(hass)
+
+
 async def test_store_repair_waits_when_no_store_is_loaded(
     hass: HomeAssistant,
     flows: RepairsFlowManager,
@@ -473,15 +486,19 @@ async def test_store_repair_waits_when_no_store_is_loaded(
     assert _issue(issue_registry, ISSUE_STORE_RECORDS_CONFLICT) is not None
 
 
+@pytest.mark.usefixtures("unloads_marketplace")
 async def test_store_repair_clears_a_stale_card_when_the_store_reads_clean(
     hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
     flows: RepairsFlowManager,
     issue_registry: ir.IssueRegistry,
 ) -> None:
     """A fix made by hand, or a store that loaded after the retries stopped:
     opening the card is what removes it."""
-    await loaded_marketplace(hass, hass_storage, main=True, mirror=False)
+    await loaded_marketplace(
+        hass, aioclient_mock, hass_storage, main=True, mirror=False
+    )
 
     result = await _open(flows, hass, ISSUE_STORE_RECORDS_CONFLICT)
 
@@ -489,10 +506,14 @@ async def test_store_repair_clears_a_stale_card_when_the_store_reads_clean(
     assert _issue(issue_registry, ISSUE_STORE_RECORDS_CONFLICT) is None
 
 
+@pytest.mark.usefixtures("unloads_marketplace")
 async def test_store_repair_names_both_listings_then_keeps_the_main_one(
-    hass: HomeAssistant, hass_storage: dict[str, Any], flows: RepairsFlowManager
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+    flows: RepairsFlowManager,
 ) -> None:
-    await loaded_marketplace(hass, hass_storage, main=True, mirror=True)
+    await loaded_marketplace(hass, aioclient_mock, hass_storage, main=True, mirror=True)
 
     shown = await _open(flows, hass, ISSUE_STORE_RECORDS_CONFLICT)
     assert shown["type"] == "form" and shown["step_id"] == "confirm"

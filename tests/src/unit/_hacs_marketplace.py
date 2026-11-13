@@ -35,6 +35,7 @@ MIRROR = "homeassistant-ai/ha-mcp-integration"
 MAIN_ID = "1056618941"
 MIRROR_ID = "1289599380"
 CARD_ID = "441028036"
+REPOSITORIES_KEY = "marketplace.repositories"
 
 # Core still starts the catalog fetch at startup (it fails offline); a stored
 # fetch time keeps a later catalog answer from taking the stored record over.
@@ -72,21 +73,17 @@ def _install_path(config_dir: Path, record: dict[str, Any]) -> Path | None:
     return None
 
 
-async def set_up_marketplace(
+def add_marketplace(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
     repositories: dict[str, dict[str, Any]],
 ) -> MockConfigEntry:
-    """Core's Marketplace, loaded with ``repositories``, GitHub unreachable."""
+    """Core's Marketplace entry with ``repositories`` stored, not set up yet."""
     offline = aiohttp.ClientConnectionError("GitHub is not reachable in a unit test")
     for method in ("get", "post", "put", "patch", "delete"):
         getattr(aioclient_mock, method)(re.compile(".*"), exc=offline)
-    hass_storage["marketplace.repositories"] = {
-        "version": 1,
-        "key": "marketplace.repositories",
-        "data": repositories,
-    }
+    store_repositories(hass_storage, repositories)
     config_dir = Path(hass.config.config_dir)
     for record in repositories.values():
         if (path := _install_path(config_dir, record)) is not None:
@@ -95,6 +92,28 @@ async def set_up_marketplace(
     mock_integration(hass, MockModule("frontend"))
     entry = MockConfigEntry(domain="marketplace", data={})
     entry.add_to_hass(hass)
+    return entry
+
+
+def store_repositories(
+    hass_storage: dict[str, Any], repositories: dict[str, dict[str, Any]]
+) -> None:
+    """Put ``repositories`` in Core's storage, where the Marketplace reads them."""
+    hass_storage[REPOSITORIES_KEY] = {
+        "version": 1,
+        "key": REPOSITORIES_KEY,
+        "data": repositories,
+    }
+
+
+async def set_up_marketplace(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+    repositories: dict[str, dict[str, Any]],
+) -> MockConfigEntry:
+    """Core's Marketplace, loaded with ``repositories``, GitHub unreachable."""
+    entry = add_marketplace(hass, aioclient_mock, hass_storage, repositories)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED

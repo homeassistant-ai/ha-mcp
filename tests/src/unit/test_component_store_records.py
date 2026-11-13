@@ -5,7 +5,7 @@ and the Marketplace then refuses to update or uninstall either record. The
 component files a repair, and its fix forgets the duplicate through the store
 manager so the kept record updates again.
 
-The store manager is Core's own Marketplace manager (``_marketplace_records``), so
+Core sets its Marketplace up from stored records (``_marketplace_records``), so
 the fix is read back from what the Marketplace saved. HACS, which is not part
 of Core, publishes the same manager shape in ``hass.data``; the Marketplace's
 manager, which Core took over from it, plays it here.
@@ -13,7 +13,7 @@ manager, which Core took over from it, plays it here.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,28 +24,44 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.ha_mcp_tools import store_records
 from custom_components.ha_mcp_tools.const import DOMAIN, ISSUE_STORE_RECORDS_CONFLICT
 
+from ._hacs_marketplace import REPOSITORIES_KEY, add_marketplace
 from ._marketplace_records import (
-    build_manager,
+    Hacs,
     loaded_marketplace,
-    store_entry,
+    own_records,
     stored_record,
+    unload_marketplace,
 )
 
 Marketplace = Callable[..., Awaitable[MarketplaceManager]]
 
 
 @pytest.fixture
-def marketplace(hass: HomeAssistant, hass_storage: dict[str, Any]) -> Marketplace:
-    """Load the Marketplace with this integration's records as given."""
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """The Marketplace prepares the configuration directory when it loads."""
+    return hass_tmp_config_dir
+
+
+@pytest.fixture
+async def marketplace(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+) -> AsyncIterator[Marketplace]:
+    """Load the Marketplace with this integration's records as given; every
+    Marketplace the test loaded is unloaded after it."""
 
     async def load(**installed: bool) -> MarketplaceManager:
-        return await loaded_marketplace(hass, hass_storage, **installed)
+        return await loaded_marketplace(hass, aioclient_mock, hass_storage, **installed)
 
-    return load
+    yield load
+    await unload_marketplace(hass)
 
 
 def _installed(built: MarketplaceManager, full_name: str) -> bool:
@@ -147,16 +163,18 @@ async def test_fix_with_one_record_changes_nothing(
 
 
 async def test_an_unknown_manager_shape_is_unknown_not_clean(
-    hass: HomeAssistant, issue_registry: ir.IssueRegistry
+    hass: HomeAssistant, issue_registry: ir.IssueRegistry, marketplace: Marketplace
 ) -> None:
     """A manager the lookup cannot read (another Core release's shape) says
     nothing about the records, so an existing repair stays and the check
     reports it could not look."""
     _file_issue(hass)
-    entry = store_entry(hass, "marketplace", ConfigEntryState.LOADED)
-    entry.runtime_data = object()
+    built = await marketplace(mirror=True)
 
-    assert store_records.async_check_store_records(hass) is False
+    with patch.object(
+        built.repositories, "get_by_full_name", side_effect=AttributeError
+    ):
+        assert store_records.async_check_store_records(hass) is False
 
     assert _issue(issue_registry) is not None
 
@@ -234,12 +252,13 @@ async def test_a_disabled_hacs_is_unknown_not_clean(
     """HACS that failed its restore has an empty repository list until it
     retries; the issue must not be cleared on that."""
     _file_issue(hass)
-    entry = store_entry(hass, "hacs", ConfigEntryState.LOADED)
-    hacs = await build_manager(hass, hass_storage, entry, restore=False)
-    # Real HACS uses its own restore reason, which Core's enum lacks; any
-    # reason sets ``system.disabled``, the only field the check reads.
-    hacs.system.disabled_reason = DisabledReason.RATE_LIMIT
-    hass.data["hacs"] = hacs
+    hacs = Hacs(hass)
+    manager = await hacs.restore(hass, hass_storage)
+    assert await hass.config_entries.async_setup(hacs.entry.entry_id)
+    # HACS is not part of Core, so its failed restore cannot happen here. Real
+    # HACS uses its own reason, which Core's enum lacks; any reason sets
+    # ``system.disabled``, the only field the check reads.
+    manager.disable(DisabledReason.RATE_LIMIT)
 
     assert store_records.conflicting_records(hass) is None
     assert store_records.async_check_store_records(hass) is False
@@ -262,50 +281,64 @@ def test_no_store_integration_means_nothing_to_wait_for(
 
 
 @pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
+@pytest.mark.usefixtures("marketplace")
 async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
     hass: HomeAssistant,
     issue_registry: ir.IssueRegistry,
     checks: MagicMock,
+    aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
     store_domain: str,
 ) -> None:
-    """The store entry still setting up, retrying or re-enabled later: the
-    check runs again on its state change, files the repair once the manager
-    answers, then lets go of the entry."""
-    entry = store_entry(hass, store_domain, ConfigEntryState.NOT_LOADED)
+    """The store entry failing its setup, then set up again: the check runs
+    again on its state change, files the repair once the manager answers,
+    then lets go of the entry."""
+    hacs: Hacs | None = None
+    entry: MockConfigEntry
+    if store_domain == "hacs":
+        hacs = Hacs(hass)
+        entry = hacs.entry
+    else:
+        records = own_records(main=True, mirror=True)
+        entry = add_marketplace(hass, aioclient_mock, hass_storage, records)
+        # Written by a newer Home Assistant: the Marketplace refuses to load it.
+        hass_storage[REPOSITORIES_KEY]["version"] = 99
 
     store_records.async_schedule_store_records_check(hass)
 
-    entry.mock_state(hass, ConfigEntryState.SETUP_RETRY)  # still no manager
+    assert not await hass.config_entries.async_setup(entry.entry_id)  # no manager
     assert _issue(issue_registry) is None
 
-    built = await build_manager(hass, hass_storage, entry, main=True, mirror=True)
-    if store_domain == "hacs":
-        hass.data["hacs"] = built
+    if hacs is not None:
+        await hacs.restore(hass, hass_storage, main=True, mirror=True)
     else:
-        entry.runtime_data = built
-    entry.mock_state(hass, ConfigEntryState.LOADED)
+        hass_storage[REPOSITORIES_KEY]["version"] = 1  # restored from a backup
+    assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
 
     assert _issue(issue_registry) is not None
     ran = checks.call_count
-    entry.mock_state(hass, ConfigEntryState.LOADED)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
     assert checks.call_count == ran, "the entry's listener was not removed"
     # The guard cleared: the next registration runs a check of its own.
     store_records.async_schedule_store_records_check(hass)
     assert checks.call_count == ran + 1
 
 
-def test_a_registration_while_waiting_adds_no_second_listener(
+async def test_a_registration_while_waiting_adds_no_second_listener(
     hass: HomeAssistant, checks: MagicMock
 ) -> None:
     """Two entries setting up while the store is not loaded share the one
     pending check instead of each subscribing to the store."""
-    entry = store_entry(hass, "hacs", ConfigEntryState.NOT_LOADED)
+    entry = Hacs(hass).entry
+    changes: list[ConfigEntryState] = []
+    entry.async_on_state_change(lambda: changes.append(entry.state))
 
     store_records.async_schedule_store_records_check(hass)
     store_records.async_schedule_store_records_check(hass)
     ran = checks.call_count
-    entry.mock_state(hass, ConfigEntryState.SETUP_RETRY)
+    assert not await hass.config_entries.async_setup(entry.entry_id)  # not ready
 
-    assert checks.call_count == ran + 1
+    assert changes
+    assert checks.call_count == ran + len(changes)
