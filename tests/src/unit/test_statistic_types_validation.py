@@ -1,190 +1,123 @@
-"""Unit tests for statistic_types parameter validation in ha_get_history (statistics source).
+"""``ha_get_history(source="statistics")`` hands ``statistic_types`` to Core.
 
-All tests use the public tool layer (HistoryTools.ha_get_history) following the pattern
-established in test_history_pagination.py, which exercises param coercion, error
-formatting, and source dispatch.
+The tool refuses only an empty list, which would make Core return rows without
+values; every other type list goes to Core's recorder as given, and Core picks
+the values it returns or refuses the request. Statistics are imported into
+Core's recorder and every reply is Core's.
 """
 
-import contextlib
 import json
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
+from homeassistant.components.recorder import Recorder
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_history import HistoryTools
+from ha_mcp.client.rest_client import HomeAssistantClient
+
+from ._client_spies import sent_messages
+from ._recorded_history import import_statistic, statistics
+
+STATISTIC_ID = "sensor.temperature"
+START = datetime(2024, 1, 1, tzinfo=UTC)
+END = datetime(2024, 1, 2, tzinfo=UTC)
 
 
-def _make_mock_client() -> MagicMock:
-    client = MagicMock()
-    client.base_url = "http://localhost:8123"
-    client.token = "test-token"
-    return client
+async def _one_hour(hass: HomeAssistant) -> None:
+    """One hour of a statistic Core keeps mean, min, max and sum for."""
+    hass.states.async_set(STATISTIC_ID, "20", {"unit_of_measurement": "°C"})
+    await import_statistic(
+        hass,
+        STATISTIC_ID,
+        "°C",
+        "temperature",
+        [{"start": START, "mean": 20.0, "min": 19.0, "max": 21.0, "sum": 5.0}],
+        mean=True,
+    )
 
 
-def _make_ws_dispatcher(stat_result: dict | None = None):
-    """Async ``send_websocket_message`` stand-in for the pooled transport (#1813).
-
-    The statistics tool now issues its single WS command through the shared
-    pooled ``client.send_websocket_message`` rather than a per-call dedicated
-    connection.
-    """
-
-    async def send_websocket_message(message):
-        if message["type"] == "recorder/statistics_during_period":
-            return {"success": True, "result": stat_result or {}}
-        return {"success": False, "error": f"unknown command: {message['type']}"}
-
-    return send_websocket_message
+def _statistics_requests(sent: Any) -> list[dict[str, Any]]:
+    return [
+        call.args[0]
+        for call in sent.await_args_list
+        if call.args[0]["type"] == "recorder/statistics_during_period"
+    ]
 
 
-class TestStatisticTypesValidation:
-    """Tests for statistic_types parameter edge cases via the public tool layer.
+@pytest.mark.parametrize("statistic_types", [[], "[]"], ids=["list", "string"])
+async def test_empty_types_are_refused_before_core_is_asked(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    statistic_types: list[str] | str,
+) -> None:
+    """Core answers types=[] with rows that carry no values; that is never useful."""
+    await _one_hour(hass)
 
-    Uses the same fixture pattern as TestStatisticsPagination in
-    test_history_pagination.py: patch get_connected_ws_client, call
-    HistoryTools(client).ha_get_history with source='statistics'.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
-
-    @pytest.fixture
-    def history_tool(self, mock_client):
-        self._mock_client = mock_client
-        return HistoryTools(mock_client).ha_get_history
-
-    def _patch_ws(self, rows: list[dict] | None = None):
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            stat_result={"sensor.test": rows or []}
-        )
-        return contextlib.nullcontext()
-
-    @pytest.mark.asyncio
-    async def test_empty_list_raises_tool_error(self, history_tool):
-        """statistic_types=[] must raise ToolError with VALIDATION_INVALID_PARAMETER.
-
-        Verified live: types=[] causes HA to return rows with only start/end keys,
-        discarding all value fields (sum, mean, state, etc.). This is never useful.
-        """
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-                statistic_types=[],
-            )
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "statistic_types" in error["message"]
-
-    @pytest.mark.asyncio
-    async def test_none_does_not_set_types_in_command(self, history_tool):
-        """statistic_types=None must not include 'types' in the WS command (HA returns all)."""
-        sent_message = {}
-
-        async def capturing_send(message):
-            sent_message.update(message)
-            return {"success": True, "result": {"sensor.test": []}}
-
-        self._mock_client.send_websocket_message = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-        ):
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-            )
-
-        assert "types" not in sent_message, (
-            "statistic_types=None must not send 'types' to HA — "
-            "omitting 'types' lets HA return all available types."
+    with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
+        await statistics(
+            core_client, [STATISTIC_ID], START, END, statistic_types=statistic_types
         )
 
-    @pytest.mark.asyncio
-    async def test_valid_list_sets_types_in_command(self, history_tool):
-        """statistic_types=['mean', 'sum'] must include types in the WS command."""
-        sent_message = {}
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "statistic_types" in error["message"]
+    assert _statistics_requests(sent) == []
 
-        async def capturing_send(message):
-            sent_message.update(message)
-            return {"success": True, "result": {"sensor.test": []}}
 
-        self._mock_client.send_websocket_message = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-        ):
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-                statistic_types=["mean", "sum"],
-            )
+async def test_no_types_lets_core_return_every_type(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _one_hour(hass)
 
-        assert "types" in sent_message
-        assert set(sent_message["types"]) == {"mean", "sum"}
+    with sent_messages(core_client) as sent:
+        result = await statistics(core_client, [STATISTIC_ID], START, END)
 
-    @pytest.mark.asyncio
-    async def test_comma_separated_string_sets_types_in_command(self, history_tool):
-        """statistic_types='mean,sum' (comma-separated string) must send correct types."""
-        sent_message = {}
+    [request] = _statistics_requests(sent)
+    assert "types" not in request
+    row = result["data"]["entities"][0]["statistics"][0]
+    assert {"mean", "min", "max", "sum"} <= row.keys()
+    assert {"mean", "min", "max", "sum"} <= set(result["data"]["statistic_types"])
 
-        async def capturing_send(message):
-            sent_message.update(message)
-            return {"success": True, "result": {"sensor.test": []}}
 
-        self._mock_client.send_websocket_message = capturing_send
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-        ):
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-                statistic_types="mean,sum",
-            )
+@pytest.mark.parametrize(
+    "statistic_types", [["mean", "sum"], "mean,sum"], ids=["list", "comma-separated"]
+)
+async def test_requested_types_are_the_types_core_returns(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    statistic_types: list[str] | str,
+) -> None:
+    await _one_hour(hass)
 
-        assert "types" in sent_message
-        assert set(sent_message["types"]) == {"mean", "sum"}
+    with sent_messages(core_client) as sent:
+        result = await statistics(
+            core_client, [STATISTIC_ID], START, END, statistic_types=statistic_types
+        )
 
-    @pytest.mark.asyncio
-    async def test_empty_string_list_notation_raises(self, history_tool):
-        """statistic_types='[]' (string notation for empty list) must raise ToolError."""
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-                statistic_types="[]",
-            )
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "statistic_types" in error["message"]
+    [request] = _statistics_requests(sent)
+    assert set(request["types"]) == {"mean", "sum"}
+    row = result["data"]["entities"][0]["statistics"][0]
+    assert row.keys() - {"start", "end"} == {"mean", "sum"}
 
-    @pytest.mark.asyncio
-    async def test_invalid_type_raises(self, history_tool):
-        """Native rejection is surfaced; the tool holds no copied type whitelist."""
-        sent_types = []
 
-        async def reject(message):
-            if message["type"] == "recorder/statistics_during_period":
-                sent_types.append(message["types"])
-            return {"success": False, "error": "Core rejected invalid_type"}
+async def test_core_rejection_of_a_type_is_surfaced(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The tool holds no copied type list: Core judges the type and says why."""
+    await _one_hour(hass)
 
-        self._mock_client.send_websocket_message = reject
-        with pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids="sensor.test",
-                source="statistics",
-                start_time="7d",
-                period="hour",
-                statistic_types=["invalid_type"],
-            )
-        error = json.loads(str(exc_info.value))["error"]
-        assert "invalid_type" in error["message"]
-        assert sent_types == [["invalid_type"]]
+    with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
+        await statistics(
+            core_client, [STATISTIC_ID], START, END, statistic_types=["invalid_type"]
+        )
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "invalid_type" in error["message"]
+    assert [request["types"] for request in _statistics_requests(sent)] == [
+        ["invalid_type"]
+    ]

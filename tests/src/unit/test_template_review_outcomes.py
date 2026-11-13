@@ -105,8 +105,7 @@ async def test_invalid_entity_metadata_is_a_snapshot_refusal(recovery, entities)
 
 async def test_recreated_identity_read_failure_is_unavailable(recovery, monkeypatch):
     monkeypatch.setattr(
-        bm,
-        "_created_entity",
+        "ha_mcp.backup_entity_ids.created_entity",
         AsyncMock(side_effect=bm.HomeAssistantError("private upstream payload")),
     )
     with pytest.raises(bm.BackupRestoreError) as caught:

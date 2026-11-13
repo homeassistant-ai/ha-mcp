@@ -1,291 +1,217 @@
-"""Unit tests for ha_get_overview repairs filtering and projection.
+"""``ha_get_overview`` repairs: dismissed ones filtered, dismissal state shown.
 
-Regression coverage for issue #1307: dismissed repairs must be filtered by
-default (matching the HA Repairs UI), and the projection must surface the
-dismissal-state fields so callers that opt in can distinguish active vs.
-ignored repairs.
+Regression coverage for issue #1307: dismissed repairs are filtered by default
+(matching the Home Assistant Repairs UI), and each repair carries its dismissal
+state so a caller that opts in can tell active from ignored ones. The issues
+are raised and ignored through Core's issue registry and read back by the tool
+over the server's own client.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE, __version__
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 
 
-def _ws_response(issues: list[dict]) -> dict:
-    return {"success": True, "result": {"issues": issues}}
+def _tools(client: HomeAssistantClient) -> SearchTools:
+    return SearchTools(client, SmartSearchTools(client=client))
 
 
-def _active_issue(issue_id: str) -> dict:
-    return {
-        "issue_id": issue_id,
-        "domain": "demo",
-        "severity": "warning",
-        "translation_key": "demo_issue",
-        "ignored": False,
-        "dismissed_version": None,
-        "is_fixable": True,
-        "breaks_in_ha_version": None,
-        "created": "2026-05-01T00:00:00+00:00",
-        "issue_domain": "demo",
+@pytest.fixture
+async def repairs(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Load the integrations that answer the overview's reads."""
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "repairs", {})
+    assert await async_setup_component(hass, "persistent_notification", {})
+
+
+def _raise(
+    hass: HomeAssistant,
+    issue_id: str,
+    *,
+    ignored: bool = False,
+    fixable: bool = True,
+    persistent: bool = False,
+) -> None:
+    ir.async_create_issue(
+        hass,
+        "demo",
+        issue_id,
+        is_fixable=fixable,
+        is_persistent=persistent,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="demo_issue",
+    )
+    if ignored:
+        ir.async_ignore_issue(hass, "demo", issue_id, True)
+
+
+async def _overview(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
+    return await _tools(client).ha_get_overview(detail_level="minimal", **kwargs)
+
+
+def _ids(result: dict[str, Any]) -> set[str]:
+    return {repair["issue_id"] for repair in result["repairs"]}
+
+
+async def test_dismissed_repairs_are_left_out_and_counted_apart(
+    hass: HomeAssistant, core_client: HomeAssistantClient, repairs: None
+) -> None:
+    """By default only active repairs are listed and counted; the dismissed
+    ones are reported as a separate count so an agent can opt in."""
+    _raise(hass, "active_one")
+    _raise(hass, "active_unfixable", fixable=False)
+    _raise(hass, "dismissed_one", ignored=True)
+    _raise(hass, "dismissed_two", ignored=True, fixable=False)
+
+    result = await _overview(core_client)
+
+    assert result["repair_count"] == 2
+    assert _ids(result) == {"active_one", "active_unfixable"}
+    assert result["dismissed_repair_count"] == 2
+
+
+async def test_include_dismissed_lists_every_repair_without_separate_count(
+    hass: HomeAssistant, core_client: HomeAssistantClient, repairs: None
+) -> None:
+    _raise(hass, "active_one")
+    _raise(hass, "dismissed_one", ignored=True)
+
+    result = await _overview(core_client, include_dismissed_repairs=True)
+
+    assert result["repair_count"] == 2
+    assert "dismissed_repair_count" not in result
+    assert _ids(result) == {"active_one", "dismissed_one"}
+
+
+async def test_each_repair_shows_its_dismissal_state(
+    hass: HomeAssistant, core_client: HomeAssistantClient, repairs: None
+) -> None:
+    """A caller that opts in can tell an ignored repair from an active one."""
+    _raise(hass, "active_one")
+    _raise(hass, "dismissed_one", ignored=True)
+
+    result = await _overview(core_client, include_dismissed_repairs=True)
+
+    for entry in result["repairs"]:
+        for field in (
+            "issue_id",
+            "domain",
+            "severity",
+            "translation_key",
+            "ignored",
+            "dismissed_version",
+            "is_fixable",
+        ):
+            assert field in entry, f"Missing field {field} in repair entry"
+    by_id = {r["issue_id"]: r for r in result["repairs"]}
+    assert by_id["active_one"]["ignored"] is False
+    assert by_id["active_one"]["dismissed_version"] is None
+    assert by_id["dismissed_one"]["ignored"] is True
+    # Core records the running version as the one the repair was dismissed in.
+    assert by_id["dismissed_one"]["dismissed_version"] == __version__
+
+
+async def test_repairs_left_inactive_by_a_restart_are_not_counted(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    repairs: None,
+) -> None:
+    """After a restart Core keeps each non-persistent issue as an inactive
+    stub until its integration raises it again. Served by the component, the
+    overview neither lists nor counts them, dismissed or not."""
+    _raise(hass, "active_one", persistent=True)
+    _raise(hass, "dismissed_one", ignored=True, persistent=True)
+    _raise(hass, "ghost_restart_required")
+    _raise(hass, "ghost_dismissed", ignored=True)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
+    await hass.async_block_till_done()
+    await ir.async_load(hass)
+    registry = ir.async_get(hass)
+    assert {key[1] for key, issue in registry.issues.items() if not issue.active} == {
+        "ghost_restart_required",
+        "ghost_dismissed",
     }
 
+    result = await _overview(component_core_client)
 
-def _ignored_issue(issue_id: str, dismissed_version: str = "2026.4.0") -> dict:
-    return {
-        "issue_id": issue_id,
-        "domain": "demo",
-        "severity": "warning",
-        "translation_key": "demo_issue",
-        "ignored": True,
-        "dismissed_version": dismissed_version,
-        "is_fixable": False,
-        "breaks_in_ha_version": None,
-        "created": "2026-04-01T00:00:00+00:00",
-        "issue_domain": "demo",
-    }
+    assert not any("legacy path" in w for w in result.get("warnings", []))
+    assert result["repair_count"] == 1
+    assert _ids(result) == {"active_one"}
+    assert result["dismissed_repair_count"] == 1
+
+    result = await _overview(component_core_client, include_dismissed_repairs=True)
+
+    assert result["repair_count"] == 2
+    assert _ids(result) == {"active_one", "dismissed_one"}
 
 
-class TestHaGetOverviewRepairs:
-    """ha_get_overview repairs filtering, count, and field projection."""
+async def test_no_repairs_yields_zero_count_and_empty_list(
+    core_client: HomeAssistantClient, repairs: None
+) -> None:
+    """``repairs`` is always present, so ``fields=["repairs"]`` never trips
+    the projection's unknown-key warning on a clean instance."""
+    result = await _overview(core_client)
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
+    assert result["repair_count"] == 0
+    assert result["repairs"] == []
+    assert "dismissed_repair_count" not in result
 
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
 
-        mcp.add_tool = capture_add_tool
-        return mcp
+async def test_only_dismissed_repairs_report_none_active(
+    hass: HomeAssistant, core_client: HomeAssistantClient, repairs: None
+) -> None:
+    for i in range(3):
+        _raise(hass, f"dismissed_{i}", ignored=True)
 
-    def _make_client(self, issues: list[dict]) -> MagicMock:
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
+    result = await _overview(core_client)
 
-        async def fake_ws(msg):
-            if msg.get("type") == "repairs/list_issues":
-                return _ws_response(issues)
-            # Persistent notifications fetch — return empty success
-            return {"success": True, "result": []}
+    assert result["repair_count"] == 0
+    assert result["repairs"] == []
+    assert result["dismissed_repair_count"] == 3
 
-        client.send_websocket_message = AsyncMock(side_effect=fake_ws)
-        return client
 
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
+async def test_unanswered_repairs_read_keeps_overview_with_error(
+    hass: HomeAssistant, core_client: HomeAssistantClient, repairs: None
+) -> None:
+    """With no WebSocket answer the overview still returns, with
+    ``repairs_error`` naming the failure and an empty ``repairs`` list."""
+    _raise(hass, "active_one")
 
-    def _build_tool(self, mock_mcp, client, smart_tools):
-        register_search_tools(mock_mcp, client, smart_tools=smart_tools)
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.mark.asyncio
-    async def test_ignored_repairs_filtered_by_default(
-        self, mock_mcp, mock_smart_tools
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        side_effect=HomeAssistantConnectionError("ws disconnect"),
     ):
-        """Default behavior: dismissed repairs do not appear in `repairs[]`
-        and are not counted in `repair_count`. Matches the HA Repairs UI.
-        """
-        issues = [
-            _active_issue("active_one"),
-            _ignored_issue("dismissed_one"),
-            _ignored_issue("dismissed_two", dismissed_version="2025.12.0"),
-        ]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+        result = await _overview(core_client)
 
-        result = await tool(detail_level="minimal")
+    assert result["repair_count"] == 0
+    assert result["repairs"] == []
+    assert "ws disconnect" in result["repairs_error"]
 
-        assert result["repair_count"] == 1
-        repair_ids = [r["issue_id"] for r in result["repairs"]]
-        assert repair_ids == ["active_one"]
-        # Surface dismissed count separately so agents can decide to opt in
-        assert result["dismissed_repair_count"] == 2
 
-    @pytest.mark.asyncio
-    async def test_include_dismissed_returns_all_repairs(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """With `include_dismissed_repairs=True`, all repairs surface and
-        the standalone dismissed counter is omitted.
-        """
-        issues = [_active_issue("active_one"), _ignored_issue("dismissed_one")]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
+async def test_rejected_repairs_read_surfaces_core_error(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Without the repairs integration Core rejects ``repairs/list_issues``;
+    the overview says so instead of reporting zero repairs as if clean."""
+    assert await async_setup_component(hass, "config", {})
 
-        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
+    result = await _overview(core_client)
 
-        assert result["repair_count"] == 2
-        assert "dismissed_repair_count" not in result
-        ids = {r["issue_id"] for r in result["repairs"]}
-        assert ids == {"active_one", "dismissed_one"}
-
-    @pytest.mark.asyncio
-    async def test_repair_projection_includes_dismissal_state(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """`ignored`, `dismissed_version`, `is_fixable`, etc. must be present
-        on each repair entry so callers can distinguish state.
-        """
-        issues = [_active_issue("active_one"), _ignored_issue("dismissed_one")]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
-
-        for entry in result["repairs"]:
-            for field in (
-                "issue_id",
-                "domain",
-                "severity",
-                "translation_key",
-                "ignored",
-                "dismissed_version",
-                "is_fixable",
-            ):
-                assert field in entry, f"Missing field {field} in repair entry"
-
-        by_id = {r["issue_id"]: r for r in result["repairs"]}
-        assert by_id["active_one"]["ignored"] is False
-        assert by_id["dismissed_one"]["ignored"] is True
-        assert by_id["dismissed_one"]["dismissed_version"] == "2026.4.0"
-
-    @pytest.mark.asyncio
-    async def test_inactive_registry_entries_not_counted(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """Inactive issue-registry stubs (``active=False``, as emitted by the
-        component's raw registry dump) must not inflate ``repair_count``,
-        must not appear in ``repairs[]``, and must not be miscounted as
-        dismissed. Mirrors HA core's ``ws_list_issues`` filter.
-        """
-        ghost = {**_active_issue("ghost_restart_required"), "active": False}
-        issues = [
-            {**_active_issue("active_one"), "active": True},
-            ghost,
-            {**_ignored_issue("dismissed_one"), "active": True},
-            {**_ignored_issue("ghost_dismissed"), "active": False},
-        ]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal")
-
-        assert result["repair_count"] == 1
-        assert [r["issue_id"] for r in result["repairs"]] == ["active_one"]
-        # Neither inactive ghost counts as dismissed — only the active
-        # dismissed_one does
-        assert result["dismissed_repair_count"] == 1
-
-        # Opting into dismissed repairs still never surfaces inactive stubs
-        result = await tool(detail_level="minimal", include_dismissed_repairs=True)
-        assert result["repair_count"] == 2
-        assert {r["issue_id"] for r in result["repairs"]} == {
-            "active_one",
-            "dismissed_one",
-        }
-
-    @pytest.mark.asyncio
-    async def test_no_repairs_yields_zero_counts(self, mock_mcp, mock_smart_tools):
-        """Empty issue list yields repair_count = 0 and ``repairs == []``.
-
-        ``repairs`` is advertised in the ``fields=`` docstring as an
-        available key, so it must always be present (even as an empty
-        list) — otherwise ``fields=["repairs"]`` trips
-        ``project_fields``' typo-guard warning on a clean instance.
-        """
-        client = self._make_client([])
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal")
-
-        assert result["repair_count"] == 0
-        assert result["repairs"] == []
-        assert "dismissed_repair_count" not in result
-
-    @pytest.mark.asyncio
-    async def test_only_dismissed_repairs_yields_zero_active(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """When every repair is dismissed, repair_count=0 (agents see clean
-        state), ``repairs == []`` (no visible issues), and
-        ``dismissed_repair_count`` reports the hidden total.
-        """
-        issues = [_ignored_issue(f"dismissed_{i}") for i in range(3)]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal")
-
-        assert result["repair_count"] == 0
-        assert result["repairs"] == []
-        assert result["dismissed_repair_count"] == 3
-
-    @pytest.mark.asyncio
-    async def test_repairs_ws_failure_does_not_break_overview(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """A websocket exception while fetching repairs leaves the overview
-        functional with a `repairs_error` message and repair_count=0.
-        """
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-
-        async def fake_ws(msg):
-            if msg.get("type") == "repairs/list_issues":
-                raise RuntimeError("ws disconnect")
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=fake_ws)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal")
-
-        assert result["repair_count"] == 0
-        # Error path: ``repairs`` stays as the default empty list
-        # (set before the try/except so the docstring contract holds
-        # even when the WS call fails); ``repairs_error`` carries the
-        # diagnostic.
-        assert result["repairs"] == []
-        assert "repairs_error" in result
-        assert "ws disconnect" in result["repairs_error"]
-
-    @pytest.mark.asyncio
-    async def test_repairs_ws_success_false_surfaces_error(
-        self, mock_mcp, mock_smart_tools
-    ):
-        """When HA responds `success: False`, surface the error message
-        instead of silently returning repair_count=0.
-        """
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-
-        async def fake_ws(msg):
-            if msg.get("type") == "repairs/list_issues":
-                return {
-                    "success": False,
-                    "error": {"code": "unknown_error", "message": "boom"},
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=fake_ws)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal")
-
-        assert result["repair_count"] == 0
-        assert result["repairs"] == []
-        assert "boom" in result["repairs_error"]
+    assert result["repair_count"] == 0
+    assert result["repairs"] == []
+    assert "Unknown command" in result["repairs_error"]

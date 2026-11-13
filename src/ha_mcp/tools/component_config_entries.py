@@ -55,7 +55,7 @@ WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 class EntryUniqueId(NamedTuple):
     """A config entry's ``unique_id``, and whether it could be read at all."""
 
-    #: False when no component answered, or the component predates the field.
+    #: False when no component answered or its answer could not be trusted.
     known: bool
     #: The value when ``known``; always ``None`` when not.
     value: str | None
@@ -157,7 +157,7 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
 
     Returns :data:`UNKNOWN_UNIQUE_ID` whenever the answer cannot be trusted —
     no ``config_entries`` capability, a downgraded component, a transport
-    failure, a malformed payload, or a row that predates the field. Never
+    failure or a malformed payload. Never
     raises: an unreadable ``unique_id`` degrades the anchor, and the caller
     decides what that means, rather than failing the whole reconfigure here.
     """
@@ -165,15 +165,6 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
     if read is None or not read.rows:
         return UNKNOWN_UNIQUE_ID
     row = read.rows[0]
-    # Key presence is the capability probe: a component older than the field
-    # omits it entirely, which must not read as "this entry has no unique_id".
-    if "unique_id" not in row:
-        logger.debug(
-            "%s row for %s predates the unique_id field; unique_id unavailable",
-            WS_CONFIG_ENTRIES,
-            entry_id,
-        )
-        return UNKNOWN_UNIQUE_ID
     if row.get("entry_id") != entry_id:
         # Reading another entry's anchor would be worse than reading none.
         logger.debug(
@@ -183,7 +174,7 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
             entry_id,
         )
         return UNKNOWN_UNIQUE_ID
-    value = row["unique_id"]
+    value = row.get("unique_id")
     if value is not None and not isinstance(value, str):
         # Malformed is unknown, NOT known-absent: silently turning junk into
         # "this entry has no unique_id" is the exact conflation this type

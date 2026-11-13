@@ -13,194 +13,194 @@ re-introduces a duplicate or discarded fetch fails loudly:
 - ITEM 4 — the fuzzy path fetches aliases only for entities that survive the
   domain filter.
 
-The default path is exact-match, so it exercises ``_exact_match_search`` +
-``deep_search``; the config-body sub-fetches fail against these minimal mocks
-(``partial: True``), which does not affect the shared/gated counts under test.
+The search runs on the server's own client against a real ``hass`` without
+the component, so it takes the legacy path; call-through spies count what the
+client sends while Core answers every request.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-_STATES = [
-    {
-        "entity_id": "light.kitchen",
-        "state": "on",
-        "attributes": {"friendly_name": "Kitchen"},
-    },
-    {
-        "entity_id": "sensor.kitchen_temp",
-        "state": "21",
-        "attributes": {"friendly_name": "Kitchen Temp"},
-    },
-    {
-        "entity_id": "scene.movie",
-        "state": "scening",
-        "attributes": {"friendly_name": "Movie"},
-    },
-]
-_ENTITY_REGISTRY = {
-    "success": True,
-    "result": [
-        {"entity_id": "light.kitchen", "entity_category": None},
-        {"entity_id": "sensor.kitchen_temp", "entity_category": None},
-        {"entity_id": "scene.movie", "unique_id": "movie", "platform": "homeassistant"},
-    ],
-}
 
+@dataclass
+class _Sent:
+    """What the client sent while the spies were on."""
 
-class CountingClient:
-    """Mock HA client that tallies the fetches ha_search makes.
+    states: AsyncMock
+    config: AsyncMock
+    websocket: AsyncMock
 
-    Only the shared/gated fetches under test return usable payloads; every other
-    config-body list fetch returns a soft failure so ``deep_search`` degrades to
-    ``partial: True`` instead of hanging on an un-mocked method.
-    """
-
-    def __init__(self) -> None:
-        # The real client's default; deep_search reads it when a config fetch failed.
-        self.admin_route_refused = False
-        self.get_states_calls = 0
-        self.get_config_calls = 0
-        self.ws_types: Counter[str] = Counter()
-        self.get_entries_entity_ids: list[list[str]] = []
-
-    async def get_states(self) -> list[dict[str, Any]]:
-        self.get_states_calls += 1
-        return [dict(s) for s in _STATES]
-
-    async def get_config(self) -> dict[str, Any]:
-        self.get_config_calls += 1
-        return {"time_zone": "UTC"}
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type", "")
-        self.ws_types[msg_type] += 1
-        if msg_type == "config/entity_registry/list":
-            return _ENTITY_REGISTRY
-        if msg_type == "config/device_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "config/entity_registry/get_entries":
-            self.get_entries_entity_ids.append(list(msg.get("entity_ids", [])))
-            return {"success": True, "result": {}}
-        # Config-body list fetches (automation/script/scene/helper) — soft-fail.
-        return {"success": False}
-
-    async def _request(self, *args: Any, **kwargs: Any) -> Any:
-        raise Exception("bulk config REST unavailable")
-
-    async def get_scene_config(self, scene_id: str) -> dict[str, Any]:
-        return {"config": {}}
-
-    async def get_script_config(self, script_id: str) -> dict[str, Any]:
-        return {"config": {}}
-
-
-def _build_ha_search(client: CountingClient):
-    mcp = MagicMock()
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
+    def ws_types(self) -> Counter[str]:
+        return Counter(
+            call.args[0].get("type") for call in self.websocket.call_args_list
         )
-        registered[name] = method
 
-    mcp.add_tool = capture_add_tool
-    smart_tools = SmartSearchTools(client=client)
-    register_search_tools(mcp, client, smart_tools=smart_tools)
-    return registered["ha_search"]
+    def ws_messages(self, msg_type: str) -> list[dict[str, Any]]:
+        return [
+            call.args[0]
+            for call in self.websocket.call_args_list
+            if call.args[0].get("type") == msg_type
+        ]
 
 
-@pytest.mark.asyncio
+@contextmanager
+def _spies(client: HomeAssistantClient) -> Iterator[_Sent]:
+    """Call-through spies on the reads under test; Core still answers each."""
+    with (
+        patch.object(client, "get_states", wraps=client.get_states) as states,
+        patch.object(client, "get_config", wraps=client.get_config) as config,
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as websocket,
+    ):
+        yield _Sent(states, config, websocket)
+
+
+def _visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: VisibilityConfig
+) -> None:
+    save_visibility_config(tmp_path, config)
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+@pytest.fixture
+async def smart_tools(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> SmartSearchTools:
+    """Core with a kitchen light, a kitchen sensor and a scene, all registered."""
+    # ``config`` serves the registry reads.
+    assert await async_setup_component(hass, "config", {})
+    for domain, object_id, name in (
+        ("light", "kitchen", "Kitchen"),
+        ("sensor", "kitchen_temp", "Kitchen Temp"),
+        ("scene", "movie", "Movie"),
+    ):
+        entry = entity_registry.async_get_or_create(
+            domain, "test", object_id, suggested_object_id=object_id
+        )
+        hass.states.async_set(entry.entity_id, "on", {"friendly_name": name})
+    return SmartSearchTools(client=core_client)
+
+
+@pytest.fixture
+def search_tools(
+    core_client: HomeAssistantClient, smart_tools: SmartSearchTools
+) -> SearchTools:
+    return SearchTools(core_client, smart_tools)
+
+
 async def test_default_query_path_shares_snapshots_and_skips_gated_fetches(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    search_tools: SearchTools,
+) -> None:
     """Default disabled install: one /api/states, one entity-registry list, no
     /api/config on the entity branch, and no device registry."""
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    _visibility(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
 
-    client = CountingClient()
-    ha_search = _build_ha_search(client)
-    resp = await ha_search(query="kitchen")
+    with _spies(core_client) as sent:
+        resp = await search_tools.ha_search(query="kitchen")
 
     assert resp["success"] is True
+    assert [row["entity_id"] for row in resp["entities"]] == [
+        "light.kitchen",
+        "sensor.kitchen_temp",
+    ]
     # ITEM 2: both branches share one state-machine fetch (was 2).
-    assert client.get_states_calls == 1
+    assert sent.states.await_count == 1
     # ITEM 1: the entity branch no longer fetches /api/config for timezone.
-    assert client.get_config_calls == 0
+    sent.config.assert_not_awaited()
     # ITEM 3: both branches share one entity-registry list (was 2).
-    assert client.ws_types["config/entity_registry/list"] == 1
+    assert sent.ws_types()["config/entity_registry/list"] == 1
     # ITEM 5: device registry is pure waste when visibility is disabled.
-    assert client.ws_types["config/device_registry/list"] == 0
+    assert sent.ws_types()["config/device_registry/list"] == 0
 
 
-@pytest.mark.asyncio
-async def test_visibility_area_rule_fetches_device_registry(tmp_path, monkeypatch):
+async def test_visibility_area_rule_fetches_device_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    search_tools: SearchTools,
+) -> None:
     """An enabled config with an area exclude consumes the device registry, so the
     fetch returns — while the shared /api/states + registry economy is unchanged."""
-    save_visibility_config(
-        tmp_path, VisibilityConfig(enabled=True, exclude_areas=["garage"])
+    _visibility(
+        tmp_path,
+        monkeypatch,
+        VisibilityConfig(enabled=True, exclude_areas=["garage"]),
     )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
 
-    client = CountingClient()
-    ha_search = _build_ha_search(client)
-    resp = await ha_search(query="kitchen")
+    with _spies(core_client) as sent:
+        resp = await search_tools.ha_search(query="kitchen")
 
     assert resp["success"] is True
-    assert client.get_states_calls == 1
-    assert client.get_config_calls == 0
-    assert client.ws_types["config/entity_registry/list"] == 1
+    assert sent.states.await_count == 1
+    sent.config.assert_not_awaited()
+    assert sent.ws_types()["config/entity_registry/list"] == 1
     # ITEM 5: the area dimension needs device-inherited areas, so it is fetched.
-    assert client.ws_types["config/device_registry/list"] == 1
+    assert sent.ws_types()["config/device_registry/list"] == 1
 
 
-@pytest.mark.asyncio
 async def test_get_entities_by_area_fetches_device_registry_when_visibility_disabled(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    smart_tools: SmartSearchTools,
+    area_registry: ar.AreaRegistry,
+) -> None:
     """CRITICAL EXCLUSION: get_entities_by_area resolves entity->device->area via
     the device registry, so it must fetch it even with visibility disabled."""
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    _visibility(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
+    area_registry.async_create("Kitchen")
 
-    client = CountingClient()
-    smart_tools = SmartSearchTools(client=client)
-    await smart_tools.get_entities_by_area("Kitchen", group_by_domain=False)
+    with _spies(core_client) as sent:
+        await smart_tools.get_entities_by_area("Kitchen")
 
-    assert client.ws_types["config/device_registry/list"] == 1
+    assert sent.ws_types()["config/device_registry/list"] == 1
 
 
-@pytest.mark.asyncio
 async def test_fuzzy_domain_filter_fetches_aliases_only_for_survivors(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    smart_tools: SmartSearchTools,
+) -> None:
     """ITEM 4: the domain filter runs before the alias fetch, so get_entries only
     covers the domain survivors — not every entity in the state machine."""
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    _visibility(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
 
-    client = CountingClient()
-    smart_tools = SmartSearchTools(client=client)
-    await smart_tools.smart_entity_search("kitchen", domain_filter="light")
+    with _spies(core_client) as sent:
+        await smart_tools.smart_entity_search("kitchen", domain_filter="light")
 
     # Aliases fetched exactly once, and only for the surviving light entity —
     # the sensor and scene are filtered out before the alias fan-out.
-    assert client.get_entries_entity_ids == [["light.kitchen"]]
+    assert [
+        msg["entity_ids"]
+        for msg in sent.ws_messages("config/entity_registry/get_entries")
+    ] == [["light.kitchen"]]
 
 
 # The WS "bulk config list" command types the legacy fetch used to try when
@@ -218,24 +218,47 @@ _PHANTOM_BULK_WS_TYPES = (
 )
 
 
-@pytest.mark.asyncio
 async def test_config_search_never_sends_phantom_bulk_ws_commands(
-    tmp_path, monkeypatch
-):
-    """Issue #1889: with the REST bulk fetch failing (as it does against real
-    HA, which has no bulk config REST endpoint either), the config branch must
-    fall straight to budgeted individual fetches — never through the
-    nonexistent ``config/<domain>/config/list`` / ``<domain>/config/list``
-    WebSocket commands."""
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-
-    client = CountingClient()
-    ha_search = _build_ha_search(client)
-    resp = await ha_search(
-        query="kitchen", search_types=["automation", "script", "scene"]
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    search_tools: SearchTools,
+) -> None:
+    """Issue #1889: real HA has no bulk config REST endpoint, so the config
+    branch must fall straight to budgeted individual fetches — never through
+    the nonexistent ``config/<domain>/config/list`` /
+    ``<domain>/config/list`` WebSocket commands."""
+    _visibility(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
+    assert await async_setup_component(
+        hass,
+        "automation",
+        {
+            "automation": {
+                "id": "kitchen_lights",
+                "alias": "Kitchen lights",
+                "triggers": [{"trigger": "event", "event_type": "kitchen_motion"}],
+                "actions": [
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.kitchen"},
+                    }
+                ],
+            }
+        },
     )
 
+    with _spies(core_client) as sent:
+        resp = await search_tools.ha_search(
+            query="kitchen", search_types=["automation", "script", "scene"]
+        )
+
     assert resp["success"] is True
+    # The individual fetch was made: Core's per-id endpoint answered 404 for
+    # the YAML automation, which the search names, and the name still matched.
+    assert [row["entity_id"] for row in resp["automations"]] == [
+        "automation.kitchen_lights"
+    ]
+    assert "per-id config endpoint returned 404" in resp["partial_reason"]
     for ws_type in _PHANTOM_BULK_WS_TYPES:
-        assert client.ws_types[ws_type] == 0, ws_type
+        assert sent.ws_types()[ws_type] == 0, ws_type

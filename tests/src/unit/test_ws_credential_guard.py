@@ -16,10 +16,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import voluptuous as vol
-from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -27,6 +26,7 @@ from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.util_helpers import is_credential_ws_command
 
 from ._code_mode import run_custom_tool
+from ._supervisor_core import load_supervisor_api, supervisor_requests
 
 
 def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
@@ -35,34 +35,23 @@ def _supervisor(endpoint: str, method: str = "post") -> dict[str, Any]:
 
 @pytest.fixture
 async def supervisor_calls(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> list[dict[str, Any]]:
-    """Core answering ``auth/current_user``, plus a recording ``supervisor/api``.
-
-    A unit test has no Supervisor, so the command Core's ``hassio`` registers
-    is a recording one; returns the calls it received.
-    """
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AiohttpClientMocker:
+    """Core answering ``auth/current_user``, and Core's own ``supervisor/api``
+    in front of a Supervisor answering ``/core/info`` (``_supervisor_core``)."""
     assert await async_setup_component(hass, "auth", {})
-    calls: list[dict[str, Any]] = []
-
-    @websocket_api.websocket_command(
+    load_supervisor_api(
+        hass,
+        aioclient_mock,
+        monkeypatch,
         {
-            vol.Required("type"): "supervisor/api",
-            vol.Required("endpoint"): str,
-            vol.Required("method"): str,
-        }
+            ("get", path): {"version": "2026.11.1"}
+            for path in ("/core/info", "/v2/core/info")
+        },
     )
-    @websocket_api.async_response
-    async def _record(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        calls.append(msg)
-        connection.send_result(msg["id"], {})
-
-    websocket_api.async_register_command(hass, _record)
-    return calls
+    return aioclient_mock
 
 
 def _tools(client: HomeAssistantClient) -> ServiceTools:
@@ -138,7 +127,7 @@ def test_whoami_and_unrelated_commands_stay_usable(
 )
 async def test_call_service_cannot_mint_tokens_or_manage_users(
     core_client: HomeAssistantClient,
-    supervisor_calls: list[dict[str, Any]],
+    supervisor_calls: AiohttpClientMocker,
     sent: AsyncMock,
     command: str,
     data: dict[str, Any] | None,
@@ -154,7 +143,7 @@ async def test_call_service_cannot_mint_tokens_or_manage_users(
     assert "Home Assistant UI" in suggestions
     assert "Check the parameter values" not in suggestions
     sent.assert_not_awaited()
-    assert supervisor_calls == []
+    assert supervisor_requests(supervisor_calls) == []
 
 
 @pytest.mark.parametrize(
@@ -166,7 +155,7 @@ async def test_call_service_cannot_mint_tokens_or_manage_users(
 )
 async def test_call_service_still_sends_whoami_and_other_supervisor_calls(
     core_client: HomeAssistantClient,
-    supervisor_calls: list[dict[str, Any]],
+    supervisor_calls: AiohttpClientMocker,
     sent: AsyncMock,
     command: str,
     data: dict[str, Any] | None,
@@ -205,7 +194,7 @@ async def test_call_service_still_sends_whoami_and_other_supervisor_calls(
 )
 async def test_sandbox_ws_send_cannot_mint_tokens_or_bypass_wrapping_tools(
     core_client: HomeAssistantClient,
-    supervisor_calls: list[dict[str, Any]],
+    supervisor_calls: AiohttpClientMocker,
     sent: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
     message: dict[str, Any],
@@ -215,7 +204,7 @@ async def test_sandbox_ws_send_cannot_mint_tokens_or_bypass_wrapping_tools(
 
     assert expected in result.get("error", "")
     sent.assert_not_awaited()
-    assert supervisor_calls == []
+    assert supervisor_requests(supervisor_calls) == []
 
 
 @pytest.mark.parametrize(
@@ -227,7 +216,7 @@ async def test_sandbox_ws_send_cannot_mint_tokens_or_bypass_wrapping_tools(
 )
 async def test_sandbox_ws_send_still_sends_whoami_and_other_supervisor_calls(
     core_client: HomeAssistantClient,
-    supervisor_calls: list[dict[str, Any]],
+    supervisor_calls: AiohttpClientMocker,
     sent: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
     message: dict[str, Any],

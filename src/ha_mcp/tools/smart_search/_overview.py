@@ -93,11 +93,6 @@ class SystemOverviewMixin(_SearchBase):
                 results = await self._fetch_legacy_overview_slices()
 
             entities = results[0]
-            # A cancelled services/registry sub-task must propagate too, not be
-            # silently degraded by the fail-open handlers below.
-            for sub_result in results[1:]:
-                if isinstance(sub_result, asyncio.CancelledError):
-                    raise sub_result
 
             # Opt-in visibility filter: drop out-of-scope entities from the whole
             # overview universe before any domain stats/samples are computed, so

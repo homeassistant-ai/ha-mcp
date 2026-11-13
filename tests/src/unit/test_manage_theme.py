@@ -1,49 +1,66 @@
-"""Unit tests for the ha_manage_theme tool in tools_themes module."""
+"""``ha_manage_theme`` list and set, against Core's own ``frontend``.
 
-import json
-from unittest.mock import AsyncMock
+The tool runs on the server's own client connected to a real ``hass``: Core's
+``frontend`` answers ``frontend/get_themes`` and validates ``frontend.set_theme``,
+so every listing, default and refusal is Core's own.
+"""
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_themes import ThemesTools
 
+from ._addon_tool_helpers import _parse_tool_error
 
-def _client(themes_dict=None, default_theme="default", default_dark_theme=None):
-    """Mock client whose websocket returns themes and whose services succeed."""
-    client = AsyncMock()
-    result = {
-        "success": True,
-        "result": {
-            "themes": themes_dict or {},
-            "default_theme": default_theme,
-            "default_dark_theme": default_dark_theme,
-        },
+_THEMES = {"nord": {"primary-color": "#5e81ac"}, "iceberg": {}}
+
+
+async def _set_up_frontend(
+    hass: HomeAssistant, tmp_path: Path, themes: dict[str, Any] | None = None
+) -> None:
+    """Core's frontend with ``themes``; the development repo keeps it off the
+    frontend package, whose files no test here asks for."""
+    config = {
+        "frontend": {
+            "development_repo": str(tmp_path),
+            "themes": _THEMES if themes is None else themes,
+        }
     }
-    client.send_websocket_message.return_value = result
-    client.call_service.return_value = []
-    return client
+    assert await async_setup_component(hass, "frontend", config)
 
 
-def _tool_error_payload(exc_info) -> dict:
-    """Parse the structured error JSON out of a raised ToolError."""
-    return json.loads(str(exc_info.value))
+async def _core_defaults(client: HomeAssistantClient) -> dict[str, Any]:
+    reply = await client.send_websocket_message({"type": "frontend/get_themes"})
+    assert reply["success"], reply
+    result: dict[str, Any] = reply["result"]
+    return result
 
 
 class TestManageThemeList:
-    """Coverage for action='list'."""
+    """action='list' reports Core's installed themes and defaults."""
 
-    @pytest.mark.asyncio
-    async def test_list_returns_sorted_names_and_defaults(self):
-        client = _client(
-            themes_dict={"nord": {"primary-color": "#5e81ac"}, "iceberg": {}},
-            default_theme="nord",
-            default_dark_theme="iceberg",
+    async def test_list_returns_sorted_names_and_defaults(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
+        await hass.services.async_call(
+            "frontend", "set_theme", {"name": "nord"}, blocking=True
         )
-        tools = ThemesTools(client)
+        await hass.services.async_call(
+            "frontend", "set_theme", {"name": "iceberg", "mode": "dark"}, blocking=True
+        )
 
-        result = await tools.ha_manage_theme(action="list")
+        result = await ThemesTools(core_client).ha_manage_theme(action="list")
 
         assert result["success"] is True
         data = result["data"]
@@ -51,147 +68,158 @@ class TestManageThemeList:
         assert data["count"] == 2
         assert data["default_theme"] == "nord"
         assert data["default_dark_theme"] == "iceberg"
-        client.send_websocket_message.assert_awaited_once_with(
-            {"type": "frontend/get_themes"}
-        )
 
-    @pytest.mark.asyncio
-    async def test_list_with_no_themes_installed(self):
-        tools = ThemesTools(_client())
+    async def test_list_with_no_themes_installed(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path, themes={})
 
-        result = await tools.ha_manage_theme(action="list")
+        result = await ThemesTools(core_client).ha_manage_theme(action="list")
 
         assert result["success"] is True
         assert result["data"]["themes"] == []
         assert result["data"]["count"] == 0
 
-    @pytest.mark.asyncio
-    async def test_list_websocket_failure_raises_tool_error(self):
-        client = AsyncMock()
-        client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "not allowed"},
-        }
-        tools = ThemesTools(client)
-
+    async def test_list_refused_by_core_raises_tool_error(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Without the frontend Core refuses frontend/get_themes; the tool says so."""
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_manage_theme(action="list")
+            await ThemesTools(core_client).ha_manage_theme(action="list")
 
-        payload = _tool_error_payload(exc_info)
+        payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
-        assert "not allowed" in payload["error"]["message"]
+        assert "Failed to list themes" in payload["error"]["message"]
+        assert "Unknown command" in payload["error"]["message"]
 
 
 class TestManageThemeSet:
-    """Coverage for action='set'."""
+    """action='set' selects Core's backend default theme and reports it."""
 
-    @pytest.mark.asyncio
-    async def test_set_requires_theme_name(self):
-        tools = ThemesTools(_client())
+    async def test_set_requires_theme_name(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
+        with (
+            patch.object(
+                core_client, "call_service", wraps=core_client.call_service
+            ) as call_spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ThemesTools(core_client).ha_manage_theme(action="set")
 
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_manage_theme(action="set")
-
-        payload = _tool_error_payload(exc_info)
+        payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+        call_spy.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_set_calls_service_and_verifies(self):
-        client = _client(themes_dict={"nord": {}}, default_theme="nord")
-        tools = ThemesTools(client)
+    async def test_set_light_default_reports_the_new_default(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
 
-        result = await tools.ha_manage_theme(action="set", theme_name="nord")
-
-        client.call_service.assert_awaited_once_with(
-            "frontend", "set_theme", {"name": "nord"}
+        result = await ThemesTools(core_client).ha_manage_theme(
+            action="set", theme_name="nord"
         )
+
         assert result["success"] is True
         assert result["data"]["theme"] == "nord"
         assert result["data"]["mode"] == "light"
         assert result["data"]["default_theme"] == "nord"
+        assert (await _core_defaults(core_client))["default_theme"] == "nord"
 
-    @pytest.mark.asyncio
-    async def test_set_with_dark_mode_passes_mode(self):
-        client = _client(
-            themes_dict={"nord": {}},
-            default_theme="default",
-            default_dark_theme="nord",
-        )
-        tools = ThemesTools(client)
+    async def test_set_with_dark_mode_sets_only_the_dark_default(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
 
-        result = await tools.ha_manage_theme(
+        result = await ThemesTools(core_client).ha_manage_theme(
             action="set", theme_name="nord", mode="dark"
         )
 
-        client.call_service.assert_awaited_once_with(
-            "frontend", "set_theme", {"name": "nord", "mode": "dark"}
-        )
         assert result["data"]["mode"] == "dark"
         assert result["data"]["default_dark_theme"] == "nord"
+        assert result["data"]["default_theme"] == "default"
+        core = await _core_defaults(core_client)
+        assert core["default_dark_theme"] == "nord"
+        assert core["default_theme"] == "default"
 
-    @pytest.mark.asyncio
-    async def test_set_light_mode_leaves_dark_default_untouched(self):
-        client = _client(
-            themes_dict={"nord": {}, "iceberg": {}},
-            default_theme="nord",
-            default_dark_theme="iceberg",
+    async def test_set_light_mode_leaves_dark_default_untouched(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
+        await hass.services.async_call(
+            "frontend", "set_theme", {"name": "iceberg", "mode": "dark"}, blocking=True
         )
-        tools = ThemesTools(client)
 
-        result = await tools.ha_manage_theme(action="set", theme_name="nord")
-
-        client.call_service.assert_awaited_once_with(
-            "frontend", "set_theme", {"name": "nord"}
+        result = await ThemesTools(core_client).ha_manage_theme(
+            action="set", theme_name="nord"
         )
+
         assert result["data"]["mode"] == "light"
+        assert result["data"]["default_theme"] == "nord"
         assert result["data"]["default_dark_theme"] == "iceberg"
 
-    @pytest.mark.asyncio
-    async def test_set_verification_failure_raises_tool_error(self):
-        """A failed post-set verification read surfaces as a structured error."""
-        client = _client()
-        client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "ws timeout"},
-        }
-        tools = ThemesTools(client)
+    async def test_set_verification_read_without_answer_raises_tool_error(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        """The theme is applied, but no answer to the re-read is an error."""
+        await _set_up_frontend(hass, tmp_path)
+        with (
+            patch.object(
+                core_client, "call_service", wraps=core_client.call_service
+            ) as call_spy,
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("ws dropped")),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ThemesTools(core_client).ha_manage_theme(
+                action="set", theme_name="nord"
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_manage_theme(action="set", theme_name="nord")
-
-        client.call_service.assert_awaited_once()
-        payload = _tool_error_payload(exc_info)
+        call_spy.assert_awaited_once()
+        payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
-        assert "ws timeout" in payload["error"]["message"]
+        assert "ws dropped" in payload["error"]["message"]
+        assert (await _core_defaults(core_client))["default_theme"] == "nord"
 
-    @pytest.mark.asyncio
-    async def test_set_api_rejection_names_theme(self):
-        """HA's bare 400 for unknown themes gets enriched with the theme name."""
-        client = _client()
-        client.call_service.side_effect = HomeAssistantAPIError(
-            "API error: 400 - 400: Bad Request"
-        )
-        tools = ThemesTools(client)
+    async def test_set_unknown_theme_rejection_names_theme(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        """Core's bare 400 for an unknown theme is enriched with the theme name."""
+        await _set_up_frontend(hass, tmp_path)
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_manage_theme(action="set", theme_name="nope")
+            await ThemesTools(core_client).ha_manage_theme(
+                action="set", theme_name="nope"
+            )
 
-        payload = _tool_error_payload(exc_info)
+        payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "nope" in payload["error"]["message"]
+        assert (await _core_defaults(core_client))["default_theme"] == "default"
 
-    @pytest.mark.asyncio
-    async def test_set_service_failure_raises_tool_error(self):
-        client = _client()
-        client.call_service.side_effect = RuntimeError("Theme nope not found")
-        tools = ThemesTools(client)
+    async def test_set_without_answer_raises_tool_error_pointing_to_list(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    ) -> None:
+        await _set_up_frontend(hass, tmp_path)
+        with (
+            patch.object(
+                core_client,
+                "call_service",
+                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ThemesTools(core_client).ha_manage_theme(
+                action="set", theme_name="nope"
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_manage_theme(action="set", theme_name="nope")
-
-        payload = _tool_error_payload(exc_info)
+        payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
-        assert "nope" in payload["error"]["message"]
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
         assert any(
             "action='list'" in s for s in payload["error"].get("suggestions", [])
         )

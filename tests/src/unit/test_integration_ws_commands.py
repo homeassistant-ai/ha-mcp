@@ -1,262 +1,375 @@
-"""ha_get_integration lists an entry's own WebSocket commands; ha_set_integration sends one."""
+"""ha_get_integration lists an entry's own WebSocket commands; ha_set_integration sends one.
+
+Every test runs on a real ``hass`` with Core's real ``knx`` integration, set up
+from its config entry as Core's own KNX tests set it up (``_knx_core``): only
+the KNX bus below xknx is replaced, so every ``knx/*`` command, its schema and
+its reply are Core's. The component's ``integration_commands`` bridge
+(``component_core_client``) describes them.
+"""
+
+from __future__ import annotations
 
 import json
-from contextlib import ExitStack
-from types import SimpleNamespace
+import logging
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.recorder import Recorder
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools.const import DOMAIN as COMPONENT_DOMAIN
+from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import integration_ws_commands as module
-from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.tools import core_contract, integration_ws_commands
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-_NOT_EXPOSED = (
-    "The installed component does not expose the listing of an "
-    "integration's own WebSocket commands."
-)
-_COMMAND_LIST = {
-    "status": "available",
-    "domain": "knx",
-    "commands": [
-        {
-            "command": "knx/get_entity_config",
-            "schema": {"type": "object"},
-            "description_complete": False,
-            "warnings": ["Some Core validators cannot be described."],
-        },
-        {
-            "command": "knx/update_entity",
-            "schema": {"type": "object"},
-            "description_complete": False,
-            "warnings": ["Some Core validators cannot be described."],
-        },
-    ],
-}
+from ._knx_core import set_up_knx
+from ._tool_errors import _error
+
+_DESCRIPTION_WARNING = "Some Core validators cannot be described"
+# A KNX switch as the KNX panel creates one: its name and the group address it
+# writes to.
+_SWITCH = {"entity": {"name": "Hall"}, "knx": {"ga_switch": {"write": "1/2/3"}}}
 
 
-def _client(domain: str = "knx") -> MagicMock:
-    client = MagicMock(get_config_entry=AsyncMock(return_value={"domain": domain}))
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": {"info": {"name": "Demo"}}}
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """KNX keeps its telegram database in the config directory; this one is the test's."""
+    return hass_tmp_config_dir
+
+
+async def _add_entry(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, domain: str = "knx"
+) -> MockConfigEntry:
+    """An entry of ``domain`` that Core's config-entry API can read.
+
+    A ``knx`` entry is Core's KNX integration, set up; another domain's entry
+    is only added.
+    """
+    assert await async_setup_component(hass, "config", {})
+    if domain == "knx":
+        return await set_up_knx(hass, monkeypatch)
+    entry = MockConfigEntry(domain=domain)
+    entry.add_to_hass(hass)
+    return entry
+
+
+def _bridge_spy() -> Any:
+    """Spy on the bridge where the listing calls it; it still answers."""
+    return patch.object(
+        integration_ws_commands,
+        "integration_commands",
+        wraps=core_contract.integration_commands,
     )
-    return client
 
 
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))["error"]
-
-
-async def _get(client: MagicMock, domain: str | None = "knx", **kwargs: Any) -> Any:
-    single = {"success": True, "entry_id": "e1", "entry": {"domain": domain}}
-    with patch.object(
-        IntegrationTools, "_get_single_entry", new=AsyncMock(return_value=single)
-    ):
-        return await IntegrationTools(client).ha_get_integration(**kwargs)
-
-
-def _bridge(answer: dict[str, Any]) -> tuple[ExitStack, Mock]:
-    """Patches for the real bridge, talking to a component that answers
-    ``answer``, and that component's WebSocket client."""
-    caps = ComponentCaps(1, "test", frozenset({"integration_commands"}), {})
-    ws = Mock(send_command=AsyncMock(return_value={"result": answer}))
-    stack = ExitStack()
-    for name, value in (("get_component_caps", caps), ("get_websocket_client", ws)):
-        stack.enter_context(
-            patch(f"ha_mcp.tools.core_contract.{name}", AsyncMock(return_value=value))
-        )
-    return stack, ws
+def _sent_types(send: AsyncMock) -> list[str]:
+    return [call.args[0]["type"] for call in send.await_args_list]
 
 
 class TestListing:
-    async def test_lists_commands_and_lifts_their_warnings(self) -> None:
-        listing = json.loads(json.dumps(_COMMAND_LIST))
-        bridge = AsyncMock(return_value=listing)
-        with patch.object(module, "integration_commands", bridge):
-            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
-        assert bridge.await_args.args[1:] == ("knx",)
-        assert [row["command"] for row in result["ws_commands"]] == [
-            "knx/get_entity_config",
-            "knx/update_entity",
-        ]
-        assert all("warnings" not in row for row in result["ws_commands"])
-        assert result["warnings"] == ["Some Core validators cannot be described."]
-
-    async def test_without_the_capability_the_list_is_absent_with_a_warning(
+    async def test_lists_only_the_entrys_domain_commands_and_lifts_their_warnings(
         self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        caps = ComponentCaps(1, "test", frozenset({"core_contract"}), {})
-        with patch(
-            "ha_mcp.tools.core_contract.get_component_caps",
-            AsyncMock(return_value=caps),
-        ):
-            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
+        entry = await _add_entry(hass, monkeypatch)
+
+        with _bridge_spy() as bridge:
+            result = await IntegrationTools(component_core_client).ha_get_integration(
+                entry_id=entry.entry_id, include_ws_commands=True
+            )
+
+        bridge.assert_awaited_once_with(component_core_client, "knx")
+        rows = result["ws_commands"]
+        commands = [row["command"] for row in rows]
+        # Core's config, config_entries and other domains' commands are
+        # registered too; only KNX's own are listed.
+        assert {"knx/get_entity_config", "knx/update_entity"} <= set(commands)
+        assert all(command.startswith("knx/") for command in commands)
+        assert all("warnings" not in row for row in rows)
+        # A KNX command Core's serializer cannot fully describe
+        # (knx/query_telegrams) lifts its warning to the result.
+        assert not all(row["description_complete"] for row in rows)
+        assert sum(_DESCRIPTION_WARNING in w for w in result["warnings"]) == 1
+
+    async def test_a_warning_several_commands_share_is_listed_once(
+        self,
+        recorder_mock: Recorder,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Core's recorder registers several commands its serializer cannot
+        fully describe; the warning they share is listed once."""
+        entry = await _add_entry(hass, monkeypatch, domain="recorder")
+
+        result = await IntegrationTools(component_core_client).ha_get_integration(
+            entry_id=entry.entry_id, include_ws_commands=True
+        )
+
+        rows = result["ws_commands"]
+        assert sum(not row["description_complete"] for row in rows) > 1
+        assert sum(_DESCRIPTION_WARNING in w for w in result["warnings"]) == 1
+
+    async def test_without_the_component_the_list_is_absent_with_a_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        entry = await _add_entry(hass, monkeypatch)
+
+        result = await IntegrationTools(core_client).ha_get_integration(
+            entry_id=entry.entry_id, include_ws_commands=True
+        )
+
+        assert result["entry"]["domain"] == "knx"
         assert "ws_commands" not in result
-        (warning,) = result["warnings"]
-        assert warning.startswith(f"ws_commands not listed: {_NOT_EXPOSED}")
+        (warning,) = [w for w in result["warnings"] if "ws_commands" in w]
+        assert warning.startswith("ws_commands not listed: ")
+        assert "listing of an integration's own WebSocket commands" in warning
         assert "Core contract" not in warning
 
-    async def test_a_failed_listing_keeps_the_entry_read_with_a_warning(
+    async def test_a_lost_bridge_keeps_the_entry_read_and_logs_one_traceback(
         self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        with patch(
-            "ha_mcp.tools.core_contract.get_component_caps",
-            AsyncMock(side_effect=RuntimeError("ws down")),
+        entry = await _add_entry(hass, monkeypatch)
+        tools = IntegrationTools(component_core_client)
+
+        with (
+            patch.object(
+                core_contract,
+                "get_websocket_client",
+                AsyncMock(side_effect=HomeAssistantConnectionError("ws down")),
+            ),
+            caplog.at_level(logging.WARNING),
         ):
-            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
-        assert result["entry"] == {"domain": "knx"}
+            result = await tools.ha_get_integration(
+                entry_id=entry.entry_id, include_ws_commands=True
+            )
+
+        assert result["entry"]["entry_id"] == entry.entry_id
         assert "ws_commands" not in result
-        assert result["warnings"] == [
+        assert [w for w in result["warnings"] if "ws_commands" in w] == [
             "ws_commands not listed: Could not obtain the listing "
             "of an integration's own WebSocket commands: ws down"
         ]
-
-    async def test_a_malformed_listing_names_the_bridge_and_logs_one_traceback(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        stack, _ws = _bridge({"status": "weird"})
-        with stack, caplog.at_level("WARNING"):
-            result = await _get(_client(), entry_id="e1", include_ws_commands=True)
-        assert result["warnings"] == [
-            "ws_commands not listed: Could not obtain the listing "
-            "of an integration's own WebSocket commands: malformed "
-            "ha_mcp_tools/integration_commands response"
+        listing_logs = [
+            record.exc_info is not None
+            for record in caplog.records
+            if record.name in (core_contract.__name__, integration_ws_commands.__name__)
         ]
-        assert [r.exc_info is not None for r in caplog.records] == [True, False]
+        assert listing_logs == [True, False]
 
     @pytest.mark.parametrize(
-        ("domain", "kwargs", "warning"),
+        ("domain", "requested", "warning"),
         [
-            ("knx", {}, None),
-            ("ha_mcp_tools", {"include_ws_commands": True}, "was ignored"),
-            (
-                None,
-                {"include_ws_commands": True},
-                "ws_commands not listed: the entry carries no domain",
-            ),
+            ("knx", False, None),
+            (COMPONENT_DOMAIN, True, "include_ws_commands was ignored"),
         ],
-        ids=["not_requested", "component_entry", "no_domain"],
+        ids=["not_requested", "component_entry"],
     )
     async def test_no_bridge_call_and_no_list(
-        self, domain: str | None, kwargs: dict[str, Any], warning: str | None
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        domain: str,
+        requested: bool,
+        warning: str | None,
     ) -> None:
-        bridge = AsyncMock()
-        with patch.object(module, "integration_commands", bridge):
-            result = await _get(_client(), domain, entry_id="e1", **kwargs)
+        entry = await _add_entry(hass, monkeypatch, domain)
+
+        with _bridge_spy() as bridge:
+            result = await IntegrationTools(component_core_client).ha_get_integration(
+                entry_id=entry.entry_id, include_ws_commands=requested
+            )
+
         bridge.assert_not_awaited()
         assert "ws_commands" not in result
-        assert (
-            (warning in result["warnings"][0]) if warning else "warnings" not in result
+        listing_warnings = [w for w in result.get("warnings", []) if "ws_command" in w]
+        assert [w.startswith(warning) for w in listing_warnings] == (
+            [True] if warning else []
         )
 
-    async def test_list_mode_ignores_the_flag_with_a_warning(self) -> None:
-        tools = IntegrationTools(_client())
-        with patch.object(
-            IntegrationTools,
-            "_list_entries",
-            new=AsyncMock(return_value={"success": True, "entries": []}),
-        ):
-            result = await tools.ha_get_integration(include_ws_commands=True)
+    async def test_list_mode_ignores_the_flag_with_a_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _add_entry(hass, monkeypatch)
+
+        with _bridge_spy() as bridge:
+            result = await IntegrationTools(core_client).ha_get_integration(
+                include_ws_commands=True
+            )
+
+        bridge.assert_not_awaited()
         assert any("include_ws_commands" in w for w in result["warnings"])
 
 
 class TestSend:
-    async def test_sends_the_command_as_given_without_a_backup(self) -> None:
-        # Core validates the call itself; the bridge is not asked first.
-        client = _client()
-        bridge = AsyncMock()
-        with (
-            patch.object(module, "integration_commands", bridge),
-            patch(
-                "ha_mcp.tools.auto_backup.get_global_settings",
-                return_value=SimpleNamespace(enable_auto_backup=True),
-            ),
-            patch(
-                "ha_mcp.tools.auto_backup._capture_pre_write_snapshot",
-                new=AsyncMock(),
-            ) as capture,
-        ):
-            result = await IntegrationTools(client).ha_set_integration(
-                entry_id="e1",
-                ws_command="knx/get_entity_config",
-                ws_data={"entity_id": "light.x"},
+    async def test_sends_the_command_as_given_without_a_backup(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Core validates the call itself; the bridge is not asked first. A
+        # ws_command changes the integration's own storage, not the entry a
+        # snapshot holds, so none is taken; enabling the entry takes one.
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+        monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
+        reset_global_settings()
+        manager = bm.get_backup_manager(core_client, get_global_settings())
+        entry = await _add_entry(hass, monkeypatch)
+        tools = IntegrationTools(core_client)
+
+        with _bridge_spy() as bridge:
+            result = await tools.ha_set_integration(
+                entry_id=entry.entry_id,
+                ws_command="knx/create_entity",
+                ws_data={"platform": "switch", "data": _SWITCH},
             )
+
         bridge.assert_not_awaited()
-        client.send_websocket_message.assert_awaited_once_with(
-            {"type": "knx/get_entity_config", "entity_id": "light.x"}
-        )
-        capture.assert_not_awaited()
-        assert result == {
-            "success": True,
-            "entry_id": "e1",
-            "ws_command": "knx/get_entity_config",
-            "result": {"info": {"name": "Demo"}},
-        }
+        assert result["success"] is True
+        assert result["ws_command"] == "knx/create_entity"
+        # KNX created the switch the data describes and answered with its id.
+        created = entity_registry.async_get(result["result"]["entity_id"])
+        assert created is not None
+        assert (created.config_entry_id, created.domain) == (entry.entry_id, "switch")
+        assert hass.states.get(created.entity_id) is not None
+        assert manager.list_snapshots() == []
+
+        await tools.ha_set_integration(entry_id=entry.entry_id, enabled=False)
+        assert manager.list_snapshots() != []
 
     @pytest.mark.parametrize("ws_data", [{"type": "call_service"}, {"id": 1}])
     async def test_ws_data_cannot_set_the_message_envelope(
-        self, ws_data: dict[str, Any]
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        ws_data: dict[str, Any],
     ) -> None:
-        client = _client()
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/get_knx_project", ws_data=ws_data
+        entry = await _add_entry(hass, monkeypatch)
+
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                wraps=core_client.send_websocket_message,
+            ) as send,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await IntegrationTools(core_client).ha_set_integration(
+                entry_id=entry.entry_id,
+                ws_command="knx/get_entity_config",
+                ws_data=ws_data,
             )
+
         assert _error(exc_info)["code"] == "VALIDATION_FAILED"
         assert "reserved" in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
+        send.assert_not_awaited()
 
     @pytest.mark.parametrize(
-        ("core_code", "code"),
+        ("ws_command", "ws_data", "code", "fragment", "suggests_listing"),
         [
-            ("invalid_format", "VALIDATION_INVALID_PARAMETER"),
-            ("home_assistant_error", "SERVICE_CALL_FAILED"),
+            (
+                "knx/get_entity_config",
+                {"entity_id": "light.x", "bogus": 1},
+                "VALIDATION_INVALID_PARAMETER",
+                "bogus",
+                True,
+            ),
+            # KNX's handler refuses a switch it does not hold.
+            (
+                "knx/update_entity",
+                {"platform": "switch", "entity_id": "switch.hall", "data": _SWITCH},
+                "SERVICE_CALL_FAILED",
+                "Entity not found: switch.hall",
+                False,
+            ),
         ],
+        ids=["invalid_format", "home_assistant_error"],
     )
     async def test_cores_error_comes_back_with_its_code(
-        self, core_code: str, code: str
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        ws_command: str,
+        ws_data: dict[str, Any],
+        code: str,
+        fragment: str,
+        suggests_listing: bool,
     ) -> None:
-        client = _client()
-        message = (
-            "Command failed: extra keys not allowed. "
-            "Got {'id': 7, 'type': 'knx/get_knx_project', 'bogus': 1}"
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": message, "error_code": core_code}
-        )
+        entry = await _add_entry(hass, monkeypatch)
+
         with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/get_knx_project", ws_data={"bogus": 1}
+            await IntegrationTools(core_client).ha_set_integration(
+                entry_id=entry.entry_id, ws_command=ws_command, ws_data=ws_data
             )
+
         error = _error(exc_info)
-        assert (error["code"], error["message"]) == (code, message)
+        assert error["code"] == code
+        assert fragment in error["message"]
         listed = "include_ws_commands" in str(error.get("suggestion"))
-        assert listed is (core_code == "invalid_format")
+        assert listed is suggests_listing
 
     @pytest.mark.parametrize(
-        ("raised", "unverified"),
-        [
-            (HomeAssistantConnectionError("closed while waiting"), True),
-            (HomeAssistantCommandNotSent("WebSocket not authenticated"), False),
-        ],
+        "unverified", [True, False], ids=["lost_after_sending", "never_sent"]
     )
     async def test_a_lost_answer_says_the_command_may_have_run(
-        self, raised: Exception, unverified: bool
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        unverified: bool,
     ) -> None:
-        client = _client()
-        client.send_websocket_message = AsyncMock(side_effect=raised)
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                entry_id="e1", ws_command="knx/update_entity", ws_data={"a": 1}
+        entry = await _add_entry(hass, monkeypatch)
+        if unverified:
+            no_answer = patch.object(
+                core_client,
+                "send_websocket_message",
+                side_effect=HomeAssistantConnectionError("closed while waiting"),
             )
+        else:
+            no_answer = patch.object(
+                core_client,
+                "send_websocket_message",
+                side_effect=HomeAssistantCommandNotSent("WebSocket not authenticated"),
+            )
+
+        with no_answer, pytest.raises(ToolError) as exc_info:
+            await IntegrationTools(core_client).ha_set_integration(
+                entry_id=entry.entry_id,
+                ws_command="knx/create_entity",
+                ws_data={"platform": "switch", "data": _SWITCH},
+            )
+
         response = json.loads(str(exc_info.value))
         assert (response.get("status") == "applied_but_unverified") is unverified
         assert ("may have been applied" in response["error"]["message"]) is unverified
@@ -265,10 +378,9 @@ class TestSend:
         ("domain", "kwargs", "fragment"),
         [
             ("knx", {"ws_command": "config/core/update"}, "'knx/'"),
+            # A shared prefix without the slash is another integration.
             ("knx", {"ws_command": "knxx/other"}, "'knx/'"),
-            ("knx", {"ws_command": "knx"}, "'knx/'"),
-            ("knx", {"ws_command": "auth/x"}, "'knx/'"),
-            ("ha_mcp_tools", {"ws_command": "ha_mcp_tools/info"}, "ha-mcp's own"),
+            (COMPONENT_DOMAIN, {"ws_command": "ha_mcp_tools/info"}, "ha-mcp's own"),
             ("knx", {"ws_command": "knx/subscribe_telegrams"}, "one-shot"),
             # Snapshot deletion stays with ha_manage_backup.
             (
@@ -276,73 +388,77 @@ class TestSend:
                 {"ws_command": "backup/delete", "ws_data": {"backup_id": "abc"}},
                 "ha_manage_backup",
             ),
-            ("knx", {"ws_command": "knx/x", "config": {"a": 1}}, "takes no config"),
-            ("knx", {"ws_command": "knx/x", "flow_id": "f1"}, "takes no flow_id"),
-            ("knx", {"ws_command": "knx/x", "abort": True}, "takes no abort"),
+            (
+                "knx",
+                {"ws_command": "knx/get_base_data", "config": {"a": 1}},
+                "takes no config",
+            ),
+            (
+                "knx",
+                {"ws_command": "knx/get_base_data", "flow_id": "f1"},
+                "takes no flow_id",
+            ),
+            (
+                "knx",
+                {"ws_command": "knx/get_base_data", "abort": True},
+                "takes no abort",
+            ),
             ("knx", {"ws_data": {"a": 1}}, "needs ws_command"),
-            ("knx", {"ws_command": "knx/x", "entry_id": None}, "needs entry_id"),
+            (
+                "knx",
+                {"ws_command": "knx/get_base_data", "entry_id": None},
+                "needs entry_id",
+            ),
         ],
     )
     async def test_refused_calls_send_nothing(
-        self, domain: str, kwargs: dict[str, Any], fragment: str
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        domain: str,
+        kwargs: dict[str, Any],
+        fragment: str,
     ) -> None:
-        client = _client(domain)
-        with pytest.raises(ToolError) as exc_info:
-            await IntegrationTools(client).ha_set_integration(
-                **{"entry_id": "e1", **kwargs}
+        entry = await _add_entry(hass, monkeypatch, domain)
+
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                wraps=core_client.send_websocket_message,
+            ) as send,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await IntegrationTools(core_client).ha_set_integration(
+                **{"entry_id": entry.entry_id, **kwargs}
             )
+
         assert fragment in _error(exc_info)["message"]
-        client.send_websocket_message.assert_not_awaited()
+        # Reading the entry's domain is the only message sent.
+        assert set(_sent_types(send)) <= {"config_entries/get_single"}
 
 
 @pytest.mark.parametrize(
-    ("bridge", "feature"),
+    ("ask", "feature"),
     [
-        ("core_contract", "Core contract discovery/validation"),
         (
-            "integration_commands",
+            lambda client: core_contract.core_contract(client, "energy/save_prefs"),
+            "Core contract discovery/validation",
+        ),
+        (
+            lambda client: core_contract.integration_commands(client, "knx"),
             "the listing of an integration's own WebSocket commands",
         ),
     ],
+    ids=["core_contract", "integration_commands"],
 )
-async def test_each_bridge_names_its_own_feature_when_absent(
-    bridge: str, feature: str
+async def test_each_bridge_names_its_own_feature_without_the_component(
+    core_client: HomeAssistantClient,
+    ask: Callable[[HomeAssistantClient], Any],
+    feature: str,
 ) -> None:
-    from ha_mcp.tools import core_contract
+    result = await ask(core_client)
 
-    caps = ComponentCaps(1, "test", frozenset(), {})
-    with patch.object(
-        core_contract, "get_component_caps", AsyncMock(return_value=caps)
-    ):
-        result = await getattr(core_contract, bridge)(Mock(), "knx")
-    assert result == {
-        "status": "unavailable",
-        "reason": f"The installed component does not expose {feature}. "
-        "Core still validates actual requests.",
-    }
-
-
-async def test_server_bridge_reaches_the_component_producer(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    """The server's bridge lists a command Core has registered, through the
-    real component over the server's own client."""
-    from homeassistant.components import websocket_api
-
-    from ha_mcp.tools import core_contract
-
-    @websocket_api.websocket_command({"type": "knx/delete_entity"})
-    @callback
-    def delete_entity(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        connection.send_result(msg["id"], None)
-
-    websocket_api.async_register_command(hass, delete_entity)
-
-    result = await core_contract.integration_commands(component_core_client, "knx")
-
-    assert result["status"] == "available"
-    assert [row["command"] for row in result["commands"]] == ["knx/delete_entity"]
+    assert result["status"] == "unavailable"
+    assert f"does not expose {feature}." in result["reason"]
