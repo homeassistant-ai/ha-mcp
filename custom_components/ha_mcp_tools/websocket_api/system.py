@@ -171,7 +171,7 @@ def _do_system_snapshot(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
       scrub here).
     * ``issues`` — the ``_overview_repairs`` slice, reused verbatim.
     * ``entities`` — the ``registry_lookup`` row shape (``as_partial_dict``).
-    * ``states`` — ``State.as_dict()`` per state (REST-parity bodies).
+    * ``states`` — ``State.as_dict()`` per state, with the live ``last_reported``.
     """
     view = _resolve_registries(hass)
     result: dict[str, Any] = {}
@@ -211,7 +211,7 @@ def _config_entry_identity_row(entry: Any) -> dict[str, Any]:
 
 
 def _snapshot_states(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Every live state as ``State.as_dict()`` (REST-parity body, unmodified)."""
+    """Every live state as ``State.as_dict()``, with the live ``last_reported``."""
     out: list[dict[str, Any]] = []
     for state in _iter_states(hass):
         if not getattr(state, "entity_id", None):

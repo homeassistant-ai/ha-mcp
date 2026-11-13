@@ -17,6 +17,7 @@ from ...client.rest_client import (
 from ...client.websocket_client import get_websocket_client
 from ...errors import create_validation_error
 from ..component_api import (
+    COMPONENT_INSTALL_HINT,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -31,6 +32,13 @@ from ..response_helpers import project_entity_record as _project_entity
 from .base import SearchToolsBase
 
 logger = logging.getLogger(__name__)
+
+_REST_LAST_REPORTED_WARNING = (
+    "last_reported comes from Home Assistant's REST API, which can keep an "
+    "older time while an entity reports an unchanged state "
+    "(home-assistant/core#181392); the ha_mcp_tools component serves the live "
+    f"value. {COMPONENT_INSTALL_HINT}"
+)
 
 
 def _missing_entity_exc(entity_id: str) -> HomeAssistantAPIError:
@@ -122,7 +130,7 @@ class StateMixin(SearchToolsBase):
     ) -> dict[str, Any]:
         """Fetch and return state for a single entity ID."""
         try:
-            result = await self._get_one_state(entity_id)
+            result, live = await self._get_one_state(entity_id)
             entity_record, attr_warn = _project_entity(
                 result, parsed_fields, parsed_attribute_keys
             )
@@ -142,6 +150,8 @@ class StateMixin(SearchToolsBase):
                 )
             if attr_warn:
                 wrapped.setdefault("warnings", []).append(attr_warn)
+            if not live and "last_reported" in (entity_record or {}):
+                wrapped.setdefault("warnings", []).append(_REST_LAST_REPORTED_WARNING)
             return wrapped
         except ToolError:
             raise
@@ -199,10 +209,12 @@ class StateMixin(SearchToolsBase):
             )
 
         try:
-            results = await self._resolve_bulk_state_results(unique_ids)
+            results, live = await self._resolve_bulk_state_results(unique_ids)
             states, errors, attr_warns = _accumulate_state_results(
                 unique_ids, results, parsed_fields, parsed_attribute_keys
             )
+            if not live and any("last_reported" in (s or {}) for s in states.values()):
+                attr_warns.append(_REST_LAST_REPORTED_WARNING)
             response = _build_bulk_states_response(
                 states, errors, attr_warns, attribute_keys_no_effect
             )
@@ -232,8 +244,8 @@ class StateMixin(SearchToolsBase):
                 raise_error=False,
             )
 
-    async def _get_one_state(self, entity_id: str) -> dict[str, Any]:
-        """Return one entity's raw state dict — component bulk-read or legacy REST.
+    async def _get_one_state(self, entity_id: str) -> tuple[dict[str, Any], bool]:
+        """One entity's raw state dict, and whether the component served it.
 
         The same fetch primitive the bulk path uses, so single- and bulk-mode
         ``ha_get_state`` share one code path. When the component serves it, an id
@@ -246,17 +258,17 @@ class StateMixin(SearchToolsBase):
             legacy_state: dict[str, Any] = await self._client.get_entity_state(
                 entity_id
             )
-            return legacy_state
+            return legacy_state, False
         states = component.get("states") or {}
         if entity_id in states:
             record: dict[str, Any] = states[entity_id]
-            return record
+            return record, True
         raise _missing_entity_exc(entity_id)
 
     async def _resolve_bulk_state_results(
         self, unique_ids: list[str]
-    ) -> list[dict[str, Any]]:
-        """Per-id fetch results for a bulk read — component bulk-read or legacy REST.
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Per-id fetch results for a bulk read, and whether the component served them.
 
         Returns one entry per id in ``_fetch_single_state`` shape (a hit dict or a
         structured error). The component path resolves every id in ONE
@@ -267,13 +279,12 @@ class StateMixin(SearchToolsBase):
         """
         component = await self._fetch_states_via_component(unique_ids)
         if component is None:
-            return list(
-                await asyncio.gather(
-                    *(self._fetch_single_state(eid) for eid in unique_ids)
-                )
+            legacy = await asyncio.gather(
+                *(self._fetch_single_state(eid) for eid in unique_ids)
             )
+            return list(legacy), False
         states = component.get("states") or {}
-        return [self._component_state_result(eid, states) for eid in unique_ids]
+        return [self._component_state_result(eid, states) for eid in unique_ids], True
 
     def _component_state_result(
         self, entity_id: str, states: dict[str, Any]
@@ -297,10 +308,9 @@ class StateMixin(SearchToolsBase):
         their ``State.as_dict()`` body) or ``None`` when the component lacks the
         ``states`` capability, was downgraded (``unknown_command`` → invalidate the
         cached caps), errored, or returned a malformed payload (both logged).
-        Falls back **silently** — unlike ``ha_search`` / ``ha_get_zone``, which
-        append a ``warnings[]`` entry — because the legacy REST path returns the
-        byte-identical correct data either way, so the caller has nothing to act
-        on; the ``log.warning`` preserves operator visibility.
+        The fallback itself adds no warning; the caller warns only when the REST
+        record it returns carries ``last_reported``, the one field REST can serve
+        stale. The ``log.warning`` preserves operator visibility.
         ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
         SEPARATE transport, so a WS transport/connect failure
         (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a

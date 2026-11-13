@@ -69,8 +69,8 @@ async def fetch_device_via_component(
     invalidate the cached caps), or errored (logged). A component that answers
     with ``{"device": None}`` is authoritative — the device does not exist — so
     the caller must distinguish that from a ``None`` return (which means "component
-    unavailable, fall back"). Falls back **silently**, mirroring
-    ``ha_get_state``: the legacy path returns the byte-identical device either way
+    unavailable, fall back"). Falls back **silently**: the legacy path returns the
+    byte-identical device either way
     and the ``log.warning`` preserves operator visibility. A
     ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
     (re)connect — is caught here and mapped to ``None``: the consumers' legacy

@@ -541,15 +541,17 @@ def _state_get(hass: HomeAssistant, entity_id: str) -> Any:
 
 
 def _state_as_dict(state: Any) -> Any:
-    """core ``State.as_dict()`` verbatim — the REST ``/api/states/<id>`` shape.
+    """Core's ``State.as_dict()``, the REST ``/api/states/<id>`` shape, with the
+    live ``last_reported``.
 
-    Returned unmodified so the WS transport encodes its datetimes with the same
-    ``isoformat`` the REST layer uses (byte-parity — see :func:`_do_states`).
+    Core caches that dict and does not refresh it when a write repeats the
+    unchanged state, so its ``last_reported`` stays at the first serialization
+    (home-assistant/core#181392); the ``State`` object itself is current.
     """
     as_dict = getattr(state, "as_dict", None)
     if callable(as_dict):
         try:
-            return as_dict()
+            return {**as_dict(), "last_reported": state.last_reported.isoformat()}
         except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return None
     return None

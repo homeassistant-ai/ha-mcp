@@ -38,8 +38,9 @@ the info handshake carries no capability entry:
   requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
   of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
   bulk call from one in-process frame instead of up to 100 REST GETs. The body
-  is byte-identical to the REST ``/api/states/<id>`` serialization by
-  construction; the server maps found/missing onto its per-id error contract.
+  is the REST ``/api/states/<id>`` serialization with the live
+  ``last_reported``, which Core's cached one can lag; the server maps
+  found/missing onto its per-id error contract.
 * ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
   (``{metadata, config, yaml}``), which core's ``blueprint/list`` never returns (it
   serves only ``{metadata}``). The path is jailed under
