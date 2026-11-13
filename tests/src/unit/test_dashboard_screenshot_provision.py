@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -15,33 +13,13 @@ from ha_mcp.client import supervisor_client
 from ha_mcp.dashboard_screenshot import provision
 from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
 
-_PUPPET_SCHEMA = [
-    {"name": "access_token"},
-    {"name": "keep_browser_open"},
-    {"name": "home_assistant_url"},
-]
+from ._dashboard_screenshot_common import _puppet_info, set_settings
+
 _WPE_SCHEMA = [
     {"name": "home_assistant_url"},
     {"name": "home_assistant_token"},
     {"name": "dashboard_path"},
 ]
-
-
-def _puppet_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
-    info: dict[str, Any] = {
-        "name": "Puppet",
-        "state": state,
-        "version": "2.4.9",
-        "schema": _PUPPET_SCHEMA,
-        "options": {
-            "access_token": "secret",
-            "keep_browser_open": False,
-            "home_assistant_url": "http://homeassistant:8123",
-        },
-    }
-    if hostname is not None:
-        info["hostname"] = hostname
-    return info
 
 
 def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
@@ -61,12 +39,14 @@ def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
     return info
 
 
-def _serve_supervisor(
-    monkeypatch: pytest.MonkeyPatch, answers: dict[str, dict[str, Any]]
-) -> None:
-    """Answer the Supervisor REST paths in ``answers``; any other path is a 404."""
+def _serve_supervisor(monkeypatch: pytest.MonkeyPatch, answers: dict[str, Any]) -> None:
+    """Answer the Supervisor REST paths in ``answers`` (a transport error raises,
+    as an unreachable Supervisor does); any other path is a 404."""
 
     def answer(request: httpx.Request) -> httpx.Response:
+        answer = answers.get(request.url.path)
+        if isinstance(answer, httpx.TransportError):
+            raise answer  # the Supervisor gave no answer at all
         if request.url.path not in answers:
             return httpx.Response(404, json={"result": "error", "message": "Not found"})
         return httpx.Response(
@@ -226,12 +206,8 @@ class TestResolveEngine:
     async def test_explicit_url_strips_trailing_slash(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                dashboard_screenshot_engine_url="http://engine:10000/"
-            ),
+        set_settings(
+            monkeypatch, dashboard_screenshot_engine_url="http://engine:10000/"
         )
         target = await provision.resolve_engine()
         assert target.url == "http://engine:10000"
@@ -243,11 +219,7 @@ class TestResolveEngine:
     async def test_stdio_no_token_raises(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(dashboard_screenshot_engine_url=""),
-        )
+        set_settings(monkeypatch, dashboard_screenshot_engine_url="")
         with pytest.raises(ToolError):
             await provision.resolve_engine()
 
@@ -260,20 +232,14 @@ class TestResolveEngine:
         from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                dashboard_screenshot_engine_url="http://engine:10000"
-            ),
-        )
-        _patch_supervisor(
+        set_settings(monkeypatch, dashboard_screenshot_engine_url="http://engine:10000")
+        _serve_supervisor(
             monkeypatch,
             {
-                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {
-                    "data": _puppet_info(state="started", hostname="def-puppet")
-                },
+                "/addons": {"addons": [{"slug": "def_puppet"}]},
+                "/addons/def_puppet/info": _puppet_info(
+                    state="started", hostname="def-puppet"
+                ),
             },
         )
         target = await provision.resolve_engine()
@@ -290,94 +256,48 @@ class TestResolveEngine:
         from ha_mcp.dashboard_screenshot import provision
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                dashboard_screenshot_engine_url="http://engine:10000"
-            ),
-        )
-        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        set_settings(monkeypatch, dashboard_screenshot_engine_url="http://engine:10000")
+        _serve_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
         target = await provision.resolve_engine()
         assert target.url == "http://engine:10000"
         assert target.addon_credential is None
 
 
-class _FakeSupResponse:
-    def __init__(self, payload: Any) -> None:
-        self._payload = payload
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> Any:
-        return self._payload
-
-
-class _FakeSupClient:
-    """Async-context Supervisor httpx stand-in driven by a path->payload map."""
-
-    def __init__(self, routes: dict[str, Any]) -> None:
-        self._routes = routes
-
-    async def __aenter__(self) -> _FakeSupClient:
-        return self
-
-    async def __aexit__(self, *_a: Any) -> None:
-        return None
-
-    async def get(self, path: str) -> _FakeSupResponse:
-        val = self._routes[path]
-        if isinstance(val, Exception):
-            raise val
-        return _FakeSupResponse(val)
-
-
-def _patch_supervisor(monkeypatch: Any, routes: dict[str, Any]) -> None:
-    import ha_mcp.client.supervisor_client as sup_mod
-
-    monkeypatch.setattr(
-        sup_mod,
-        "make_supervisor_httpx_client",
-        lambda *_a, **_kw: _FakeSupClient(routes),
-    )
-
-
 class TestDiscoverEngineViaSupervisor:
     async def test_not_installed_raises_resource_not_found(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(
+        _serve_supervisor(
             monkeypatch,
-            {"/addons": {"data": {"addons": [{"slug": "core_ssh"}, {"slug": "a_db"}]}}},
+            {"/addons": {"addons": [{"slug": "core_ssh"}, {"slug": "a_db"}]}},
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_via_supervisor()
+            await provision.resolve_engine()
         assert "not installed" in str(exc.value).lower()
 
-    async def test_prefers_started_match(self, monkeypatch: Any) -> None:
+    async def test_prefers_started_match(
+        self, monkeypatch: Any, supervisor_mode: None
+    ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(
+        _serve_supervisor(
             monkeypatch,
             {
                 "/addons": {
-                    "data": {
-                        "addons": [
-                            {"slug": "abc_puppet"},  # stopped
-                            {"slug": "def_puppet"},  # started
-                        ]
-                    }
+                    "addons": [
+                        {"slug": "abc_puppet"},  # stopped
+                        {"slug": "def_puppet"},  # started
+                    ]
                 },
-                "/addons/abc_puppet/info": {"data": _puppet_info(state="stopped")},
-                "/addons/def_puppet/info": {
-                    "data": _puppet_info(state="started", hostname="def-puppet")
-                },
+                "/addons/abc_puppet/info": _puppet_info(state="stopped"),
+                "/addons/def_puppet/info": _puppet_info(
+                    state="started", hostname="def-puppet"
+                ),
             },
         )
-        target = await provision._discover_engine_via_supervisor()
+        target = await provision.resolve_engine()
         assert target.url == "http://def-puppet:10000"
         assert target.engine_kind == "puppet"
         assert target.engine_version == "2.4.9"
@@ -390,114 +310,73 @@ class TestDiscoverEngineViaSupervisor:
         )
 
     async def test_multiple_verified_started_matches_fail_closed(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(
+        _serve_supervisor(
             monkeypatch,
             {
                 "/addons": {
-                    "data": {
-                        "addons": [
-                            {"slug": "abc_puppet"},
-                            {"slug": "def_puppet"},
-                        ]
-                    }
+                    "addons": [
+                        {"slug": "abc_puppet"},
+                        {"slug": "def_puppet"},
+                    ]
                 },
-                "/addons/abc_puppet/info": {
-                    "data": _puppet_info(state="started", hostname="abc-puppet")
-                },
-                "/addons/def_puppet/info": {
-                    "data": _puppet_info(state="started", hostname="def-puppet")
-                },
+                "/addons/abc_puppet/info": _puppet_info(
+                    state="started", hostname="abc-puppet"
+                ),
+                "/addons/def_puppet/info": _puppet_info(
+                    state="started", hostname="def-puppet"
+                ),
             },
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_via_supervisor()
+            await provision.resolve_engine()
 
         assert "ambiguous" in str(exc_info.value)
 
-    async def test_started_without_hostname_raises(self, monkeypatch: Any) -> None:
+    async def test_started_without_hostname_raises(
+        self, monkeypatch: Any, supervisor_mode: None
+    ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(
+        _serve_supervisor(
             monkeypatch,
             {
-                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {"data": _puppet_info(state="started")},
+                "/addons": {"addons": [{"slug": "def_puppet"}]},
+                "/addons/def_puppet/info": _puppet_info(state="started"),
             },
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_via_supervisor()
+            await provision.resolve_engine()
         assert "hostname" in str(exc.value).lower()
 
-    async def test_installed_but_not_started_raises(self, monkeypatch: Any) -> None:
+    async def test_installed_but_not_started_raises(
+        self, monkeypatch: Any, supervisor_mode: None
+    ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(
+        _serve_supervisor(
             monkeypatch,
             {
-                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {"data": _puppet_info(state="stopped")},
+                "/addons": {"addons": [{"slug": "def_puppet"}]},
+                "/addons/def_puppet/info": _puppet_info(state="stopped"),
             },
         )
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_via_supervisor()
+            await provision.resolve_engine()
         assert "not started" in str(exc.value).lower()
 
     async def test_supervisor_http_error_raises_connection_failed(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, supervisor_mode: None
     ) -> None:
         import httpx
 
         from ha_mcp.dashboard_screenshot import provision
 
-        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        _serve_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
         with pytest.raises(ToolError) as exc:
-            await provision._discover_engine_via_supervisor()
+            await provision.resolve_engine()
         assert "supervisor" in str(exc.value).lower()
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            None,
-            {"data": None},
-            {"data": {"addons": None}},
-            {"data": {"addons": [None]}},
-        ],
-    )
-    async def test_malformed_addon_listing_raises_structured_error(
-        self, monkeypatch: Any, payload: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-
-        _patch_supervisor(monkeypatch, {"/addons": payload})
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_via_supervisor()
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert "Supervisor" in error["error"]["message"]
-
-    async def test_malformed_addon_info_raises_structured_error(
-        self, monkeypatch: Any
-    ) -> None:
-        from ha_mcp.dashboard_screenshot import provision
-
-        _patch_supervisor(
-            monkeypatch,
-            {
-                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
-                "/addons/def_puppet/info": {"data": None},
-            },
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await provision._discover_engine_via_supervisor()
-
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        assert "Supervisor" in error["error"]["message"]

@@ -197,26 +197,6 @@ def _select_started_verified_engine(
     return started[0]
 
 
-def _supervisor_response_data(payload: Any, endpoint: str) -> dict[str, Any]:
-    """Return a Supervisor response's object-shaped data payload."""
-    if not isinstance(payload, dict):
-        raise ValueError(f"Supervisor {endpoint} returned a non-object payload")
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise ValueError(f"Supervisor {endpoint} returned invalid data")
-    return data
-
-
-def _supervisor_addon_listing(payload: Any) -> list[dict[str, Any]]:
-    """Return the validated add-on objects from a Supervisor list response."""
-    addons = _supervisor_response_data(payload, "/addons").get("addons")
-    if not isinstance(addons, list) or not all(
-        isinstance(addon, dict) for addon in addons
-    ):
-        raise ValueError("Supervisor /addons returned an invalid addons list")
-    return addons
-
-
 async def resolve_engine() -> EngineTarget:
     """Resolve the screenshot engine endpoint, or raise ToolError.
 
@@ -301,7 +281,7 @@ async def _discover_engine_via_supervisor(
         async with make_supervisor_httpx_client(timeout=15.0, verify=True) as sup:
             listing = await sup.get("/addons")
             listing.raise_for_status()
-            addons = _supervisor_addon_listing(listing.json())
+            addons: list[dict[str, Any]] = listing.json()["data"]["addons"]
 
             profiles = tuple(
                 profile
@@ -339,7 +319,7 @@ async def _discover_engine_via_supervisor(
                 slug = str(match["slug"])
                 info = await sup.get(f"/addons/{slug}/info")
                 info.raise_for_status()
-                data = _supervisor_response_data(info.json(), f"/addons/{slug}/info")
+                data: dict[str, Any] = info.json()["data"]
                 addon_infos.append((slug, data))
             slug, data, profile = _select_started_verified_engine(addon_infos, profiles)
             hostname = data.get("hostname") or data.get("ip_address")

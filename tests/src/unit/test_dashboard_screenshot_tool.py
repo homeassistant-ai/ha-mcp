@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from ha_mcp import config
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
 
 from ._dashboard_screenshot_common import (
     clear_screenshot_env,
     fake_dashboard_capture,
+    set_settings,
 )
 
 
@@ -47,11 +46,7 @@ class TestStandaloneScreenshotTool:
             captures.append(kwargs)
             return [fake_dashboard_capture()]
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
         monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
         monkeypatch.setattr(mod, "capture_dashboard_images", capture)
 

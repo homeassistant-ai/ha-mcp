@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -12,6 +12,8 @@ from ha_mcp import config
 
 from ._dashboard_screenshot_common import (
     clear_screenshot_env,
+    fresh_settings,
+    set_settings,
 )
 
 
@@ -20,28 +22,34 @@ def _clear_env(monkeypatch: Any) -> None:
     clear_screenshot_env(monkeypatch)
 
 
+@pytest.fixture(autouse=True)
+def _reset_settings() -> Iterator[None]:
+    yield
+    config.reset_global_settings()
+
+
 class TestSettings:
     def test_flag_default_disabled(self) -> None:
-        assert config.Settings().enable_dashboard_screenshot is False
+        assert fresh_settings().enable_dashboard_screenshot is False
 
     def test_flag_enabled_via_env(self, monkeypatch: Any) -> None:
+        # A beta feature: it is on only with the beta master toggle on too.
+        monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
         monkeypatch.setenv("HAMCP_ENABLE_DASHBOARD_SCREENSHOT", "true")
-        assert config.Settings().enable_dashboard_screenshot is True
+        assert fresh_settings().enable_dashboard_screenshot is True
 
     def test_flag_empty_string_means_false(self, monkeypatch: Any) -> None:
         monkeypatch.setenv("HAMCP_ENABLE_DASHBOARD_SCREENSHOT", "")
-        assert config.Settings().enable_dashboard_screenshot is False
+        assert fresh_settings().enable_dashboard_screenshot is False
 
     def test_engine_url_default_empty(self) -> None:
-        assert config.Settings().dashboard_screenshot_engine_url == ""
+        assert fresh_settings().dashboard_screenshot_engine_url == ""
 
     def test_engine_url_from_env(self, monkeypatch: Any) -> None:
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000"
         )
-        assert (
-            config.Settings().dashboard_screenshot_engine_url == "http://engine:10000"
-        )
+        assert fresh_settings().dashboard_screenshot_engine_url == "http://engine:10000"
 
     @pytest.mark.parametrize("bad", ["ftp://engine:10000", "engine:10000", "//engine"])
     def test_engine_url_rejects_non_http(self, monkeypatch: Any, bad: str) -> None:
@@ -49,16 +57,14 @@ class TestSettings:
         # scheme URL instead of letting it 0-byte-fail at render time.
         monkeypatch.setenv("HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", bad)
         with pytest.raises(ValidationError):
-            config.Settings()
+            fresh_settings()
 
     def test_engine_url_validator_strips_trailing_slash(self, monkeypatch: Any) -> None:
         # The field validator (not just resolve_engine) normalizes the URL.
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000/"
         )
-        assert (
-            config.Settings().dashboard_screenshot_engine_url == "http://engine:10000"
-        )
+        assert fresh_settings().dashboard_screenshot_engine_url == "http://engine:10000"
 
     def test_flag_in_feature_flag_fields(self) -> None:
         assert "enable_dashboard_screenshot" in {
@@ -87,11 +93,7 @@ class TestRegistrationGate:
     def test_gate_off_registers_nothing(self, monkeypatch: Any) -> None:
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=False),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=False)
         mcp = _RecordingMcp()
         mod.register_dashboard_screenshot_tools(mcp, client=None)
         assert mcp.added == []
@@ -99,11 +101,7 @@ class TestRegistrationGate:
     def test_gate_on_registers_tool(self, monkeypatch: Any) -> None:
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
         mcp = _RecordingMcp()
         mod.register_dashboard_screenshot_tools(mcp, client=None)
         assert len(mcp.added) == 1

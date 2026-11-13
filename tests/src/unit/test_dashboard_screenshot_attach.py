@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any, Literal
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
-from ha_mcp import config
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import ToolResult
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._dashboard_screenshot_common import (
     _PNG,
     clear_screenshot_env,
     fake_dashboard_capture,
+    set_settings,
 )
 
 
@@ -133,11 +135,7 @@ class TestMaybeAttachScreenshot:
     async def test_feature_off_warns(self, monkeypatch: Any) -> None:
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=False),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=False)
         result: dict[str, Any] = {"success": True}
         out = await maybe_attach_screenshot(result, "default", requested=True)
         assert out is result
@@ -147,11 +145,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def boom(*_a: Any, **_kw: Any) -> list[Any]:
             raise ToolError("engine unreachable")
@@ -168,11 +162,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         seen: dict[str, Any] = {}
 
@@ -197,11 +187,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def ok(*_a: Any, **_kw: Any) -> list[Any]:
             return [fake_dashboard_capture()]
@@ -231,11 +217,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def ok(*_a: Any, **_kw: Any) -> list[Any]:
             return [fake_dashboard_capture(height=4096, legacy_full_page_fallback=True)]
@@ -246,6 +228,7 @@ class TestMaybeAttachScreenshot:
             {"success": True}, "my-dash", requested=True, full_page=True
         )
 
+        assert isinstance(out, ToolResult)
         assert any("4096" in warning for warning in out.structured_content["warnings"])
         assert (
             out.structured_content["screenshots"][0]["local_capture_options"][
@@ -263,11 +246,7 @@ class TestMaybeAttachScreenshot:
             maybe_attach_screenshot,
         )
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
         seen: dict[str, Any] = {}
 
         async def record(path: str, **kwargs: Any) -> list[Any]:
@@ -297,6 +276,7 @@ class TestMaybeAttachScreenshot:
         assert seen["path"] == "wall-panel/home"
         assert seen["kwargs"]["viewport_presets"] == ["mobile", "desktop"]
         assert seen["kwargs"]["theme"] == "Gerry Dark"
+        assert isinstance(out, ToolResult)
         assert len(out.content) == 2
         assert out.structured_content["screenshot_render_path"] == "wall-panel/home"
 
@@ -306,11 +286,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def partial(*_args: Any, **kwargs: Any) -> list[Any]:
             kwargs["partial_failures"].append(
@@ -329,6 +305,7 @@ class TestMaybeAttachScreenshot:
             {"success": True}, "wall-panel", requested=True
         )
 
+        assert isinstance(out, ToolResult)
         assert len(out.content) == 1
         assert out.structured_content["screenshot_partial"] is True
         assert out.structured_content["screenshot_failures"][0]["preset"] == ("desktop")
@@ -340,11 +317,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def fail(*_args: Any, **_kwargs: Any) -> list[Any]:
             raise ToolError(raw_error)
@@ -364,11 +337,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def ok(*_args: Any, **_kwargs: Any) -> list[Any]:
             return [fake_dashboard_capture()]
@@ -407,11 +376,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def ok(*_args: Any, **_kwargs: Any) -> list[Any]:
             return [fake_dashboard_capture()]
@@ -434,11 +399,7 @@ class TestMaybeAttachScreenshot:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
-        )
+        set_settings(monkeypatch, enable_dashboard_screenshot=True)
 
         async def boom(*_a: Any, **_kw: Any) -> list[Any]:
             raise ToolError("engine unreachable")
@@ -702,6 +663,27 @@ class TestAttachScreenshotToolError:
         assert "warnings" not in result["screenshot_error"]
 
 
+async def _wall_panel(hass: HomeAssistant, client: HomeAssistantClient) -> None:
+    """A storage dashboard "wall-panel" with a view "home", saved through Core."""
+    assert await async_setup_component(hass, "lovelace", {})
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": "wall-panel",
+            "title": "Wall",
+        }
+    )
+    assert created["success"], created
+    saved = await client.send_websocket_message(
+        {
+            "type": "lovelace/config/save",
+            "url_path": "wall-panel",
+            "config": {"views": [{"title": "Home", "path": "home"}]},
+        }
+    )
+    assert saved["success"], saved
+
+
 class TestPublicScreenshotOptionForwarding:
     """Public dashboard get/set methods forward view_path only.
 
@@ -732,19 +714,14 @@ class TestPublicScreenshotOptionForwarding:
         assert capture_call["capture_warnings"] == []
 
     async def test_get_include_screenshot_forwards_view_path(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                enable_dashboard_screenshot=True,
-                enable_mandatory_bps=False,
-            ),
+        set_settings(
+            monkeypatch, enable_dashboard_screenshot=True, enable_mandatory_bps=False
         )
         capture_call: dict[str, Any] = {}
 
@@ -753,17 +730,10 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "result": {
-                    "views": [{"title": "Home", "path": "home"}],
-                }
-            }
-        )
+        await _wall_panel(hass, core_client)
 
         result = await dashboard_tools.DashboardConfigTools(
-            client
+            core_client
         ).ha_config_get_dashboard(
             url_path="wall-panel",
             include_screenshot=True,
@@ -774,25 +744,17 @@ class TestPublicScreenshotOptionForwarding:
         self._assert_capture_call(capture_call)
 
     async def test_set_return_screenshot_forwards_view_path(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools import auto_backup
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                enable_dashboard_screenshot=True,
-                enable_mandatory_bps=False,
-            ),
-        )
-        monkeypatch.setattr(
-            auto_backup,
-            "get_global_settings",
-            lambda: SimpleNamespace(enable_auto_backup=False),
+        set_settings(
+            monkeypatch,
+            enable_dashboard_screenshot=True,
+            enable_mandatory_bps=False,
+            enable_auto_backup=False,
         )
         capture_call: dict[str, Any] = {}
 
@@ -801,21 +763,13 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
+        await _wall_panel(hass, core_client)
         dashboard_config = {
             "views": [{"title": "Home", "path": "home"}],
         }
-        client = MagicMock(base_url=None, token=None)
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"result": [{"url_path": "wall-panel", "id": "wall_panel"}]},
-                {"result": dashboard_config},
-                {"success": True},
-                {"result": dashboard_config},
-            ]
-        )
 
         result = await dashboard_tools.DashboardConfigTools(
-            client
+            core_client
         ).ha_config_set_dashboard(
             url_path="wall-panel",
             config=dashboard_config,
@@ -828,20 +782,15 @@ class TestPublicScreenshotOptionForwarding:
         self._assert_capture_call(capture_call)
 
     async def test_include_screenshot_surfaces_theme_guard_warning(
-        self, monkeypatch: Any
+        self, monkeypatch: Any, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
         """A failed theme restore must surface in the config-tool response."""
         from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-        monkeypatch.setattr(
-            config,
-            "get_global_settings",
-            lambda: SimpleNamespace(
-                enable_dashboard_screenshot=True,
-                enable_mandatory_bps=False,
-            ),
+        set_settings(
+            monkeypatch, enable_dashboard_screenshot=True, enable_mandatory_bps=False
         )
 
         async def record(path: str, **kwargs: Any) -> list[Any]:
@@ -849,17 +798,10 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "result": {
-                    "views": [{"title": "Home", "path": "home"}],
-                }
-            }
-        )
+        await _wall_panel(hass, core_client)
 
         result = await dashboard_tools.DashboardConfigTools(
-            client
+            core_client
         ).ha_config_get_dashboard(
             url_path="wall-panel",
             include_screenshot=True,
