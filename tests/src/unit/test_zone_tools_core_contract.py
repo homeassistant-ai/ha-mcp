@@ -24,8 +24,6 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_zones import ZoneTools, _build_zone_result
 
-from ._tool_errors import error_of
-
 OFFICE = {
     "id": "office",
     "name": "Office",
@@ -109,6 +107,10 @@ def _sent(client: MagicMock, kind: str) -> list[dict[str, Any]]:
     ]
 
 
+def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
+    return json.loads(str(exc_info.value))["error"]  # type: ignore[no-any-return]
+
+
 @pytest.fixture
 def removed() -> AsyncMock:
     return AsyncMock(return_value=True)
@@ -168,7 +170,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="office")
 
-        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
 
     @pytest.mark.parametrize("call", ["remove", "update"])
     async def test_unknown_zone_is_resource_not_found_before_any_write(
@@ -183,7 +185,7 @@ class TestZoneLookup:
             else:
                 await tools.ha_set_zone(zone_id="nope", radius=50)
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         assert error["code"] == "RESOURCE_NOT_FOUND"
         assert "ha_get_zone" in json.dumps(error)
         assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
@@ -203,7 +205,7 @@ class TestZoneLookup:
             else:
                 await tools.ha_set_zone(zone_id=zone_id, radius=50)
 
-        assert "not a stored zone" in error_of(exc_info)["message"]
+        assert "not a stored zone" in _error(exc_info)["message"]
         assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
 
     async def test_an_empty_state_reply_is_a_read_failure(self) -> None:
@@ -213,7 +215,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="ghost")
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "Could not read the state" in error["message"]
 
@@ -223,7 +225,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="office")
 
-        assert error_of(exc_info)["code"] == "SERVICE_CALL_FAILED"
+        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
         assert _sent(client, "zone/delete") == []
 
     async def test_a_registry_entry_of_no_stored_zone_is_not_written(self) -> None:
@@ -237,7 +239,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="zone.ghost")
 
-        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
         assert _sent(client, "zone/delete") == []
 
     async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(self) -> None:
@@ -252,7 +254,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="work")
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         assert error["code"] == "RESOURCE_NOT_FOUND"
         assert "not a stored zone" not in error["message"]
         assert _sent(client, "zone/delete") == []
@@ -265,7 +267,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="work")
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         hints = [error.get("suggestion", ""), *error.get("suggestions", [])]
         assert any("full entity_id" in s for s in hints)
 
@@ -275,7 +277,7 @@ class TestZoneLookup:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_remove_zone(zone_id="office")
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         assert error["code"] != "RESOURCE_NOT_FOUND"
         assert "403" in error["message"]
         assert _sent(client, "zone/delete") == []
@@ -387,7 +389,7 @@ class TestRemoveWait:
         else:
             with pytest.raises(ToolError) as exc_info:
                 await tools.ha_remove_zone(zone_id="office")
-            message = error_of(exc_info)["message"]
+            message = _error(exc_info)["message"]
 
         assert "office" in message and "None" not in message
 
@@ -433,7 +435,7 @@ class TestZoneWrites:
                 name="  ", latitude=52.5, longitude=13.4, zone_id=zone_id
             )
 
-        assert "name cannot be blank" in error_of(exc_info)["message"]
+        assert "name cannot be blank" in _error(exc_info)["message"]
         assert not _sent(client, "zone/create") and not _sent(client, "zone/update")
 
 
@@ -529,6 +531,6 @@ class TestListing:
         with pytest.raises(ToolError) as exc_info:
             await ZoneTools(client).ha_get_zone(zone_id="home")
 
-        error = error_of(exc_info)
+        error = _error(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "403" in error["message"]
