@@ -15,9 +15,22 @@ rule:
     # del registry.entities[key]
     - kind: delete_statement
       regex: '\.(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)\['
-    # registry.entities.pop(...), .clear(), .update(...), .setdefault(...)
+    # registry.entities.pop(...), .clear(), .update(...), .setdefault(...),
+    # whatever the registry is reached through (ir.async_get(hass).issues).
     - kind: call
-      regex: '^[\w.\[\]"'']*\.(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)\.(pop|clear|update|setdefault)\('
+      has:
+        field: function
+        kind: attribute
+        all:
+          - has:
+              field: attribute
+              regex: '^(pop|clear|update|setdefault)$'
+          - has:
+              field: object
+              kind: attribute
+              has:
+                field: attribute
+                regex: '^(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)$'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"

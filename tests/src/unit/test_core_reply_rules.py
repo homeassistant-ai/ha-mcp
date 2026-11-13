@@ -559,6 +559,12 @@ def test_no_test_writes_a_websocket_command_or_reply() -> None:
         pytest.param("area_registry.areas.pop(area.id)\n", True, id="area-popped"),
         pytest.param("self.labels.clear()\n", True, id="labels-cleared"),
         pytest.param(
+            "ir.async_get(hass).issues.clear()\n",
+            True,
+            id="store-reached-through-a-call",
+        ),
+        pytest.param("registry.async_clear()\n", False, id="not-a-store"),
+        pytest.param(
             "floor_registry.floors.update({floor.floor_id: floor})\n",
             True,
             id="floors-updated",
