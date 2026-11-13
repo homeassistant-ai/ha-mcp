@@ -393,6 +393,32 @@ async def test_a_diff_after_a_restore_finds_the_item_under_its_new_id(
         assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
 
 
+async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """A label, area or floor that was never renamed comes back under its own
+    id; its new read-only timestamps are no difference the snapshot can restore."""
+    labels = lr.async_get(hass)
+    label = labels.async_create("Security")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall", icon="mdi:door")
+    floors = fr.async_get(hass)
+    floor = floors.async_create("Ground", level=0)
+    snapshots = [
+        await _snapshot(backup_manager, "label", label.label_id),
+        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
+        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
+    ]
+    labels.async_delete(label.label_id)
+    areas.async_delete(area.id)
+    floors.async_delete(floor.floor_id)
+
+    for snapshot in snapshots:
+        await backup_manager.restore_snapshot(snapshot)
+        diff = await backup_manager.diff_snapshot(snapshot)
+        assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
+
+
 async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:

@@ -1703,6 +1703,20 @@ class BackupManager:
             return todo_current_key(target, data["config"])
         return target
 
+    async def _registry_item_current(
+        self, domain: str, entity_id: str, config: dict[str, Any], current: Any
+    ) -> Any:
+        """The live label, category, area or floor, as a diff compares it."""
+        if current is None:
+            # A restored item can carry another id.
+            return await _restored_item(self._client, domain, entity_id, config)
+        if isinstance(current, dict):
+            # A restore cannot set the timestamps either, so an item that came
+            # back under its own id differs in them by nature.
+            keep = {k: v for k, v in config.items() if k in _REGISTRY_READONLY_KEYS}
+            return {**current, **keep}
+        return current
+
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity."""
         data = await asyncio.to_thread(self.read_snapshot, name)
@@ -1727,14 +1741,9 @@ class BackupManager:
             live = await _dashboard_resource_like(self._client, data["config"])
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
-        elif (
-            domain in _REGISTRY_ITEM_DOMAINS
-            and current is None
-            and isinstance(data["config"], dict)
-        ):
-            # A restored label, category, area or floor can carry another id.
-            current = await _restored_item(
-                self._client, domain, data["entity_id"], data["config"]
+        elif domain in _REGISTRY_ITEM_DOMAINS and isinstance(data["config"], dict):
+            current = await self._registry_item_current(
+                domain, data["entity_id"], data["config"], current
             )
         if (
             isinstance(current, dict)
