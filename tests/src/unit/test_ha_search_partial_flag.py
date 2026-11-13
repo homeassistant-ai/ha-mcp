@@ -3,7 +3,8 @@
 ``deep_search`` runs on the server's own client against a real ``hass``. Core
 supplies each condition: a YAML-defined automation or script is a 404 on the
 per-id config endpoint, a ``!secret`` in the file that endpoint loads is an
-HTTP 500, and a slow server is a fetch that gives no answer in time. Each
+HTTP 500 for every id, a value Core cannot serialize is an HTTP 500 for that
+id alone, and a slow server is a fetch that gives no answer in time. Each
 fragment must say plainly that the configs were not scanned, that their match
 status is unknown and that the result is not exhaustive: softer wording was
 read as a complete result by agents (PR #1529).
@@ -11,6 +12,7 @@ read as a complete result by agents (PR #1529).
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import re
 from pathlib import Path
@@ -18,9 +20,11 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -33,6 +37,11 @@ LOG_HINT = "in the Home Assistant log"
 # the id up, so every fetch of that type answers HTTP 500 (#1784 follow-up).
 UNREADABLE_AUTOMATIONS = "- id: a0\n  alias: A0\n  description: !secret nope\n"
 UNREADABLE_SCRIPTS = "s0:\n  alias: !secret nope\n  sequence: []\n"
+# The per-id endpoint loads this file and finds a1, then cannot serialize its
+# bytes value, so a1 alone answers HTTP 500; any other id is a 404.
+UNSERIALIZABLE_A1 = "- id: a1\n  alias: A1\n  description: !!binary aGk=\n"
+# The registry lookup that resolves a script's storage key before its fetch.
+REGISTRY_GET = "config/entity_registry/get"
 
 
 @pytest.fixture
@@ -100,6 +109,13 @@ def _assert_states_incompleteness(fragment: str) -> None:
     assert "not exhaustive" in fragment
 
 
+def _fragment(reason: str, prefix: str) -> str:
+    """The one ``partial_reason`` fragment that starts with ``prefix``."""
+    matching = [part for part in reason.split(" ; ") if part.startswith(prefix)]
+    assert len(matching) == 1, reason
+    return matching[0]
+
+
 @pytest.mark.parametrize(
     ("noun", "budget_setting"),
     [
@@ -134,6 +150,35 @@ async def test_exhausted_budget_names_the_unscanned_configs_and_their_setting(
     assert budget_setting in reason
 
 
+@pytest.mark.usefixtures("config_views")
+async def test_budget_exhaustion_and_failed_fetches_are_counted_apart(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Configs the budget left unread and configs whose fetch failed each get their own count."""
+    total = INDIVIDUAL_FETCH_BATCH_SIZE + 1
+    await _write_config_file(hass, "automations.yaml", UNREADABLE_AUTOMATIONS)
+    await _yaml_automations(hass, total)
+    # The same clock as the budget test above: the first batch is fetched
+    # (and fails), the budget runs out before the second.
+    ticks = itertools.count()
+    search = SmartSearchTools(client=core_client, clock=lambda: float(next(ticks)))
+
+    reason = await _reason(search, "automation", config_time_budget=1.5)
+
+    failed = _fragment(
+        reason,
+        f"{INDIVIDUAL_FETCH_BATCH_SIZE} automation(s) not scanned "
+        "(per-id fetch raised a non-404 error",
+    )
+    skipped = _fragment(
+        reason,
+        f"{total - INDIVIDUAL_FETCH_BATCH_SIZE} automation(s) not scanned "
+        "(time budget exhausted)",
+    )
+    assert LOG_HINT in failed
+    assert "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET" in skipped
+
+
 @pytest.mark.parametrize(
     ("noun", "endpoint"),
     [
@@ -153,6 +198,27 @@ async def test_yaml_defined_config_is_reported_as_a_structural_gap(
     assert f"YAML-defined {noun}s that the {endpoint} REST endpoint" in reason
     _assert_states_incompleteness(reason)
     assert "non-404" not in reason
+
+
+async def test_yaml_defined_and_failed_configs_of_one_type_are_reported_apart(
+    hass: HomeAssistant, search: SmartSearchTools
+) -> None:
+    """A 404 and a non-404 error on one type stay two fragments: the structural gap is not retryable, the failure may be (PR #1529)."""
+    await _write_config_file(hass, "automations.yaml", UNSERIALIZABLE_A1)
+    await _yaml_automations(hass, 2)
+
+    reason = await _reason(search, "automation")
+
+    failed = _fragment(
+        reason, "1 automation(s) not scanned (per-id fetch raised a non-404 error"
+    )
+    yaml_defined = _fragment(
+        reason, "1 automation(s) not scanned (per-id config endpoint returned 404"
+    )
+    assert "YAML-defined" not in failed
+    assert "YAML-defined automations" in yaml_defined
+    _assert_states_incompleteness(failed)
+    _assert_states_incompleteness(yaml_defined)
 
 
 @pytest.mark.parametrize(
@@ -201,6 +267,57 @@ async def test_timed_out_fetch_points_at_the_concurrency_settings(
     assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in reason
     _assert_states_incompleteness(reason)
     assert "non-404" not in reason
+
+
+async def test_timed_out_and_failed_configs_of_one_type_are_reported_apart(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    search: SmartSearchTools,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout and a failure on one type stay two fragments, each with its own remedy (#1784).
+
+    Core holds the registry lookup for script s0 until the client's wait for
+    that WebSocket command has run out; s1 is answered, and its config fetch
+    is Core's HTTP 500 for the ``!secret`` in scripts.yaml.
+    """
+    await _write_config_file(hass, "scripts.yaml", UNREADABLE_SCRIPTS)
+    await _yaml_scripts(hass, 2)
+    held = asyncio.Event()
+    release = asyncio.Event()
+    core_handler, schema = hass.data[websocket_api.DOMAIN][REGISTRY_GET]
+
+    async def hold_s0_lookup(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        if msg["entity_id"] == "script.s0":
+            held.set()
+            await release.wait()
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(
+        hass, REGISTRY_GET, websocket_api.async_response(hold_s0_lookup), schema
+    )
+    # One real command opens the client's socket under the normal wait; the
+    # wait is then cut so only the held lookup runs out of it.
+    await core_client.send_websocket_message({"type": "config/entity_registry/list"})
+    monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1.0)
+    try:
+        reason = await _reason(search, "script")
+    finally:
+        release.set()
+
+    assert held.is_set()
+    timed_out = _fragment(reason, "1 script(s) not scanned (per-id fetch timed out")
+    failed = _fragment(
+        reason, "1 script(s) not scanned (per-id fetch raised a non-404 error"
+    )
+    assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" in timed_out
+    assert LOG_HINT not in timed_out
+    assert LOG_HINT in failed
+    assert "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT" not in failed
 
 
 async def test_failure_sample_and_log_hint_stay_with_their_type(
