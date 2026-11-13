@@ -23,7 +23,6 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
-    COMPONENT_INSTALL_HINT,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -31,7 +30,6 @@ from .component_api import (
 )
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
-    core_error_message,
     exception_to_structured_error,
     get_connected_ws_client,
     log_tool_usage,
@@ -684,13 +682,20 @@ class SystemTools:
 
             want_dead_entities = "dead_entities" in includes
 
-            # One snapshot read shared by every consuming section requested;
-            # ``None`` sends each to its own legacy fetch (see
-            # ``_fetch_system_snapshot``).
+            # One ``ha_mcp_tools/system_snapshot`` read up front, threaded into
+            # every consuming section below, when the component supports it and
+            # at least one consuming section was actually requested — never
+            # fetched (and never counted against the component) for a call that
+            # only wants zha_network/thread_network/themes/diagnostics/
+            # config_check. ``None`` (capability miss, command error/timeout, or
+            # a malformed slice) means every consuming section below falls back
+            # to its own legacy fetch — all-or-nothing per call, never a partial
+            # hybrid. Only the slices a requested section actually needs are
+            # asked for, so e.g. a repairs-only call doesn't pay for a full
+            # states/entities dump.
             snapshot: _SystemSnapshotSlices | None = None
             if want_repairs or want_zwave or want_matter or want_dead_entities:
                 snapshot = await self._fetch_system_snapshot(
-                    result,
                     include_issues=want_repairs,
                     include_config_entries=(
                         want_zwave or want_matter or want_dead_entities
@@ -1129,7 +1134,6 @@ class SystemTools:
 
     async def _fetch_system_snapshot(
         self,
-        result: dict[str, Any],
         *,
         include_issues: bool,
         include_config_entries: bool,
@@ -1146,15 +1150,23 @@ class SystemTools:
         ``config_entries/get`` round-trips (a TOCTOU across sections) into one
         consistent in-process read.
 
-        All-or-nothing per call, mirroring ``_overview_via_component``: every
-        consuming section reads the snapshot or every one reads legacy data,
-        never a hybrid from two instants. A capability miss or
-        ``unknown_command`` (which invalidates the cached caps) takes the
-        legacy route. Any other command error or timeout of the advertised
-        command, or a malformed reply, takes it too and adds a warning to
-        ``result`` that names the command. A ``HomeAssistantConnectionError``
-        propagates: the call ends as CONNECTION_FAILED, as
-        ``_reraise_if_fatal`` ends it for a section.
+        All-or-nothing per call, mirroring ``_fetch_exposure_via_component`` /
+        ``_overview_via_component``: a capability miss, command error/timeout,
+        or malformed slice falls back to the legacy per-section fetches for
+        EVERY consuming section in this call — never a partial hybrid where
+        one section reads the snapshot and a sibling reads legacy data from a
+        different instant. ``unknown_command`` invalidates the cached caps
+        (component downgraded mid-session); any other command error/timeout
+        just logs and falls back, leaving caps cached. A
+        ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
+        (re)connect - is caught here and mapped to ``None``: the consuming
+        sections' legacy fetches run on a DEDICATED health WS client
+        (repairs/zwave/matter) plus REST ``get_states()`` and the
+        ``send_websocket_message`` bridge (dead_entities), so a component-side
+        fault degrades per-section rather than failing the WHOLE
+        ``ha_get_system_health``. A genuinely dead transport is a different
+        case and deliberately does NOT degrade: the bridge raises (#1947) and
+        the dead-entities detector fails loud rather than answer while blind.
 
         Only the ``include_*`` flags the caller actually needs are requested
         (mirroring which of ``want_repairs`` / ``want_zwave`` / ``want_matter``
@@ -1164,12 +1176,12 @@ class SystemTools:
         caps = await get_component_caps(self._client)
         if not component_supports(caps, "system_snapshot"):
             return None
-        ws = await get_websocket_client(
-            url=self._client.base_url,
-            token=self._client.token,
-            verify_ssl=getattr(self._client, "verify_ssl", None),
-        )
         try:
+            ws = await get_websocket_client(
+                url=self._client.base_url,
+                token=self._client.token,
+                verify_ssl=getattr(self._client, "verify_ssl", None),
+            )
             raw = await ws.send_command(
                 WS_SYSTEM_SNAPSHOT,
                 include_issues=include_issues,
@@ -1180,18 +1192,24 @@ class SystemTools:
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
-                return None
-            failure = core_error_message(exc)
-        else:
-            snapshot = _build_system_snapshot_slices(raw.get("result") or {})
-            if snapshot is not None:
-                return snapshot
-            failure = "malformed reply"
-        result.setdefault("warnings", []).append(
-            f"{WS_SYSTEM_SNAPSHOT} failed: {failure}; the sections were read "
-            "from Home Assistant directly. " + COMPONENT_INSTALL_HINT
-        )
-        return None
+            else:
+                logger.warning(
+                    "%s failed; fell back to legacy: %r", WS_SYSTEM_SNAPSHOT, exc
+                )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            # HomeAssistantConnectionError: a pooled-WS drop or a failed
+            # (re)connect. The legacy sections degrade individually (dedicated
+            # health WS + REST + the bridge), so fall back rather than fail the
+            # whole tool on a component-side fault. A genuinely dead transport
+            # still fails loud from the bridge itself (#1947).
+            logger.warning(
+                "%s connection error; falling back to legacy: %r",
+                WS_SYSTEM_SNAPSHOT,
+                exc,
+            )
+            return None
+        return _build_system_snapshot_slices(raw.get("result") or {})
 
     @staticmethod
     async def _fetch_repairs(
