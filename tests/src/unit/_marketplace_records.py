@@ -15,7 +15,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_integration,
+    mock_platform,
+)
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.ha_mcp_tools.store_records import (
@@ -89,6 +94,8 @@ class Hacs:
                 async_unload_entry=self.unload_entry,
             ),
         )
+        # Core imports an integration's config flow before setting up its entry.
+        mock_platform(hass, "hacs.config_flow")
         self.entry = MockConfigEntry(domain="hacs")
         self.entry.add_to_hass(hass)
 
