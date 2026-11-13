@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
-from homeassistant.components import websocket_api
 from homeassistant.components.recorder import Recorder
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
@@ -17,6 +15,8 @@ from pytest_homeassistant.components.recorder.common import async_wait_recording
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_energy import EnergyTools
+
+from ._client_spies import sent_messages
 
 
 async def test_energy_inspection_resolves_all_referenced_statistics_without_writes(
@@ -94,27 +94,15 @@ async def test_empty_energy_config_does_not_request_all_recorder_metadata(
     core_client: HomeAssistantClient,
 ) -> None:
     assert await async_setup_component(hass, "energy", {})
-    requests: list[dict[str, Any]] = []
 
-    @websocket_api.websocket_command(
-        {
-            "type": "recorder/get_statistics_metadata",
-            "statistic_ids": [str],
-        }
-    )
-    @websocket_api.async_response
-    async def record_request(
-        hass: HomeAssistant,
-        connection: websocket_api.ActiveConnection,
-        msg: dict[str, Any],
-    ) -> None:
-        requests.append(msg)
-        connection.send_result(msg["id"], [])
+    with sent_messages(core_client) as sent:
+        result = await EnergyTools(core_client).ha_manage_energy_prefs(
+            mode="get", include_statistics=True
+        )
 
-    websocket_api.async_register_command(hass, record_request)
-
-    result = await EnergyTools(core_client).ha_manage_energy_prefs(
-        mode="get", include_statistics=True
-    )
     assert result["statistics_metadata"] == []
-    assert requests == []
+    # An empty statistic_ids list would make Core's recorder return every
+    # statistic's metadata.
+    assert "recorder/get_statistics_metadata" not in [
+        call.args[0]["type"] for call in sent.await_args_list
+    ]

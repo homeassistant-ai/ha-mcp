@@ -34,8 +34,8 @@ from .rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
-    _is_ssl_error,
 )
+from .transport_errors import is_ssl_error
 from .websocket_state import WebSocketConnectionState
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,7 @@ class HomeAssistantWebSocketClient:
         except Exception as e:  # noqa: BLE001
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
-            if _is_ssl_error(e) and self.verify_ssl:
+            if is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
                     "If this is a self-signed certificate or hostname "

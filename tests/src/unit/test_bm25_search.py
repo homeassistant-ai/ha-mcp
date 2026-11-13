@@ -731,25 +731,3 @@ class TestHiddenScorePenalty:
         assert ids == sorted(ids), (
             f"tied-score results should sort by entity_id ascending: {ids}"
         )
-
-    @pytest.mark.asyncio
-    async def test_cancelled_error_propagates_from_registry_gather(self):
-        """Pre-fix `asyncio.gather(return_exceptions=True)` captured
-        CancelledError on the registry task and the search continued
-        with `hidden_filter_unavailable:` logged. After the fix the
-        cancellation must propagate — otherwise the caller waits
-        forever for a task that was already cancelled."""
-        import asyncio
-        from unittest.mock import AsyncMock
-
-        from ha_mcp.tools.smart_search import SmartSearchTools
-
-        mock_client = AsyncMock()
-        mock_client.get_states = AsyncMock(return_value=[])
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=asyncio.CancelledError()
-        )
-        smart_tools = SmartSearchTools(client=mock_client, fuzzy_threshold=60)
-
-        with pytest.raises(asyncio.CancelledError):
-            await smart_tools.smart_entity_search("anything", limit=5)

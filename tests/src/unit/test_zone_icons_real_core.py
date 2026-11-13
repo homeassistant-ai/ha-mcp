@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.components.device_tracker import ATTR_IN_ZONES
 from homeassistant.components.zone.const import DATA_ZONE
 from homeassistant.core import HomeAssistant
@@ -20,13 +21,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantClient,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
-from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import websocket_manager
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_zones import ZoneTools
 
 _PATHS = ["component", "core"]
@@ -210,38 +207,55 @@ async def test_the_component_reads_only_the_zones_states(
     component's targeted read exists to avoid."""
     tools = ZoneTools(core_client)
     await _create(tools)
-    core_client.get_states = AsyncMock(  # type: ignore[method-assign]
-        side_effect=HomeAssistantConnectionError("all states read")
-    )
 
-    result = await tools.ha_get_zone()
+    with patch.object(
+        core_client, "get_states", wraps=core_client.get_states
+    ) as all_states:
+        result = await tools.ha_get_zone()
 
+    all_states.assert_not_called()
     assert "warnings" not in result
     assert all("persons" in z for z in result["zones"])
 
 
 @pytest.mark.parametrize("core_client", ["component"], indirect=True)
 async def test_a_dropped_state_read_still_lists_who_is_in_each_zone(
-    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """A socket reset during the component's state read falls back to reading
+    """A socket closed during the component's state read falls back to reading
     every state instead of failing a listing that was already complete."""
     tools = ZoneTools(core_client)
-    await _create(tools)
-    send = HomeAssistantWebSocketClient.send_command
+    created = await _create(tools, icon="mdi:briefcase")
+    hass.states.async_set(
+        "device_tracker.phone", "Office", {ATTR_IN_ZONES: [created["entity_id"]]}
+    )
+    # The component's own command stays registered with its own schema; when
+    # Core receives the state read, the socket closes instead of an answer.
+    _, schema = hass.data[websocket_api.DOMAIN]["ha_mcp_tools/states"]
 
-    async def reset_on_states(
-        self: HomeAssistantWebSocketClient, command_type: str, **params: Any
-    ) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/states":
-            raise ConnectionResetError("connection reset by peer")
-        return await send(self, command_type, **params)
+    async def drop_the_socket(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        await websocket_manager.disconnect()
 
-    monkeypatch.setattr(HomeAssistantWebSocketClient, "send_command", reset_on_states)
+    websocket_api.async_register_command(
+        hass,
+        "ha_mcp_tools/states",
+        websocket_api.async_response(drop_the_socket),
+        schema,
+    )
 
-    result = await tools.ha_get_zone()
+    with patch.object(
+        core_client, "get_states", wraps=core_client.get_states
+    ) as all_states:
+        result = await tools.ha_get_zone()
 
-    assert all("persons" in z for z in result["zones"])
+    all_states.assert_awaited_once()
+    rows = {z["entity_id"]: z for z in result["zones"]}
+    assert rows[created["entity_id"]]["device_trackers"] == ["device_tracker.phone"]
+    assert "warnings" not in result
 
 
 @pytest.mark.parametrize("core_client", ["component"], indirect=True)
@@ -250,17 +264,18 @@ async def test_a_helper_icon_update_sets_no_registry_override(
 ) -> None:
     """The helper settings tab writes the icon to the stored item only; an
     override would hide every later change made there."""
-    name = f"Lamp {uuid.uuid4().hex[:8]}"
-    created = await _execute_create_simple_helper(
-        core_client, "input_boolean", name, "mdi:lamp", None, None, None,
-        False, False, {},
-    )  # fmt: skip
+    tools = HelperConfigTools(core_client)
+    created = await tools.ha_config_set_helper(
+        helper_type="input_boolean",
+        name=f"Lamp {uuid.uuid4().hex[:8]}",
+        icon="mdi:lamp",
+        wait=False,
+    )
     entity_id = created["entity_id"]
 
-    await _execute_update_simple_helper(
-        core_client, "input_boolean", entity_id, entity_id, None, "mdi:star",
-        None, None, None, False, False, {},
-    )  # fmt: skip
+    await tools.ha_config_set_helper(
+        helper_type="input_boolean", helper_id=entity_id, icon="mdi:star", wait=False
+    )
 
     assert _override(hass, entity_id) is None
     state = hass.states.get(entity_id)

@@ -49,16 +49,12 @@ logger = logging.getLogger(__name__)
 
 
 def _process_device_domain(
-    domain: str,
-    value: str,
-    ieee_address: str | None,
-    is_z2m: bool,
-    zwave_node_id: str | None,
-) -> tuple[str | None, bool, str | None]:
-    """Return updated (ieee_address, is_z2m, zwave_node_id) for a single identifier domain."""
+    domain: str, value: str, ieee_address: str | None, is_z2m: bool
+) -> tuple[str | None, bool]:
+    """Return updated (ieee_address, is_z2m) for a single identifier domain."""
     # ZHA: identifier is ["zha", "IEEE_ADDRESS"]
     if domain == "zha":
-        return value, is_z2m, zwave_node_id
+        return value, is_z2m
     # Z2M: identifier is ["mqtt", "zigbee2mqtt_0xIEEE"] or "zigbee2mqtt_bridge_0xIEEE"
     if domain == "mqtt" and "zigbee2mqtt" in value.lower():
         extracted = (
@@ -66,34 +62,24 @@ def _process_device_domain(
             if "_0x" in value
             else ieee_address
         )
-        return extracted, True, zwave_node_id
-    # Z-Wave JS: identifier is ["zwave_js", "{home_id}-{node_id}"]
-    if domain == "zwave_js" and "-" in value:
-        return ieee_address, is_z2m, value.split("-")[1]
-    return ieee_address, is_z2m, zwave_node_id
+        return extracted, True
+    return ieee_address, is_z2m
 
 
-def _extract_zigbee_info(
-    identifiers: list[Any],
-) -> tuple[str | None, bool, str | None]:
-    """Parse device identifiers into (ieee_address, is_z2m, zwave_node_id)."""
+def _extract_zigbee_info(identifiers: list[Any]) -> tuple[str | None, bool]:
+    """Parse device identifiers into (ieee_address, is_z2m)."""
     ieee_address: str | None = None
     is_z2m = False
-    zwave_node_id: str | None = None
 
     for identifier in identifiers:
         if isinstance(identifier, (list, tuple)) and len(identifier) >= 2:
             domain = identifier[0]
             if isinstance(domain, str):
-                ieee_address, is_z2m, zwave_node_id = _process_device_domain(
-                    domain,
-                    str(identifier[1]),
-                    ieee_address,
-                    is_z2m,
-                    zwave_node_id,
+                ieee_address, is_z2m = _process_device_domain(
+                    domain, str(identifier[1]), ieee_address, is_z2m
                 )
 
-    return ieee_address, is_z2m, zwave_node_id
+    return ieee_address, is_z2m
 
 
 def _first_ieee_from_connections(
@@ -163,9 +149,7 @@ def _get_device_info(
     places it in, where a child device without its own area sits in its
     parent's.
     """
-    ieee_address, is_z2m, zwave_node_id = _extract_zigbee_info(
-        device.get("identifiers") or []
-    )
+    ieee_address, is_z2m = _extract_zigbee_info(device.get("identifiers") or [])
     ieee_address = _first_ieee_from_connections(
         device.get("connections") or [], ieee_address
     )
@@ -196,9 +180,6 @@ def _get_device_info(
         device_info["zha_trigger_hint"] = (
             f"Use ieee '{ieee_address}' for zha_event triggers"
         )
-    if integration_type == "zwave_js" and zwave_node_id:
-        device_info["node_id"] = zwave_node_id
-
     return device_info
 
 
@@ -474,7 +455,7 @@ async def _get_single_device_result(
 
     if device_info.get("integration_type") == "zha" and device_info.get("ieee_address"):
         await enrich_zha_metrics(client, device_info, warnings)
-    if device_info.get("integration_type") == "zwave_js" and device_info.get("node_id"):
+    if device_info.get("integration_type") == "zwave_js":
         await enrich_zwave_status(client, device_id, device_info, warnings)
     if device_info.get("integration_type") == "matter":
         await enrich_matter_diagnostics(client, device_id, device_info, warnings)
@@ -551,8 +532,8 @@ def _add_integration_hints(
         )
     elif integration_lower == "zwave_js":
         result["usage_hint"] = (
-            "Use node_id for Z-Wave device identification. "
-            "Single device lookup includes node status (security, routing)."
+            "Single device lookup includes Z-Wave JS's node_id and node status "
+            "(security, routing)."
         )
 
 
@@ -815,7 +796,8 @@ class RegistryTools:
         - By entity_id: ha_get_device(entity_id="light.living_room")
 
         **Zigbee:** integration="zha" or "zigbee2mqtt". Returns ieee_address, radio metrics.
-        **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
+        **Z-Wave:** integration="zwave_js". Single device lookup returns
+        Z-Wave JS's node_id and node_status.
         **Matter:** integration="matter". Returns node_diagnostics (network type,
         reachability, IPs, fabrics). For management use ha_manage_radio.
         """

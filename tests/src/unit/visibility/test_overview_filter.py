@@ -1,278 +1,255 @@
-"""Runnable in-process coverage for the visibility filter in get_system_overview.
+"""The visibility filter in ``get_system_overview``, on real Core.
 
-Drives the real ``get_system_overview`` with a fake client so the overview
-wiring (M4) has non-e2e coverage: the container-only e2e is the outer proof,
-this is the fast inner one. Asserts both the filter effect and count coherence
-(total_entities / domain_stats reflect the post-filter universe)."""
+The overview reads states, services and the area, entity and device registries
+from Core through the server's own client, so the hidden set is resolved from
+Core's registry rows. Count coherence: ``total_entities`` and ``domain_stats``
+describe the filtered universe.
+"""
+
+from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from homeassistant.components import api
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp.tools.smart_search._overview import SystemOverviewMixin
-from ha_mcp.visibility import resolver
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import save_visibility_config
 
-_STATES = [
-    {"entity_id": "light.keep", "state": "on", "attributes": {}},
-    {"entity_id": "sensor.drop_batt", "state": "50", "attributes": {}},
+_OPTIONAL_READS = [
+    "config/area_registry/list",
+    "config/entity_registry/list",
+    "config/device_registry/list",
 ]
-_ENTITY_REGISTRY = {
-    "success": True,
-    "result": [
-        {"entity_id": "light.keep", "entity_category": None},
-        {"entity_id": "sensor.drop_batt", "entity_category": "diagnostic"},
-    ],
-}
 
 
-class _OverviewClient:
-    """Serves the five reads in get_system_overview; only entity registry
-    carries data, the other registries are empty."""
-
-    def __init__(self, states, entity_registry: dict):
-        self._states = states
-        self._entity_registry = entity_registry
-
-    async def get_states(self):
-        return self._states
-
-    async def get_services(self):
-        return []
-
-    async def send_websocket_message(self, msg):
-        if msg["type"] == "config/entity_registry/list":
-            return self._entity_registry
-        return {"success": True, "result": []}
-
-
-def _run_overview(tmp_path, monkeypatch, config: VisibilityConfig):
-    save_visibility_config(tmp_path, config)
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    mixin.client = _OverviewClient(_STATES, _ENTITY_REGISTRY)
-    return asyncio.run(mixin.get_system_overview(detail_level="full"))
+@pytest.fixture
+async def overview(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+) -> SmartSearchTools:
+    """A light and a diagnostic sensor on a ``hass`` that serves the registries."""
+    assert await async_setup_component(hass, "config", {})
+    entity_registry.async_get_or_create(
+        "light", "test", "keep", suggested_object_id="keep"
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        "test",
+        "drop_batt",
+        suggested_object_id="drop_batt",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    )
+    hass.states.async_set("light.keep", "on")
+    hass.states.async_set("sensor.drop_batt", "50")
+    return SmartSearchTools(client=core_client)
 
 
-class _DeviceRegistryOverviewClient(_OverviewClient):
-    """Overview client that also serves a device registry (round-4 wiring proof)."""
+async def test_overview_drops_entity_in_area_inherited_from_its_device(
+    hass: HomeAssistant,
+    area_registry: ar.AreaRegistry,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """An entity with no area of its own is hidden by its device's area."""
+    set_config(enabled=True, exclude_areas=["garage"])
+    garage = area_registry.async_create("Garage")
+    assert garage.id == "garage"
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "spot")}
+    )
+    device_registry.async_update_device(device.id, area_id=garage.id)
+    entity_registry.async_get_or_create(
+        "light",
+        "test",
+        "spot",
+        suggested_object_id="spot",
+        device_id=device.id,
+    )
+    hass.states.async_set("light.spot", "on")
 
-    def __init__(self, states, entity_registry: dict, device_registry: dict):
-        super().__init__(states, entity_registry)
-        self._device_registry = device_registry
+    res = await overview.get_system_overview(detail_level="full")
 
-    async def send_websocket_message(self, msg):
-        if msg["type"] == "config/device_registry/list":
-            return self._device_registry
-        return await super().send_websocket_message(msg)
-
-
-def test_overview_excludes_device_inherited_area(tmp_path, monkeypatch):
-    # Seam proof that the device registry reaches the resolver through the overview
-    # gather (results[4]): a device-bound entity (registry area_id None + device_id)
-    # is dropped by exclude_areas via its device's area. Guards the call-site
-    # wiring, not just the pure resolver.
-    states = [
-        {"entity_id": "light.spot", "state": "on", "attributes": {}},
-        {"entity_id": "light.keep", "state": "on", "attributes": {}},
-    ]
-    entity_registry = {
-        "success": True,
-        "result": [
-            {"entity_id": "light.spot", "area_id": None, "device_id": "d1"},
-            {"entity_id": "light.keep", "area_id": None, "device_id": None},
-        ],
+    listed = {
+        e["entity_id"]
+        for stats in res["domain_stats"].values()
+        for e in stats["entities"]
     }
-    device_registry = {"success": True, "result": [{"id": "d1", "area_id": "garage"}]}
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(enabled=True, exclude_categories=[], exclude_areas=["garage"]),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    mixin.client = _DeviceRegistryOverviewClient(
-        states, entity_registry, device_registry
-    )
-    res = asyncio.run(mixin.get_system_overview(detail_level="full"))
-    # light.spot dropped via its device's area; light.keep (no device) remains.
-    assert res["system_summary"]["total_entities"] == 1
+    assert "light.spot" not in listed
+    assert "light.keep" in listed
+    assert res["system_summary"]["total_entities"] == 2
 
 
-def test_overview_enabled_drops_diagnostic_and_counts_stay_coherent(
-    tmp_path, monkeypatch
-):
-    res = _run_overview(
-        tmp_path,
-        monkeypatch,
-        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
-    )
+async def test_overview_hidden_category_leaves_totals_and_domains_coherent(
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """A hidden diagnostic sensor is in neither the totals nor the domain rollup."""
+    set_config(enabled=True, exclude_categories=["diagnostic"])
+
+    res = await overview.get_system_overview(detail_level="full")
+
     assert res["success"] is True
-    # Diagnostic entity removed from the universe before any stats are computed,
-    # so both the total and the per-domain rollup omit it.
     assert res["system_summary"]["total_entities"] == 1
     assert res["system_summary"]["total_domains"] == 1
     assert "light" in res["domain_stats"]
     assert "sensor" not in res["domain_stats"]
 
 
-def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
-    res = _run_overview(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
+async def test_overview_with_filter_disabled_keeps_every_entity(
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    set_config(enabled=False, exclude_categories=["diagnostic"])
+
+    res = await overview.get_system_overview(detail_level="full")
+
     assert res["system_summary"]["total_entities"] == 2
     assert {"light", "sensor"} <= set(res["domain_stats"])
 
 
-def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkeypatch):
-    """Optional reads overlap only after the mandatory states fetch succeeds."""
+async def test_overview_reads_states_first_then_optional_slices_together(
+    core_client: HomeAssistantClient,
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """States are read first; the services and registry reads are all sent
+    before Core serves the services request, so they overlap."""
+    set_config(enabled=False)
+    order = Mock()
+    with (
+        patch.object(
+            core_client, "get_states", AsyncMock(wraps=core_client.get_states)
+        ) as states,
+        patch.object(
+            core_client, "get_services", AsyncMock(wraps=core_client.get_services)
+        ) as services,
+        patch.object(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=core_client.send_websocket_message),
+        ) as send,
+        patch.object(
+            api, "async_services_json", wraps=api.async_services_json
+        ) as core_services,
+    ):
+        order.attach_mock(states, "states")
+        order.attach_mock(services, "services")
+        order.attach_mock(send, "send")
+        order.attach_mock(core_services, "core_services")
 
-    class SequencedClient(_OverviewClient):
-        def __init__(self, states_started, release_states):
-            super().__init__([], {"success": True, "result": []})
-            self.states_started = states_started
-            self.release_states = release_states
-            self.calls = []
-            self.active_optional = 0
-            self.max_active_optional = 0
+        res = await overview.get_system_overview(detail_level="minimal")
 
-        async def _record_optional(self, name, result):
-            self.calls.append(name)
-            self.active_optional += 1
-            self.max_active_optional = max(
-                self.max_active_optional, self.active_optional
-            )
-            await asyncio.sleep(0)
-            self.active_optional -= 1
-            return result
-
-        async def get_states(self):
-            self.calls.append("states")
-            self.states_started.set()
-            await self.release_states.wait()
-            return []
-
-        async def get_services(self):
-            return await self._record_optional("services", [])
-
-        async def send_websocket_message(self, msg):
-            return await self._record_optional(
-                msg["type"], {"success": True, "result": []}
-            )
-
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-
-    async def run_overview():
-        states_started = asyncio.Event()
-        release_states = asyncio.Event()
-        mixin = SystemOverviewMixin()
-        client = SequencedClient(states_started, release_states)
-        mixin.client = client
-
-        overview_task = asyncio.create_task(
-            mixin.get_system_overview(detail_level="minimal")
-        )
-        await states_started.wait()
-        await asyncio.sleep(0)
-        assert client.calls == ["states"]
-
-        release_states.set()
-        return await overview_task, client
-
-    overview, client = asyncio.run(run_overview())
-
-    assert overview["success"] is True
-    assert client.calls[0] == "states"
-    assert set(client.calls[1:]) == {
-        "services",
-        "config/area_registry/list",
-        "config/entity_registry/list",
-        "config/device_registry/list",
-    }
-    assert client.max_active_optional == 4
-
-
-def test_overview_stops_immediately_when_mandatory_states_fail(tmp_path, monkeypatch):
-    """A mandatory states failure prevents every optional overview read."""
-
-    class StatesFailClient(_OverviewClient):
-        def __init__(self):
-            super().__init__([], {"success": True, "result": []})
-            self.calls = []
-
-        async def get_states(self):
-            self.calls.append("states")
-            raise RuntimeError("states unavailable")
-
-        async def get_services(self):
-            self.calls.append("services")
-            return []
-
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    client = StatesFailClient()
-    mixin.client = client
-
-    with pytest.raises(Exception, match="states unavailable"):
-        asyncio.run(mixin.get_system_overview(detail_level="minimal"))
-
-    assert client.calls == ["states"]
-
-
-def test_overview_visibility_warning_does_not_mark_partial(tmp_path, monkeypatch):
-    # A pure visibility warning on otherwise-complete data (an unknown exclude
-    # category) surfaces in `warnings` but must NOT set `partial` — partial is for
-    # genuinely incomplete data (e.g. a failed services fetch). Aligns overview
-    # with ha_search, which reports the same warnings without a partial flag.
-    res = _run_overview(
-        tmp_path,
-        monkeypatch,
-        VisibilityConfig(enabled=True, exclude_categories=["typo"]),
+    assert res["success"] is True
+    names = [call[0] for call in order.mock_calls]
+    assert names[0] == "states"
+    assert names.index("core_services") > max(
+        i for i, name in enumerate(names) if name == "send"
     )
+    assert sorted(call.args[0]["type"] for call in send.await_args_list) == sorted(
+        _OPTIONAL_READS
+    )
+    services.assert_awaited_once()
+
+
+async def test_overview_stops_when_mandatory_states_read_gets_no_answer(
+    core_client: HomeAssistantClient,
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """With no states answer, no optional read is sent and the overview fails."""
+    set_config(enabled=False)
+    with (
+        patch.object(
+            core_client,
+            "get_states",
+            side_effect=HomeAssistantConnectionError("states unavailable"),
+        ),
+        patch.object(
+            core_client, "get_services", AsyncMock(wraps=core_client.get_services)
+        ) as services,
+        patch.object(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=core_client.send_websocket_message),
+        ) as send,
+        pytest.raises(ToolError, match="states unavailable"),
+    ):
+        await overview.get_system_overview(detail_level="minimal")
+
+    services.assert_not_called()
+    send.assert_not_called()
+
+
+async def test_overview_visibility_warning_does_not_mark_partial(
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """An unknown category warns on complete data without setting ``partial``."""
+    set_config(enabled=True, exclude_categories=["typo"])
+
+    res = await overview.get_system_overview(detail_level="full")
+
     assert any("unknown exclude_categories" in w for w in res.get("warnings", []))
     assert res.get("partial") is not True
 
 
-class _ServicesFailOverviewClient(_OverviewClient):
-    """get_system_overview client whose services fetch fails (partial data)."""
+async def test_overview_services_failure_marks_partial_beside_visibility_warning(
+    core_client: HomeAssistantClient,
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """An unanswered services read sets ``partial`` and names itself, and a
+    visibility warning still rides along in the same ``warnings`` list."""
+    set_config(enabled=True, exclude_categories=["typo"])
 
-    async def get_services(self):
-        raise RuntimeError("services boom")
+    with patch.object(
+        core_client,
+        "get_services",
+        side_effect=HomeAssistantConnectionError("services boom"),
+    ):
+        res = await overview.get_system_overview(detail_level="full")
 
-
-def test_overview_services_failure_marks_partial_with_coexisting_visibility_warning(
-    tmp_path, monkeypatch
-):
-    # The other half of the partial/warnings split: a genuine services failure sets
-    # `partial: true` and surfaces "Services unavailable", and a coexisting pure
-    # visibility warning (an unknown category) rides alongside in the same
-    # `warnings` list without being conflated — the two channels (partial =
-    # genuinely incomplete data, visibility = annotation on complete data) coexist.
-    save_visibility_config(
-        tmp_path, VisibilityConfig(enabled=True, exclude_categories=["typo"])
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    mixin.client = _ServicesFailOverviewClient(_STATES, _ENTITY_REGISTRY)
-    res = asyncio.run(mixin.get_system_overview(detail_level="full"))
     assert res.get("partial") is True
     warnings = res.get("warnings", [])
     assert any("Services unavailable" in w for w in warnings)
     assert any("unknown exclude_categories" in w for w in warnings)
 
 
-class _StatesCancelOverviewClient(_OverviewClient):
-    """get_system_overview client whose mandatory states fetch is cancelled."""
+async def test_overview_cancelled_during_states_read_propagates_cancellation(
+    core_client: HomeAssistantClient,
+    overview: SmartSearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """Cancelling the overview mid states read cancels it instead of being
+    turned into an error result."""
+    set_config(enabled=False)
+    with patch.object(
+        core_client, "get_states", AsyncMock(wraps=core_client.get_states)
+    ) as states:
+        task = asyncio.create_task(overview.get_system_overview(detail_level="full"))
+        await asyncio.sleep(0)
+        states.assert_called_once()
+        task.cancel()
 
-    async def get_states(self):
-        raise asyncio.CancelledError
-
-
-def test_overview_propagates_states_cancellation():
-    """A cancelled states fetch propagates instead of being assigned to
-    ``entities`` and crashing downstream iteration (mirrors the area-search
-    siblings)."""
-    mixin = SystemOverviewMixin()
-    mixin.client = _StatesCancelOverviewClient(_STATES, _ENTITY_REGISTRY)
-    with pytest.raises(asyncio.CancelledError):
-        asyncio.run(mixin.get_system_overview(detail_level="full"))
+        await asyncio.wait({task})
+        assert task.cancelled()

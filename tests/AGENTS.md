@@ -138,7 +138,14 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   client class. A tool test takes `core_client` (`src/unit/_core_client.py`): the
   server's own client connected to the real `hass`. The test sets Core up
   (`hass.states.async_set`, `async_setup_component`, a registry fixture, a
-  WebSocket command) and asserts on the tool's result.
+  config entry) and asserts on the tool's result. A WebSocket command and its
+  reply come from the integration that owns it, never from a command the test
+  registers: where the integration talks to a device or a service, only what
+  is below its library is replaced, as Core's own tests replace it (Core's test
+  kit for the integration, `aioclient_mock` for the HTTP API it calls). A test
+  may re-register a command's own handler with its own schema to observe it,
+  to hold it until the test releases it (the handler then runs and answers),
+  or to drop the connection; it never answers for it.
   `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
   handed straight to a pure helper follows the same rule: get it from Core.
 - What may be replaced: this repository's own collaborators that do not speak
@@ -156,11 +163,13 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   call was made, counted or not made, spy on the real method
   (`AsyncMock(wraps=client.get_states)`): it calls through, so the reply is
   still Core's.
-- An integration whose requirements are not installed with Core (`cloud`,
+- An integration a test runs gets its requirements in the dev group at the
+  pins of Core's manifest (`src/unit/test_dev_integration_pins.py` keeps them
+  equal). One whose requirements are not installed with Core (`cloud`,
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Eight ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
@@ -178,13 +187,25 @@ bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
 `assignment`, `attr-defined` or `misc`). The eighth
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
+The ninth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
+a test registers (`@websocket_api.websocket_command`) and a reply it writes on
+a connection (`connection.send_result`, `send_error`, `send_message`,
+`send_event`); it has no list, so every unit test complies. The tenth
+(`rules/no-test-registry-store-writes.yml`) refuses a write into a registry's
+store (`.issues`, `.entities`, `.deleted_entities`, `.devices`,
+`.deleted_devices`, `.areas`, `.floors`, `.labels`, `.categories`): an item
+assigned or deleted by key, or `pop`, `clear`, `update` or `setdefault` on
+it. The test creates, changes or removes the entry through Core, and gets a
+restored one by having Core load it from storage. It has no list either.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
 which is why the fourth rule exists.
 
 Test files written before a check are listed with it: in the rule's `ignores`
-and in the guard. Converting a file removes it from the lists.
+and in the guard. Converting a file removes it from every list it is on: the
+ast-grep `ignores`, the guard, `SLF001` and the mypy list below. A file taken
+off one list and left on another fails the ratchet below.
 `src/unit/test_core_reply_rules.py` keeps the lists of the hass, reply,
 shared-client, suppression and fixture-annotation rules exact: a listed file that no longer
 violates fails it, as does a violating file that is not listed.
@@ -198,9 +219,9 @@ older files. The script also fails a rule that is removed, renamed or made to
 scan fewer files.
 
 A listed file is exempt for what it already holds, not for what is added to
-it. For each file on an ast-grep rule's list that the pull request changes,
-the same script counts what the rule refuses at the base and in the pull
-request, and fails when the count rises. A test added to a listed file goes in
+it. For each file on an ast-grep rule's list or a `SLF001` list that the pull
+request changes, the same script counts what the check refuses at the base
+and in the pull request, and fails when the count rises. A test added to a listed file goes in
 a new file on real Core, or the file is converted.
 
 Two more checks run on these trees, each with a list under the same rules:
