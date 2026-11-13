@@ -635,29 +635,16 @@ class TestCapture:
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images("lovelace/0")
 
-    @pytest.mark.parametrize("path", ["/", "/.", "", "  ", "//"])
-    async def test_root_or_empty_path_rejected(
-        self, monkeypatch: Any, path: str
-    ) -> None:
-        """A root/empty path would make the engine serve its config/UI HTML
-        instead of a dashboard PNG — reject it rather than fail silently."""
-        from ha_mcp.dashboard_screenshot import capture
-
-        async def fake_resolve() -> EngineTarget:
-            return EngineTarget(url="http://engine:10000")
-
-        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(200, _PNG)
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
-
-        with pytest.raises(ToolError):
-            await capture.capture_dashboard_images(path)
-        assert _FakeAsyncClient.gets == []
-
     @pytest.mark.parametrize(
         "path",
         [
+            # A root or empty path makes the engine serve its own UI page.
+            "/",
+            "/.",
+            "",
+            "  ",
+            "//",
+            # Each of these could re-point the credentialed engine elsewhere.
             "http://evil/x",  # scheme injection
             "lovelace/0?x=://evil",  # query + scheme
             "lovelace/../admin",  # traversal
@@ -668,11 +655,11 @@ class TestCapture:
             "lovelace/\x01ctrl",  # control character
         ],
     )
-    async def test_attack_vector_paths_rejected(
+    async def test_unsafe_dashboard_paths_never_reach_the_engine(
         self, monkeypatch: Any, path: str
     ) -> None:
-        """Each path that could re-point the credentialed engine at an
-        arbitrary URL / admin route must raise, not just root/empty."""
+        """A path that is not a plain dashboard path is refused before the
+        engine is asked for anything."""
         from ha_mcp.dashboard_screenshot import capture
 
         async def fake_resolve() -> EngineTarget:

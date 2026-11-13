@@ -5,8 +5,6 @@ component-aware catalog."""
 from __future__ import annotations
 
 import json
-import uuid
-from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -31,49 +29,10 @@ from ha_mcp.tools.tools_config_helpers import (
 )
 
 from ._client_spies import sent_messages
+from ._helper_tool_core import create_item, fresh_name, set_up, stored_item
+from ._helper_tool_core import tools as tools
 
 pytestmark = pytest.mark.asyncio
-
-
-@pytest.fixture(params=[False, True], ids=["core", "component"])
-async def tools(
-    request: pytest.FixtureRequest,
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-) -> AsyncIterator[HelperConfigTools]:
-    if request.param:
-        from custom_components.ha_mcp_tools import websocket_api
-
-        websocket_api.async_register_commands(hass)
-    yield HelperConfigTools(core_client)
-    await hass.async_block_till_done()
-
-
-async def _set_up(hass: HomeAssistant, helper_type: str) -> None:
-    # ``config`` serves the entity-registry reads of the tool.
-    for domain in ("config", helper_type):
-        assert await async_setup_component(hass, domain, {})
-
-
-def _name() -> str:
-    """A fresh name, so no registry entry of an earlier helper is restored."""
-    return f"Helper {uuid.uuid4().hex[:8]}"
-
-
-async def _stored(client: HomeAssistantClient, helper_type: str, item_id: str) -> Any:
-    listed = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    assert listed["success"], listed
-    return next(i for i in listed["result"] if i["id"] == item_id)
-
-
-async def _create(
-    client: HomeAssistantClient, helper_type: str, fields: dict[str, Any]
-) -> str:
-    created = await client.send_websocket_message(
-        {"type": f"{helper_type}/create", "name": _name(), **fields}
-    )
-    assert created["success"], created
-    return str(created["result"]["id"])
 
 
 async def _create_tag(client: HomeAssistantClient, **fields: Any) -> None:
@@ -111,15 +70,15 @@ async def test_a_storage_field_is_not_a_tool_parameter(
 async def test_config_accepts_core_names_and_name(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    await _set_up(hass, "counter")
-    name = _name()
+    await set_up(hass, "counter")
+    name = fresh_name()
     result = await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="counter",
         action="create",
         config={"name": name, "minimum": 0, "maximum": "5", "icon": "mdi:run"},
     )
     # As written: Core coerces the string, not the tool.
-    stored = await _stored(core_client, "counter", result["data"]["id"])
+    stored = await stored_item(core_client, "counter", result["data"]["id"])
     assert stored["minimum"] == 0
     assert stored["maximum"] == 5
     assert stored["name"] == name
@@ -133,28 +92,33 @@ async def test_core_value_types_pass_through(
 ) -> None:
     """Core takes seconds for a timer and a fractional number initial."""
     for helper_type in ("timer", "input_number", "input_boolean"):
-        await _set_up(hass, helper_type)
+        await set_up(hass, helper_type)
     tools = HelperConfigTools(core_client)
     timer = await tools.ha_config_set_helper(
-        helper_type="timer", name=_name(), action="create", config={"duration": 300}
+        helper_type="timer",
+        name=fresh_name(),
+        action="create",
+        config={"duration": 300},
     )
     number = await tools.ha_config_set_helper(
         helper_type="input_number",
-        name=_name(),
+        name=fresh_name(),
         action="create",
         config={"initial": 2.5, "min": 0, "max": 5},
     )
     boolean = await tools.ha_config_set_helper(
         helper_type="input_boolean",
-        name=_name(),
+        name=fresh_name(),
         action="create",
         config={"initial": True},
     )
-    stored_timer = await _stored(core_client, "timer", timer["data"]["id"])
+    stored_timer = await stored_item(core_client, "timer", timer["data"]["id"])
     assert stored_timer["duration"] == "0:05:00"
-    stored_number = await _stored(core_client, "input_number", number["data"]["id"])
+    stored_number = await stored_item(core_client, "input_number", number["data"]["id"])
     assert stored_number["initial"] == 2.5
-    stored_boolean = await _stored(core_client, "input_boolean", boolean["data"]["id"])
+    stored_boolean = await stored_item(
+        core_client, "input_boolean", boolean["data"]["id"]
+    )
     assert stored_boolean["initial"] is True
 
 
@@ -163,7 +127,7 @@ async def test_unknown_config_keys_reach_core_for_its_suggestion(
 ) -> None:
     """Core rejects a key its schema lacks and names the closest one, so the
     tool sends it rather than replacing that with its own generic error."""
-    await _set_up(hass, "input_number")
+    await set_up(hass, "input_number")
     mcp, _ = await _registered_tool(core_client)
     with pytest.raises(ToolError, match="minn"):
         await _call(mcp, helper_type="input_number", name="T", config={"minn": 1})
@@ -181,7 +145,7 @@ async def test_config_cannot_choose_the_command_or_the_item(
 ) -> None:
     """``type`` and the item ids address the WebSocket request; a config key
     with that name would send another command or write another item."""
-    await _set_up(hass, helper_type)
+    await set_up(hass, helper_type)
     mcp, _ = await _registered_tool(core_client)
     with sent_messages(core_client) as sent, pytest.raises(ToolError, match=key):
         await _call(mcp, helper_type=helper_type, name="T", config={key: "x"})
@@ -192,7 +156,7 @@ async def test_config_cannot_choose_the_command_or_the_item(
 async def test_one_field_passed_twice_with_different_values_is_rejected(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    await _set_up(hass, "input_number")
+    await set_up(hass, "input_number")
     mcp, _ = await _registered_tool(core_client)
     base = {"helper_type": "input_number", "name": "T", "action": "create"}
     with (
@@ -209,20 +173,20 @@ async def test_one_field_passed_twice_with_different_values_is_rejected(
         action="create",
         config={"name": "T", "min": 1, "max": 5},
     )
-    stored = await _stored(core_client, "input_number", created["data"]["id"])
+    stored = await stored_item(core_client, "input_number", created["data"]["id"])
     assert stored["min"] == 1
 
 
 async def test_error_context_lists_cores_fields_when_served(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    await _set_up(hass, "input_number")
+    await set_up(hass, "input_number")
     mcp, _ = await _registered_tool(component_core_client)
     with pytest.raises(ToolError) as exc:
         await _call(
             mcp,
             helper_type="input_number",
-            name=_name(),
+            name=fresh_name(),
             action="create",
             config={"min": "x"},
         )
@@ -233,13 +197,13 @@ async def test_error_context_lists_cores_fields_when_served(
 async def test_error_context_has_no_schema_without_component(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    await _set_up(hass, "input_number")
+    await set_up(hass, "input_number")
     mcp, _ = await _registered_tool(core_client)
     with pytest.raises(ToolError) as exc:
         await _call(
             mcp,
             helper_type="input_number",
-            name=_name(),
+            name=fresh_name(),
             action="create",
             config={"min": "x"},
         )
@@ -252,13 +216,13 @@ async def test_create_routes_through_component(
     area_registry: ar.AreaRegistry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "input_number")
+    await set_up(hass, "input_number")
     area = area_registry.async_create("Kitchen")
     tools = HelperConfigTools(component_core_client)
     with sent_messages(component_core_client) as sent:
         result = await tools.ha_config_set_helper(
             helper_type="input_number",
-            name=_name(),
+            name=fresh_name(),
             action="create",
             area_id=area.id,
             config={"min": 1.0, "max": 9.0},
@@ -268,7 +232,9 @@ async def test_create_routes_through_component(
     entry = entity_registry.async_get(result["entity_id"])
     assert entry is not None
     assert entry.area_id == area.id
-    stored = await _stored(component_core_client, "input_number", result["data"]["id"])
+    stored = await stored_item(
+        component_core_client, "input_number", result["data"]["id"]
+    )
     assert stored["min"] == 1.0
     assert stored["max"] == 9.0
 
@@ -276,10 +242,10 @@ async def test_create_routes_through_component(
 async def test_schedule_update_keeps_unpassed_days(
     hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
 ) -> None:
-    await _set_up(hass, "schedule")
+    await set_up(hass, "schedule")
     created = await tools.ha_config_set_helper(
         helper_type="schedule",
-        name=_name(),
+        name=fresh_name(),
         config={"monday": [{"from": "07:00:00", "to": "08:00:00"}]},
     )
     item_id = created["data"]["id"]
@@ -288,7 +254,7 @@ async def test_schedule_update_keeps_unpassed_days(
         helper_id=item_id,
         config={"tuesday": [{"from": "09:00", "to": "10:00"}]},
     )
-    stored = await _stored(core_client, "schedule", item_id)
+    stored = await stored_item(core_client, "schedule", item_id)
     assert stored["monday"] == [{"from": "07:00:00", "to": "08:00:00"}]
     assert stored["tuesday"][0]["from"].startswith("09:00")
     # Removing the schedule cancels the timer for its next block.
@@ -302,10 +268,10 @@ async def test_websocket_update_of_a_person_reads_its_storage_items(
     hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
 ) -> None:
     """person/list nests the editable items under "storage"."""
-    await _set_up(hass, "person")
+    await set_up(hass, "person")
     created = await tools.ha_config_set_helper(
         helper_type="person",
-        name=_name(),
+        name=fresh_name(),
         config={"device_trackers": ["device_tracker.a"]},
     )
     item_id = created["data"]["id"]
@@ -321,7 +287,7 @@ async def test_websocket_update_of_a_person_reads_its_storage_items(
 async def test_zone_update_without_icon_keeps_a_stored_icon(
     hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
 ) -> None:
-    await _set_up(hass, "zone")
+    await set_up(hass, "zone")
     # Another zone with an icon comes first, so the lookup must match by id.
     await tools.ha_config_set_helper(
         helper_type="zone",
@@ -331,7 +297,7 @@ async def test_zone_update_without_icon_keeps_a_stored_icon(
     )
     created = await tools.ha_config_set_helper(
         helper_type="zone",
-        name=_name(),
+        name=fresh_name(),
         icon="mdi:school",
         config={"latitude": 1.0, "longitude": 2.0, "radius": 100.0},
     )
@@ -339,7 +305,7 @@ async def test_zone_update_without_icon_keeps_a_stored_icon(
     await tools.ha_config_set_helper(
         helper_type="zone", helper_id=item_id, config={"radius": 50.0}
     )
-    stored = await _stored(core_client, "zone", item_id)
+    stored = await stored_item(core_client, "zone", item_id)
     assert stored["icon"] == "mdi:school"
     assert stored["radius"] == 50.0
 
@@ -357,8 +323,8 @@ async def test_update_routes_through_component_with_merged_payload(
     entity_registry: er.EntityRegistry,
     category_registry: cr.CategoryRegistry,
 ) -> None:
-    await _set_up(hass, "input_number")
-    item_id = await _create(
+    await set_up(hass, "input_number")
+    item_id = await create_item(
         component_core_client, "input_number", {"min": 0.0, "max": 50.0, "step": 5.0}
     )
     category = category_registry.async_create(scope="helpers", name="Cat1")
@@ -372,7 +338,7 @@ async def test_update_routes_through_component_with_merged_payload(
         )
     sent_types = [c.args[0]["type"] for c in sent.call_args_list]
     assert "input_number/update" not in sent_types
-    stored = await _stored(component_core_client, "input_number", item_id)
+    stored = await stored_item(component_core_client, "input_number", item_id)
     assert stored["min"] == 0
     assert stored["max"] == 80
     assert stored["step"] == 5
@@ -387,13 +353,13 @@ async def test_tag_update_routes_through_component(
     area_registry: ar.AreaRegistry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(component_core_client, description="old")
     area = area_registry.async_create("Kitchen")
     await HelperConfigTools(component_core_client).ha_config_set_helper(
         helper_type="tag", helper_id="abc-1", name="T2", area_id=area.id
     )
-    stored = await _stored(component_core_client, "tag", "abc-1")
+    stored = await stored_item(component_core_client, "tag", "abc-1")
     assert stored["description"] == "old"
     assert stored["name"] == "T2"
     entity_id = entity_registry.async_get_entity_id("tag", "tag", "abc-1")
@@ -410,8 +376,8 @@ async def test_empty_category_clears_via_the_component(
     category_registry: cr.CategoryRegistry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "input_boolean")
-    item_id = await _create(core_client, "input_boolean", {})
+    await set_up(hass, "input_boolean")
+    item_id = await create_item(core_client, "input_boolean", {})
     entity_id = entity_registry.async_get_entity_id(
         "input_boolean", "input_boolean", item_id
     )
@@ -433,12 +399,12 @@ async def test_blank_clears_and_quote_only_is_rejected(
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "input_boolean")
+    await set_up(hass, "input_boolean")
     mcp, _ = await _registered_tool(core_client)
     base = {"helper_type": "input_boolean", "name": "B", "action": "create"}
     created = await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="input_boolean",
-        name=_name(),
+        name=fresh_name(),
         action="create",
         area_id="  ",
         icon=" ",
@@ -452,7 +418,7 @@ async def test_blank_clears_and_quote_only_is_rejected(
         await _call(mcp, **base, category='""')
     created = await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="input_boolean",
-        name=_name(),
+        name=fresh_name(),
         action="create",
         config={"icon": " "},
     )
@@ -469,8 +435,8 @@ async def test_empty_category_clears_the_scope(
 ) -> None:
     from ha_mcp.tools.config_write_helpers import apply_entity_category
 
-    await _set_up(hass, "input_boolean")
-    item_id = await _create(core_client, "input_boolean", {})
+    await set_up(hass, "input_boolean")
+    item_id = await create_item(core_client, "input_boolean", {})
     entity_id = entity_registry.async_get_entity_id(
         "input_boolean", "input_boolean", item_id
     )
@@ -491,7 +457,7 @@ async def test_websocket_create_failure_code(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Core's own invalid_format rejection is reported as an invalid parameter."""
-    await _set_up(hass, "input_boolean")
+    await set_up(hass, "input_boolean")
     mcp, _ = await _registered_tool(core_client)
     with pytest.raises(ToolError, match="VALIDATION_INVALID_PARAMETER"):
         await _call(
@@ -508,7 +474,7 @@ async def test_websocket_tag_create_reports_the_real_entity(
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     result = await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="tag",
         name="Front door",
@@ -527,12 +493,12 @@ async def test_websocket_tag_update_resolves_the_tag_id(
     entity_registry: er.EntityRegistry,
     helper_id: str,
 ) -> None:
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(core_client, name="Front door")
     result = await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="tag", helper_id=helper_id, name="Front"
     )
-    stored = await _stored(core_client, "tag", "abc-1")
+    stored = await stored_item(core_client, "tag", "abc-1")
     assert stored["name"] == "Front"
     assert result["entity_id"] == entity_registry.async_get_entity_id(
         "tag", "tag", "abc-1"
@@ -545,7 +511,7 @@ async def test_websocket_tag_update_writes_the_icon_to_the_registry(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """A tag has no icon field, so Core would reject one: it goes to the registry."""
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(core_client, name="Front door")
     await HelperConfigTools(core_client).ha_config_set_helper(
         helper_type="tag", helper_id="abc-1", icon="mdi:nfc"
@@ -555,7 +521,7 @@ async def test_websocket_tag_update_writes_the_icon_to_the_registry(
     entry = entity_registry.async_get(entity_id)
     assert entry is not None
     assert entry.icon == "mdi:nfc"
-    assert "icon" not in await _stored(core_client, "tag", "abc-1")
+    assert "icon" not in await stored_item(core_client, "tag", "abc-1")
 
 
 async def test_websocket_tag_update_clears_the_registry_icon(
@@ -564,7 +530,7 @@ async def test_websocket_tag_update_clears_the_registry_icon(
     entity_registry: er.EntityRegistry,
 ) -> None:
     """A cleared icon is left out of tag/update and clears the registry icon."""
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(core_client, name="Front door")
     entity_id = entity_registry.async_get_entity_id("tag", "tag", "abc-1")
     assert entity_id is not None
@@ -583,7 +549,7 @@ async def test_websocket_tag_update_applies_registry_fields(
     area_registry: ar.AreaRegistry,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(core_client, name="Front door")
     area = area_registry.async_create("Kitchen")
     await HelperConfigTools(core_client).ha_config_set_helper(
@@ -601,7 +567,7 @@ async def test_component_tag_update_reports_the_component_entity(
     component_core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(component_core_client, name="Front door")
     result = await HelperConfigTools(component_core_client).ha_config_set_helper(
         helper_type="tag", helper_id="abc-1", name="F"
@@ -609,7 +575,7 @@ async def test_component_tag_update_reports_the_component_entity(
     assert result["entity_id"] == entity_registry.async_get_entity_id(
         "tag", "tag", "abc-1"
     )
-    stored = await _stored(component_core_client, "tag", "abc-1")
+    stored = await stored_item(component_core_client, "tag", "abc-1")
     assert stored["name"] == "F"
 
 
@@ -618,10 +584,10 @@ async def test_write_falls_back_to_websocket_when_component_unavailable(
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    await _set_up(hass, "input_boolean")
+    await set_up(hass, "input_boolean")
     with sent_messages(core_client) as sent:
         result = await HelperConfigTools(core_client).ha_config_set_helper(
-            helper_type="input_boolean", name=_name(), action="create"
+            helper_type="input_boolean", name=fresh_name(), action="create"
         )
     sent_types = [c.args[0]["type"] for c in sent.call_args_list]
     assert sent_types.count("input_boolean/create") == 1
@@ -681,7 +647,7 @@ async def test_a_tag_update_is_not_waited_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A tag is not waited on after an update, as after its create."""
-    await _set_up(hass, "tag")
+    await set_up(hass, "tag")
     await _create_tag(core_client, name="Front door")
     waited = AsyncMock(wraps=hc_update.wait_for_entity_registered)
     monkeypatch.setattr(hc_update, "wait_for_entity_registered", waited)
