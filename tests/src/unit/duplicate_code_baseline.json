@@ -671,9 +671,7 @@
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityShowAs.mock_client",
     "tests/src/unit/test_tools_resources.py::TestHaConfigDeleteDashboardResource.mock_client",
     "tests/src/unit/test_tools_resources.py::TestHaConfigListDashboardResources.mock_client",
-    "tests/src/unit/test_tools_resources.py::TestHaConfigSetDashboardResource.mock_client",
-    "tests/src/unit/test_tools_voice_assistant.py::TestHaGetEntityExposure.mock_client",
-    "tests/src/unit/test_tools_voice_assistant.py::TestHaListExposedEntities.mock_client"
+    "tests/src/unit/test_tools_resources.py::TestHaConfigSetDashboardResource.mock_client"
   ],
   "d29ab431ea8a": [
     "tests/src/e2e/tools/test_dev_mode_tools.py::_reset_settings_state",
