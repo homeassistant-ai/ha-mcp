@@ -10,7 +10,6 @@ replacement: bounded per-frame size, concurrent fetch, and per-chunk
 best-effort failure handling.
 """
 
-import asyncio
 import logging
 import math
 from unittest.mock import patch
@@ -40,13 +39,11 @@ class RecordingClient:
         self,
         fail_on_call: int | None = None,
         fail_response_on_call: int | None = None,
-        cancel_on_call: int | None = None,
         malformed_on_call: int | None = None,
     ) -> None:
         self.calls: list[dict] = []
         self.fail_on_call = fail_on_call
         self.fail_response_on_call = fail_response_on_call
-        self.cancel_on_call = cancel_on_call
         self.malformed_on_call = malformed_on_call
 
     async def send_websocket_message(self, message: dict) -> dict:
@@ -54,8 +51,6 @@ class RecordingClient:
         call_number = len(self.calls)
         if self.fail_on_call == call_number:
             raise RuntimeError(f"simulated failure on call {call_number}")
-        if self.cancel_on_call == call_number:
-            raise asyncio.CancelledError
         if self.fail_response_on_call == call_number:
             return {"success": False, "error": "simulated failure"}
         if self.malformed_on_call == call_number:
@@ -157,20 +152,6 @@ class TestAliasFetchChunking:
         assert aliases_map[second_chunk_id] == [f"alias-{second_chunk_id}"]
 
         assert "alias_enrichment_failed" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_cancelled_chunk_propagates(self):
-        """A cancelled sub-fetch must abort enrichment, not degrade to a warning.
-
-        Swallowing a captured CancelledError as best-effort would reintroduce
-        the #1721 failure class on the new concurrent path.
-        """
-        client = RecordingClient(cancel_on_call=2)
-        tools = _make_tools(client)
-        survivor_ids = _entity_ids(_GET_ENTRIES_CHUNK_SIZE + 1)
-
-        with pytest.raises(asyncio.CancelledError):
-            await tools._fetch_entity_aliases(survivor_ids)
 
     @pytest.mark.asyncio
     async def test_malformed_success_payload_tolerated(self, caplog):

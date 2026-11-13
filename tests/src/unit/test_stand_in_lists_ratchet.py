@@ -248,6 +248,17 @@ def _listed(rule: str, entry: str) -> str:
             "mypy no longer reports assignment in tests",
             id="mypy-loosened-for-every-module",
         ),
+        pytest.param(
+            {_RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', "")},
+            f"{_OLD} came off no-hand-made-core-replies but is still on "
+            f"pyproject.toml (mypy), {_GUARD_PATH}, {_RUFF_PATH}",
+            id="converted-file-left-on-the-other-lists",
+        ),
+        pytest.param(
+            {_RUFF_PATH: _ADDON_RUFF},
+            f"{_OLD} came off {_RUFF_PATH} but is still on",
+            id="private-access-removed-but-still-on-the-rule-list",
+        ),
     ],
 )
 def test_an_exempted_test_is_reported(
@@ -307,6 +318,27 @@ def test_a_listed_file_cannot_gain_what_its_list_excuses(
     expected = [
         f"rules: {_OLD} has 2 of what no-hand-made-core-replies refuses, "
         "1 at the base; a listed file may not gain any"
+    ]
+    assert ratchet.problems_since(repo, "HEAD") == (expected if reported else [])
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "reported"),
+    [
+        pytest.param("x._a\n", "x._a\nx._b\n", True, id="gains-a-private-access"),
+        pytest.param("x._a\n", "x._b\n", False, id="same-count"),
+        pytest.param("x._a\nx._b\n", "x._a\n", False, id="loses-one"),
+    ],
+)
+def test_a_file_on_the_private_access_list_cannot_gain_any(
+    ratchet: ModuleType, tmp_path: Path, before: str, after: str, reported: bool
+) -> None:
+    """The SLF001 list exempts the private access a file held, not a new one."""
+    repo = _pull_request(tmp_path, {_OLD: after}, {**_BASE, _OLD: before})
+
+    expected = [
+        f"{_RUFF_PATH}: {_OLD} has 2 private accesses (SLF001), 1 at the base; "
+        "a listed file may not gain any"
     ]
     assert ratchet.problems_since(repo, "HEAD") == (expected if reported else [])
 

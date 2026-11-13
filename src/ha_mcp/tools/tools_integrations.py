@@ -1961,7 +1961,7 @@ class IntegrationTools:
         but no registry entry), for a config entry the backend reports as 404,
         or for a missing config subentry.
         Calling N times gives the same response. Transient connectivity failures
-        raise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so
+        raise their own codes (CONNECTION_FAILED, CONNECTION_TIMEOUT) so
         retry logic can branch separately.
 
         EXAMPLES:
@@ -2200,12 +2200,10 @@ class IntegrationTools:
         try:
             # Step 1: resolve target → entry_id (typed reason on failure)
             entry_id, reason = await get_entry_id_for_flow_helper(
-                client, helper_type, target, warnings
+                client, helper_type, target
             )
             if entry_id is None:
-                raise_flow_helper_lookup_error(
-                    reason, helper_type, target, detail="; ".join(warnings) or None
-                )
+                raise_flow_helper_lookup_error(reason, helper_type, target)
 
             result: dict[str, Any] = await self._delete_resolved_flow_helper(
                 helper_type=helper_type,

@@ -118,7 +118,7 @@ uv run ast-grep scan
 ```
 
 The unit and app test trees carry extra checks that keep a test on real Home
-Assistant Core: eight ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
+Assistant Core: ten ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
 and the mypy script above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
 owns the rules and the lists of files written before them.
 

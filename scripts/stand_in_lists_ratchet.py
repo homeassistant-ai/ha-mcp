@@ -20,9 +20,14 @@ Two rules decide every added entry:
   match before; nothing else justifies a longer list.
 
 A listed file is exempt as a whole, so a pull request could also add a new
-faked test to one. For every file on an ast-grep rule's list that the pull
-request changes, the script counts what the rule refuses in the file at the
-base and in the checkout: the count may fall or stay, never rise.
+faked test to one. For every file on an ast-grep rule's list or a ``SLF001``
+list that the pull request changes, the script counts what the check refuses
+in the file at the base and in the checkout: the count may fall or stay, never
+rise.
+
+A file the pull request takes off any list is converted, and a converted file
+is on no list: one taken off an ast-grep rule's list but left on ``SLF001``
+still reaches into private members the conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
 removing or renaming a rule, loosening the ``tests.*`` mypy settings, and
@@ -54,6 +59,8 @@ WORKFLOW = ".github/workflows/pr.yml"
 MYPY_ON_TESTS = "scripts/mypy_tests_exact.py"
 # The parts of an ast-grep rule that decide what it matches.
 RULE_DEFINITION = ("rule", "constraints", "utils", "language")
+# The list of test modules mypy skips, as the conversion check names it.
+MYPY_LIST = f"{PYPROJECT} (mypy)"
 MYPY_LOOSENING = ("ignore_errors", "ignore_missing_imports", "follow_imports")
 
 
@@ -361,6 +368,116 @@ def _check_file_list(
             problems.append(f"{path}: {entry} was added to the list")
 
 
+def _ruff() -> str:
+    found = shutil.which("ruff", path=str(Path(sys.executable).parent)) or shutil.which(
+        "ruff"
+    )
+    if not found:
+        raise RuntimeError("ruff (dev group) is not installed")
+    return found
+
+
+def _private_accesses(repo: Path, entry: str, text: str) -> int:
+    """How often SLF001 refuses ``text`` as a file beside ``entry``.
+
+    The text goes in under a name no per-file entry matches, so the folder's
+    own ``ruff.toml`` applies with the file's exemption set aside.
+    """
+    probe = f"{entry.rsplit('/', 1)[0]}/slf001-count-probe.py"
+    proc = subprocess.run(
+        [_ruff(), "check", "-", "--stdin-filename", probe, "--select", "SLF001"]
+        + ["--output-format", "json", "--no-cache", "--exit-zero"],
+        cwd=repo,
+        input=text,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    try:
+        return len(json.loads(proc.stdout))
+    except ValueError as err:
+        raise RuntimeError(f"ruff failed on {entry}: {proc.stderr}") from err
+
+
+def _check_private_access(
+    base: Base, repo: Path, listed: dict[str, set[str]], problems: list[str]
+) -> None:
+    """A file on a ``SLF001`` list may change, but not gain private access."""
+    changed = base.changed()
+    for path in RUFF_FILES:
+        for entry in sorted(listed.get(path, set()) & changed):
+            if not (repo / entry).is_file() or not base.has(entry):
+                continue
+            now = _private_accesses(
+                repo, entry, (repo / entry).read_text(encoding="utf-8")
+            )
+            before = _private_accesses(repo, entry, base.text(entry) or "")
+            if now > before:
+                problems.append(
+                    f"{path}: {entry} has {now} private accesses (SLF001), "
+                    f"{before} at the base; a listed file may not gain any"
+                )
+
+
+def _lists(base: Base, repo: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Every list's files, by list name, in the checkout and at the base."""
+    head: dict[str, set[str]] = {}
+    before: dict[str, set[str]] = {}
+    head_rules = _test_rules(
+        {
+            path.relative_to(repo).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted((repo / "rules").glob("*.yml"))
+        }
+    )
+    base_rules = _test_rules(
+        {
+            name: text
+            for name in base.names("rules")
+            if name.endswith(".yml") and (text := base.text(name)) is not None
+        }
+    )
+    for lists, rules in ((head, head_rules), (before, base_rules)):
+        for rule_id, rule in rules.items():
+            lists[rule_id] = set(map(str, rule.get("ignores") or []))
+    guard_base = base.text(GUARD)
+    head[GUARD] = _guard_entries((repo / GUARD).read_text(encoding="utf-8"))
+    if guard_base is not None:
+        before[GUARD] = _guard_entries(guard_base)
+    for path in RUFF_FILES:
+        head[path] = _ruff_entries(path, (repo / path).read_text(encoding="utf-8"), [])
+        ruff_base = base.text(path)
+        if ruff_base is not None:
+            before[path] = _ruff_entries(path, ruff_base, [])
+    head[MYPY_LIST] = {
+        _module_path(base, module)
+        for module in _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8"))[0]
+    }
+    pyproject_base = base.text(PYPROJECT)
+    if pyproject_base is not None:
+        before[MYPY_LIST] = {
+            _module_path(base, module) for module in _mypy_state(pyproject_base)[0]
+        }
+    return head, before
+
+
+def _check_full_conversion(
+    head: dict[str, set[str]], before: dict[str, set[str]], problems: list[str]
+) -> None:
+    """A file taken off one list is taken off every list."""
+    taken_off: dict[str, list[str]] = {}
+    for name, entries in sorted(before.items()):
+        for entry in entries - head.get(name, set()):
+            taken_off.setdefault(entry, []).append(name)
+    for entry, names in sorted(taken_off.items()):
+        still = sorted(name for name, entries in head.items() if entry in entries)
+        if still:
+            problems.append(
+                f"{entry} came off {', '.join(names)} but is still on "
+                f"{', '.join(still)}; a converted file comes off every list"
+            )
+
+
 def problems_since(repo: Path, commit: str) -> list[str]:
     """Every way the checkout exempts a test that the base did not."""
     base = Base(repo, commit)
@@ -385,6 +502,9 @@ def problems_since(repo: Path, commit: str) -> list[str]:
             problems,
         )
     _check_mypy(base, (repo / PYPROJECT).read_text(encoding="utf-8"), problems)
+    head_lists, base_lists = _lists(base, repo)
+    _check_private_access(base, repo, head_lists, problems)
+    _check_full_conversion(head_lists, base_lists, problems)
     return problems
 
 
@@ -410,7 +530,8 @@ def main(argv: list[str] | None = None) -> int:
             "against real Core instead: take the core_client fixture, do not reach "
             "into private members, and fix its type errors. A renamed file counts "
             "as new. A listed file is exempt for what it already holds: a test added "
-            "to it goes in a new file, or the file is converted."
+            "to it goes in a new file, or the file is converted, which takes it off "
+            "every list."
         )
         return 1
     print("No test was exempted from the real-Core checks.")

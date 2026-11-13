@@ -75,10 +75,12 @@ async def restore_reset_timestamps(
 ) -> list[str]:
     """Read resets in their stored unit to avoid Core converting timestamps.
 
-    Core 2026.9's generic row converter also converts last_reset. A native
-    same-unit query avoids that bug without inverse arithmetic or a unit table,
-    and remains correct when Core fixes it. Group by native class/stored unit
-    because one query's unit option applies to every statistic in that class.
+    Core before 2026.11 (home-assistant/core#188508) also converts last_reset
+    in its generic row converter, so this serves Core 2026.8 (the hacs.json
+    minimum) through 2026.10.x. A native same-unit query avoids that bug without
+    inverse arithmetic or a unit table and stays correct on fixed Cores. Group by
+    native class/stored unit because one query's unit option applies to every
+    statistic in that class.
     """
     groups, unresolved = _reset_groups(
         rows_by_id, metadata, query, resolved_units or {}

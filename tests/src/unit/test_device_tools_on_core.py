@@ -414,16 +414,15 @@ async def test_radio_refusal_warns_in_cores_words(
     )
 
 
-@pytest.mark.parametrize("domain", ["zha", "zwave_js"])
-async def test_radio_device_without_its_radio_id_is_not_read(
-    hass: HomeAssistant, tools: RegistryTools, domain: str
+async def test_zha_device_without_an_ieee_address_is_not_read(
+    hass: HomeAssistant, tools: RegistryTools
 ) -> None:
-    """A ZHA device without an IEEE address, or a Z-Wave device without a
-    node id, gives the radio read nothing to ask for: none is made, so Core
-    refuses nothing and the answer carries no warnings."""
-    dev = _device(hass, domain, identifiers={("other", "1")})
+    """A ZHA device without an IEEE address gives the radio read nothing to
+    ask for: none is made, so Core refuses nothing and the answer carries no
+    warnings. (A Z-Wave device's node is always Z-Wave JS's to resolve.)"""
+    dev = _device(hass, "zha", identifiers={("other", "1")})
 
     result = await tools.ha_get_device(device_id=dev.id)
 
-    assert result["device"]["integration_type"] == domain
+    assert result["device"]["integration_type"] == "zha"
     assert "warnings" not in result

@@ -45,13 +45,11 @@ class _Refused(Exception):
 
 
 def _core() -> SimpleNamespace | None:
-    """Core's todo parts this bridge uses, or None on a Core without them."""
-    try:
-        from homeassistant.components.todo import const, entity, services
-        from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-        from homeassistant.helpers import config_validation as cv
-    except ImportError:
-        return None
+    """Core's todo parts this bridge uses, or None on a Core missing one."""
+    from homeassistant.components.todo import const, entity, services
+    from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+    from homeassistant.helpers import config_validation as cv
+
     core = SimpleNamespace(
         component_key=getattr(const, "DATA_COMPONENT", None),
         domain=getattr(const, "DOMAIN", None),
