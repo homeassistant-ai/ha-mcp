@@ -7,7 +7,6 @@ scripts.yaml in Core's config directory: a test file that uses these overrides
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +20,7 @@ from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-
-def error_body(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    """The structured body of a tool's rejection."""
-    body: dict[str, Any] = json.loads(str(exc.value))
-    return body
+from ._tool_errors import error_body
 
 
 def error_of(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:

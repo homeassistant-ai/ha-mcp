@@ -9,7 +9,6 @@ component's own.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +33,8 @@ from ha_mcp.tools.log_sources_fault import (
 )
 from ha_mcp.tools.tools_filesystem import call_mcp_tools_service
 from ha_mcp.tools.tools_logs import LogTools
+
+from ._tool_errors import error_body
 
 # Two faulthandler dumps, as HA Core's append-mode file accumulates them.
 _SEGV_BLOCK = [
@@ -104,11 +105,6 @@ def _call_kwargs(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
-
-
-def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    payload: dict[str, Any] = json.loads(str(exc_info.value))
-    return payload
 
 
 async def _get(client: HomeAssistantClient, **overrides: Any) -> dict[str, Any]:
@@ -315,7 +311,7 @@ class TestFailures:
         with pytest.raises(ToolError) as exc_info:
             await _get(core_client)
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         assert MIN_COMPONENT_VERSION_FAULT_LOG in payload["error"]["message"]
         # create_error_response spreads ``context`` beside ``error``.
@@ -332,7 +328,7 @@ class TestFailures:
         with pytest.raises(ToolError) as exc_info:
             await _get(core_client)
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Cannot read binary file" in payload["error"]["message"]
         suggestions = payload["error"]["suggestions"]
@@ -360,9 +356,7 @@ class TestFailures:
         ):
             await _get(core_client)
 
-        assert _parse_tool_error(exc_info)["error"]["code"] == (
-            "COMPONENT_NOT_INSTALLED"
-        )
+        assert error_body(exc_info)["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         assert not [
             c for c in spy.await_args_list if c.args[:2] == (DOMAIN, "read_file")
         ]

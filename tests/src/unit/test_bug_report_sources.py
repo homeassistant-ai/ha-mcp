@@ -8,7 +8,7 @@ test, so a test that needs particular adapters gives Core its own.
 
 import asyncio
 import socket
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -93,22 +93,6 @@ def unreachable_port() -> int:
         probe.bind(("127.0.0.1", 0))
         port: int = probe.getsockname()[1]
     return port
-
-
-@pytest.fixture
-async def read_only_client(
-    core_client: HomeAssistantClient, hass_read_only_access_token: str
-) -> AsyncIterator[HomeAssistantClient]:
-    """The server's client on Core, with a non-admin user's token."""
-    client = HomeAssistantClient(
-        base_url=core_client.base_url,
-        token=hass_read_only_access_token,
-        verify_ssl=False,
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 @pytest.fixture

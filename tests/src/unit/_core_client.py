@@ -56,6 +56,24 @@ async def core_client(
 
 
 @pytest.fixture
+async def read_only_client(
+    core_client: HomeAssistantClient, hass_read_only_access_token: str
+) -> AsyncIterator[HomeAssistantClient]:
+    """The server's client on Core, with a non-admin user's token."""
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    client = HomeAssistantClient(
+        base_url=core_client.base_url,
+        token=hass_read_only_access_token,
+        verify_ssl=False,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+@pytest.fixture
 async def component_core_client(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> HomeAssistantClient:

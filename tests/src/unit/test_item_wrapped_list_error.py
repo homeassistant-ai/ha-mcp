@@ -28,8 +28,9 @@ from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-from ._config_writes import automation_tools, error_body, error_of, script_tools
+from ._config_writes import automation_tools, error_of, script_tools
 from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
+from ._tool_errors import error_body
 
 _ACTION = {"action": "light.turn_on", "target": {"entity_id": "light.x"}}
 _TRIGGER = {"trigger": "state", "entity_id": "input_boolean.x"}
