@@ -545,7 +545,9 @@ jobs:
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
-      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+      # xdist's `auto` counts physical cores (2 on the hosted runner);
+      # `logical` uses all 4 CPUs.
+      run: uv run pytest tests/src/unit/ -n logical --tb=short -v
 
     - name: Run BAT runner tests
       # The tests of the UAT/BAT tooling need no Docker and no model.
@@ -554,7 +556,7 @@ jobs:
       run: >-
         uv run pytest tests/uat/
         --ignore=tests/uat/stories/test_stories.py
-        -n auto --tb=short -v
+        -n logical --tb=short -v
 
     - name: Check unit tests left no local state
       # The runner's home starts without ~/.ha-mcp. A unit test that writes
@@ -578,7 +580,7 @@ jobs:
       # nowhere in CI. Excludes test_addon_startup.py, which spins up real
       # Docker containers (testcontainers) this lint/unit runner doesn't have.
       run: >-
-        uv run pytest tests/addon/ -n auto --tb=short -v
+        uv run pytest tests/addon/ -n logical --tb=short -v
         --ignore=tests/addon/test_addon_startup.py
 
   # The unit and app (add-on) suites against the current beta Core, the same
@@ -681,12 +683,12 @@ jobs:
     # would quietly test the stable Core again.
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
-      run: uv run --no-sync pytest tests/src/unit/ -n auto --tb=short -q -rf
+      run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 
     - name: Run app tests on the beta Core
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: >-
-        uv run --no-sync pytest tests/addon/ -n auto --tb=short -q -rf
+        uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py
 
   # Comprehensive E2E validation for all PRs
