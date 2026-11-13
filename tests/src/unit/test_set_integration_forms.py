@@ -40,10 +40,11 @@ from pytest_homeassistant.common import (
     mock_platform,
 )
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import config_entry_flow_progress
 from ha_mcp.tools.tools_integrations import IntegrationTools
+
+from ._tool_errors import rejected_call_body
 
 _DOMAIN = "flow_forms"
 _MENU_DOMAIN = "flow_menu"
@@ -216,13 +217,6 @@ def flow_calls(client: HomeAssistantClient) -> Iterator[dict[str, AsyncMock]]:
         }
 
 
-async def _tool_error(call: Any) -> dict[str, Any]:
-    with pytest.raises(ToolError) as exc_info:
-        _ = await call
-    body: dict[str, Any] = json.loads(str(exc_info.value))
-    return body
-
-
 async def test_set_integration_returns_the_setup_form(
     hass: HomeAssistant, core_client: HomeAssistantClient, tools: IntegrationTools
 ) -> None:
@@ -267,7 +261,7 @@ async def test_set_integration_subentry_form_takes_menu_choice_only(
     says: str,
 ) -> None:
     with flow_calls(core_client) as calls:
-        body = await _tool_error(tools.ha_set_integration(**call))
+        body = await rejected_call_body(tools.ha_set_integration(**call))
 
     error = body["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -337,7 +331,9 @@ async def test_set_integration_options_form_refuses_an_ignored_entry(
     ignored.add_to_hass(hass)
 
     with flow_calls(core_client) as calls:
-        body = await _tool_error(tools.ha_set_integration(entry_id=ignored.entry_id))
+        body = await rejected_call_body(
+            tools.ha_set_integration(entry_id=ignored.entry_id)
+        )
 
     assert "ignored" in body["error"]["message"]
     calls["start_options_flow"].assert_not_called()
@@ -350,7 +346,7 @@ async def test_set_integration_options_form_fails_when_the_flow_does(
     bare = MockConfigEntry(domain="flow_bare")
     bare.add_to_hass(hass)
 
-    await _tool_error(tools.ha_set_integration(entry_id=bare.entry_id))
+    await rejected_call_body(tools.ha_set_integration(entry_id=bare.entry_id))
 
 
 def test_ha_get_integration_takes_no_menu_choice() -> None:
@@ -362,9 +358,9 @@ async def test_set_integration_of_a_domain_without_a_flow_names_cores_reason(
     tools: IntegrationTools,
 ) -> None:
     """Core answers 404 Invalid handler for a domain it has no flow for."""
-    error = (await _tool_error(tools.ha_set_integration(domain="no_such_domain")))[
-        "error"
-    ]
+    error = (
+        await rejected_call_body(tools.ha_set_integration(domain="no_such_domain"))
+    )["error"]
 
     assert error["code"] == "RESOURCE_NOT_FOUND"
     assert "no_such_domain" in error["message"]
@@ -383,9 +379,9 @@ async def test_set_integration_whose_dependency_fails_points_at_the_log(
     # No config_flow platform is loaded yet, so Core loads the integration
     # and sets up its dependencies before it starts the flow.
     with mock_config_flow("flow_with_dep", _FormsFlow):
-        error = (await _tool_error(tools.ha_set_integration(domain="flow_with_dep")))[
-            "error"
-        ]
+        error = (
+            await rejected_call_body(tools.ha_set_integration(domain="flow_with_dep"))
+        )["error"]
 
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "flow_with_dep" in error["message"]
@@ -401,7 +397,9 @@ async def test_set_integration_whose_flow_errors_is_not_called_unstartable(
     tools: IntegrationTools,
 ) -> None:
     """Only a 400 or 404 is about the flow start; a 5xx is the tool's own error."""
-    error = (await _tool_error(tools.ha_set_integration(domain="flow_bug")))["error"]
+    error = (await rejected_call_body(tools.ha_set_integration(domain="flow_bug")))[
+        "error"
+    ]
 
     assert "could not start a config flow" not in error["message"]
     assert "spelled correctly" in error["suggestion"]
@@ -434,7 +432,7 @@ async def test_set_integration_of_a_setup_flow_that_aborts_gives_cores_text(
 ) -> None:
     MockConfigEntry(domain="sun").add_to_hass(hass)
 
-    body = await _tool_error(tools.ha_set_integration(domain="sun"))
+    body = await rejected_call_body(tools.ha_set_integration(domain="sun"))
 
     assert body["error"]["code"] == "SERVICE_CALL_FAILED"
     # Core aborts a second entry of a single-entry integration itself, in its
@@ -493,7 +491,9 @@ async def test_set_integration_of_a_progress_step_keeps_the_flow_open(
     monkeypatch.setattr(config_entry_flow_progress, "PROGRESS_BUDGET_S", 0.0)
 
     with flow_calls(core_client) as calls:
-        body = await _tool_error(tools.ha_set_integration(domain=_PROGRESS_DOMAIN))
+        body = await rejected_call_body(
+            tools.ha_set_integration(domain=_PROGRESS_DOMAIN)
+        )
 
     assert body["error"]["code"] == "TIMEOUT_OPERATION"
     assert [flow["flow_id"] for flow in hass.config_entries.flow.async_progress()] == [
