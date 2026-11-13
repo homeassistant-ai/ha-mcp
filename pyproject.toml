@@ -658,9 +658,10 @@ dev = [
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
     # The requirements of the Core integrations whose own handlers the unit
-    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, ZHA and
-    # KNX, plus usb, hassio, homeassistant_hardware and infrared, which those
-    # load. Only the device or bus below each library is replaced. Each pin
+    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, ZHA,
+    # KNX, Local Calendar and Remote Calendar, plus usb, hassio,
+    # homeassistant_hardware and infrared, which those load. Only the device,
+    # bus or server below each library is replaced. Each pin
     # equals the integration's manifest in the Core above;
     # test_dev_integration_pins.py keeps them equal.
     "python-otbr-api==3.1.0",
@@ -679,6 +680,7 @@ dev = [
     "xknxproject==3.10.0",
     "knx-frontend==2026.11.8.11926",
     "knx-telegram-store[sqlite,postgres]==0.15.2",
+    "ical==14.3.1",
 ]
 
 [tool.uv]
