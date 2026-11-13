@@ -113,10 +113,7 @@ async def fetch_value_source(
 
 async def _fetch_ha_domains(client: Any, _params: dict[str, str]) -> list[str]:
     services = await client.get_services()
-    # /services returns either {domain: {service: ...}} or
-    # [{domain, services}, ...] depending on HA version; handle both.
-    if isinstance(services, dict):
-        return list(services.keys())
+    # /services returns [{domain, services}, ...].
     if isinstance(services, list):
         return [s["domain"] for s in services if isinstance(s, dict) and "domain" in s]
     # Unknown shape — surface it so a future HA API change doesn't silently
@@ -131,14 +128,6 @@ async def _fetch_ha_services(client: Any, params: dict[str, str]) -> list[str]:
     services = await client.get_services()
     domain_filter = params.get("domain")
     out: set[str] = set()
-    if isinstance(services, dict):
-        if domain_filter:
-            out.update((services.get(domain_filter) or {}).keys())
-        else:
-            for svcs in services.values():
-                if isinstance(svcs, dict):
-                    out.update(svcs.keys())
-        return list(out)
     if isinstance(services, list):
         for entry in services:
             if not isinstance(entry, dict):
