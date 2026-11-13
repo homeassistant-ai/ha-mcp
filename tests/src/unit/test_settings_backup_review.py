@@ -15,7 +15,7 @@ import socket
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -34,12 +34,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import build_settings_handlers
 
 from ._template_helper_core import create_template_sensor
-
-if TYPE_CHECKING:
-    from ha_mcp.server import HomeAssistantSmartMCPServer
 
 NAME = "calendar_event.calendar.fam_evt-1.20260909_000000.yaml"
 Route = Callable[[Request], Awaitable[Response]]
@@ -67,7 +65,7 @@ def backup_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _routes(client: HomeAssistantClient) -> dict[str, Route]:
     """The Settings handlers of a server whose client is ``client``."""
-    server = cast("HomeAssistantSmartMCPServer", SimpleNamespace(client=client))
+    server = cast(HomeAssistantSmartMCPServer, SimpleNamespace(client=client))
     return build_settings_handlers(server)
 
 

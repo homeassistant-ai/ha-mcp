@@ -316,7 +316,7 @@ async def test_the_result_event_goes_out_on_a_client_it_builds_and_closes(
                 APPROVAL_RESPONSE_EVENT,
                 {"token": token, "decision": "approve", "pin": PIN},
             )
-            await call
+            _ = await call
             await _arrival(first_result)
 
     [construction] = built.call_args_list

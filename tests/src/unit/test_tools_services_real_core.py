@@ -61,7 +61,7 @@ async def test_every_service_refuses_a_non_admin(
         outcome = service.job.target(ServiceCall(hass, DOMAIN, name, {}, context))
         assert isinstance(outcome, Coroutine), name
         with pytest.raises(Unauthorized):
-            await outcome
+            _ = await outcome
 
 
 async def test_admin_with_a_wrong_token_gets_the_unauthorized_response(

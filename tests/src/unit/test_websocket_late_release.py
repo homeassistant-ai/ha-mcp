@@ -266,7 +266,7 @@ async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
                 await until(lambda: _subscribed(hass) == 0)
                 abort_transport(client)
                 async with asyncio.timeout(5):
-                    await unsubscribe
+                    _ = await unsubscribe
 
     assert [
         record.levelno

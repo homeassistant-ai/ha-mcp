@@ -121,7 +121,7 @@ async def test_rotation_dispatched_before_restore_must_honor_later_pin(
         with pytest.raises(bm.SnapshotInUseError):
             manager.delete_snapshot(source.name)
         release.set()
-        await capture
+        _ = await capture
         result = await restore
     finally:
         release.set()

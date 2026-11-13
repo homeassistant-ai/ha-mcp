@@ -81,7 +81,7 @@ async def test_core_closing_the_socket_fails_the_waiting_command_not_cancels_it(
             # Bounded: the broken behaviour was an escaping CancelledError.
             async with asyncio.timeout(5):
                 with pytest.raises(HomeAssistantConnectionError):
-                    await command
+                    _ = await command
     finally:
         await open_gate(hass)
 
@@ -145,7 +145,7 @@ async def test_a_dropped_connection_fails_the_waiting_command_and_warns(
                 with pytest.raises(
                     HomeAssistantConnectionError, match="dropped without a close frame"
                 ):
-                    await command
+                    _ = await command
     finally:
         await open_gate(hass)
 
@@ -196,7 +196,7 @@ async def test_command_with_event_drop_retrieves_event_future_exception(
                 abort_transport(client)
                 async with asyncio.timeout(5):
                     with pytest.raises(HomeAssistantConnectionError):
-                        await command
+                        _ = await command
 
     try:
         await drop_during_the_result_phase()

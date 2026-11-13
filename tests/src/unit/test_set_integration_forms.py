@@ -218,7 +218,7 @@ def flow_calls(client: HomeAssistantClient) -> Iterator[dict[str, AsyncMock]]:
 
 async def _tool_error(call: Any) -> dict[str, Any]:
     with pytest.raises(ToolError) as exc_info:
-        await call
+        _ = await call
     body: dict[str, Any] = json.loads(str(exc_info.value))
     return body
 
