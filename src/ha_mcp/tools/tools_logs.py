@@ -9,12 +9,14 @@ Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
 Consolidation and Module Size.
 """
 
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from .._vendor.fastmcp.exceptions import ToolError
 from ..client.error_log_journald import is_cursor_token, parse_cursor_token
+from ..client.journal_window import parse_window_token
 from ..errors import TOOL_ERROR_LOG_LEVEL
 from .error_log_parsing import _DEFAULT_TOP_N
 from .helpers import log_tool_usage
@@ -31,46 +33,48 @@ from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .tool_hints import read_only_hints
 
 
-def _validate_log_offset(source: str, offset: int | str) -> int | str:
-    """Validate a paging anchor: an integer, or an error-log cursor token."""
-    if isinstance(offset, str):
-        text = offset.strip()
-        if not text:
-            # An empty string means "no anchor"; MCP clients stringify 0.
-            return 0
-        if text.lstrip("-").isdigit():
-            # Clients that stringify integers used to reach the integer schema;
-            # keep that working now that the union admits strings.
-            numeric = int(text)
-            if numeric < 0:
-                raise ToolError(
-                    f"'offset' must not be negative, got {numeric}",
-                    log_level=TOOL_ERROR_LOG_LEVEL,
-                )
-            return numeric
-        offset = text
-    if isinstance(offset, str):
-        if source != "error_log":
-            raise ToolError(
-                "Cursor tokens only apply to source='error_log'; "
-                f"source='{source}' takes a non-negative integer offset",
-                log_level=TOOL_ERROR_LOG_LEVEL,
-            )
-        if not is_cursor_token(offset):
+def _validate_offset_token(source: str, token: str) -> str:
+    """Check ``token`` is a ``next_offset`` value ``source`` itself returns."""
+    if source in ("supervisor", "system_service"):
+        parse: Callable[[str], object] = parse_window_token
+    elif source == "error_log":
+        if not is_cursor_token(token):
             raise ToolError(
                 "Invalid 'offset' token for source='error_log'; pass the "
                 "'next_offset' value a previous response returned",
                 log_level=TOOL_ERROR_LOG_LEVEL,
             )
-        try:
-            parse_cursor_token(offset)
-        except ValueError as e:
-            raise ToolError(
-                f"Invalid 'offset' token for source='error_log' ({e}); pass the "
-                "'next_offset' value a previous response returned",
-                log_level=TOOL_ERROR_LOG_LEVEL,
-            ) from e
-        return offset
+        parse = parse_cursor_token
+    else:
+        raise ToolError(
+            "Cursor tokens only apply to source='error_log', 'supervisor' "
+            f"and 'system_service'; source='{source}' takes a non-negative "
+            "integer offset",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
+    try:
+        parse(token)
+    except ValueError as e:
+        raise ToolError(
+            f"Invalid 'offset' token for source='{source}' ({e}); pass the "
+            "'next_offset' value a previous response returned",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        ) from e
+    return token
+
+
+def _validate_log_offset(source: str, offset: int | str) -> int | str:
+    """Validate a paging anchor: an integer, or a cursor token a page returned."""
+    if isinstance(offset, str):
+        text = offset.strip()
+        if not text:
+            # An empty string means "no anchor"; MCP clients stringify 0.
+            return 0
+        if not text.lstrip("-").isdigit():
+            return _validate_offset_token(source, text)
+        # Clients that stringify integers used to reach the integer schema;
+        # keep that working now that the union admits strings.
+        offset = int(text)
     if offset < 0:
         raise ToolError(
             f"'offset' must not be negative, got {offset}",
@@ -95,7 +99,7 @@ class LogTools(
         source: str,
         limit: int | None,
         search: str | None,
-        hours_back: int,
+        hours_back: int | None,
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
@@ -104,14 +108,17 @@ class LogTools(
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: Literal["newest", "oldest"],
+        order: Literal["newest", "oldest"] | None,
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
+        # Only a supervisor/system_service page read can take its order from a
+        # token, so only those two are given ``order`` as it came.
+        chosen = order or "newest"
         numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
-                hours_back=hours_back,
+                hours_back=hours_back if hours_back is not None else 1,
                 entity_id=entity_id,
                 device_id=device_id,
                 context_id=context_id,
@@ -120,18 +127,18 @@ class LogTools(
                 offset=numeric_offset,
                 search=search,
                 compact=compact,
-                order=order,
+                order=chosen,
             )
         if source == "system":
             return await self._get_system_log(
-                limit=limit, search=search, level=level, order=order, compact=compact
+                limit=limit, search=search, level=level, order=chosen, compact=compact
             )
         if source == "error_log":
             return await self._get_error_log(
                 limit=limit,
                 search=search,
                 level=level,
-                order=order,
+                order=chosen,
                 offset=offset,
                 structured=structured,
                 top_n=top_n,
@@ -142,16 +149,26 @@ class LogTools(
             return await self._get_logger_info(limit=limit, search=search)
         if source == "fault_log":
             return await self._get_fault_log(
-                limit=limit, search=search, offset=numeric_offset, order=order
+                limit=limit, search=search, offset=numeric_offset, order=chosen
             )
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
             return await self._get_system_service_log(
-                service=slug, limit=limit, search=search, order=order
+                service=slug,
+                limit=limit,
+                search=search,
+                order=order,
+                hours_back=hours_back,
+                offset=offset,
             )
         assert slug is not None  # guaranteed by _validate_log_slug
         return await self._get_supervisor_log(
-            slug=slug, limit=limit, search=search, order=order
+            slug=slug,
+            limit=limit,
+            search=search,
+            order=order,
+            hours_back=hours_back,
+            offset=offset,
         )
 
     async def get_logs(
@@ -159,7 +176,7 @@ class LogTools(
         source: str,
         limit: int | None,
         search: str | None,
-        hours_back: int,
+        hours_back: int | None,
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
@@ -168,7 +185,7 @@ class LogTools(
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: Literal["newest", "oldest"] = "newest",
+        order: Literal["newest", "oldest"] | None = None,
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
@@ -182,8 +199,10 @@ class LogTools(
             context_id,
             end_time,
             slug,
-            order,
+            order or "newest",
             offset,
+            hours_back=hours_back,
+            search=search,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -285,7 +304,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "are selected within it, and a record longer than it is cut "
                     "(header and last lines kept) with a warning naming how many "
                     "lines were cut. Does not apply to source='error_log' with "
-                    "structured=True."
+                    "structured=True. On a supervisor/system_service page read "
+                    "(see offset) it counts journal entries, and an entry can "
+                    "print several lines."
                 )
             ),
         ] = None,
@@ -303,24 +324,42 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         order: Annotated[
-            Literal["newest", "oldest"],
+            Literal["newest", "oldest"] | None,
             Field(
                 description=(
                     "Sort order for time-ordered sources (logbook, system, error_log, "
                     "supervisor, system_service, fault_log): 'newest' returns "
                     "most-recent first; 'oldest' returns chronological-first. For "
-                    "raw-text sources it sets the read direction of the most-recent "
-                    "window; fault_log orders whole crash blocks; error_log orders "
+                    "error_log, supervisor and system_service it sets the read "
+                    "direction of the newest lines read. A supervisor/"
+                    "system_service page read (hours_back, no search) is "
+                    "always oldest-first, so this may be omitted there; "
+                    "'newest' is answered oldest-first with a warning. "
+                    "Default 'newest'. "
+                    "fault_log orders whole crash blocks; error_log orders "
                     "whole records and keeps each record's lines in place. Ignored "
                     "for source='logger', and for source='error_log' with "
                     "structured=True."
                 )
             ),
-        ] = "newest",
+        ] = None,
         # Source-scoped options: each description names the sources it applies to
         hours_back: Annotated[
-            int, Field(ge=1, description="Logbook only: how many hours back to read.")
-        ] = 1,
+            int | None,
+            Field(
+                ge=1,
+                description=(
+                    "How many hours back to read. Logbook (default 1), "
+                    "supervisor and system_service. For the last two, only "
+                    "when given: the journal serves that window, from its "
+                    "start to the journal's end, one page at a time, "
+                    "oldest-first (see offset); has_more says more of it remains. With search "
+                    "the whole window is read at once, up to 10,000 entries: "
+                    "window_complete says whether every entry of the window "
+                    "was searched, and when false only the newest were."
+                ),
+            ),
+        ] = None,
         entity_id: Annotated[
             str | None,
             Field(
@@ -359,8 +398,14 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
-                    "Page deeper into source='logbook', 'error_log' and "
-                    "'fault_log' (ignored for other sources). On error_log it "
+                    "Page deeper into source='logbook', 'error_log', "
+                    "'fault_log', and supervisor/system_service on a page "
+                    "read: hours_back and no search (ignored otherwise). "
+                    "There it is the opaque token a previous page returned "
+                    "in 'next_offset', which continues from an exact journal "
+                    "entry in the same window; pass it with the same slug "
+                    "(hours_back may be omitted). An integer skips that many "
+                    "entries from the window's first. A page's total_lines is its line count. On error_log it "
                     "counts raw log lines back from the newest entry, or is the "
                     "opaque token a previous page returned in 'next_offset' on "
                     "Supervisor/journald installs, which keeps paging exact "
@@ -448,9 +493,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Raw-text sources (error_log, supervisor, system_service) read a bounded
         window per call, so level/search filter and limit slice within that
-        window only; window_lines reports the size requested. Logbook
-        responses carry has_more plus a pagination_hint; error_log and fault_log
-        carry has_more with a next_offset to pass back while it stays true.
+        window only; window_lines reports the size requested. With hours_back,
+        supervisor and system_service read the journal's own time window
+        instead. Logbook and hours_back responses carry has_more plus a
+        pagination_hint; error_log, fault_log and supervisor/system_service
+        page reads carry has_more with a next_offset to pass back while it
+        stays true.
         """
         return await tools.get_logs(
             source=source,

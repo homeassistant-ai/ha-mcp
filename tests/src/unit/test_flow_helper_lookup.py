@@ -1,198 +1,161 @@
-"""Unit tests for the flow-helper entity → config entry lookup."""
+"""The flow-helper entity → config entry lookup, on a real ``hass``.
 
-import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+Every registry row, state and refusal below is Core's own, read through the
+server's client.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
-    HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.flow_helper_lookup import get_entry_id_for_flow_helper
 
-
-def _make_client(ws_response: Any = None, raises: Exception | None = None) -> MagicMock:
-    """Build a mock client whose send_websocket_message returns / raises.
-
-    The entity has no state unless a test gives it one.
-    """
-    client = MagicMock()
-    client.get_entity_state = AsyncMock(return_value=None)
-    if raises is not None:
-        client.send_websocket_message = AsyncMock(side_effect=raises)
-    else:
-        client.send_websocket_message = AsyncMock(return_value=ws_response)
-    return client
+from ._addon_tool_helpers import _parse_tool_error
 
 
-class TestGetEntryIdForFlowHelper:
-    """Unit tests for the flow-helper entry_id lookup."""
+@pytest.fixture(autouse=True)
+async def _registry_commands(hass: HomeAssistant) -> None:
+    """``config`` answers the entity registry reads."""
+    assert await async_setup_component(hass, "config", {})
 
-    async def test_returns_entry_id_for_full_entity_id(self) -> None:
-        client = _make_client(
-            {
-                "success": True,
-                "result": {"platform": "utility_meter", "config_entry_id": "abc123"},
-            }
-        )
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.peak"
-        )
-        assert entry_id == "abc123"
-        assert reason == "ok"
 
-    async def test_returns_none_for_bare_id_flow_helper(self) -> None:
-        # Flow helpers require full entity_id — bare IDs cannot be safely
-        # completed because helper_type often differs from entity domain
-        # (e.g. utility_meter → sensor.*, switch_as_x → switch/light.*).
-        client = _make_client()
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "template", "my_sensor"
-        )
-        assert entry_id is None
-        assert reason == "bare_id_not_supported"
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_returns_none_for_unknown_helper_type(self) -> None:
-        client = _make_client()
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client,
-            "input_button",
-            "my_button",  # SIMPLE, not FLOW
-        )
-        assert entry_id is None
-        assert reason == "wrong_helper_type"
-        client.send_websocket_message.assert_not_awaited()
-
-    async def test_returns_none_when_entity_not_in_registry(self) -> None:
-        client = _make_client(
-            {"success": False, "error": "Entity not found", "error_code": "not_found"}
-        )
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "template", "template.ghost"
-        )
-        assert entry_id is None
-        assert reason == "not_in_registry"
-
-    async def test_returns_none_when_entity_has_no_config_entry_id(self) -> None:
-        # YAML-defined helper: entity exists but no config_entry_id
-        client = _make_client(
-            {
-                "success": True,
-                "result": {"platform": "template", "entity_id": "template.x"},
-            }
-        )
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "template", "template.x"
-        )
-        assert entry_id is None
-        assert reason == "no_config_entry"
-
-    async def test_websocket_exception_appends_to_warnings(self) -> None:
-        client = _make_client(raises=ConnectionError("ws drop"))
-        warnings: list[str] = []
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.x", warnings=warnings
-        )
-        assert entry_id is None
-        assert reason == "lookup_failed"
-        assert len(warnings) == 1
-        assert "entity_registry/get failed" in warnings[0]
-        assert "sensor.x" in warnings[0]
-
-    async def test_websocket_exception_without_warnings_is_silent(self) -> None:
-        client = _make_client(raises=ConnectionError("ws drop"))
-        entry_id, reason = await get_entry_id_for_flow_helper(
-            client, "utility_meter", "sensor.x", warnings=None
-        )
-        assert entry_id is None
-        assert reason == "lookup_failed"
-
-    @pytest.mark.parametrize(
-        "reply",
-        [
-            "garbage",
-            {"success": True, "result": "garbage"},
-            {"success": True, "result": {}},
-        ],
-        ids=["reply_not_a_dict", "result_not_a_dict", "result_empty"],
+def _registered(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    platform: str,
+    *,
+    with_entry: bool = True,
+) -> er.RegistryEntry:
+    entry = None
+    if with_entry:
+        entry = MockConfigEntry(domain=platform)
+        entry.add_to_hass(hass)
+    return entity_registry.async_get_or_create(
+        "sensor", platform, f"{platform}-unique", config_entry=entry
     )
-    async def test_reply_without_an_entry_is_a_failed_read(self, reply: Any) -> None:
-        """A reply that carries no entry proves neither that the entity is
-        missing nor that it belongs elsewhere; it is a failed read, and
-        nothing is deleted on it."""
-        client = _make_client(reply)
-        with pytest.raises(ToolError) as exc_info:
-            await get_entry_id_for_flow_helper(client, "template", "template.x")
-        err = json.loads(str(exc_info.value))["error"]
-        assert err["code"] == "SERVICE_CALL_FAILED"
-
-    async def test_connection_error_propagates(self) -> None:
-        # Auth/connection errors must reach the outer handler — they are
-        # not "lookup_failed", they are infrastructure failures.
-        client = _make_client(raises=HomeAssistantConnectionError("network down"))
-        with pytest.raises(HomeAssistantConnectionError):
-            await get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
-
-    async def test_auth_error_propagates(self) -> None:
-        client = _make_client(raises=HomeAssistantAuthError("token expired"))
-        with pytest.raises(HomeAssistantAuthError):
-            await get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
 
 
-async def test_blocked_registry_read_is_not_reported_as_missing() -> None:
-    """A proxy-blocked read is no evidence the entity is absent."""
-    client = _make_client(
-        {
-            "success": False,
-            "error": "WebSocket request blocked (403 Forbidden): denied",
-            "error_code": None,
-        }
-    )
-    with pytest.raises(ToolError) as exc_info:
-        await get_entry_id_for_flow_helper(client, "template", "template.x")
-    err = json.loads(str(exc_info.value))["error"]
-    assert err["code"] == "SERVICE_CALL_FAILED"
-    assert "403 Forbidden" in err["message"]
+async def test_a_helpers_entity_resolves_to_its_config_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    meter = _registered(hass, entity_registry, "utility_meter")
+
+    assert await get_entry_id_for_flow_helper(
+        core_client, "utility_meter", meter.entity_id
+    ) == (meter.config_entry_id, "ok")
 
 
-_NOT_FOUND = {"success": False, "error": "Entity not found", "error_code": "not_found"}
+@pytest.mark.parametrize(
+    ("helper_type", "target", "reason"),
+    [
+        # Flow helpers need the full entity_id: helper_type often differs
+        # from the entity's domain (utility_meter → sensor.*).
+        ("template", "my_sensor", "bare_id_not_supported"),
+        ("input_button", "my_button", "wrong_helper_type"),  # not a flow helper
+    ],
+    ids=["bare_id", "not_a_flow_helper"],
+)
+async def test_a_call_shape_the_lookup_cannot_use_reads_nothing(
+    core_client: HomeAssistantClient, helper_type: str, target: str, reason: str
+) -> None:
+    with patch.object(
+        core_client, "send_websocket_message", wraps=core_client.send_websocket_message
+    ) as sent:
+        assert await get_entry_id_for_flow_helper(core_client, helper_type, target) == (
+            None,
+            reason,
+        )
+
+    sent.assert_not_awaited()
 
 
-async def test_entity_with_a_state_but_no_registry_entry_is_not_missing() -> None:
+async def test_an_entity_with_neither_registry_entry_nor_state_is_missing(
+    core_client: HomeAssistantClient,
+) -> None:
+    assert await get_entry_id_for_flow_helper(
+        core_client, "template", "sensor.ghost"
+    ) == (None, "not_in_registry")
+
+
+async def test_entity_with_a_state_but_no_registry_entry_is_not_missing(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
     """Core keeps no registry entry for an entity without a unique_id (a YAML
     template sensor without one, zone.home); it exists, so it must not read
     as missing."""
-    client = _make_client(_NOT_FOUND)
-    client.get_entity_state = AsyncMock(return_value={"state": "zoning"})
-    entry_id, reason = await get_entry_id_for_flow_helper(
-        client, "template", "zone.home"
+    hass.states.async_set("zone.home", "zoning")
+
+    assert await get_entry_id_for_flow_helper(core_client, "template", "zone.home") == (
+        None,
+        "not_registry_managed",
     )
-    assert (entry_id, reason) == (None, "not_registry_managed")
 
 
-async def test_state_read_404_confirms_the_entity_is_missing() -> None:
-    client = _make_client(_NOT_FOUND)
-    client.get_entity_state = AsyncMock(
-        side_effect=HomeAssistantAPIError("not found", status_code=404)
-    )
-    entry_id, reason = await get_entry_id_for_flow_helper(
-        client, "template", "template.ghost"
-    )
-    assert (entry_id, reason) == (None, "not_in_registry")
+async def test_a_registered_entity_without_a_config_entry_is_not_a_stored_helper(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    # A YAML-defined template sensor with a unique_id.
+    sensor = _registered(hass, entity_registry, "template", with_entry=False)
+
+    assert await get_entry_id_for_flow_helper(
+        core_client, "template", sensor.entity_id
+    ) == (None, "no_config_entry")
 
 
-async def test_failed_state_read_is_not_evidence_of_absence() -> None:
-    client = _make_client(_NOT_FOUND)
-    client.get_entity_state = AsyncMock(
-        side_effect=HomeAssistantAPIError("server error", status_code=500)
-    )
-    with pytest.raises(HomeAssistantAPIError):
-        await get_entry_id_for_flow_helper(client, "template", "template.x")
+async def test_a_registry_read_core_refuses_is_not_reported_as_missing(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A refusal other than not_found is no evidence the entity is absent."""
+    with pytest.raises(ToolError) as exc_info:
+        await get_entry_id_for_flow_helper(core_client, "template", "sensor.not valid")
+
+    error = _parse_tool_error(exc_info)["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "sensor.not valid" in error["message"]
+
+
+async def test_a_state_read_without_an_answer_is_not_evidence_of_absence(
+    core_client: HomeAssistantClient,
+) -> None:
+    with (
+        patch.object(
+            core_client,
+            "get_entity_state",
+            AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
+        ),
+        pytest.raises(HomeAssistantConnectionError),
+    ):
+        await get_entry_id_for_flow_helper(core_client, "template", "sensor.ghost")
+
+
+async def test_a_registry_read_without_an_answer_propagates(
+    core_client: HomeAssistantClient,
+) -> None:
+    # The caller's handler reports the lost connection.
+    with (
+        patch.object(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
+        ),
+        pytest.raises(HomeAssistantConnectionError),
+    ):
+        await get_entry_id_for_flow_helper(core_client, "utility_meter", "sensor.x")
 
 
 @pytest.mark.parametrize(
@@ -201,19 +164,20 @@ async def test_failed_state_read_is_not_evidence_of_absence() -> None:
     ids=["not_a_helper", "other_helper"],
 )
 async def test_wrong_helper_type_refusal_names_the_owning_integration(
-    platform: str, retry_hint: str
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    platform: str,
+    retry_hint: str,
 ) -> None:
     """The refusal must say which integration owns the entity, so omitting
     helper_type is suggested only where it can work."""
-    client = _make_client(
-        {
-            "success": True,
-            "result": {"platform": platform, "config_entry_id": "e"},
-        }
-    )
+    owned = _registered(hass, entity_registry, platform)
+
     with pytest.raises(ToolError) as exc_info:
-        await get_entry_id_for_flow_helper(client, "group", "sensor.x")
-    response = json.loads(str(exc_info.value))
+        await get_entry_id_for_flow_helper(core_client, "group", owned.entity_id)
+
+    response = _parse_tool_error(exc_info)
     err = response["error"]
     assert err["code"] == "VALIDATION_INVALID_PARAMETER"
     assert f"'{platform}'" in err["message"]

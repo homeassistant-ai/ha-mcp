@@ -6,17 +6,39 @@ own helpers are reached lazily so its tests can patch them in place.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from ._vendor.websockets.exceptions import WebSocketException
+from .client.rest_client import HomeAssistantError
 from .utils.registry_update_lock import registry_update_locks
+
+# How long a restore waits for Core to register a recreated entry's entity.
+RECREATED_ENTITY_WAIT_S = 5.0
 
 
 def _manager() -> Any:
     from . import backup_manager
 
     return backup_manager
+
+
+async def created_entity(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
+    """Wait for the recreated entry's entity with ``unique_id``."""
+    async with asyncio.timeout(RECREATED_ENTITY_WAIT_S):
+        while True:
+            rows: list[dict[str, Any]] = [
+                row
+                for row in await _manager()._entity_registry_rows(client)
+                if row.get("config_entry_id") == entry_id
+                and row.get("unique_id") == unique_id
+            ]
+            if len(rows) > 1:
+                raise HomeAssistantError("Recreated entity mapping is ambiguous")
+            if rows:
+                return rows[0]
+            await asyncio.sleep(0.1)
 
 
 def entity_id_locks(*entity_ids: str) -> AbstractAsyncContextManager[None]:
@@ -144,11 +166,11 @@ async def _restore_entity_id(
     """Rename one recreated entity to its saved ID/name and record it."""
     bm = _manager()
     unique_id = _recreated_unique_id(saved, original_entry_id, entry_id)
-    row = await bm._created_entity(client, entry_id, unique_id)
+    row = await created_entity(client, entry_id, unique_id)
     source, target = row["entity_id"], saved["entity_id"]
     locked_ids = {source, target}
     async with entity_id_locks(*locked_ids):
-        row = await bm._created_entity(client, entry_id, unique_id)
+        row = await created_entity(client, entry_id, unique_id)
         source = row["entity_id"]
         if source not in locked_ids:
             raise bm.BackupRestoreError(
@@ -185,7 +207,7 @@ async def _restore_entity_id(
                     ],
                     verification_status="unavailable",
                 ) from err
-        actual = await bm._created_entity(client, entry_id, unique_id)
+        actual = await created_entity(client, entry_id, unique_id)
         if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
             raise bm.BackupRestoreError(
                 "Recreated entity identity did not match",

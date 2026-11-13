@@ -500,8 +500,9 @@ jobs:
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
     # min and the `npm ci` step swung from 1s to 4 min during an npm registry
-    # incident, so 8 left no room for one slow install.
-    timeout-minutes: 10
+    # incident, so 8 left no room for one slow install. 10 → 12 for #3081:
+    # the unit tests run more of Home Assistant Core's own integrations.
+    timeout-minutes: 12
 
     steps:
     - name: Restore apt download cache

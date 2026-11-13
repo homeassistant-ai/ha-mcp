@@ -1026,9 +1026,9 @@ class ServiceTools(EventCallMixin):
         ``service_response`` key is emitted (``present`` False). That is the
         overwhelming majority of calls.
 
-        Anything else — a non-dict reply, a missing key, or a ``changed_states``
-        that is not a list — means a non-conforming responder (HA core always
-        sends both keys, with a list). Every such shape takes ONE path: the whole
+        Anything else means a non-conforming responder (HA core always sends both
+        keys, with a list) — in practice ``_request``'s ``{}`` for a non-JSON reply
+        such as a reverse proxy's redirect. Every such shape takes ONE path: the whole
         reply becomes the response data, ``result`` stays empty, and a warning
         says so. Uniformity is the point — peeling a recognised key out of an
         unrecognised envelope would silently discard whatever else it carried,

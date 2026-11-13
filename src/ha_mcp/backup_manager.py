@@ -3107,23 +3107,6 @@ async def _check_entity_collision(
         )
 
 
-async def _created_entity(client: Any, entry_id: str, unique_id: str) -> dict[str, Any]:
-    """Wait for the recreated entry's entity with ``unique_id``."""
-    async with asyncio.timeout(5):
-        while True:
-            rows = [
-                row
-                for row in await _entity_registry_rows(client)
-                if row.get("config_entry_id") == entry_id
-                and row.get("unique_id") == unique_id
-            ]
-            if len(rows) > 1:
-                raise HomeAssistantError("Recreated entity mapping is ambiguous")
-            if rows:
-                return rows[0]
-            await asyncio.sleep(0.1)
-
-
 async def _recreate_flow_helper(
     client: Any, entry_id: str, snapshot: dict[str, Any], helper_type: str
 ) -> dict[str, Any]:

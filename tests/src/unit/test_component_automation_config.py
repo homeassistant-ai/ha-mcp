@@ -1,311 +1,308 @@
 """ha_mcp_tools/automation_config: Core's automation validator, descriptions and lookup.
 
-The component runs against a fake Core: a validator that reports a status the
-way ``_async_validate_config_item`` does and rewrites the config it is given,
-description getters, an entity registry, an issue registry, the loaded
-automation entities and the ``*_in_automation`` reference helpers.
+The component runs in a real ``hass``. Automations load from the test's own
+``automations.yaml``, so the registry rows, the loaded entities and the repair
+issue of an automation that fails validation are the ones Core makes. A Core
+build that lacks a part is the real module with that attribute removed.
 """
 
 from __future__ import annotations
 
 import copy
-import importlib
-import sys
-import types
-from enum import StrEnum
-from types import SimpleNamespace
+import logging
 from typing import Any
+from unittest.mock import AsyncMock
 
+import probatio
 import pytest
-import voluptuous as vol
+from homeassistant.components import automation as automation_core
+from homeassistant.components.automation import config as automation_core_config
+from homeassistant.components.automation import const as automation_core_const
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import condition, trigger
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
+from homeassistant.util.yaml import dump
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from .test_component_ws_search import (
-    FakeEntityReg,
-    FakeHass,
-    FakeRegEntry,
-    _FakeConnection,
-    _Unauthorized,
-    functional_ws,  # noqa: F401 - pytest fixture
-    wsapi,
-)
+from custom_components.ha_mcp_tools import automation_config
 
-automation_config = importlib.import_module(
-    "custom_components.ha_mcp_tools.automation_config"
-)
+from ._component_core import ws_call, ws_result
+from ._config_dir_yaml import setup_from_configuration, write_config_files
 
 MORNING = "automation.morning"
-
-
-class _Status(StrEnum):
-    # Core's automation ValidationStatus members.
-    FAILED_ACTIONS = "failed_actions"
-    FAILED_BLUEPRINT = "failed_blueprint"
-    FAILED_CONDITIONS = "failed_conditions"
-    FAILED_SCHEMA = "failed_schema"
-    FAILED_TRIGGERS = "failed_triggers"
-    OK = "ok"
-
-
-class _Invalid(Exception):
-    pass
-
-
-class _Checked:
-    """Core's AutomationConfig as the bridge reads it: the outcome attributes."""
-
-    def __init__(self, status: _Status, error: str | None = None) -> None:
-        self.validation_status = status
-        self.validation_error = error
-
-
-class _Validator:
-    def __init__(self) -> None:
-        self.answer: Any = _Checked(_Status.OK)
-        self.raise_: Exception | None = None
-        self.calls: list[tuple[Any, ...]] = []
-
-    async def __call__(
-        self, hass: HomeAssistant, config: dict[str, Any], *args: Any, **kwargs: Any
-    ) -> Any:
-        self.calls.append((*args, *kwargs.items()))
-        # Core's backward-compat schema renames keys in the dict it is given.
-        if "trigger" in config:
-            config["triggers"] = config.pop("trigger")
-        if self.raise_ is not None:
-            raise self.raise_
-        return self.answer
-
-
-class _Issue:
-    def __init__(self, error: str, *, active: bool = True) -> None:
-        self.active = active
-        self.translation_placeholders = (
-            {"entity_id": MORNING, "error": error} if active else None
-        )
-
-
-class _Unavailable:
-    """Core's placeholder entity for an automation that failed validation."""
-
-
-class _Issues:
-    def __init__(self) -> None:
-        self.issues: dict[tuple[str, str], _Issue] = {}
-
-    def async_get_issue(self, domain: str, issue_id: str) -> _Issue | None:
-        return self.issues.get((domain, issue_id))
+_BLUEPRINT_PATH = "ha_mcp_test/motion_light.yaml"
+_BLUEPRINT = """\
+blueprint:
+  name: Motion light
+  domain: automation
+  input:
+    motion:
+      selector: {entity: {}}
+    target:
+      selector: {target: {}}
+triggers:
+  - trigger: state
+    entity_id: !input motion
+actions:
+  - action: light.turn_on
+    target: !input target
+"""
+# A working blueprint automation whose target names one of each reference.
+_MORNING: dict[str, Any] = {
+    "id": "1700",
+    "alias": "morning",
+    "use_blueprint": {
+        "path": _BLUEPRINT_PATH,
+        "input": {
+            "motion": "light.porch",
+            "target": {
+                "entity_id": ["light.porch", "light.hall"],
+                "device_id": "d1",
+                "floor_id": "f1",
+                "label_id": ["l2", "l1"],
+            },
+        },
+    },
+}
+_BAD_TRIGGER: dict[str, Any] = {
+    "id": "1700",
+    "alias": "morning",
+    "triggers": [{"trigger": "stat"}],
+    "actions": [],
+}
 
 
 @pytest.fixture
-def core(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    registry = FakeEntityReg(
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core reads automations and blueprints from here."""
+    return hass_tmp_config_dir
+
+
+async def _load(hass: HomeAssistant, *automations: dict[str, Any]) -> None:
+    """Load ``automations`` the way Core loads ``automations.yaml`` at start."""
+    await write_config_files(
+        hass,
         {
-            MORNING: FakeRegEntry(
-                MORNING, unique_id="1700", platform="automation", labels=("l1",)
-            ),
-            "light.porch": FakeRegEntry(
-                "light.porch", unique_id="1700", platform="hue"
-            ),
-        }
-    )
-    issues = _Issues()
-    loaded: set[str] = set()
-    failed: set[str] = set()
-    references = {
-        "entities": {"light.porch", "light.hall"},
-        "devices": {"d1"},
-        "areas": set(),
-        "floors": {"f1"},
-        "labels": {"l2", "l1"},
-    }
-    ns = SimpleNamespace(
-        validate=_Validator(),
-        validate_or_raise=None,
-        invalid=(_Invalid, HomeAssistantError),
-        statuses=_Status,
-        descriptions={"trigger": None, "condition": None},
-        entity_registry=lambda hass: registry,
-        issue_registry=lambda hass: issues,
-        component_key="automation_component",
-        references={
-            name: (lambda hass, entity_id, ids=ids: set(ids))
-            for name, ids in references.items()
+            f"blueprints/automation/{_BLUEPRINT_PATH}": _BLUEPRINT,
+            "automations.yaml": dump(list(automations)),
+            "configuration.yaml": "automation: !include automations.yaml\n",
         },
-        blueprint=lambda hass, entity_id: "motion_light.yaml",
-        unavailable_entity=_Unavailable,
-        # test handles
-        issues=issues,
-        loaded=loaded,
-        failed=failed,
     )
-    monkeypatch.setattr(automation_config, "_core", lambda: ns)
-    return ns
+    await setup_from_configuration(hass, "automation")
 
 
-def _hass(core: SimpleNamespace) -> Any:
-    def get_entity(entity_id: str) -> Any:
-        if entity_id in core.failed:
-            return _Unavailable()
-        return object() if entity_id in core.loaded else None
-
-    component = SimpleNamespace(get_entity=get_entity)
-    return SimpleNamespace(data={core.component_key: component})
-
-
-async def _run(core: SimpleNamespace, action: str, **fields: Any) -> dict[str, Any]:
-    result: dict[str, Any] = await automation_config.async_automation_config(
-        _hass(core), {"action": action, **fields}
+async def _command(client: MockHAClientWebSocket, **fields: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(
+        client, automation_config.WS_AUTOMATION_CONFIG, **fields
     )
     return result
+
+
+def _bridge_failed(caplog: pytest.LogCaptureFixture) -> bool:
+    """Whether the component's catch-all for an unexpected failure ran."""
+    return any(r.name == automation_config.__name__ for r in caplog.records)
 
 
 # --- validate -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("status", "error", "wire"),
-    [
-        (_Status.OK, None, "ok"),
-        (
-            _Status.FAILED_TRIGGERS,
-            "Invalid trigger 'stat' specified",
-            "failed_triggers",
-        ),
-    ],
-)
-async def test_validation_reports_cores_status_and_text(
-    core: SimpleNamespace, status: _Status, error: str | None, wire: str
+async def test_valid_config_reports_ok(component_ws: MockHAClientWebSocket) -> None:
+    got = await _command(
+        component_ws, action="validate", config={"triggers": [], "actions": []}
+    )
+    assert got == {"status": "ok", "error": None}
+
+
+async def test_validation_reports_what_cores_repair_issue_says(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
-    core.validate.answer = _Checked(status, error)
-    got = await _run(core, "validate", config={"triggers": []})
-    assert got == {"status": wire, "error": error}
+    """A proposal gets the failed section and text the user would see in the
+    repair issue once the automation is saved and loaded."""
+    await _load(hass, _BAD_TRIGGER)
+    issue = issue_registry.async_get_issue(
+        "automation", f"{MORNING}_validation_failed_triggers"
+    )
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+
+    got = await _command(component_ws, action="validate", config=_BAD_TRIGGER)
+
+    assert got == {
+        "status": "failed_triggers",
+        "error": issue.translation_placeholders["error"],
+    }
 
 
 async def test_validation_leaves_the_callers_config_unchanged(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
 ) -> None:
-    config = {"trigger": [{"trigger": "state"}], "actions": []}
+    """Core's backward-compat schema renames ``trigger`` to ``triggers`` in
+    the dict it is given; the caller's own config must not change."""
+    config = {
+        "trigger": [{"trigger": "state", "entity_id": "light.porch"}],
+        "actions": [],
+    }
     sent = copy.deepcopy(config)
-    await _run(core, "validate", config=config)
+    await automation_config.async_automation_config(
+        hass, {"action": "validate", "config": config}
+    )
     assert config == sent
 
 
-async def test_a_proposal_is_not_raised_or_logged_as_a_broken_automation(
-    core: SimpleNamespace,
+async def test_a_proposal_is_not_logged_as_a_broken_automation(
+    component_ws: MockHAClientWebSocket, caplog: pytest.LogCaptureFixture
 ) -> None:
-    await _run(core, "validate", config={})
-    assert core.validate.calls == [
-        (("raise_on_errors", False), ("warn_on_errors", False))
+    """Checking a draft must not leave an error in the user's log saying an
+    automation was disabled."""
+    with caplog.at_level(logging.WARNING):
+        await _command(component_ws, action="validate", config=_BAD_TRIGGER)
+    assert not [
+        r for r in caplog.records if r.name.startswith(automation_core.__name__)
     ]
 
 
 async def test_config_core_cannot_even_name_is_a_schema_failure(
-    core: SimpleNamespace,
+    component_ws: MockHAClientWebSocket,
 ) -> None:
     # Core's fallback id/alias/description check raises even when told not to.
-    core.validate.raise_ = _Invalid("expected str for dictionary value @ data['alias']")
-    got = await _run(core, "validate", config={"alias": ["x"]})
-    assert got == {
-        "status": "failed_schema",
-        "error": "expected str for dictionary value @ data['alias']",
-    }
+    got = await _command(component_ws, action="validate", config={"alias": ["x"]})
+    assert got["status"] == "failed_schema"
+    assert "alias" in got["error"]
 
 
 async def test_public_validator_stands_in_for_a_missing_private_one(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def public(
-        hass: HomeAssistant, config_key: str, config: dict[str, Any]
-    ) -> Any:
-        # Core's public validator raises on every failure.
-        raise _Invalid("required key not provided @ data['triggers']")
+    # The public validator raises on every failure instead of reporting it.
+    with pytest.raises(probatio.Invalid) as raised:
+        await automation_core_config.async_validate_config_item(hass, "", {})
+    error = raised.value
+    # A Core build with only the public validator; this Core's public one
+    # calls the private one, so it raises what it raised above.
+    monkeypatch.delattr(automation_core_config, "_async_validate_config_item")
+    public = AsyncMock(side_effect=error)
+    monkeypatch.setattr(automation_core_config, "async_validate_config_item", public)
 
-    core.validate, core.validate_or_raise = None, public
-    got = await _run(core, "validate", config={})
-    assert got == {
-        "status": "failed_schema",
-        "error": "required key not provided @ data['triggers']",
-    }
+    got = await _command(component_ws, action="validate", config={})
+
+    assert got == {"status": "failed_schema", "error": str(error)}
+    public.assert_awaited_once()
 
 
-async def test_core_without_a_validator_is_unavailable(core: SimpleNamespace) -> None:
-    core.validate = None
-    got = await _run(core, "validate", config={})
+async def test_core_without_a_validator_is_unavailable(
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    for name in ("_async_validate_config_item", "async_validate_config_item"):
+        monkeypatch.delattr(automation_core_config, name)
+    got = await _command(component_ws, action="validate", config={})
     assert got["status"] == "unavailable"
+    assert not _bridge_failed(caplog)
 
 
 async def test_unexpected_core_failure_is_unavailable_not_an_error(
-    core: SimpleNamespace,
+    component_ws: MockHAClientWebSocket, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    core.validate.raise_ = RuntimeError("blueprint store not loaded")
-    got = await _run(core, "validate", config={})
+    # A failure Core cannot be made to raise here.
+    monkeypatch.setattr(
+        automation_core_config,
+        "_async_validate_config_item",
+        AsyncMock(side_effect=RuntimeError("blueprint store not loaded")),
+    )
+    got = await _command(component_ws, action="validate", config={})
     assert got == {"status": "unavailable", "error": "blueprint store not loaded"}
-
-
-async def test_core_without_the_automation_integration_is_unavailable(
-    core: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(automation_config, "_core", lambda: None)
-    got = await _run(core, "validate", config={})
-    assert got["status"] == "unavailable"
 
 
 # --- describe -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["trigger", "condition"])
-async def test_descriptions_are_cores_own(core: SimpleNamespace, kind: str) -> None:
-    # A platform without a description stays listed: its key is still valid.
-    descriptions = {
-        "state": {"fields": {"to": {"selector": {"state": {}}}}},
-        "light.turned_on": {"target": {"entity": [{"domain": ["light"]}]}},
-        "mqtt": None,
-    }
+@pytest.mark.parametrize(
+    ("kind", "core_descriptions"),
+    [
+        ("trigger", trigger.async_get_all_descriptions),
+        ("condition", condition.async_get_all_descriptions),
+    ],
+)
+async def test_descriptions_are_cores_own(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    kind: str,
+    core_descriptions: Any,
+) -> None:
+    for domain in ("homeassistant", "light"):
+        assert await async_setup_component(hass, domain, {})
+    await hass.async_block_till_done()
+    expected = await core_descriptions(hass)
+    assert expected
 
-    async def describe(hass: HomeAssistant) -> dict[str, Any]:
-        return descriptions
+    got = await _command(component_ws, action="describe", kind=kind)
 
-    core.descriptions[kind] = describe
-    got = await _run(core, "describe", kind=kind)
-    assert got == {"descriptions": descriptions}
+    assert got == {"descriptions": expected}
 
 
-async def test_core_without_descriptions_is_unavailable(core: SimpleNamespace) -> None:
-    got = await _run(core, "describe", kind="condition")
+async def test_core_without_descriptions_is_unavailable(
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delattr(condition, "async_get_all_descriptions")
+    got = await _command(component_ws, action="describe", kind="condition")
     assert got["status"] == "unavailable"
+    assert not _bridge_failed(caplog)
 
 
 # --- lookup ---------------------------------------------------------------------
 
 
 async def test_lookup_by_entity_id_returns_cores_registry_row(
-    core: SimpleNamespace,
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """The list row lacked the aliases and capabilities the fallback's
     config/entity_registry/get row carries, so the field changed shape with
     the route."""
-    got = await _run(core, "lookup", entity_id=MORNING)
-    row = core.entity_registry(None).async_get(MORNING).extended_dict
+    await _load(hass, _MORNING)
+    row = await ws_result(component_ws, "config/entity_registry/get", entity_id=MORNING)
+
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
+
     assert got["found"] is True
     assert got["entity"] == row
 
 
-async def test_lookup_by_config_id_resolves_through_the_registry(
-    core: SimpleNamespace,
+async def test_lookup_by_config_id_finds_the_automation_not_another_platform(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
 ) -> None:
-    got = await _run(core, "lookup", unique_id="1700")
+    entity_registry.async_get_or_create(
+        "light", "hue", "1700", suggested_object_id="porch"
+    )
+    await _load(hass, _MORNING)
+    got = await _command(component_ws, action="lookup", unique_id="1700")
     assert got["entity"]["entity_id"] == MORNING
 
 
-@pytest.mark.parametrize(
-    "fields", [{"entity_id": "automation.gone"}, {"entity_id": "light.porch"}]
-)
+@pytest.mark.parametrize("entity_id", ["automation.gone", "light.porch"])
 async def test_lookup_without_an_automation_row_is_not_found(
-    core: SimpleNamespace, fields: dict[str, str]
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    entity_id: str,
 ) -> None:
-    got = await _run(core, "lookup", **fields)
+    entity_registry.async_get_or_create(
+        "light", "hue", "1700", suggested_object_id="porch"
+    )
+    await _load(hass, _MORNING)
+    got = await _command(component_ws, action="lookup", entity_id=entity_id)
     assert got == {
         "found": False,
         "entity": None,
@@ -316,45 +313,103 @@ async def test_lookup_without_an_automation_row_is_not_found(
 
 
 async def test_lookup_reports_the_validation_issue_core_filed(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
     """Core keeps an unavailable placeholder entity for a failed automation,
     whose reference readers answer empty sets; it was counted as loaded, so
     a failed blueprint automation read as one using no blueprint."""
-    core.issues.issues[("automation", f"{MORNING}_validation_failed_triggers")] = (
-        _Issue("Invalid trigger 'stat' specified")
+    await _load(hass, _BAD_TRIGGER)
+    issue = issue_registry.async_get_issue(
+        "automation", f"{MORNING}_validation_failed_triggers"
     )
-    core.failed.add(MORNING)
-    got = await _run(core, "lookup", entity_id=MORNING)
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
+
+    assert got["found"] is True
     assert got["validation"] == {
         "status": "failed_triggers",
-        "error": "Invalid trigger 'stat' specified",
+        "error": issue.translation_placeholders["error"],
     }
     assert got["loaded"] is False
     assert got["references"] is None
 
 
 async def test_issue_of_an_automation_whose_id_extends_this_one_is_ignored(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    issue_registry: ir.IssueRegistry,
 ) -> None:
-    other = f"{MORNING}_validation_x_validation_failed_schema"
-    core.issues.issues[("automation", other)] = _Issue("bad")
-    got = await _run(core, "lookup", entity_id=MORNING)
+    """Read by id prefix, the other automation's issue was reported as this
+    one's failure."""
+    other = "automation.morning_validation_x"
+    await _load(
+        hass,
+        _MORNING,
+        {"id": "1701", "alias": "morning validation x"},
+    )
+    assert issue_registry.async_get_issue(
+        "automation", f"{other}_validation_failed_schema"
+    )
+
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
+
+    assert got["found"] is True
     assert got["validation"] is None
 
 
+@pytest.mark.parametrize("load_registries", [False])
 async def test_stored_issue_from_an_earlier_run_is_ignored(
-    core: SimpleNamespace,
+    hass: HomeAssistant, hass_storage: dict[str, Any]
 ) -> None:
-    issue_id = f"{MORNING}_validation_failed_actions"
-    core.issues.issues[("automation", issue_id)] = _Issue("old", active=False)
-    got = await _run(core, "lookup", entity_id=MORNING)
+    """Core keeps a non-persistent issue across a restart only as an inactive
+    record; reading it as current reported an automation fixed since then as
+    still failing."""
+    # The record Core saved for the issue before the restart.
+    hass_storage[ir.STORAGE_KEY] = {
+        "version": ir.STORAGE_VERSION_MAJOR,
+        "minor_version": ir.STORAGE_VERSION_MINOR,
+        "data": {
+            "issues": [
+                {
+                    "config_entry_id": None,
+                    "created": "2026-01-01T00:00:00+00:00",
+                    "dismissed_version": None,
+                    "domain": "automation",
+                    "is_persistent": False,
+                    "issue_id": f"{MORNING}_validation_failed_actions",
+                }
+            ]
+        },
+    }
+    await ir.async_load(hass)
+    dr.async_setup(hass)
+    await dr.async_load(hass)
+    await er.async_load(hass)
+    er.async_get(hass).async_get_or_create(
+        "automation", "automation", "1700", suggested_object_id="morning"
+    )
+    stored = ir.async_get(hass).async_get_issue(
+        "automation", f"{MORNING}_validation_failed_actions"
+    )
+    assert stored is not None
+
+    got = await automation_config.async_automation_config(
+        hass, {"action": "lookup", "entity_id": MORNING}
+    )
+
+    assert got["found"] is True
     assert got["validation"] is None
 
 
-async def test_lookup_carries_the_references_core_reads(core: SimpleNamespace) -> None:
-    core.loaded.add(MORNING)
-    got = await _run(core, "lookup", entity_id=MORNING)
+async def test_lookup_carries_the_references_core_reads(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    await _load(hass, _MORNING)
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
     assert got["loaded"] is True
     assert got["references"] == {
         "entities": ["light.hall", "light.porch"],
@@ -362,103 +417,97 @@ async def test_lookup_carries_the_references_core_reads(core: SimpleNamespace) -
         "areas": [],
         "floors": ["f1"],
         "labels": ["l1", "l2"],
-        "blueprint": "motion_light.yaml",
+        "blueprint": _BLUEPRINT_PATH,
     }
 
 
 async def test_references_are_absent_while_the_automation_is_not_loaded(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
 ) -> None:
     """The server could not tell a disabled automation from one that
     references nothing; ``loaded`` lets it say why."""
-    got = await _run(core, "lookup", entity_id=MORNING)
+    await _load(hass, _MORNING)
+    entity_registry.async_update_entity(
+        MORNING, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(MORNING) is None
+
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
+
     assert got["found"] is True
     assert got["loaded"] is False
     assert got["references"] is None
 
 
-async def test_lookup_without_a_key_is_refused_not_answered_not_found(
-    core: SimpleNamespace,
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"action": "validate"},
+        {"action": "describe"},
+        {"action": "lookup"},
+        {"action": "lookup", "entity_id": ""},
+    ],
+    ids=[
+        "validate-without-config",
+        "describe-without-kind",
+        "lookup-without-a-key",
+        "lookup-empty-id",
+    ],
+)
+async def test_request_without_its_input_is_refused_not_answered(
+    hass: HomeAssistant, msg: dict[str, Any]
 ) -> None:
+    """Answered, a validate without a config or a describe without a kind
+    would read as Core's verdict on nothing, and a lookup without a key or of
+    ``""`` as an automation that does not exist."""
     with pytest.raises(HomeAssistantError):
-        await _run(core, "lookup")
+        await automation_config.async_automation_config(hass, msg)
 
 
 async def test_core_missing_a_lookup_part_is_unavailable(
-    core: SimpleNamespace,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    core.references["floors"] = None
-    got = await _run(core, "lookup", entity_id=MORNING)
+    await _load(hass, _MORNING)
+    # A Core build from before floors were referenced.
+    monkeypatch.delattr(automation_core, "floors_in_automation")
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
     assert got["status"] == "unavailable"
+    assert not _bridge_failed(caplog)
 
 
-# --- registration ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "frame",
-    [
-        {"action": "validate", "config": {"triggers": []}},
-        {"action": "describe", "kind": "condition"},
-        {"action": "lookup", "entity_id": MORNING, "unique_id": "1700"},
-    ],
-)
-def test_schema_takes_each_action_the_server_sends(frame: dict[str, Any]) -> None:
-    schema = vol.Schema(automation_config.command_specs(vol)[0][0])
-    msg = {"type": automation_config.WS_AUTOMATION_CONFIG, **frame}
-    assert schema(msg) == msg
-
-
-def test_command_registered_and_advertised(functional_ws) -> None:  # noqa: F811
-    assert automation_config.WS_AUTOMATION_CONFIG in functional_ws.registered
-    assert automation_config.CAPABILITY in wsapi.CAPABILITIES
-
-
-def test_command_is_admin_gated(
-    functional_ws,  # noqa: F811
-    core: SimpleNamespace,
-) -> None:
-    handler = functional_ws.registered[automation_config.WS_AUTOMATION_CONFIG]
-    msg = {"id": 1, "type": automation_config.WS_AUTOMATION_CONFIG}
-    msg |= {"action": "validate", "config": {}}
-    with pytest.raises(_Unauthorized):
-        handler(FakeHass(), _FakeConnection(is_admin=False), msg)
-    connection = _FakeConnection()
-    handler(FakeHass(), connection, msg)
-    assert connection.results[1] == {"status": "ok", "error": None}
-
-
-def test_component_key_is_read_from_the_package_on_older_core(
+async def test_component_key_is_read_from_the_package_on_older_core(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core 2026.10 defines DATA_COMPONENT in the automation package and only
     2026.11 moves it to automation.const; reading const alone left the lookup
     "unavailable" on every 2026.10 install."""
-    components = types.ModuleType("homeassistant.components")
-    automation = types.ModuleType("homeassistant.components.automation")
-    automation.DATA_COMPONENT = "automation_component_key"
-    for name in ("entities", "devices", "areas", "floors", "labels"):
-        setattr(automation, f"{name}_in_automation", lambda hass, eid: set())
-    automation.blueprint_in_automation = lambda hass, eid: None
-    config = types.ModuleType("homeassistant.components.automation.config")
-    const = types.ModuleType("homeassistant.components.automation.const")
-    components.automation = automation
-    automation.config, automation.const = config, const
-    helpers = types.ModuleType("homeassistant.helpers")
-    for name in ("condition", "trigger", "entity_registry", "issue_registry"):
-        mod = types.ModuleType(f"homeassistant.helpers.{name}")
-        setattr(helpers, name, mod)
-        monkeypatch.setitem(sys.modules, f"homeassistant.helpers.{name}", mod)
-    for name, mod in {
-        "homeassistant.components": components,
-        "homeassistant.components.automation": automation,
-        "homeassistant.components.automation.config": config,
-        "homeassistant.components.automation.const": const,
-        "homeassistant.helpers": helpers,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, mod)
+    await _load(hass, _MORNING)
+    monkeypatch.delattr(automation_core_const, "DATA_COMPONENT")
+    got = await _command(component_ws, action="lookup", entity_id=MORNING)
+    assert got["loaded"] is True
 
-    core = automation_config._core()
 
-    assert core is not None
-    assert core.component_key == "automation_component_key"
+# --- registration ---------------------------------------------------------------
+
+
+async def test_command_is_admin_gated(
+    component_ws: MockHAClientWebSocket,
+    component_ws_read_only: MockHAClientWebSocket,
+) -> None:
+    frame = {"action": "validate", "config": {"triggers": [], "actions": []}}
+    refused = await ws_call(
+        component_ws_read_only, automation_config.WS_AUTOMATION_CONFIG, **frame
+    )
+    assert refused["error"]["code"] == "unauthorized"
+    answered = await ws_call(
+        component_ws, automation_config.WS_AUTOMATION_CONFIG, **frame
+    )
+    assert answered["success"], answered

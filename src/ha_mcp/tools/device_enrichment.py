@@ -61,16 +61,11 @@ async def enrich_zwave_status(
             {"type": "zwave_js/node_status", "device_id": device_id}
         )
         if zwave_result.get("success"):
+            # Z-Wave JS resolves the node (a pre-provisioned device has none),
+            # so its node_id comes from this reply, passed through whole.
             node_data = zwave_result.get("result", {})
-            device_info["node_status"] = {
-                "node_id": node_data.get("node_id"),
-                "status": node_data.get("status"),
-                "is_routing": node_data.get("is_routing"),
-                "is_secure": node_data.get("is_secure"),
-                "highest_security_class": node_data.get("highest_security_class"),
-                "zwave_plus_version": node_data.get("zwave_plus_version"),
-                "is_controller_node": node_data.get("is_controller_node"),
-            }
+            device_info["node_id"] = node_data.get("node_id")
+            device_info["node_status"] = node_data
         else:
             warnings.append(
                 f"Z-Wave node status unavailable: {core_error_message(zwave_result.get('error') or 'request failed')}"

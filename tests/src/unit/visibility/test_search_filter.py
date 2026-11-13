@@ -1,339 +1,237 @@
-"""Integration of the visibility filter into search_entities._exact_match_search."""
+"""The visibility filter in ``ha_search``'s entity listings, on real Core.
 
-import asyncio
+Each test drives the public ``ha_search`` (or ``ha_get_state``) tool on the
+server's client connected to a real ``hass`` without the ha_mcp_tools
+component, so the legacy search path reads Core's own states and registry
+rows. Count coherence: ``entity_total_matches`` is the filtered total.
+"""
 
-from ha_mcp.tools import tools_search
-from ha_mcp.tools.search import entities as search_entities
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import save_visibility_config
+
+_DIAGNOSTIC = EntityCategory.DIAGNOSTIC
 
 
-class _FakeClient:
-    """Minimal client: get_states() + registry send_websocket_message()."""
-
-    def __init__(self, states, registry):
-        self._states = states
-        self._registry = registry
-
-    async def get_states(self):
-        return self._states
-
-    async def send_websocket_message(self, msg):
-        assert msg == {"type": "config/entity_registry/list"}
-        return self._registry
+@pytest.fixture
+async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> SearchTools:
+    """``ha_search`` on a ``hass`` that serves the registry commands."""
+    assert await async_setup_component(hass, "config", {})
+    return SearchTools(core_client, SmartSearchTools(client=core_client))
 
 
-_STATES = [
-    {"entity_id": "sensor.foo_batt", "state": "50", "attributes": {}},
-    {"entity_id": "light.foo_lamp", "state": "on", "attributes": {}},
-]
-_REGISTRY = {
-    "success": True,
-    "result": [
-        {"entity_id": "sensor.foo_batt", "entity_category": "diagnostic"},
-        {"entity_id": "light.foo_lamp", "entity_category": None},
-    ],
-}
+@pytest.fixture
+def add_entity(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> Callable[..., None]:
+    """Register an entity with Core and give it a state."""
 
-
-def _run_search(tmp_path, monkeypatch, config: VisibilityConfig):
-    save_visibility_config(tmp_path, config)
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    client = _FakeClient(_STATES, _REGISTRY)
-    return asyncio.run(
-        search_entities._exact_match_search(
-            client, query="foo", domain_filter=None, limit=10
+    def _add(
+        entity_id: str,
+        state: str = "on",
+        *,
+        category: EntityCategory | None = None,
+        area_id: str | None = None,
+    ) -> None:
+        domain, _, object_id = entity_id.partition(".")
+        entry = entity_registry.async_get_or_create(
+            domain,
+            "test",
+            object_id,
+            suggested_object_id=object_id,
+            entity_category=category,
         )
-    )
+        assert entry.entity_id == entity_id
+        if area_id is not None:
+            entity_registry.async_update_entity(entity_id, area_id=area_id)
+        hass.states.async_set(entity_id, state)
+
+    return _add
 
 
-def test_enabled_category_exclude_drops_diagnostic_and_counts_stay_coherent(
-    tmp_path, monkeypatch
-):
-    res = _run_search(
-        tmp_path,
-        monkeypatch,
-        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
-    )
-    ids = [r["entity_id"] for r in res["results"]]
-    assert ids == ["light.foo_lamp"]  # diagnostic sensor excluded
-    # Coherence: the total reflects the post-filter set, not the raw 2.
-    assert res["total_matches"] == 1
+@pytest.fixture
+def foo_entities(add_entity: Callable[..., None]) -> None:
+    add_entity("sensor.foo_batt", "50", category=_DIAGNOSTIC)
+    add_entity("light.foo_lamp")
 
 
-def test_disabled_config_returns_both(tmp_path, monkeypatch):
-    res = _run_search(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
-    ids = sorted(r["entity_id"] for r in res["results"])
-    assert ids == ["light.foo_lamp", "sensor.foo_batt"]
+def _ids(res: dict[str, Any]) -> list[str]:
+    return sorted(row["entity_id"] for row in res["entities"])
 
 
-def test_corrupt_config_fails_open_returns_both(tmp_path, monkeypatch):
+async def test_query_search_hides_category_and_counts_only_visible_matches(
+    tools: SearchTools,
+    foo_entities: None,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    set_config(enabled=True, exclude_categories=["diagnostic"])
+
+    res = await tools.ha_search(query="foo", exact_match=True)
+
+    assert _ids(res) == ["light.foo_lamp"]
+    assert res["entity_total_matches"] == 1
+
+
+async def test_query_search_with_filter_disabled_returns_every_match(
+    tools: SearchTools,
+    foo_entities: None,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    set_config(enabled=False, exclude_categories=["diagnostic"])
+
+    res = await tools.ha_search(query="foo", exact_match=True)
+
+    assert _ids(res) == ["light.foo_lamp", "sensor.foo_batt"]
+
+
+async def test_query_search_with_corrupt_config_hides_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: SearchTools,
+    foo_entities: None,
+) -> None:
+    """A config that cannot be read fails open: the search still lists all."""
     (tmp_path / "entity_visibility.json").write_text("{ corrupt")
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    client = _FakeClient(_STATES, _REGISTRY)
-    res = asyncio.run(
-        search_entities._exact_match_search(
-            client, query="foo", domain_filter=None, limit=10
-        )
-    )
-    ids = sorted(r["entity_id"] for r in res["results"])
-    assert ids == ["light.foo_lamp", "sensor.foo_batt"]
+
+    res = await tools.ha_search(query="foo", exact_match=True)
+
+    assert _ids(res) == ["light.foo_lamp", "sensor.foo_batt"]
 
 
-class _DomainClient:
-    """Client for the domain-listing path: states + entity registry.
+async def test_domain_listing_hides_category_before_counting(
+    tools: SearchTools,
+    add_entity: Callable[..., None],
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    set_config(enabled=True, exclude_categories=["diagnostic"])
+    add_entity("sensor.keep", "1")
+    add_entity("sensor.drop", "2", category=_DIAGNOSTIC)
 
-    The domain path returns its search dict directly (no add_timezone_metadata
-    wrapper) since entity records carry no timestamp fields."""
+    res = await tools.ha_search(domain_filter="sensor", include_hidden=True)
 
-    def __init__(self, states, registry):
-        self._states = states
-        self._registry = registry
-
-    async def get_states(self):
-        return self._states
-
-    async def send_websocket_message(self, msg):
-        assert msg == {"type": "config/entity_registry/list"}
-        return self._registry
+    assert _ids(res) == ["sensor.keep"]
+    assert res["entity_total_matches"] == 1
 
 
-def test_domain_only_search_excludes_denied_and_counts_stay_coherent(
-    tmp_path, monkeypatch
-):
-    """_search_domain_only applies the filter before pagination, so a hidden
-    entity is gone AND total_matches reflects the post-filter set."""
-    states = [
-        {"entity_id": "sensor.keep", "state": "1", "attributes": {}},
-        {"entity_id": "sensor.drop", "state": "2", "attributes": {}},
-    ]
-    registry = {
-        "success": True,
-        "result": [
-            {"entity_id": "sensor.keep", "entity_category": None},
-            {"entity_id": "sensor.drop", "entity_category": "diagnostic"},
-        ],
-    }
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
-    res = asyncio.run(
-        tools._search_domain_only(
-            query=None,
-            domain_filter="sensor",
-            state_filter=None,
-            limit=10,
-            offset=0,
-            include_hidden_bool=True,
-            group_by_domain_bool=False,
-            per_domain_limit_int=None,
-            parsed_result_fields=None,
-        )
-    )
-    ids = [r["entity_id"] for r in res["results"]]
-    assert ids == ["sensor.keep"]  # diagnostic sensor.drop excluded
-    assert res["total_matches"] == 1  # count reflects post-filter set, not raw 2
+async def test_state_listing_hides_category_before_counting(
+    tools: SearchTools,
+    add_entity: Callable[..., None],
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """The total counts visible entities in the state, not every one in it."""
+    set_config(enabled=True, exclude_categories=["diagnostic"])
+    add_entity("sensor.on_keep", "on")
+    add_entity("sensor.on_keep2", "on")
+    add_entity("sensor.on_drop", "on", category=_DIAGNOSTIC)
+    add_entity("sensor.off_ignore", "off")
+
+    res = await tools.ha_search(state_filter="on", include_hidden=True)
+
+    assert _ids(res) == ["sensor.on_keep", "sensor.on_keep2"]
+    assert res["entity_total_matches"] == 2
 
 
-def test_state_only_search_excludes_denied_and_counts_stay_coherent(
-    tmp_path, monkeypatch
-):
-    """_search_state_only applies the filter before pagination, so a denied
-    entity in the target state is gone AND total_matches reflects the
-    post-filter set (not the raw count of entities in that state)."""
-    states = [
-        {"entity_id": "sensor.on_keep", "state": "on", "attributes": {}},
-        {"entity_id": "sensor.on_keep2", "state": "on", "attributes": {}},
-        {"entity_id": "sensor.on_drop", "state": "on", "attributes": {}},
-        {"entity_id": "sensor.off_ignore", "state": "off", "attributes": {}},
-    ]
-    registry = {
-        "success": True,
-        "result": [
-            {"entity_id": "sensor.on_keep", "entity_category": None},
-            {"entity_id": "sensor.on_keep2", "entity_category": None},
-            {"entity_id": "sensor.on_drop", "entity_category": "diagnostic"},
-            {"entity_id": "sensor.off_ignore", "entity_category": None},
-        ],
-    }
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
-    res = asyncio.run(
-        tools._search_state_only(
-            "on",
-            limit=10,
-            offset=0,
-            include_hidden_bool=True,
-            group_by_domain_bool=False,
-            per_domain_limit_int=None,
-            parsed_result_fields=None,
-        )
-    )
-    ids = sorted(r["entity_id"] for r in res["results"])
-    assert ids == ["sensor.on_keep", "sensor.on_keep2"]  # diagnostic on_drop excluded
-    assert res["total_matches"] == 2  # post-filter count (2 "on"), not raw 4
+async def test_state_listing_matches_mixed_case_state(
+    hass: HomeAssistant,
+    tools: SearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """A state of "Vacation" is found by ``state_filter="vacation"``."""
+    set_config(enabled=False)
+    hass.states.async_set("input_select.mode", "Vacation")
+    hass.states.async_set("input_select.other", "Home")
+
+    res = await tools.ha_search(state_filter="vacation")
+
+    assert _ids(res) == ["input_select.mode"]
+    assert res["entity_total_matches"] == 1
 
 
-def test_state_only_search_is_case_insensitive(tmp_path, monkeypatch):
-    """A mixed-case entity state matches a (lowercased) state_filter."""
-    states = [
-        {"entity_id": "input_select.mode", "state": "Vacation", "attributes": {}},
-        {"entity_id": "input_select.other", "state": "Home", "attributes": {}},
-    ]
-    registry = {
-        "success": True,
-        "result": [
-            {"entity_id": "input_select.mode", "entity_category": None},
-            {"entity_id": "input_select.other", "entity_category": None},
-        ],
-    }
-    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
-    res = asyncio.run(
-        tools._search_state_only(
-            "vacation",
-            limit=10,
-            offset=0,
-            include_hidden_bool=True,
-            group_by_domain_bool=False,
-            per_domain_limit_int=None,
-            parsed_result_fields=None,
-        )
-    )
-    ids = [r["entity_id"] for r in res["results"]]
-    assert ids == ["input_select.mode"]  # "Vacation" matches "vacation"
-    assert res["total_matches"] == 1
-
-
-class _GetStateClient:
-    """Minimal client for the targeted single-entity read path."""
-
-    async def get_entity_state(self, entity_id):
-        return {"entity_id": entity_id, "state": "on", "attributes": {}}
-
-    async def get_config(self):
-        return {"time_zone": "UTC"}
-
-
-def test_targeted_get_state_ignores_visibility_filter(tmp_path, monkeypatch):
-    """Tier-B contract: a targeted read returns the entity even when an enabled
-    denylist would hide it from collection reads. This is the runnable, in-process
-    counterpart to the container-only e2e Tier-B assertion."""
+async def test_targeted_state_read_returns_entity_the_denylist_hides(
+    hass: HomeAssistant,
+    tools: SearchTools,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """Outside enforce mode a targeted read is not filtered, although the
+    same entity is missing from a listing."""
     denied = "input_boolean.denied_probe"
-    # Filter enabled and denying the entity — a collection read would drop it.
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(enabled=True, exclude_categories=[], deny_entity_ids=[denied]),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    set_config(enabled=True, deny_entity_ids=[denied])
+    hass.states.async_set(denied, "on")
 
-    tools = tools_search.SearchTools(_GetStateClient(), smart_tools=None)
-    res = asyncio.run(tools._get_single_entity_state(denied, None, None, False))
+    listing = await tools.ha_search(domain_filter="input_boolean")
+    res = await tools.ha_get_state(denied)
 
-    # Targeted path never consults the filter — the entity is still returned.
+    assert _ids(listing) == []
     assert res["data"]["entity_id"] == denied
 
 
-def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
-    """An allow-area match authorizes past the broad diagnostic category filter.
-
-    The non-allowed entity remains hidden by restrict mode.
-    """
-    states = [
-        {"entity_id": "sensor.foo_diag", "state": "1", "attributes": {}},
-        {"entity_id": "light.foo_keep", "state": "on", "attributes": {}},
-        {"entity_id": "light.foo_other", "state": "on", "attributes": {}},
-    ]
-    registry = {
-        "success": True,
-        "result": [
-            {
-                "entity_id": "sensor.foo_diag",
-                "entity_category": "diagnostic",
-                "area_id": "kitchen",
-            },
-            {
-                "entity_id": "light.foo_keep",
-                "entity_category": None,
-                "area_id": "kitchen",
-            },
-            {
-                "entity_id": "light.foo_other",
-                "entity_category": None,
-                "area_id": "bedroom",
-            },
-        ],
-    }
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=["diagnostic"],
-            allow_areas=["kitchen"],
-        ),
+async def test_area_allowlist_admits_category_the_exclude_would_hide(
+    area_registry: ar.AreaRegistry,
+    tools: SearchTools,
+    add_entity: Callable[..., None],
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """An allowed-area match is shown past the broad category exclusion, and
+    an entity outside the allowed area stays hidden."""
+    kitchen = area_registry.async_create("Kitchen")
+    bedroom = area_registry.async_create("Bedroom")
+    set_config(
+        enabled=True, exclude_categories=["diagnostic"], allow_areas=[kitchen.id]
     )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    res = asyncio.run(
-        search_entities._exact_match_search(
-            _FakeClient(states, registry),
-            query="foo",
-            domain_filter=None,
-            limit=10,
-        )
-    )
-    assert {r["entity_id"] for r in res["results"]} == {
-        "sensor.foo_diag",
-        "light.foo_keep",
-    }
+    add_entity("sensor.foo_diag", "1", category=_DIAGNOSTIC, area_id=kitchen.id)
+    add_entity("light.foo_keep", area_id=kitchen.id)
+    add_entity("light.foo_other", area_id=bedroom.id)
+
+    res = await tools.ha_search(query="foo", exact_match=True)
+
+    assert _ids(res) == ["light.foo_keep", "sensor.foo_diag"]
 
 
-class _AreaTzClient:
-    """Client for the area dispatch: add_timezone_metadata reads get_config."""
+async def test_area_search_forwards_visibility_warnings(
+    area_registry: ar.AreaRegistry,
+    tools: SearchTools,
+    add_entity: Callable[..., None],
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """A visibility warning raised while listing an area reaches the response."""
+    kitchen = area_registry.async_create("Kitchen")
+    add_entity("light.kitchen", area_id=kitchen.id)
+    set_config(enabled=True, exclude_categories=["typo"])
 
-    async def get_config(self):
-        return {"time_zone": "UTC"}
+    res = await tools.ha_search(area_filter="Kitchen")
 
-
-class _FakeSmartTools:
-    """Stands in for the SmartSearchTools the area dispatch delegates to."""
-
-    def __init__(self, area_result):
-        self._area_result = area_result
-
-    async def get_entities_by_area(
-        self, area_filter, group_by_domain=True, include_hidden=False
-    ):
-        return self._area_result
+    assert _ids(res) == ["light.kitchen"]
+    assert any("unknown exclude_categories" in w for w in res.get("warnings", []))
 
 
-def test_area_search_forwards_visibility_warnings_to_response():
-    """The three area builders rebuild a fresh response dict and drop
-    area_result['warnings']; the dispatch must forward them so a
-    visibility/registry degradation on ha_search(area_filter=...) is not silently
-    invisible (the non-area path already surfaces the same warnings)."""
-    warning = "Entity visibility filter degraded on the area path"
-    area_result = {"success": True, "areas": {}, "warnings": [warning]}
-    tools = tools_search.SearchTools(
-        _AreaTzClient(), smart_tools=_FakeSmartTools(area_result)
-    )
-    res = asyncio.run(tools.ha_search(area_filter="kitchen"))
-    assert warning in res.get("warnings", [])
-
-
-def test_area_search_without_warnings_has_no_warnings_key() -> None:
+async def test_area_search_without_warnings_has_no_warnings_key(
+    area_registry: ar.AreaRegistry,
+    tools: SearchTools,
+    add_entity: Callable[..., None],
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
     """An empty list is omitted, not returned as ``"warnings": []``."""
-    area_result = {"success": True, "areas": {}}
-    tools = tools_search.SearchTools(
-        _AreaTzClient(), smart_tools=_FakeSmartTools(area_result)
-    )
-    res = asyncio.run(tools.ha_search(area_filter="kitchen"))
+    kitchen = area_registry.async_create("Kitchen")
+    add_entity("light.kitchen", area_id=kitchen.id)
+    set_config(enabled=False)
+
+    res = await tools.ha_search(area_filter="Kitchen")
+
+    assert _ids(res) == ["light.kitchen"]
     assert "warnings" not in res

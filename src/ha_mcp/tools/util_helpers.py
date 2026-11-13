@@ -344,16 +344,10 @@ def filter_active_repairs(
     Repairs UI hides ignored ones by default). Mirror that UI default so
     overview / system-health responses don't surface repairs the user has
     already dismissed.
-
-    Entries with ``active=False`` are always dropped, regardless of
-    ``include_dismissed``: HA core's ``ws_list_issues`` never emits them
-    (on restart the registry reloads each stored non-persistent issue as an
-    inactive stub until it is re-raised or deleted), but the component's
-    raw registry dump does.
     """
     if include_dismissed:
-        return [r for r in issues if r.get("active") is not False]
-    return [r for r in issues if r.get("active") is not False and not r.get("ignored")]
+        return list(issues)
+    return [r for r in issues if not r.get("ignored")]
 
 
 def project_repair_fields(issue: dict[str, Any]) -> dict[str, Any]:

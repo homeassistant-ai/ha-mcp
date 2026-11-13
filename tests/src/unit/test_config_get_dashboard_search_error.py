@@ -1,50 +1,78 @@
-"""Unit tests for ha_config_get_dashboard error handling.
+"""``ha_config_get_dashboard`` error handling and search disclosure warnings.
 
-Covers two distinct failure axes:
- - Search mode: structured error responses must not leak internal Python type
-   names or tracebacks.
- - List mode (list_only=True): unexpected HA response shapes must emit a
-   warning and return an empty list, not a silent degradation.
+Covers:
+ - Search mode: when Home Assistant gives no answer, the structured error
+   carries a classified code and dashboard suggestions, never internal Python
+   type names or tracebacks.
+ - List mode (list_only=True): a reply without a dashboard list emits a
+   warning and returns an empty list, not a silent degradation.
+ - Search disclosure warnings at the tool boundary.
+ - The error context of an unexpected failure after lazy-resolve names the
+   resolved url_path.
 
-Replaces test_dashboard_find_card_error.py after ha_dashboard_find_card
-was merged into ha_config_get_dashboard (issue #901).
+Every reply is Core's own: the tool runs on the server's client connected to a
+real ``hass`` with ``lovelace`` set up.
 """
 
-import json
+from __future__ import annotations
+
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.dashboard_read_errors import UNKNOWN_CONFIG_PREFIX
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.tools import tools_config_dashboards
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+
+from ._addon_tool_helpers import _parse_tool_error
+from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
+
+
+async def _search_without_answer(
+    hass: HomeAssistant, client: HomeAssistantClient, kind: str = "dropped"
+) -> dict[str, Any]:
+    """Search a stored dashboard while Home Assistant gives no answer."""
+    await store_dashboard(hass, client, {"views": [{"cards": []}]})
+    if kind == "dropped":
+        no_answer = patch.object(
+            client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("Connection lost")),
+        )
+    else:
+        # The socket stops answering; the client turns that into its own
+        # no-answer error, as it does for a real command timeout.
+        no_answer = patch.object(
+            HomeAssistantWebSocketClient,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
+        )
+    with no_answer, pytest.raises(ToolError) as exc_info:
+        await DashboardConfigTools(client).ha_config_get_dashboard(
+            url_path=SEARCH_URL_PATH, entity_id="light.test"
+        )
+    return _parse_tool_error(exc_info)
 
 
 class TestConfigGetDashboardSearchErrorHandling:
-    """Test ha_config_get_dashboard search mode error path does not leak internals."""
+    """Search mode's error path does not leak internals."""
 
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("Connection lost")
-        )
-        return client
-
-    @pytest.fixture
-    def get_dashboard_tool(self, mock_client):
-        """Return the ha_config_get_dashboard bound method."""
-        return DashboardConfigTools(mock_client).ha_config_get_dashboard
-
-    @pytest.mark.asyncio
-    async def test_error_does_not_leak_internals(self, get_dashboard_tool):
+    async def test_error_does_not_leak_internals(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
         """Error response must NOT contain 'error_type' or 'traceback'."""
-        with pytest.raises(ToolError) as exc_info:
-            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
+        result = await _search_without_answer(hass, core_client)
 
-        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert isinstance(result["error"], dict), (
             "error must be structured dict, not raw string"
@@ -54,13 +82,12 @@ class TestConfigGetDashboardSearchErrorHandling:
         assert "error_type" not in result
         assert "traceback" not in result
 
-    @pytest.mark.asyncio
-    async def test_error_includes_suggestions(self, get_dashboard_tool):
+    async def test_error_includes_suggestions(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
         """Error response must include dashboard-specific suggestions."""
-        with pytest.raises(ToolError) as exc_info:
-            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
+        result = await _search_without_answer(hass, core_client)
 
-        result = json.loads(str(exc_info.value))
         suggestions = result["error"]["suggestions"]
         assert "Check HA connection" in suggestions
         assert (
@@ -68,73 +95,50 @@ class TestConfigGetDashboardSearchErrorHandling:
             in suggestions
         )
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "exception_cls,exception_msg,expected_code",
-        [
-            (ValueError, "invalid dashboard", "VALIDATION_FAILED"),
-            (TimeoutError, "timed out", "TIMEOUT_OPERATION"),
-            (RuntimeError, "unexpected failure", "INTERNAL_ERROR"),
-        ],
+        ("kind", "expected_code"),
+        [("dropped", "CONNECTION_FAILED"), ("timeout", "CONNECTION_TIMEOUT")],
     )
-    async def test_different_exception_types_produce_correct_error_codes(
+    async def test_no_answer_kinds_produce_their_error_codes(
         self,
-        mock_client,
-        get_dashboard_tool,
-        exception_cls,
-        exception_msg,
-        expected_code,
-    ):
-        """Different exception types should map to appropriate error codes."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=exception_cls(exception_msg)
-        )
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        kind: str,
+        expected_code: str,
+    ) -> None:
+        """A dropped connection and a timeout are told apart by error code."""
+        result = await _search_without_answer(hass, core_client, kind)
 
-        with pytest.raises(ToolError) as exc_info:
-            await get_dashboard_tool(url_path="lovelace", entity_id="light.test")
-
-        result = json.loads(str(exc_info.value))
         assert result["success"] is False
         assert result["error"]["code"] == expected_code
 
 
 class TestGetDashboardListOnlyUnexpectedShape:
-    """list_only=True emits a warning (not a failure) on unexpected HA response shape.
+    """list_only=True warns (not fails) when the reply carries no dashboard list.
 
     fetch_dashboards_list logs at WARNING and returns None; the ``or []``
     fallback means the tool still returns a valid success response with an
-    empty dashboards list. This test pins the behavior introduced when the
-    inline fetch was extracted to the shared helper so that a silent ``[]``
-    return can no longer mask a future HA shape change at the
-    ``ha_config_get_dashboard`` list path (``list_only=True`` branch).
+    empty dashboards list. Core without ``lovelace`` answers the list command
+    with an error reply, which has no list in it.
     """
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def get_dashboard_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_get_dashboard
-
-    @pytest.mark.asyncio
-    async def test_unexpected_shape_logs_warning_and_returns_empty_list(
-        self, get_dashboard_tool, mock_client, caplog
-    ):
-        mock_client.send_websocket_message.return_value = "unexpected string"
-
+    async def test_reply_without_list_logs_warning_and_returns_empty_list(
+        self,
+        core_client: HomeAssistantClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         with caplog.at_level(
             logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
         ):
-            result = await get_dashboard_tool(list_only=True)
+            result = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                list_only=True
+            )
 
         assert result["success"] is True
         assert result["dashboards"] == []
         assert result["count"] == 0
         assert any(
-            "unexpected shape" in rec.message and "type=str" in rec.message
+            "unexpected shape" in rec.message and "type=dict" in rec.message
             for rec in caplog.records
         ), (
             f"expected an 'unexpected shape' warning naming the response "
@@ -151,28 +155,26 @@ class TestFindCardDisclosureWarnings:
     container no longer suppresses it and a true negative no longer cries wolf.
     """
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
+    async def _search(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        config: dict[str, Any],
+        **criteria: Any,
+    ) -> dict[str, Any]:
+        await store_dashboard(hass, client, config)
+        result = await DashboardConfigTools(client).ha_config_get_dashboard(
+            url_path=SEARCH_URL_PATH, **criteria
+        )
+        assert isinstance(result, dict)
+        return result
 
-    @pytest.fixture
-    def get_dashboard_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_get_dashboard
-
-    async def _search(self, tool, mock_client, config, **criteria):
-        # url_path="default" → effective_url_path is None, so no lazy-resolve
-        # retry: the single websocket reply carries the config under "result".
-        mock_client.send_websocket_message.return_value = {"result": config}
-        return await tool(url_path="default", **criteria)
-
-    @pytest.mark.asyncio
     async def test_warns_on_uncoverable_shape_even_when_matched(
-        self, get_dashboard_tool, mock_client
-    ):
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
         """A picture-elements card that itself matches still triggers the warning
-        — the suppressible-warning bug is closed."""
+        — the suppressible-warning bug is closed. Warnings are a top-level
+        ``list[str]`` (return contract)."""
         config = {
             "views": [
                 {
@@ -187,62 +189,23 @@ class TestFindCardDisclosureWarnings:
             ]
         }
         result = await self._search(
-            get_dashboard_tool,
-            mock_client,
-            config,
-            card_type="picture-elements",
+            hass, core_client, config, card_type="picture-elements"
         )
         assert result["match_count"] == 1  # the container matched
-        warnings = result.get("warnings", [])
-        assert any("elements" in w for w in warnings), warnings
+        warnings = result["warnings"]
+        assert isinstance(warnings, list)
+        assert all(isinstance(w, str) for w in warnings)
         assert any(".views[0].cards[0].elements" in w for w in warnings), warnings
 
-    @pytest.mark.asyncio
     async def test_silent_on_true_negative_without_shape(
-        self, get_dashboard_tool, mock_client
-    ):
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
         """A 0-match over a fully-coverable dashboard emits no disclosure warning
         — the cry-wolf bug is closed."""
         config = {"views": [{"cards": [{"type": "tile", "entity": "light.plain"}]}]}
-        result = await self._search(
-            get_dashboard_tool, mock_client, config, card_type="nonexistent"
-        )
+        result = await self._search(hass, core_client, config, card_type="nonexistent")
         assert result["match_count"] == 0
         assert "warnings" not in result
-
-    @pytest.mark.asyncio
-    async def test_silent_on_empty_dashboard(self, get_dashboard_tool, mock_client):
-        """An empty dashboard (no cards) emits no disclosure warning."""
-        config = {"views": [{"cards": []}]}
-        result = await self._search(
-            get_dashboard_tool, mock_client, config, card_type="tile"
-        )
-        assert result["match_count"] == 0
-        assert "warnings" not in result
-
-    @pytest.mark.asyncio
-    async def test_response_warnings_is_top_level_list_of_str(
-        self, get_dashboard_tool, mock_client
-    ):
-        """When present, ``warnings`` is a top-level ``list[str]`` (return
-        contract), never nested under ``data`` nor a singular string."""
-        config = {
-            "views": [
-                {
-                    "cards": [
-                        {
-                            "type": "picture-elements",
-                            "elements": [{"type": "state-badge"}],
-                        }
-                    ]
-                }
-            ]
-        }
-        result = await self._search(
-            get_dashboard_tool, mock_client, config, card_type="tile"
-        )
-        assert isinstance(result["warnings"], list)
-        assert all(isinstance(w, str) for w in result["warnings"])
 
 
 class TestResolvedUrlPathInErrorContext:
@@ -251,65 +214,58 @@ class TestResolvedUrlPathInErrorContext:
     (pre-resolve) identifier.
 
     Regression test for the C901 decomposition of ha_config_get_dashboard:
-    splitting the mode dispatch into _get_dashboard_search_mode /
-    _get_dashboard_get_mode moved the url_path reassignment into a helper's
-    local scope, so the outer method's except-block context silently fell
-    back to reporting the unresolved identifier.
+    splitting the mode dispatch into separate mode helpers moved the url_path
+    reassignment into a helper's local scope, so the outer method's
+    except-block context silently fell back to reporting the unresolved
+    identifier.
+
+    Core stores a dashboard under an id slugified from its url_path
+    (``resolved-path`` becomes ``resolved_path``); the tool is given that id.
     """
 
     @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def get_dashboard_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_get_dashboard
-
-    @pytest.mark.asyncio
-    async def test_search_mode_reports_resolved_url_path(
-        self, get_dashboard_tool, mock_client, monkeypatch
-    ):
-        mock_client.send_websocket_message.side_effect = [
+    async def internal_id_dashboard(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        assert await async_setup_component(hass, "lovelace", {})
+        created = await core_client.send_websocket_message(
             {
-                "success": False,
-                "error": {"message": f"{UNKNOWN_CONFIG_PREFIX}: internal-id"},
-            },
-            {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
-            {"result": {"views": [{"cards": []}]}},
-        ]
+                "type": "lovelace/dashboards/create",
+                "url_path": "resolved-path",
+                "title": "Resolved",
+            }
+        )
+        assert created["success"], created
+        saved = await core_client.send_websocket_message(
+            {
+                "type": "lovelace/config/save",
+                "url_path": "resolved-path",
+                "config": {"views": [{"cards": []}]},
+            }
+        )
+        assert saved["success"], saved
+
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    @pytest.mark.parametrize(
+        "criteria", [{"card_type": "tile"}, {}], ids=["search", "get"]
+    )
+    async def test_failure_after_resolve_reports_resolved_url_path(
+        self,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        criteria: dict[str, Any],
+    ) -> None:
+        tool = DashboardConfigTools(core_client).ha_config_get_dashboard
+        resolved = await tool(url_path="resolved_path", **criteria)
+        assert resolved["url_path"] == "resolved-path"
+        # An unexpected failure in our own code once the config is read.
         monkeypatch.setattr(
-            DashboardConfigTools,
-            "_build_search_result",
+            tools_config_dashboards,
+            "compute_config_hash",
             MagicMock(side_effect=RuntimeError("boom")),
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await get_dashboard_tool(url_path="internal-id", card_type="tile")
+            await tool(url_path="resolved_path", **criteria)
 
-        result = json.loads(str(exc_info.value))
-        assert result["url_path"] == "resolved-path"
-
-    @pytest.mark.asyncio
-    async def test_get_mode_reports_resolved_url_path(
-        self, get_dashboard_tool, mock_client, monkeypatch
-    ):
-        mock_client.send_websocket_message.side_effect = [
-            {
-                "success": False,
-                "error": {"message": f"{UNKNOWN_CONFIG_PREFIX}: internal-id"},
-            },
-            {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
-            {"result": {"views": []}},
-        ]
-        monkeypatch.setattr(
-            "ha_mcp.tools.tools_config_dashboards.compute_config_hash",
-            MagicMock(side_effect=RuntimeError("boom")),
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await get_dashboard_tool(url_path="internal-id")
-
-        result = json.loads(str(exc_info.value))
-        assert result["url_path"] == "resolved-path"
+        assert _parse_tool_error(exc_info)["url_path"] == "resolved-path"

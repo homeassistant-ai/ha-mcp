@@ -53,8 +53,8 @@ class EntityModesMixin(EntityEnrichmentMixin):
     ) -> dict[str, Any]:
         """Search within area entities using fuzzy matching against a query string."""
         # Collect entities from all matched areas, applying domain_filter if present.
-        # _ha_search_entities calls get_entities_by_area with group_by_domain=True,
-        # so area_result["areas"][id]["entities"] is always a dict keyed by domain.
+        # get_entities_by_area groups each area's entities by domain, so
+        # area_result["areas"][id]["entities"] is always a dict keyed by domain.
         all_area_entities = []
         for area_id in sorted(area_result.get("areas", {})):
             area_data = area_result["areas"][area_id]
@@ -342,12 +342,6 @@ class EntityModesMixin(EntityEnrichmentMixin):
         device_result: Any = gather_results[2] if need_device else None
         if isinstance(states_result, BaseException):
             raise states_result
-        # CancelledError must propagate; gather captures it like any other
-        # exception when return_exceptions=True.
-        if isinstance(registry_result, asyncio.CancelledError):
-            raise registry_result
-        if isinstance(device_result, asyncio.CancelledError):
-            raise device_result
 
         hidden_ids = _build_hidden_ids(registry_result)
         # Opt-in visibility filter: hard exclude, fails open (empty set on any

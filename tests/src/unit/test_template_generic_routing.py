@@ -1,381 +1,453 @@
-"""Generic config-entry mutations retain recoverable Template options."""
+"""Generic config-entry mutations retain recoverable flow-helper options.
 
-from copy import deepcopy
+``ha_set_integration`` (options, enable/disable) and
+``ha_remove_helpers_integrations`` change a config entry Core owns. For a flow
+helper (Template, Min/Max, ...) the auto-backup captures the helper's own
+options before the write, inside the entry's write lock, so the snapshot can
+recreate it; any other entry keeps the integration backup. Every entry,
+flow and registry row below is Core's own, reached through the server's
+client with the ``ha_mcp_tools`` component installed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
+from homeassistant.config_entries import (
+    SIGNAL_CONFIG_ENTRY_CHANGED,
+    ConfigEntry,
+    ConfigEntryChange,
+    ConfigEntryDisabler,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import auto_backup, component_api, component_config_entries
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.tools import config_entry_backup
 from ha_mcp.tools.tools_integrations import IntegrationTools
+
+_PLAIN = "plain_hub"
+
+
+@dataclass
+class Mutation:
+    """What was true when Core first changed the entry."""
+
+    snapshots: list[dict[str, Any]]
+    locked: asyncio.Task[bool]
+
+
+@dataclass
+class World:
+    hass: HomeAssistant
+    client: HomeAssistantClient
+    manager: bm.BackupManager
+    tools: IntegrationTools
+    mutations: list[Mutation] = field(default_factory=list)
+    # Entries are recorded only once the test's own setup is done.
+    watching: bool = False
+
+    def snapshots(self) -> list[dict[str, Any]]:
+        return [
+            self.manager.read_snapshot(row["name"])
+            for row in self.manager.list_snapshots()
+        ]
+
+
+async def _write_lock_held(manager: bm.BackupManager, entry_id: str) -> bool:
+    """Whether another write to the entry would have to wait."""
+    try:
+        async with asyncio.timeout(0), manager.config_entry_write_guard(entry_id):
+            return False
+    except TimeoutError:
+        return True
 
 
 @pytest.fixture
-def entry_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    entry = {
-        "entry_id": "template-entry",
-        "domain": "template",
-        "title": "Example",
-        "disabled_by": None,
-    }
-    options = {"name": "Example", "template_type": "sensor", "state": "{{ 12 }}"}
-    entity = {
-        "entity_id": "sensor.example",
-        "unique_id": "template-entry",
-        "name": "Renamed Example",
-        "original_name": "Example",
-    }
-    client = SimpleNamespace(
-        get_config_entry=AsyncMock(side_effect=lambda _: deepcopy(entry)),
-        abort_options_flow=AsyncMock(),
+async def world(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[World]:
+    """Auto-backup on, and a record of each entry's first change by Core."""
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    monkeypatch.setenv("AUTO_BACKUP_THROTTLE_MINUTES", "0")
+    monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
+    reset_global_settings()
+    assert await async_setup_component(hass, "config", {})
+    manager = bm.get_backup_manager(component_core_client, get_global_settings())
+    world = World(
+        hass, component_core_client, manager, IntegrationTools(component_core_client)
     )
-    settings = SimpleNamespace(
-        enable_auto_backup=True,
-        auto_backup_throttle_minutes=0,
-        auto_backup_retain_per_entity=5,
-        auto_backup_dir=str(tmp_path),
-    )
-    manager = bm.get_backup_manager(client, settings)
-    mutations = []
+    seen: set[str] = set()
 
-    async def snapshot_read(_client: Any, message: dict[str, Any]) -> Any:
-        if message["type"] == "config_entries/get":
-            return [deepcopy(entry)]
-        if message["type"] == "config/entity_registry/list":
-            return [{**entity, "config_entry_id": entry["entry_id"]}]
-        assert message["type"] == "ha_mcp_tools/helpers_list"
-        return {
-            "covered_types": [entry["domain"]],
-            "helpers": [
-                {
-                    "kind": "flow",
-                    "helper_type": entry["domain"],
-                    "entry_id": entry["entry_id"],
-                    "entity_id": entity["entity_id"],
-                    "options": deepcopy(options),
-                }
-            ],
-        }
-
-    async def options_flow(_entry_id: str) -> dict[str, Any]:
-        return {
-            "type": "form",
-            "flow_id": "edit-flow",
-            "step_id": options.get("template_type", "init"),
-            "data_schema": [
-                {"name": "state", "required": True, "selector": {"template": {}}},
-                {"name": "source", "required": False, "selector": {"entity": {}}},
-            ],
-        }
-
-    def observe_mutation() -> None:
-        snapshots = list(manager.backup_dir.glob("*.yaml"))
-        mutations.append(
-            {
-                "snapshots": [manager.read_snapshot(path.name) for path in snapshots],
-                "locked": manager._entry_write_locks[entry["entry_id"]].locked(),
-            }
+    @callback
+    def _changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if not world.watching or entry.entry_id in seen:
+            return
+        seen.add(entry.entry_id)
+        world.mutations.append(
+            Mutation(
+                world.snapshots(),
+                hass.async_create_task(_write_lock_held(manager, entry.entry_id)),
+            )
         )
 
-    async def submit_options(_flow_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        observe_mutation()
-        options.update(data)
-        return {"type": "create_entry", "result": {}}
+    unsubscribe = async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _changed)
+    yield world
+    unsubscribe()
+    await hass.async_block_till_done()
 
-    async def delete_entry(_entry_id: str) -> dict[str, Any]:
-        observe_mutation()
-        return {"require_restart": False}
 
-    async def set_enabled(message: dict[str, Any]) -> dict[str, Any]:
-        assert message["type"] == "config_entries/disable"
-        observe_mutation()
-        entry["disabled_by"] = message["disabled_by"]
-        return {"success": True, "result": {"require_restart": False}}
+async def _flow_helper(
+    hass: HomeAssistant, domain: str, user_input: dict[str, Any], menu: str = ""
+) -> ConfigEntry:
+    """A flow helper created through Core's own config flow."""
+    flow = await hass.config_entries.flow.async_init(domain, context={"source": "user"})
+    if menu:
+        flow = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], {"next_step_id": menu}
+        )
+    flow = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input)
+    assert flow["type"] == FlowResultType.CREATE_ENTRY, flow
+    await hass.async_block_till_done()
+    entry: ConfigEntry = flow["result"]
+    return entry
 
-    client.start_options_flow = AsyncMock(side_effect=options_flow)
-    client.submit_options_flow_step = AsyncMock(side_effect=submit_options)
-    client.delete_config_entry = AsyncMock(side_effect=delete_entry)
-    client.send_websocket_message = AsyncMock(side_effect=set_enabled)
-    monkeypatch.setattr(bm, "_ws_send", snapshot_read)
-    # No component config-entry read: integration snapshots fall back to Core's row.
-    monkeypatch.setattr(
-        component_config_entries, "fetch_config_entries", AsyncMock(return_value=None)
+
+async def _template(hass: HomeAssistant, template_type: str = "sensor") -> ConfigEntry:
+    return await _flow_helper(
+        hass, "template", {"name": "Example", "state": "{{ 12 }}"}, template_type
     )
-    monkeypatch.setattr(
-        component_api, "get_component_caps", AsyncMock(return_value=None)
+
+
+async def _min_max(hass: HomeAssistant) -> ConfigEntry:
+    hass.states.async_set("sensor.a", "1")
+    hass.states.async_set("sensor.b", "2")
+    return await _flow_helper(
+        hass,
+        "min_max",
+        {"name": "Lowest", "entity_ids": ["sensor.a", "sensor.b"], "type": "min"},
     )
-    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: settings)
-    return SimpleNamespace(
-        entry=entry,
-        entity=entity,
-        options=options,
-        manager=manager,
-        client=client,
-        tools=IntegrationTools(client),
-        mutations=mutations,
+
+
+def _entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str:
+    (row,) = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    return row.entity_id
+
+
+async def _first_mutation(world: World) -> tuple[list[dict[str, Any]], bool]:
+    (mutation, *_) = world.mutations
+    return mutation.snapshots, await mutation.locked
+
+
+class _PlainOptions(OptionsFlow):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=probatio.Schema({probatio.Required("host"): str}),
+        )
+
+
+class _PlainFlow(ConfigFlow):
+    VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return _PlainOptions()
+
+
+@pytest.fixture
+def plain_entry(hass: HomeAssistant) -> Iterator[MockConfigEntry]:
+    """An entry of an integration that is not a helper, with an options flow."""
+    mock_integration(hass, MockModule(_PLAIN))
+    mock_platform(hass, f"{_PLAIN}.config_flow")
+    entry = MockConfigEntry(
+        domain=_PLAIN, title="Hub", data={"host": "10.0.0.1"}, options={"host": "a"}
+    )
+    entry.add_to_hass(hass)
+    with mock_config_flow(_PLAIN, _PlainFlow):
+        yield entry
+
+
+async def _mutate(world: World, entry_id: str, operation: str) -> dict[str, Any]:
+    """Edit the entry's options, or delete it, through the generic tools."""
+    world.watching = True
+    if operation == "options":
+        return await world.tools.ha_set_integration(
+            entry_id=entry_id, config={"state": "{{ 99 }}"}
+        )
+    return await world.tools.ha_remove_helpers_integrations(
+        target=entry_id, confirm=True
     )
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])
 @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
 async def test_generic_template_mutation_captures_options_before_write(
-    entry_backup: SimpleNamespace, operation: str, template_type: str
+    world: World, operation: str, template_type: str
 ) -> None:
-    entry_backup.options["template_type"] = template_type
-    entry_backup.entity["entity_id"] = f"{template_type}.example"
-    original = deepcopy(entry_backup.options)
-    if operation == "options":
-        result = await entry_backup.tools.ha_set_integration(
-            entry_id="template-entry", config={"state": "{{ 99 }}"}
-        )
-        tool_name = "ha_set_integration"
-    else:
-        result = await entry_backup.tools.ha_remove_helpers_integrations(
-            target="template-entry", confirm=True
-        )
-        tool_name = "ha_remove_helpers_integrations"
+    entry = await _template(world.hass, template_type)
+    entity_id = _entity_id(world.hass, entry)
+    original = dict(entry.options)
+
+    result = await _mutate(world, entry.entry_id, operation)
 
     assert result["success"] is True
-    assert len(entry_backup.mutations) == 1
-    mutation = entry_backup.mutations[0]
-    assert mutation["locked"] is True
-    assert len(mutation["snapshots"]) == 1
-    snapshot = mutation["snapshots"][0]
+    snapshots, locked = await _first_mutation(world)
+    assert locked is True
+    (snapshot,) = snapshots
     assert snapshot["domain"] == "helper_template"
-    assert snapshot["entity_id"] == "template-entry"
-    assert snapshot["tool"] == tool_name
-    assert snapshot["config"] == {
-        "entry_id": "template-entry",
-        "options": original,
-        "entities": [entry_backup.entity],
-    }
+    assert snapshot["entity_id"] == entry.entry_id
+    assert snapshot["tool"] == (
+        "ha_set_integration"
+        if operation == "options"
+        else "ha_remove_helpers_integrations"
+    )
+    assert snapshot["config"]["entry_id"] == entry.entry_id
+    assert snapshot["config"]["options"] == original
+    assert [row["entity_id"] for row in snapshot["config"]["entities"]] == [entity_id]
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])
 async def test_generic_mutation_of_any_flow_helper_captures_its_options(
-    entry_backup: SimpleNamespace, operation: str
+    world: World, operation: str
 ) -> None:
     """The routing is by the entry's domain, not a template-only rule (#2632)."""
-    entry_backup.entry["domain"] = "utility_meter"
-    entry_backup.options.clear()
-    entry_backup.options.update(
-        {"name": "Energy", "source": "sensor.power", "cycle": "daily"}
-    )
-    original = deepcopy(entry_backup.options)
+    entry = await _min_max(world.hass)
+    original = dict(entry.options)
+    world.watching = True
     if operation == "options":
-        result = await entry_backup.tools.ha_set_integration(
-            entry_id="template-entry", config={"source": "sensor.other"}
+        result = await world.tools.ha_set_integration(
+            entry_id=entry.entry_id, config={"entity_ids": ["sensor.a"]}
         )
     else:
-        result = await entry_backup.tools.ha_remove_helpers_integrations(
-            target="template-entry", confirm=True
+        result = await world.tools.ha_remove_helpers_integrations(
+            target=entry.entry_id, confirm=True
         )
 
     assert result["success"] is True
-    (mutation,) = entry_backup.mutations
-    (snapshot,) = mutation["snapshots"]
-    assert snapshot["domain"] == "helper_utility_meter"
+    snapshots, locked = await _first_mutation(world)
+    assert locked is True
+    (snapshot,) = snapshots
+    assert snapshot["domain"] == "helper_min_max"
     assert snapshot["config"]["options"] == original
 
 
 async def test_explicit_flow_entry_id_is_rejected_without_capture(
-    entry_backup: SimpleNamespace,
+    world: World,
 ) -> None:
-    with pytest.raises(ToolError, match="ENTITY_NOT_FOUND"):
-        await entry_backup.tools.ha_remove_helpers_integrations(
-            target="template-entry", helper_type="template", confirm=True, wait=False
+    entry = await _template(world.hass)
+    world.watching = True
+
+    with (
+        patch.object(
+            world.client, "delete_config_entry", wraps=world.client.delete_config_entry
+        ) as delete,
+        pytest.raises(ToolError, match="ENTITY_NOT_FOUND"),
+    ):
+        await world.tools.ha_remove_helpers_integrations(
+            target=entry.entry_id, helper_type="template", confirm=True, wait=False
         )
 
-    entry_backup.client.delete_config_entry.assert_not_awaited()
-    assert entry_backup.mutations == []
-    assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
+    delete.assert_not_awaited()
+    assert world.hass.config_entries.async_get_entry(entry.entry_id) is not None
+    assert world.mutations == []
+    assert world.snapshots() == []
 
 
 async def test_explicit_template_entity_id_captures_once_after_resolution(
-    entry_backup: SimpleNamespace,
+    world: World,
 ) -> None:
-    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
-        if message["type"] == "config/entity_registry/get":
-            assert message["entity_id"] == "sensor.example"
-            return {
-                "success": True,
-                "result": {"platform": "template", "config_entry_id": "template-entry"},
-            }
-        assert message["type"] == "config/entity_registry/list"
-        return {"success": True, "result": []}
+    entry = await _template(world.hass)
+    original = dict(entry.options)
+    world.watching = True
 
-    entry_backup.client.send_websocket_message.side_effect = registry_read
-    result = await entry_backup.tools.ha_remove_helpers_integrations(
-        target="sensor.example", helper_type="template", confirm=True, wait=False
-    )
+    with patch.object(
+        world.client, "delete_config_entry", wraps=world.client.delete_config_entry
+    ) as delete:
+        result = await world.tools.ha_remove_helpers_integrations(
+            target=_entity_id(world.hass, entry),
+            helper_type="template",
+            confirm=True,
+            wait=False,
+        )
 
     assert result["success"] is True
-    entry_backup.client.delete_config_entry.assert_awaited_once_with("template-entry")
-    assert len(entry_backup.mutations) == 1
-    mutation = entry_backup.mutations[0]
-    assert mutation["locked"] is True
-    assert len(mutation["snapshots"]) == 1
-    snapshot = mutation["snapshots"][0]
+    delete.assert_awaited_once_with(entry.entry_id)
+    snapshots, locked = await _first_mutation(world)
+    assert locked is True
+    (snapshot,) = snapshots
     assert snapshot["domain"] == "helper_template"
-    assert snapshot["entity_id"] == "template-entry"
-    assert snapshot["config"]["options"] == entry_backup.options
+    assert snapshot["entity_id"] == entry.entry_id
+    assert snapshot["config"]["options"] == original
+    assert len(world.snapshots()) == 1
 
 
 @pytest.mark.parametrize("enabled", [False, True])
 async def test_template_enable_disable_keeps_integration_backup(
-    entry_backup: SimpleNamespace, enabled: bool
+    world: World, enabled: bool
 ) -> None:
-    entry_backup.entry["disabled_by"] = "user" if enabled else None
-    original = deepcopy(entry_backup.entry)
+    """Enabling or disabling keeps the entry's own row, its disabled flag
+    included, rather than the helper's options."""
+    entry = await _template(world.hass)
+    if enabled:
+        await world.hass.config_entries.async_set_disabled_by(
+            entry.entry_id, ConfigEntryDisabler.USER
+        )
+        await world.hass.async_block_till_done()
+    original = {"disabled_by": entry.disabled_by, "options": dict(entry.options)}
+    world.watching = True
 
-    result = await entry_backup.tools.ha_set_integration(
-        entry_id="template-entry", enabled=enabled
-    )
+    with patch.object(
+        world.client, "get_config_entry", wraps=world.client.get_config_entry
+    ) as get_entry:
+        result = await world.tools.ha_set_integration(
+            entry_id=entry.entry_id, enabled=enabled
+        )
 
     assert result["success"] is True
-    assert entry_backup.entry["disabled_by"] == (None if enabled else "user")
-    mutation = entry_backup.mutations[0]
-    assert mutation["locked"] is True
-    assert len(mutation["snapshots"]) == 1
-    snapshot = mutation["snapshots"][0]
+    assert entry.disabled_by == (None if enabled else ConfigEntryDisabler.USER)
+    snapshots, locked = await _first_mutation(world)
+    assert locked is True
+    (snapshot,) = snapshots
     assert snapshot["domain"] == "integration"
-    assert snapshot["config"] == {
-        **original,
-        "options_unavailable": "component_unavailable",
-    }
+    assert snapshot["config"]["entry_id"] == entry.entry_id
+    assert snapshot["config"]["domain"] == "template"
+    assert {key: snapshot["config"][key] for key in original} == original
     # Only the own-entry guard reads the entry; the backup keeps the whole
     # integration fragment without resolving a helper domain.
-    entry_backup.client.get_config_entry.assert_awaited_once_with("template-entry")
+    get_entry.assert_awaited_once_with(entry.entry_id)
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])
 async def test_other_integration_mutations_keep_existing_backup(
-    entry_backup: SimpleNamespace, operation: str
+    world: World, plain_entry: MockConfigEntry, operation: str
 ) -> None:
-    entry_backup.entry["domain"] = "workday"
-    original = deepcopy(entry_backup.entry)
-
+    original = dict(plain_entry.options)
+    world.watching = True
     if operation == "options":
-        result = await entry_backup.tools.ha_set_integration(
-            entry_id="template-entry", config={"state": "{{ 99 }}"}
+        result = await world.tools.ha_set_integration(
+            entry_id=plain_entry.entry_id, config={"host": "b"}
         )
     else:
-        result = await entry_backup.tools.ha_remove_helpers_integrations(
-            target="template-entry", confirm=True
+        result = await world.tools.ha_remove_helpers_integrations(
+            target=plain_entry.entry_id, confirm=True
         )
 
     assert result["success"] is True
-    mutation = entry_backup.mutations[0]
-    assert mutation["locked"] is True
-    assert len(mutation["snapshots"]) == 1
-    snapshot = mutation["snapshots"][0]
+    snapshots, locked = await _first_mutation(world)
+    assert locked is True
+    (snapshot,) = snapshots
     assert snapshot["domain"] == "integration"
-    assert snapshot["config"] == {
-        **original,
-        "options_unavailable": "component_unavailable",
-    }
+    assert snapshot["config"]["entry_id"] == plain_entry.entry_id
+    assert snapshot["config"]["domain"] == _PLAIN
+    assert snapshot["config"]["options"] == original
 
 
 @pytest.mark.parametrize("operation", ["options", "delete"])
 @pytest.mark.parametrize("capture_state", ["disabled", "lookup_failed"])
 async def test_generic_template_mutation_preserves_best_effort_capture_policy(
-    entry_backup: SimpleNamespace, operation: str, capture_state: str
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    capture_state: str,
 ) -> None:
+    entry = await _template(world.hass)
     if capture_state == "disabled":
-        entry_backup.manager._settings.enable_auto_backup = False
+        monkeypatch.setattr(get_global_settings(), "enable_auto_backup", False)
     else:
-        entry_backup.client.get_config_entry.side_effect = [
-            bm.HomeAssistantError("entry lookup temporarily unavailable"),
-            deepcopy(entry_backup.entry),
-        ]
+        # Core's list of helper flows, which names the snapshot's domain,
+        # gets no answer.
+        monkeypatch.setattr(
+            config_entry_backup,
+            "helper_flow_types",
+            AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
+        )
 
-    if operation == "options":
-        result = await entry_backup.tools.ha_set_integration(
-            entry_id="template-entry", config={"state": "{{ 99 }}"}
-        )
-    else:
-        result = await entry_backup.tools.ha_remove_helpers_integrations(
-            target="template-entry", confirm=True
-        )
+    with patch.object(
+        world.client, "get_config_entry", wraps=world.client.get_config_entry
+    ) as get_entry:
+        result = await _mutate(world, entry.entry_id, operation)
 
     assert result["success"] is True
-    assert entry_backup.mutations == [{"snapshots": [], "locked": True}]
+    snapshots, locked = await _first_mutation(world)
+    assert (snapshots, locked) == ([], True)
+    assert world.snapshots() == []
     # The mutation itself reads the entry once (the options walker, or the
     # delete's own-entry guard), independently of backup.
-    assert entry_backup.client.get_config_entry.await_count == (
-        1 + int(capture_state == "lookup_failed")
-    )
+    assert get_entry.await_count == 1 + int(capture_state == "lookup_failed")
 
 
 @pytest.mark.parametrize("confirm", [False, True])
 async def test_flow_helper_removal_captures_once_and_only_when_confirmed(
-    entry_backup: SimpleNamespace, confirm: bool
+    world: World, confirm: bool
 ) -> None:
     """Every flow helper, not only template, is captured by the inner backup."""
-    entry_backup.entry["domain"] = "utility_meter"
-
-    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
-        if message["type"] == "config/entity_registry/get":
-            return {
-                "success": True,
-                "result": {
-                    "platform": "utility_meter",
-                    "config_entry_id": "template-entry",
-                },
-            }
-        return {"success": True, "result": []}
-
-    entry_backup.client.send_websocket_message.side_effect = registry_read
-    remove = entry_backup.tools.ha_remove_helpers_integrations
+    entry = await _min_max(world.hass)
+    target = _entity_id(world.hass, entry)
+    world.watching = True
+    remove = world.tools.ha_remove_helpers_integrations
     if not confirm:
         with pytest.raises(ToolError, match="not confirmed"):
-            await remove(target="sensor.example", helper_type="utility_meter")
-        assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
+            await remove(target=target, helper_type="min_max")
+        assert world.snapshots() == []
+        assert world.hass.config_entries.async_get_entry(entry.entry_id) is not None
         return
-    result = await remove(
-        target="sensor.example", helper_type="utility_meter", confirm=True
-    )
+
+    result = await remove(target=target, helper_type="min_max", confirm=True)
+
     assert result["success"] is True
-    snapshots = entry_backup.mutations[0]["snapshots"]
-    assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
+    assert [s["domain"] for s in world.snapshots()] == ["helper_min_max"]
 
 
 async def test_entity_only_removal_captures_only_the_resolved_helper(
-    entry_backup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    world: World,
 ) -> None:
     """Without helper_type the registry names the helper; the removal captures
     that helper once, and the unresolved outer call attempts no snapshot (it
     would list every config entry looking for the entity_id)."""
-    entry_backup.entry["domain"] = "utility_meter"
-    capture = auto_backup._capture_pre_write_snapshot
-    captured_by: list[str] = []
+    entry = await _min_max(world.hass)
+    world.watching = True
 
-    async def record(func: Any, *args: Any, **kwargs: Any) -> Any:
-        captured_by.append(func.__name__)
-        return await capture(func, *args, **kwargs)
+    with patch.object(
+        world.manager, "maybe_snapshot", wraps=world.manager.maybe_snapshot
+    ) as capture:
+        result = await world.tools.ha_remove_helpers_integrations(
+            target=_entity_id(world.hass, entry), confirm=True
+        )
 
-    monkeypatch.setattr(auto_backup, "_capture_pre_write_snapshot", record)
-
-    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
-        if message["type"] == "config/entity_registry/get":
-            return {
-                "success": True,
-                "result": {
-                    "platform": "utility_meter",
-                    "config_entry_id": "template-entry",
-                },
-            }
-        return {"success": True, "result": []}
-
-    entry_backup.client.send_websocket_message.side_effect = registry_read
-    result = await entry_backup.tools.ha_remove_helpers_integrations(
-        target="sensor.example", confirm=True
-    )
     assert result["success"] is True
-    snapshots = entry_backup.mutations[0]["snapshots"]
-    assert [s["domain"] for s in snapshots] == ["helper_utility_meter"]
-    assert "ha_remove_helpers_integrations" not in captured_by
+    assert [c.args for c in capture.call_args_list] == [
+        ("helper_min_max", entry.entry_id)
+    ]
+    assert [s["domain"] for s in world.snapshots()] == ["helper_min_max"]

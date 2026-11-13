@@ -423,27 +423,6 @@ def _validate_entity_search_params(
     return query, domain_filter, area_filter, parsed_result_fields
 
 
-def _raise_gather_exceptions(
-    state_result: Any, registry_result: Any, device_result: Any
-) -> None:
-    """Re-raise fatal exceptions captured by an ``asyncio.gather(..., return_exceptions=True)``.
-
-    ``state_result`` failure is always fatal. Auth/connection errors must
-    propagate so the agent sees "your token is invalid" instead of "zero
-    entities matched". ``CancelledError`` on the registry/device results
-    comes through gather as a captured exception even when
-    ``return_exceptions=True``; it has to propagate or the canceller waits
-    forever. Other registry/device failures are tolerated by the caller (we
-    just lose the hidden filter).
-    """
-    if isinstance(state_result, BaseException):
-        raise state_result
-    if isinstance(registry_result, asyncio.CancelledError):
-        raise registry_result
-    if isinstance(device_result, asyncio.CancelledError):
-        raise device_result
-
-
 def _match_exact_search_entity(
     entity: dict[str, Any],
     query_lower: str,
@@ -563,7 +542,11 @@ async def _exact_match_search(
         else slots.get("registry")
     )
     device_result: Any = slots.get("device")
-    _raise_gather_exceptions(state_result, registry_result, device_result)
+    # States failure is fatal: an auth or connection error must reach the agent
+    # instead of reading as zero matches; registry/device failures only lose
+    # the hidden filter.
+    if isinstance(state_result, BaseException):
+        raise state_result
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
     # Opt-in visibility filter: a hard exclude (unlike the hidden_by score
@@ -669,10 +652,6 @@ class EntityEnrichmentMixin(SearchToolsBase):
                 )
             )
         fetched = await asyncio.gather(*coros, return_exceptions=True)
-        for item in fetched:
-            # A cancelled read must propagate, not degrade to an empty field.
-            if isinstance(item, asyncio.CancelledError):
-                raise item
         failed_reads: list[str] = []
         if prefetched_entries is None:
             if _ws_read_failed(fetched[0]):

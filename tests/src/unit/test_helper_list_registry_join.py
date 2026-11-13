@@ -1,336 +1,161 @@
-"""
-Unit tests for ha_config_list_helpers entity-registry enrichment (issue #1794).
+"""``ha_config_list_helpers`` shows a renamed helper's current entity (#1794).
 
-``ha_config_list_helpers`` builds its records from the ``{helper_type}/list``
-storage-collection WebSocket response, which carries the immutable ``id``
-(unique_id) and creation-time ``name``. After a UI rename those go stale — the
-current ``entity_id`` and display name live in the entity registry. These tests
-pin that the tool joins the entity registry so a renamed helper surfaces its
-current ``entity_id`` and ``name`` (keeping the storage ``id`` and the original
-name for reference), and that the join degrades gracefully.
+Without the component the tool builds its records from Core's
+``{helper_type}/list``, which carries the immutable storage ``id`` and the
+creation-time ``name``. After a UI rename the current ``entity_id`` and display
+name live in the entity registry, so the tool joins it: a renamed helper shows
+its current ``entity_id`` and ``name`` and keeps the storage name as
+``original_name``. The join is cosmetic, so a failed registry read degrades to
+the plain list with a warning.
+
+The tool runs on the server's own client against a real ``hass``.
 """
 
+from __future__ import annotations
+
+import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 
 @pytest.fixture
-def mock_client():
-    """Mock client for the legacy storage-list path.
-
-    #1812 added a component-backed ``helpers_list`` path ahead of the legacy
-    ``{type}/list`` body these tests target. Leaving ``base_url``/``token``
-    unset makes ``get_component_caps`` return ``None`` via its no-credentials
-    guard, so the tool falls through to the legacy body and the registry join
-    under test actually runs (rather than the component path short-circuiting
-    it). The WS handler is assembled per-test from canned responses."""
-    client = MagicMock()
-    client.base_url = None
-    client.token = None
-    return client
+def suffix() -> str:
+    """Fresh storage ids no deleted registry entry can be restored for."""
+    return uuid.uuid4().hex[:8]
 
 
-@pytest.fixture
-def register_tools(mock_client):
-    """Register helper config tools and return the captured tool callables."""
-    from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
-
-    registered_tools: dict[str, Any] = {}
-
-    def capture_add_tool(method):
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
+async def _create_booleans(
+    hass: HomeAssistant, client: HomeAssistantClient, *names: str
+) -> list[str]:
+    """Stored input_booleans; returns their storage ids."""
+    assert await async_setup_component(hass, "input_boolean", {})
+    ids = []
+    for name in names:
+        created = await client.send_websocket_message(
+            {"type": "input_boolean/create", "name": name}
         )
-        registered_tools[name] = method
-
-    mock_mcp = MagicMock()
-    mock_mcp.add_tool = capture_add_tool
-    register_config_helper_tools(mock_mcp, mock_client)
-    return registered_tools
+        assert created["success"], created
+        ids.append(created["result"]["id"])
+    await hass.async_block_till_done()
+    return ids
 
 
-def _ws_handler(list_items: list[dict], registry: list[dict] | Exception):
-    """Build a send_websocket_message side_effect for list + registry responses."""
-
-    async def handler(msg: dict) -> dict:
-        msg_type = msg.get("type", "")
-        if msg_type == "config/entity_registry/list":
-            if isinstance(registry, Exception):
-                raise registry
-            return {"success": True, "result": registry}
-        if msg_type.endswith("/list"):
-            return {"success": True, "result": list_items}
-        return {"success": True, "result": {}}
-
-    return handler
+async def _list(client: HomeAssistantClient, helper_type: str) -> dict[str, Any]:
+    result: dict[str, Any] = await HelperConfigTools(client).ha_config_list_helpers(
+        helper_type=helper_type
+    )
+    assert result["success"] is True
+    return result
 
 
-class TestListHelpersRegistryJoin:
-    async def test_renamed_helper_surfaces_current_entity_id_and_name(
-        self, register_tools, mock_client
-    ):
-        """A helper renamed in the UI (entity_id + name changed, unique_id kept)
-        must surface the current entity_id and display name, not the stale
-        storage values."""
-        list_items = [
-            {"id": "dark_enough", "name": "Dark Enough", "icon": "mdi:brightness-6"}
-        ]
-        registry = [
-            {
-                "entity_id": "input_boolean.dark_enough_mode",
-                "unique_id": "dark_enough",
-                "platform": "input_boolean",
-                "name": "Dark Enough Mode",
-                "original_name": "Dark Enough",
-            }
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, registry)
-        )
+async def test_a_renamed_helper_shows_its_current_entity_id_and_name(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    suffix: str,
+) -> None:
+    """Renamed in the UI (entity_id and name changed, storage id kept); a
+    helper never renamed keeps its name and gains its entity_id."""
+    assert await async_setup_component(hass, "config", {})
+    dark, guest = await _create_booleans(
+        hass, core_client, f"Dark {suffix}", f"Guest {suffix}"
+    )
+    entity_registry.async_update_entity(
+        f"input_boolean.{dark}",
+        new_entity_id=f"input_boolean.dark_mode_{suffix}",
+        name="Dark Mode",
+    )
+    await hass.async_block_till_done()
 
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
+    result = await _list(core_client, "input_boolean")
 
-        assert result["success"] is True
-        helper = result["helpers"][0]
-        # Storage id preserved (still the key HA's collection uses).
-        assert helper["id"] == "dark_enough"
-        # Current values surfaced from the registry.
-        assert helper["entity_id"] == "input_boolean.dark_enough_mode"
-        assert helper["name"] == "Dark Enough Mode"
-        # Original creation-time name kept, labeled.
-        assert helper["original_name"] == "Dark Enough"
+    by_id = {helper["id"]: helper for helper in result["helpers"]}
+    assert by_id[dark]["entity_id"] == f"input_boolean.dark_mode_{suffix}"
+    assert by_id[dark]["name"] == "Dark Mode"
+    assert by_id[dark]["original_name"] == f"Dark {suffix}"
+    assert by_id[guest]["entity_id"] == f"input_boolean.{guest}"
+    assert by_id[guest]["name"] == f"Guest {suffix}"
+    assert "warnings" not in result
 
-    async def test_registry_name_null_falls_back_to_original_name(
-        self, register_tools, mock_client
-    ):
-        """When the registry entry has no custom name (name is null), the current
-        name falls back to original_name and entity_id is still surfaced."""
-        list_items = [{"id": "guest_mode", "name": "Guest Mode"}]
-        registry = [
-            {
-                "entity_id": "input_boolean.guest_mode",
-                "unique_id": "guest_mode",
-                "platform": "input_boolean",
-                "name": None,
-                "original_name": "Guest Mode",
-            }
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, registry)
-        )
 
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
+async def test_an_entry_of_another_platform_with_the_same_id_is_not_joined(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    suffix: str,
+) -> None:
+    """The helper's own registry entry is gone and a sensor's entry carries
+    its storage id as unique_id: the helper keeps its storage values."""
+    assert await async_setup_component(hass, "config", {})
+    (helper_id,) = await _create_booleans(hass, core_client, f"Shared {suffix}")
+    entity_registry.async_remove(f"input_boolean.{helper_id}")
+    entity_registry.async_get_or_create(
+        "sensor", "template", helper_id, original_name="Some Sensor"
+    )
+    await hass.async_block_till_done()
 
-        helper = result["helpers"][0]
-        assert helper["entity_id"] == "input_boolean.guest_mode"
-        assert helper["name"] == "Guest Mode"
+    result = await _list(core_client, "input_boolean")
 
-    async def test_no_registry_match_keeps_storage_values(
-        self, register_tools, mock_client
-    ):
-        """A helper with no matching registry entry (e.g. a tag, which has no
-        entity) keeps its storage id/name and gains no entity_id."""
-        list_items = [{"id": "abc123", "name": "My Tag"}]
-        registry: list[dict] = []
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, registry)
-        )
+    (helper,) = result["helpers"]
+    assert helper["id"] == helper_id
+    assert helper["name"] == f"Shared {suffix}"
+    assert "entity_id" not in helper
 
-        result = await register_tools["ha_config_list_helpers"](helper_type="tag")
 
-        helper = result["helpers"][0]
-        assert helper["id"] == "abc123"
-        assert helper["name"] == "My Tag"
-        assert "entity_id" not in helper
+async def test_a_refused_registry_read_still_lists_the_helpers_with_a_warning(
+    hass: HomeAssistant, core_client: HomeAssistantClient, suffix: str
+) -> None:
+    """Without ``config`` set up Core refuses the registry list command while
+    ``input_boolean/list`` still answers."""
+    (helper_id,) = await _create_booleans(hass, core_client, f"Dark {suffix}")
 
-    async def test_platform_mismatch_is_not_joined(self, register_tools, mock_client):
-        """A registry entry sharing the unique_id but on a different platform must
-        not be joined (guards against cross-platform unique_id collision)."""
-        list_items = [{"id": "shared", "name": "Storage Name"}]
-        registry = [
-            {
-                "entity_id": "sensor.shared_thing",
-                "unique_id": "shared",
-                "platform": "sensor",
-                "name": "Some Sensor",
-                "original_name": "Some Sensor",
-            }
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, registry)
-        )
+    result = await _list(core_client, "input_boolean")
 
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
+    assert result["count"] == 1
+    (helper,) = result["helpers"]
+    assert helper["id"] == helper_id
+    assert "entity_id" not in helper
+    assert any("registry" in warning.lower() for warning in result["warnings"])
 
-        helper = result["helpers"][0]
-        assert helper["name"] == "Storage Name"
-        assert "entity_id" not in helper
 
-    async def test_registry_fetch_failure_degrades_open_with_warning(
-        self, register_tools, mock_client
-    ):
-        """If the entity_registry/list call fails, the tool still returns the
-        helper list (as before the join) and flags the degradation."""
-        list_items = [{"id": "dark_enough", "name": "Dark Enough"}]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, TimeoutError("ws boom"))
-        )
+async def test_stored_and_yaml_persons_are_listed_and_joined(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    suffix: str,
+) -> None:
+    """Core's ``person/list`` splits stored and YAML persons; both are listed,
+    counted and joined to the registry."""
+    assert await async_setup_component(hass, "config", {})
+    yaml_id = f"guest_{suffix}"
+    assert await async_setup_component(
+        hass, "person", {"person": [{"id": yaml_id, "name": "Guest"}]}
+    )
+    created = await core_client.send_websocket_message(
+        {"type": "person/create", "name": f"Mirko {suffix}"}
+    )
+    assert created["success"], created
+    stored_id = created["result"]["id"]
+    await hass.async_block_till_done()
+    stored_entity = entity_registry.async_get_entity_id("person", "person", stored_id)
+    assert stored_entity is not None
+    entity_registry.async_update_entity(stored_entity, name="Mirko Renamed")
+    await hass.async_block_till_done()
 
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
+    result = await _list(core_client, "person")
 
-        assert result["success"] is True
-        assert result["count"] == 1
-        helper = result["helpers"][0]
-        assert helper["id"] == "dark_enough"
-        # No enrichment, but the list still works.
-        assert "entity_id" not in helper
-        assert any("registry" in w.lower() for w in result.get("warnings", []))
-
-    async def test_success_without_result_key_degrades_open_with_warning(
-        self, register_tools, mock_client
-    ):
-        """A registry response that reports success but omits ``result`` is a
-        malformed read, not an empty registry: the tool must flag it rather than
-        silently returning un-enriched records."""
-
-        async def handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/list":
-                return {"success": True}  # no "result" key
-            if msg_type.endswith("/list"):
-                return {"success": True, "result": [{"id": "x", "name": "X"}]}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
-
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
-
-        helper = result["helpers"][0]
-        assert helper == {"id": "x", "name": "X"}
-        assert "entity_id" not in helper
-        assert any("registry" in w.lower() for w in result.get("warnings", []))
-
-    async def test_registry_unsuccessful_response_degrades_open_with_warning(
-        self, register_tools, mock_client
-    ):
-        """When HA answers the registry read with an error, the client returns
-        ``{"success": False, ...}`` rather than throwing. That
-        unsuccessful response is a malformed read: the tool must flag it and
-        return the un-enriched list (the branch production actually takes)."""
-
-        async def handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/list":
-                return {"success": False, "error": "registry unavailable"}
-            if msg_type.endswith("/list"):
-                return {"success": True, "result": [{"id": "x", "name": "X"}]}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
-
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
-
-        helper = result["helpers"][0]
-        assert helper == {"id": "x", "name": "X"}
-        assert "entity_id" not in helper
-        assert any("registry" in w.lower() for w in result.get("warnings", []))
-
-    async def test_registry_unexpected_shape_degrades_open_without_raising(
-        self, register_tools, mock_client
-    ):
-        """An unexpected record shape (here a non-hashable ``id`` that breaks the
-        registry lookup) must degrade open. Enrichment is cosmetic, so a raise
-        from the join must never turn a list call into a failure — the broad
-        guard converts it to the un-enriched list plus a warning."""
-        list_items = [{"id": ["not", "hashable"], "name": "X"}]
-        registry = [
-            {
-                "entity_id": "input_boolean.x",
-                "unique_id": "x",
-                "platform": "input_boolean",
-                "name": "X",
-            }
-        ]
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(list_items, registry)
-        )
-
-        result = await register_tools["ha_config_list_helpers"](
-            helper_type="input_boolean"
-        )
-
-        assert result["success"] is True
-        assert any("registry" in w.lower() for w in result.get("warnings", []))
-
-    async def test_person_dict_shaped_list_is_flattened_and_enriched(
-        self, register_tools, mock_client
-    ):
-        """person/list returns {"storage": [...], "config": [...]} rather than a
-        flat list; the tool must flatten it (so count and shape are right) and
-        still enrich each record from the entity registry."""
-
-        async def handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "person.mirko",
-                            "unique_id": "mirko",
-                            "platform": "person",
-                            "name": "Mirko Renamed",
-                            "original_name": "Mirko",
-                        },
-                        {
-                            "entity_id": "person.guest",
-                            "unique_id": "guest",
-                            "platform": "person",
-                            "name": None,
-                            "original_name": "Guest",
-                        },
-                    ],
-                }
-            if msg_type == "person/list":
-                # Both storage- and config-entry-backed persons must be merged.
-                return {
-                    "success": True,
-                    "result": {
-                        "storage": [{"id": "mirko", "name": "Mirko"}],
-                        "config": [{"id": "guest", "name": "Guest"}],
-                    },
-                }
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
-
-        result = await register_tools["ha_config_list_helpers"](helper_type="person")
-
-        # Flattened across storage + config: count is the person count, not
-        # len({"storage", "config"}) == 2 by coincidence here — assert the ids.
-        assert result["count"] == 2
-        assert isinstance(result["helpers"], list)
-        by_id = {h["id"]: h for h in result["helpers"]}
-        assert by_id.keys() == {"mirko", "guest"}
-        assert by_id["mirko"]["entity_id"] == "person.mirko"
-        assert by_id["mirko"]["name"] == "Mirko Renamed"
-        assert by_id["mirko"]["original_name"] == "Mirko"
-        # config-entry person is enriched too (registry name null -> original_name).
-        assert by_id["guest"]["entity_id"] == "person.guest"
-        assert by_id["guest"]["name"] == "Guest"
+    assert result["count"] == 2
+    by_id = {helper["id"]: helper for helper in result["helpers"]}
+    assert by_id.keys() == {stored_id, yaml_id}
+    assert by_id[stored_id]["entity_id"] == stored_entity
+    assert by_id[stored_id]["name"] == "Mirko Renamed"
+    assert by_id[stored_id]["original_name"] == f"Mirko {suffix}"
+    assert by_id[yaml_id]["entity_id"] == "person.guest"
+    assert by_id[yaml_id]["name"] == "Guest"

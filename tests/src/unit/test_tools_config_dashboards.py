@@ -1,444 +1,449 @@
-"""Unit tests for the dashboard-resolver helpers in tools_config_dashboards and
-dashboard_read_errors.
+"""Dashboard identifier resolution and deletion, against Core's own ``lovelace``.
 
-The helpers under test (`is_unknown_dashboard`, `_resolve_dashboard`,
-`_lazy_resolve_and_retry`) hold the substring-trigger contract and the
-two-call-site resolver glue that the rest of the dual-accept identifier
-design rests on. End-to-end tests would only catch a regression here on
-the right HA-version axis; these unit tests pin the contract independent
-of HA wording stability.
+The dual-accept identifier design rests on three pieces: the unknown-identifier
+trigger (``is_unknown_dashboard``), the registry lookup that maps an internal
+id or a url_path to both forms, and the lazy resolve + single retry of a
+``lovelace/config`` read. They are reached here through the public tools
+(``ha_config_get_dashboard``, ``ha_config_delete_dashboard``) on the server's
+own client connected to a real ``hass``, so every registry row, config and
+error reply is Core's.
+
+Core stores a dashboard under an id slugified from its url_path
+(``resolved-path`` becomes ``resolved_path``), so the two forms differ.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import storage
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.dashboard_read_errors import (
-    UNKNOWN_CONFIG_PREFIX,
-    is_unknown_dashboard,
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
 )
-from ha_mcp.tools.tools_config_dashboards import (
-    DashboardConfigTools,
-    _lazy_resolve_and_retry,
-    _resolve_dashboard,
-)
+from ha_mcp.tools import tools_config_dashboards
+from ha_mcp.tools.dashboard_read_errors import is_unknown_dashboard
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-# -----------------------------------------------------------------------------
-# Fixtures / helpers
-# -----------------------------------------------------------------------------
+from ._addon_tool_helpers import _parse_tool_error
+
+_LOGGER_NAME = "ha_mcp.tools.tools_config_dashboards"
+_STORED_CONFIG = {"views": [{"title": "Stored", "cards": []}]}
+
+
+def _sent_types(spy: MagicMock) -> list[str]:
+    """The Core command types the spied client sent, in order."""
+    return [call.args[0]["type"] for call in spy.call_args_list]
+
+
+async def _create_dashboard(client: HomeAssistantClient, url_path: str) -> None:
+    created = await client.send_websocket_message(
+        {"type": "lovelace/dashboards/create", "url_path": url_path, "title": "T"}
+    )
+    assert created["success"], created
+
+
+async def _listed_url_paths(client: HomeAssistantClient) -> list[str]:
+    listed = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+    return [row["url_path"] for row in listed["result"]]
 
 
 @pytest.fixture
-def fake_client():
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock()
-    return client
+async def lovelace(hass: HomeAssistant) -> None:
+    assert await async_setup_component(hass, "lovelace", {})
 
 
-def _trigger_response(missing_id: str = "anything") -> dict:
-    """Build the WS error envelope HA emits when ``lovelace/config`` is
-    called with an identifier it does not recognise. Includes the literal
-    trigger substring."""
-    return {
-        "success": False,
-        "error": {
-            "message": f"{UNKNOWN_CONFIG_PREFIX}: {missing_id}",
-            "code": "config_not_found",
-        },
-    }
-
-
-def _success_response(payload: dict | None = None) -> dict:
-    return {"success": True, "result": payload or {"views": []}}
+@pytest.fixture
+async def internal_id_dashboard(
+    hass: HomeAssistant, lovelace: None, core_client: HomeAssistantClient
+) -> None:
+    """``resolved-path``, which Core stores under the id ``resolved_path``."""
+    await _create_dashboard(core_client, "resolved-path")
+    saved = await core_client.send_websocket_message(
+        {
+            "type": "lovelace/config/save",
+            "url_path": "resolved-path",
+            "config": _STORED_CONFIG,
+        }
+    )
+    assert saved["success"], saved
 
 
 # -----------------------------------------------------------------------------
-# is_unknown_dashboard — substring contract
+# is_unknown_dashboard — Core's own messages
 # -----------------------------------------------------------------------------
 
 
 class TestIsUnknownDashboard:
-    """The substring trigger is the only signal available at the tool
-    layer. Pin the contract so an HA-side wording change is caught here
-    rather than degrading to "lazy fallback never fires" silently."""
+    """The message is the only signal that tells Core's two ``config_not_found``
+    causes apart at the tool layer. Pin it against Core's real wording so an
+    HA-side change is caught here rather than degrading to "lazy fallback
+    never fires" silently."""
 
-    def test_exact_trigger_message(self):
-        assert is_unknown_dashboard(UNKNOWN_CONFIG_PREFIX) is True
-
-    def test_trigger_with_identifier_suffix(self):
-        # The HA emit form is f"Unknown config specified: {url_path}".
-        assert is_unknown_dashboard("Unknown config specified: my_dashboard") is True
-
-    def test_trigger_embedded_in_longer_message(self):
-        assert (
-            is_unknown_dashboard("Command failed: Unknown config specified: foo")
-            is True
+    @pytest.mark.usefixtures("lovelace")
+    async def test_cores_unknown_identifier_reply_is_recognised(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        reply = await core_client.send_websocket_message(
+            {"type": "lovelace/config", "url_path": "never-created"}
         )
 
-    def test_unrelated_message_does_not_match(self):
-        assert is_unknown_dashboard("Some other error") is False
-        assert is_unknown_dashboard("") is False
+        assert reply["success"] is False
+        assert is_unknown_dashboard(str(reply["error"])) is True
 
-    def test_legitimate_empty_dashboard_message_does_not_match(self):
-        # HA emits "No config found." for genuinely empty (un-initialised)
-        # dashboards — must NOT trigger a lazy retry, otherwise the
-        # caller's empty-state path is hidden.
-        assert is_unknown_dashboard("No config found.") is False
-
-
-# -----------------------------------------------------------------------------
-# _resolve_dashboard — registry lookup
-# -----------------------------------------------------------------------------
-
-
-class TestResolveDashboard:
-    """Tests both arms of ``_resolve_dashboard``: matched and unexpected-shape."""
-
-    async def test_match_by_url_path(self, fake_client):
-        dashboards_list = [
-            {"url_path": "my-dash", "id": "my_dash"},
-            {"url_path": "other", "id": "other_id"},
-        ]
-        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
-        match, dashboards = await _resolve_dashboard(fake_client, "my-dash")
-        assert match == {"url_path": "my-dash", "id": "my_dash"}
-        assert dashboards == dashboards_list
-
-    async def test_match_by_internal_id(self, fake_client):
-        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
-        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
-        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
-        assert match == {"url_path": "my-dash", "id": "my_dash"}
-        assert dashboards == dashboards_list
-
-    async def test_response_as_bare_list(self, fake_client):
-        # Older HA versions / different response shapes return the list
-        # directly rather than wrapped in {"result": ...}.
-        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
-        fake_client.send_websocket_message.return_value = dashboards_list
-        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
-        assert match == {"url_path": "my-dash", "id": "my_dash"}
-        assert dashboards == dashboards_list
-
-    async def test_no_match_still_returns_dashboards_list(self, fake_client):
-        # When the identifier doesn't match any dashboard, ``match`` is
-        # None but ``dashboards`` still carries the fetched list — the
-        # fetch happened, only the match check failed.
-        dashboards_list = [{"url_path": "my-dash", "id": "my_dash"}]
-        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
-        match, dashboards = await _resolve_dashboard(fake_client, "nonexistent")
-        assert match is None
-        assert dashboards == dashboards_list
-
-    async def test_malformed_shape_logs_warning_and_returns_none_pair(
-        self, fake_client, caplog
-    ):
-        # Neither dict-with-result nor list — could be a future HA shape
-        # change or an error envelope. Must surface as a logger.warning,
-        # not silently degrade to "always no match". Both elements of
-        # the tuple are None so callers know the fetch failed and they
-        # can fall back to a fresh fetch instead of treating ``[]`` as
-        # an authoritative empty registry.
-        fake_client.send_websocket_message.return_value = "unexpected string"
-        with caplog.at_level(
-            logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
-        ):
-            match, dashboards = await _resolve_dashboard(fake_client, "anything")
-        assert match is None
-        assert dashboards is None
-        assert any("unexpected shape" in rec.message for rec in caplog.records), (
-            f"expected an 'unexpected shape' warning; got {caplog.records}"
+    @pytest.mark.usefixtures("lovelace")
+    async def test_cores_empty_dashboard_reply_is_not_an_unknown_identifier(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Core's "No config found." for a dashboard with nothing saved must NOT
+        trigger a lazy retry, otherwise the caller's empty-state path is hidden."""
+        await _create_dashboard(core_client, "empty-dash")
+        reply = await core_client.send_websocket_message(
+            {"type": "lovelace/config", "url_path": "empty-dash"}
         )
 
-    async def test_missing_url_path_in_match_returns_none_match(self, fake_client):
-        # Malformed registry entry where the matching dashboard is
-        # missing one of the required fields. Match is None (skipped
-        # rather than forwarding empty strings to delete_dashboard) but
-        # the list itself is still returned.
-        dashboards_list = [{"id": "my_dash"}]  # url_path missing entirely
-        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
-        match, dashboards = await _resolve_dashboard(fake_client, "my_dash")
-        assert match is None
-        assert dashboards == dashboards_list
-
-    async def test_empty_id_in_match_returns_none_match(self, fake_client):
-        dashboards_list = [{"url_path": "my-dash", "id": ""}]
-        fake_client.send_websocket_message.return_value = {"result": dashboards_list}
-        match, dashboards = await _resolve_dashboard(fake_client, "my-dash")
-        assert match is None
-        assert dashboards == dashboards_list
+        assert reply["success"] is False
+        assert is_unknown_dashboard(str(reply["error"])) is False
 
 
 # -----------------------------------------------------------------------------
-# _lazy_resolve_and_retry — composition + no-op axes
+# Lazy resolve + single retry of the get-mode read
 # -----------------------------------------------------------------------------
 
 
 class TestLazyResolveAndRetry:
-    async def test_success_response_short_circuits(self, fake_client):
-        ws_data = {"type": "lovelace/config", "url_path": "anything"}
-        response = _success_response()
-        new_url, new_response = await _lazy_resolve_and_retry(
-            fake_client, "anything", ws_data, response
-        )
-        assert (new_url, new_response) == ("anything", response)
-        # No WS call — short-circuit must not pay the round-trip.
-        fake_client.send_websocket_message.assert_not_called()
-
-    async def test_empty_url_path_short_circuits(self, fake_client):
-        # Default-dashboard path: caller passes None for url_path.
-        ws_data = {"type": "lovelace/config"}
-        response = _trigger_response()
-        new_url, new_response = await _lazy_resolve_and_retry(
-            fake_client, None, ws_data, response
-        )
-        assert new_url is None
-        assert new_response is response
-        fake_client.send_websocket_message.assert_not_called()
-
-    async def test_non_trigger_failure_short_circuits(self, fake_client):
-        # Failure response, but with a different error message. Must NOT
-        # invoke the resolver — that would surface a synthetic resolver
-        # error instead of the real HA error to the caller.
-        ws_data = {"type": "lovelace/config", "url_path": "x"}
-        response = {
-            "success": False,
-            "error": {"message": "permission denied"},
-        }
-        new_url, new_response = await _lazy_resolve_and_retry(
-            fake_client, "x", ws_data, response
-        )
-        assert (new_url, new_response) == ("x", response)
-        fake_client.send_websocket_message.assert_not_called()
-
-    async def test_resolver_no_match_returns_original_response(self, fake_client):
-        # Trigger fired, resolver runs, but the registry has no match —
-        # original failure response wins so the caller's existing error
-        # path runs against the real HA error.
-        fake_client.send_websocket_message.side_effect = [
-            {"result": []},  # resolver: empty list, no match
-        ]
-        ws_data = {"type": "lovelace/config", "url_path": "ghost"}
-        original = _trigger_response("ghost")
-        new_url, new_response = await _lazy_resolve_and_retry(
-            fake_client, "ghost", ws_data, original
-        )
-        assert new_url == "ghost"
-        assert new_response is original
-
-    async def test_resolver_exception_falls_through(self, fake_client, caplog):
-        # Resolver raises (timeout, network blip). Must NOT escape; must
-        # log at WARNING and fall through to the original response so
-        # the caller's existing error path surfaces the real HA error.
-        fake_client.send_websocket_message.side_effect = ConnectionError("ws gone")
-        ws_data = {"type": "lovelace/config", "url_path": "x"}
-        original = _trigger_response("x")
-        with caplog.at_level(
-            logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
-        ):
-            new_url, new_response = await _lazy_resolve_and_retry(
-                fake_client, "x", ws_data, original
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    async def test_known_url_path_reads_without_a_registry_lookup(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as spy:
+            result = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                url_path="resolved-path"
             )
-        assert (new_url, new_response) == ("x", original)
+
+        assert result["config"] == _STORED_CONFIG
+        assert "resolved_from" not in result
+        assert "lovelace/dashboards/list" not in _sent_types(spy)
+
+    @pytest.mark.usefixtures("lovelace")
+    async def test_empty_dashboard_reply_does_not_resolve(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A failure other than the unknown-identifier one must NOT invoke the
+        resolver: the caller sees Core's own answer."""
+        await _create_dashboard(core_client, "empty-dash")
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as spy:
+            result = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                url_path="empty-dash"
+            )
+
+        assert result["stored_config"] is False
+        assert "lovelace/dashboards/list" not in _sent_types(spy)
+
+    @pytest.mark.usefixtures("lovelace")
+    async def test_unmatched_identifier_reports_cores_error(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """The resolver finds nothing: Core's original reply wins, as a 404."""
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                wraps=core_client.send_websocket_message,
+            ) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                url_path="ghost-dash"
+            )
+
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert is_unknown_dashboard(error["error"]["message"])
+        assert _sent_types(spy).count("lovelace/dashboards/list") == 1
+        assert _sent_types(spy).count("lovelace/config") == 1
+
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    async def test_resolver_without_answer_falls_through_to_cores_error(
+        self,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The registry read gets no answer: it must NOT escape; it is logged
+        and the caller's error path surfaces Core's real reply."""
+        monkeypatch.setattr(
+            tools_config_dashboards,
+            "fetch_dashboards_list",
+            AsyncMock(side_effect=HomeAssistantConnectionError("ws gone")),
+        )
+
+        with (
+            caplog.at_level(logging.WARNING, logger=_LOGGER_NAME),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                url_path="resolved_path"
+            )
+
+        error = _parse_tool_error(exc_info)
+        assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert is_unknown_dashboard(error["error"]["message"])
         assert any("Lazy resolver failed" in rec.message for rec in caplog.records)
 
-    async def test_happy_path_resolves_and_retries(self, fake_client):
-        # Trigger fires, resolver finds the canonical url_path, retry
-        # succeeds with new url_path on the WS data dict.
-        fake_client.send_websocket_message.side_effect = [
-            {  # resolver
-                "result": [{"url_path": "my-dash", "id": "my_dash"}]
-            },
-            _success_response({"views": [{"cards": []}]}),  # retry
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    async def test_internal_id_resolves_and_retries_with_the_url_path(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as spy:
+            result = await DashboardConfigTools(core_client).ha_config_get_dashboard(
+                url_path="resolved_path"
+            )
+
+        assert result["config"] == _STORED_CONFIG
+        assert result["url_path"] == "resolved-path"
+        assert result["resolved_from"] == "resolved_path"
+        reads = [
+            call.args[0]
+            for call in spy.call_args_list
+            if call.args[0]["type"] == "lovelace/config"
         ]
-        ws_data = {"type": "lovelace/config", "url_path": "my_dash", "force": True}
-        original = _trigger_response("my_dash")
-        new_url, new_response = await _lazy_resolve_and_retry(
-            fake_client, "my_dash", ws_data, original
-        )
-        assert new_url == "my-dash"
-        assert new_response["success"] is True
-
-        # Caller's ws_data dict must NOT be mutated — the retry uses a
-        # shallow copy. Verify both the contract and that the retry call
-        # carried the canonical url_path.
-        assert ws_data["url_path"] == "my_dash", (
-            "_lazy_resolve_and_retry mutated the caller's ws_data dict"
-        )
-        retry_call = fake_client.send_websocket_message.call_args_list[1]
-        assert retry_call.args[0]["url_path"] == "my-dash"
-        assert retry_call.args[0]["type"] == "lovelace/config"
+        # The first read keeps the caller's identifier (its message is not
+        # rewritten in place); the single retry carries the canonical url_path.
+        assert [read["url_path"] for read in reads] == [
+            "resolved_path",
+            "resolved-path",
+        ]
 
 
-class TestDeleteDashboardNotFoundShape:
+# -----------------------------------------------------------------------------
+# ha_config_delete_dashboard — registry lookup and result shapes (#1300)
+# -----------------------------------------------------------------------------
+
+
+class TestDeleteDashboard:
     """Pin the 404 and idempotent-success shapes on ``ha_config_delete_dashboard``
     (issue #1300): ``RESOURCE_NOT_FOUND`` with top-level ``action`` + ``url_path``,
     no ``resource_type`` / ``identifier``, and the success path's matching key
-    set on the WS-not-found idempotent branch.
+    set on the already-deleted idempotent branch.
     """
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    async def test_internal_id_deletes_the_dashboard(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+            url_path="resolved_path"
+        )
 
-    @pytest.fixture
-    def delete_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_delete_dashboard
+        assert result["success"] is True
+        assert "resolved-path" not in await _listed_url_paths(core_client)
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("internal_id_dashboard")
+    async def test_url_path_deletes_by_the_registry_id(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+            url_path="resolved-path"
+        )
+
+        assert result["success"] is True
+        assert result["resolved_id"] == "resolved_path"
+        assert "resolved-path" not in await _listed_url_paths(core_client)
+
+    @pytest.mark.usefixtures("lovelace")
     async def test_unresolvable_url_path_raises_resource_not_found(
-        self, delete_tool, mock_client
-    ):
-        """When _resolve_dashboard finds no match (empty registry), the tool
-        raises a ToolError carrying the canonical RESOURCE_NOT_FOUND shape
-        with top-level ``action`` and ``url_path`` matching the idempotent
-        already-deleted success branch on the same function.
-        """
-        # Empty dashboards list → _resolve_dashboard returns None.
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [],
-        }
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """No registry match: the canonical RESOURCE_NOT_FOUND shape with
+        top-level ``action`` and ``url_path`` matching the idempotent
+        already-deleted success branch, naming the dashboards that exist."""
+        await _create_dashboard(core_client, "real-dash")
 
         with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="ghost-dash")
+            await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+                url_path="ghost-dash"
+            )
 
-        body = json.loads(str(exc_info.value))
-
-        # Error code lives at error.code (canonical builder shape).
+        body = _parse_tool_error(exc_info)
         assert body["success"] is False
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "ghost-dash" in body["error"]["message"]
-
-        # Top-level shape mirrors the idempotent already-deleted success branch:
-        # action="delete" + url_path=<input>.
+        assert "real-dash" in json.dumps(body)
         assert body["action"] == "delete"
         assert body["url_path"] == "ghost-dash"
-
-        # The pre-#1300 hard-coded resource_type / identifier from the
-        # previous helper path are intentionally dropped — those keys were
-        # the source of the cross-family shape divergence.
+        # The pre-#1300 hard-coded resource_type / identifier are dropped —
+        # they were the source of the cross-family shape divergence.
         assert "resource_type" not in body
         assert "identifier" not in body
 
-    @pytest.mark.asyncio
     async def test_unreadable_registry_raises_service_failure(
-        self, delete_tool, mock_client
-    ):
-        """A failed registry read is not reported as a missing dashboard."""
-        mock_client.send_websocket_message.return_value = "unexpected string"
+        self, core_client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A registry reply without a dashboard list (Core without ``lovelace``
+        refuses the command) is logged and is not reported as a missing
+        dashboard, and nothing is deleted."""
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                wraps=core_client.send_websocket_message,
+            ) as spy,
+            caplog.at_level(logging.WARNING, logger=_LOGGER_NAME),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+                url_path="existing-dash"
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="existing-dash")
-
-        body = json.loads(str(exc_info.value))
+        body = _parse_tool_error(exc_info)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "dashboard registry" in body["error"]["message"]
         assert "not found" not in body["error"]["message"].lower()
         assert body["action"] == "delete"
         assert body["url_path"] == "existing-dash"
-        assert mock_client.send_websocket_message.call_count == 1
+        assert any("unexpected shape" in rec.message for rec in caplog.records)
+        assert "lovelace/dashboards/delete" not in _sent_types(spy)
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_already_deleted_returns_idempotent_success_shape(
-        self, delete_tool, mock_client
-    ):
-        """When _resolve_dashboard succeeds but the WS delete call replies with
-        Core's ``not_found`` code, the tool returns the idempotent success shape
-        — locking the ``action`` + ``url_path`` keys that the failure-path
-        404 mirrors. Drift between the two top-level shapes would surface
-        as a test break here.
-        """
-        # First call: registry lookup → returns a real dashboard so
-        # _resolve_dashboard succeeds. Second call: delete → Core's collection
-        # (ws_delete_item) reports the item is already gone.
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
-            {
-                "success": False,
-                "error": "Command failed: Unable to find dashboard_id abc123",
-                "error_code": "not_found",
-            },
-        ]
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Another client deletes the dashboard between the registry read and
+        the delete: Core's ``not_found`` reply is the idempotent success shape,
+        with the ``action`` + ``url_path`` keys the 404 path mirrors."""
+        await _create_dashboard(core_client, "stale-dash")
+        real_fetch = tools_config_dashboards.fetch_dashboards_list
 
-        result = await delete_tool(url_path="stale-dash")
+        async def fetch_then_deleted_elsewhere(
+            client: HomeAssistantClient,
+        ) -> list[dict[str, Any]] | None:
+            rows = await real_fetch(client)
+            gone = await client.send_websocket_message(
+                {"type": "lovelace/dashboards/delete", "dashboard_id": "stale_dash"}
+            )
+            assert gone["success"], gone
+            return rows
+
+        monkeypatch.setattr(
+            tools_config_dashboards,
+            "fetch_dashboards_list",
+            fetch_then_deleted_elsewhere,
+        )
+
+        result = await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+            url_path="stale-dash"
+        )
 
         assert result["success"] is True
         assert result["action"] == "delete"
         assert result["url_path"] == "stale-dash"
-        # Symmetric absence to the 404-path: success branch must also not
-        # leak the dropped resource_type / identifier keys.
         assert "resource_type" not in result
         assert "identifier" not in result
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_not_found_text_without_core_code_is_a_failure(
-        self, delete_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Only Core's ``not_found`` code means already deleted, not message text."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": [{"id": "abc123", "url_path": "stale-dash"}]},
-            {
-                "success": False,
-                "error": "Command failed: Storage file not found",
-                "error_code": "unknown_error",
-            },
-        ]
+        await _create_dashboard(core_client, "stale-dash")
+        # Core fails to remove the dashboard's storage file.
+        monkeypatch.setattr(
+            storage.Store,
+            "async_remove",
+            AsyncMock(side_effect=HomeAssistantError("Storage file not found")),
+        )
 
         with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="stale-dash")
+            await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+                url_path="stale-dash"
+            )
 
-        body = json.loads(str(exc_info.value))
+        body = _parse_tool_error(exc_info)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Storage file not found" in body["error"]["message"]
 
-    @pytest.mark.asyncio
     async def test_yaml_mode_dashboard_gets_a_precise_error(
-        self, delete_tool: Any, mock_client: MagicMock
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
-        """A YAML row has no collection id; the error names YAML mode."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"url_path": "yaml-dash", "mode": "yaml", "title": "Y"}],
-        }
+        """A YAML row has no collection id; the error names YAML mode and
+        nothing is deleted."""
+        assert await async_setup_component(
+            hass,
+            "lovelace",
+            {
+                "lovelace": {
+                    "dashboards": {
+                        "yaml-dash": {
+                            "mode": "yaml",
+                            "filename": "yaml-dash.yaml",
+                            "title": "Y",
+                        }
+                    }
+                }
+            },
+        )
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                wraps=core_client.send_websocket_message,
+            ) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+                url_path="yaml-dash"
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="yaml-dash")
-
-        body = json.loads(str(exc_info.value))
+        body = _parse_tool_error(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "YAML-mode" in body["error"]["message"]
         assert "configuration.yaml" in body["error"]["details"]
-        assert mock_client.send_websocket_message.call_count == 1
+        assert "lovelace/dashboards/delete" not in _sent_types(spy)
 
-    @pytest.mark.asyncio
     async def test_default_alias_deletes_the_lovelace_item(
-        self, delete_tool: Any, mock_client: MagicMock
+        self,
+        hass: HomeAssistant,
+        hass_storage: dict[str, Any],
+        core_client: HomeAssistantClient,
     ) -> None:
         """'default' maps to the migrated ``lovelace`` item, which Core deletes."""
-        mock_client.send_websocket_message.side_effect = [
-            {
-                "success": True,
-                "result": [
-                    {"id": "lovelace", "url_path": "lovelace", "mode": "storage"}
-                ],
-            },
-            {"success": True, "result": None},
-        ]
+        # Core migrates a stored default config to its ``lovelace`` dashboard item.
+        hass_storage["lovelace"] = {
+            "version": 1,
+            "minor_version": 1,
+            "key": "lovelace",
+            "data": {"config": _STORED_CONFIG},
+        }
+        assert await async_setup_component(hass, "lovelace", {})
+        assert "lovelace" in await _listed_url_paths(core_client)
 
-        result = await delete_tool(url_path="default")
+        result = await DashboardConfigTools(core_client).ha_config_delete_dashboard(
+            url_path="default"
+        )
 
         assert result["success"] is True
         assert result["url_path"] == "lovelace"
         assert "auto-generated default dashboard" in result["note"]
-        delete_call = mock_client.send_websocket_message.call_args_list[1].args[0]
-        assert delete_call == {
-            "type": "lovelace/dashboards/delete",
-            "dashboard_id": "lovelace",
-        }
+        assert "lovelace" not in await _listed_url_paths(core_client)
