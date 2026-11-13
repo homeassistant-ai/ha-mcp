@@ -142,6 +142,12 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     reset_global_settings()
 
 
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core writes into its config directory; a shared one holds other tests' files."""
+    return hass_tmp_config_dir
+
+
 def _uses_js_harness(module: object) -> bool:
     from . import _js_harness
 

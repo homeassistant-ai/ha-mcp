@@ -4,26 +4,37 @@
 by config ``id``, so a hidden body never spells out its entity_id. The decision
 is made on the whole file: the component applies ``tail_lines`` and
 ``yaml_path`` itself, and a slice can start anywhere inside a hidden block.
+
+The files sit in Core's config directory and are read by the File & YAML
+Tools entry's own ``read_file`` service; the hidden items are real registry
+rows.
 """
 
 from __future__ import annotations
 
 import json
-import posixpath
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import yaml
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
+from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION, FilesystemTools
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_filesystem import FilesystemTools
 from ha_mcp.tools.tools_yaml_read import YamlReadTools
+from ha_mcp.visibility.model import VisibilityConfig
 
-# Autouse: each test starts with an empty per-client caller-token cache.
-from ..test_caller_token_auth import _reset_token_cache_between_tests  # noqa: F401
-from .test_enforcement import FakeClient, _error_body, make_context, make_mw
+from .._visibility_core import enforce_hiding, error_code, register_entity
+from ._chained_enforcement import _ChainedEnforcement, make_context
 
 _SCRIPTS_YAML = """\
 unlock_house:
@@ -67,6 +78,7 @@ _FILES = {
     "packages/door.yaml": _DOOR_PACKAGE_YAML,
 }
 
+# (entity_id, registry unique_id, registry platform)
 _HIDDEN = [
     ("script.unlock_house", "unlock_house", "script"),
     ("script.front_door", "come_home", "script"),
@@ -75,62 +87,43 @@ _HIDDEN = [
 ]
 
 
-class _ComponentClient(FakeClient):
-    """Registry double plus the component's ``read_file`` service."""
-
-    async def get_services(self) -> list[dict[str, Any]]:
-        services = {"get_caller_token": {}, "read_file": {}, "list_files": {}}
-        return [{"domain": "ha_mcp_tools", "services": services}]
-
-    async def call_service(
-        self, domain: str, service: str, payload: dict[str, Any], **_: Any
-    ) -> dict[str, Any]:
-        if service == "get_caller_token":
-            body = {"success": True, "token": "t", "version": MIN_COMPONENT_VERSION}
-            return {"service_response": body}
-        assert service == "read_file", service
-        return {"service_response": _read_file(payload)}
-
-
-def _read_file(payload: dict[str, Any]) -> dict[str, Any]:
-    """Resolve the path and apply ``tail_lines`` / ``yaml_path`` like the component."""
-    content = _FILES[posixpath.normpath(payload["path"])]
-    tail_lines = payload.get("tail_lines")
-    if tail_lines:
-        content = "".join(content.splitlines(keepends=True)[-tail_lines:])
-    body: dict[str, Any] = {"success": True, "path": payload["path"]}
-    yaml_path = payload.get("yaml_path")
-    if yaml_path is None:
-        body["content"] = content
-        return body
-    node: Any = yaml.safe_load(content)
-    for part in yaml_path.split("."):
-        node = node.get(part) if isinstance(node, dict) else None
-    body["subtree"] = None if node is None else yaml.safe_dump(node)
-    if payload.get("include_parsed"):
-        body["parsed"] = node
-    return body
-
-
 @pytest.fixture
-def client(set_config: Callable[..., Any]) -> _ComponentClient:
-    set_config(
-        enabled=True,
-        enforce=True,
-        deny_entity_ids=[entity_id for entity_id, _key, _platform in _HIDDEN],
+async def client(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    component_core_client: HomeAssistantClient,
+    set_config: Callable[..., VisibilityConfig],
+    tmp_path: Path,
+) -> HomeAssistantClient:
+    """The server's client on a ``hass`` whose config dir holds ``_FILES``."""
+    for rel_path, content in _FILES.items():
+        path = tmp_path / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    hass.config.config_dir = str(tmp_path)
+    # ``config`` serves the registry list the hidden set is computed from.
+    assert await async_setup_component(hass, "config", {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TOOLS_ENTRY_TITLE,
+        version=HaMcpToolsConfigFlow.VERSION,
+        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
+        data={},
     )
-    registry = [
-        {"entity_id": entity_id, "unique_id": key, "platform": platform}
-        for entity_id, key, platform in _HIDDEN
-    ]
-    return _ComponentClient(registry={"success": True, "result": registry})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    assert entry.state is ConfigEntryState.LOADED
+    for entity_id, unique_id, platform in _HIDDEN:
+        register_entity(hass, entity_registry, entity_id, unique_id, platform)
+    enforce_hiding(set_config, *(entity_id for entity_id, _key, _platform in _HIDDEN))
+    return component_core_client
 
 
-async def _read_file_tool(client: Any, **kwargs: Any) -> Any:
+async def _read_file_tool(client: HomeAssistantClient, **kwargs: Any) -> Any:
     return await FilesystemTools(client).ha_read_file(**kwargs)
 
 
-async def _get_yaml_tool(client: Any, **kwargs: Any) -> Any:
+async def _get_yaml_tool(client: HomeAssistantClient, **kwargs: Any) -> Any:
     return await YamlReadTools(client).ha_config_get_yaml(**kwargs)
 
 
@@ -138,10 +131,10 @@ _TOOL_NAMES = {_read_file_tool: "ha_read_file", _get_yaml_tool: "ha_config_get_y
 
 
 async def _call_through_enforcement(
-    client: _ComponentClient, call: Callable[..., Any], kwargs: dict[str, Any]
+    client: HomeAssistantClient, call: Callable[..., Any], kwargs: dict[str, Any]
 ) -> Any:
     """Run the real tool behind the enforcement middleware pair."""
-    mw = make_mw(get_client=lambda: client)
+    mw = _ChainedEnforcement(lambda: client)
 
     async def _run_tool(_context: Any) -> Any:
         result = await call(client, **kwargs)
@@ -200,30 +193,36 @@ async def _call_through_enforcement(
     ],
 )
 async def test_read_of_a_file_defining_a_hidden_item_is_refused(
-    client: _ComponentClient, call: Callable[..., Any], kwargs: dict[str, Any]
+    client: HomeAssistantClient, call: Callable[..., Any], kwargs: dict[str, Any]
 ) -> None:
     with pytest.raises(ToolError) as exc:
         await _call_through_enforcement(client, call, kwargs)
-    assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
 
 @pytest.mark.parametrize(
-    ("call", "kwargs"),
+    ("call", "kwargs", "expected"),
     [
         pytest.param(
             _read_file_tool,
             {"path": "www/presence.yaml"},
+            "Coming home",
             id="helper-sharing-a-hidden-script-key",
         ),
         pytest.param(
             _get_yaml_tool,
             {"file": "packages/presence.yaml", "yaml_path": "input_boolean.come_home"},
+            "Coming home",
             id="package-helper-sharing-a-hidden-script-key",
         ),
     ],
 )
 async def test_file_that_only_shares_a_hidden_key_stays_readable(
-    client: _ComponentClient, call: Callable[..., Any], kwargs: dict[str, Any]
+    client: HomeAssistantClient,
+    call: Callable[..., Any],
+    kwargs: dict[str, Any],
+    expected: str,
 ) -> None:
     result = await _call_through_enforcement(client, call, kwargs)
     assert result.structured_content["success"] is True
+    assert expected in result.content[0].text

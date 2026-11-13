@@ -1,29 +1,36 @@
 """Unit tests for the component's "Download diagnostics" handler (#2584).
 
-Startup errors are filed through the real ``embedded_setup._create_issue`` into a recording issue
-registry, so the handler reads the placeholder shape bring-up actually writes.
+The file is downloaded from Core's diagnostics integration, so it holds what a
+user attaches: Core's own sections (its ``issues`` field among them) around the
+component's summary. Startup errors are filed by a real failed bring-up into
+Core's issue registry, so the handler reads the shape bring-up actually writes.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-from types import SimpleNamespace
-from typing import Any
+from datetime import timedelta
+from http import HTTPStatus
+from typing import Any, Literal, get_args, get_type_hints
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.registry import SAVE_DELAY_LONG
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant.typing import ClientSessionGenerator
 
-import custom_components.ha_mcp_tools.diagnostics as diag
 import custom_components.ha_mcp_tools.embedded_server as eserver
 import custom_components.ha_mcp_tools.embedded_setup as esetup
 from custom_components.ha_mcp_tools.const import (
-    CONF_ENTRY_TYPE,
     DATA_ACCESS_ENABLED,
     DATA_ACCESS_TOKEN,
-    DATA_BRINGUP_TASK,
     DATA_DCR_SIGNING_KEY,
     DATA_LAST_PIP_SPEC,
-    DATA_MANAGER,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
@@ -35,7 +42,6 @@ from custom_components.ha_mcp_tools.const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
-    ENTRY_TYPE_SERVER,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_ENABLE_WEBHOOK,
@@ -49,6 +55,26 @@ from custom_components.ha_mcp_tools.const import (
     OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_NONE,
 )
+from custom_components.ha_mcp_tools.embedded_server import (
+    EmbeddedServerError,
+    EmbeddedServerManager,
+)
+
+# Bound before the autouse ``server`` fixture replaces the module attribute.
+from custom_components.ha_mcp_tools.embedded_setup import async_bring_up_server
+
+from ._server_entry import add_server_entry, replace_server, set_up
+
+type FailureKind = Literal["package", "start", "token"]
+
+# Every failure kind bring-up can file, except "token": that one files the
+# token repair, which carries the refusal reason rather than an error detail
+# and which Core's ``issues`` field already names.
+DETAIL_KINDS: list[FailureKind] = [
+    kind
+    for kind in get_args(get_type_hints(EmbeddedServerError.__init__)["kind"])
+    if kind != "token"
+]
 
 # One distinct value per secret key, so a leak names the key that leaked.
 SECRET_DATA = {
@@ -80,69 +106,35 @@ SECRET_OPTIONS = {
 }
 
 
-class RecordingIssueRegistry:
-    """Keeps what ``ir.async_create_issue`` files; serves it back like Core."""
-
-    def __init__(self) -> None:
-        self.issues: dict[str, Any] = {}
-
-    def async_create_issue(
-        self, hass: HomeAssistant, domain: str, issue_id: str, **kwargs: Any
-    ) -> None:
-        assert domain == DOMAIN
-        self.issues[issue_id] = SimpleNamespace(
-            active=True,
-            is_persistent=kwargs.get("is_persistent", False),
-            data=kwargs.get("data"),
-            translation_placeholders=kwargs.get("translation_placeholders"),
-        )
-
-    def async_get_issue(self, domain: str, issue_id: str) -> Any:
-        assert domain == DOMAIN
-        return self.issues.get(issue_id)
+@pytest.fixture(autouse=True)
+def server(monkeypatch: pytest.MonkeyPatch) -> Any:
+    return replace_server(monkeypatch)
 
 
-class FakeHass:
-    def __init__(self, entries: list[Any], data: dict[str, Any] | None = None):
-        self.data = {DOMAIN: dict(data or {})}
-        self.config_entries = SimpleNamespace(
-            async_entries=lambda domain: list(entries) if domain == DOMAIN else []
-        )
-
-    async def async_add_executor_job(self, func: Any, *args: Any) -> Any:
-        return func(*args)
-
-
-def _entry(data: dict[str, Any], options: dict[str, Any] | None = None) -> Any:
-    return SimpleNamespace(
-        data=data,
+async def _setup_entry(
+    hass: HomeAssistant,
+    data: dict[str, Any] | None = None,
+    options: dict[str, Any] | None = None,
+) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=dict(data or {}),
         options=dict(options or {}),
-        state=SimpleNamespace(value="loaded"),
         disabled_by=None,
     )
+    entry.add_to_hass(hass)
+    assert await set_up(hass, entry)
+    return entry
 
 
-def _server_entry(
-    options: dict[str, Any] | None = None, data: dict[str, Any] | None = None
-) -> Any:
-    return _entry({CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER, **(data or {})}, options)
-
-
-@pytest.fixture(autouse=True)
-def registry(monkeypatch: pytest.MonkeyPatch) -> RecordingIssueRegistry:
-    """One registry behind both the producer and the handler.
-
-    Autouse: the stubbed ``ir`` would otherwise hand back a MagicMock issue.
-    """
-    reg = RecordingIssueRegistry()
-    fake_ir = SimpleNamespace(
-        async_get=lambda hass: reg,
-        async_create_issue=reg.async_create_issue,
-        IssueSeverity=SimpleNamespace(ERROR="error"),
-    )
-    monkeypatch.setattr(diag, "ir", fake_ir)
-    monkeypatch.setattr(esetup, "ir", fake_ir)
-    return reg
+async def _setup_server_entry(
+    hass: HomeAssistant,
+    options: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+) -> MockConfigEntry:
+    entry = add_server_entry(hass, data=data, options=options)
+    assert await set_up(hass, entry)
+    return entry
 
 
 @pytest.fixture(autouse=True)
@@ -169,61 +161,138 @@ def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
     return pin
 
 
-def _fail_bring_up(kind: str, detail: str) -> None:
-    """File the repair issue exactly as a failed bring-up does."""
-    entry = SimpleNamespace(entry_id="server-entry")
-    esetup._create_issue(None, entry, kind, detail)  # type: ignore[arg-type]
+async def _fail_bring_up(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: MockConfigEntry,
+    kind: FailureKind,
+    detail: str,
+) -> None:
+    """Run the entry's real bring-up with the server start failing as ``detail``."""
+    monkeypatch.setattr(
+        EmbeddedServerManager,
+        "async_start",
+        AsyncMock(side_effect=EmbeddedServerError(detail, kind=kind)),
+    )
+    await async_bring_up_server(hass, entry)
 
 
-async def _diagnostics(hass: FakeHass) -> dict[str, Any]:
-    # The handler ignores which entry was asked for: both get the same summary.
-    return await diag.async_get_config_entry_diagnostics(hass, None)  # type: ignore[arg-type]
+async def _download(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator, entry: MockConfigEntry
+) -> dict[str, Any]:
+    """The file "Download diagnostics" serves for ``entry``, as Core builds it."""
+    assert await async_setup_component(hass, "diagnostics", {})
+    client = await hass_client()
+    response = await client.get(f"/api/diagnostics/config_entry/{entry.entry_id}")
+    assert response.status == HTTPStatus.OK
+    body: dict[str, Any] = await response.json()
+    return body
 
 
-def test_reads_every_issue_bring_up_files() -> None:
+@pytest.mark.parametrize("kind", DETAIL_KINDS)
+@pytest.mark.asyncio
+async def test_every_failure_kind_reaches_the_file(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: FailureKind,
+) -> None:
     """A failure kind added to bring-up without the reader would drop its
     error from the file."""
-    assert set(diag._STARTUP_ISSUE_IDS) == set(esetup._ISSUE_BY_KIND.values())
+    entry = await _setup_server_entry(hass)
+    await _fail_bring_up(hass, monkeypatch, entry, kind, "boom")
+
+    result = await _download(hass, hass_client, entry)
+
+    [filed] = [issue["issue_id"] for issue in result["issues"]]
+    assert result["data"]["server"]["startup_error"] == {
+        "issue_id": filed,
+        "detail": "boom",
+    }
 
 
-def test_unscrubbed_detail_stays_out_of_cores_issues_field(
-    registry: RecordingIssueRegistry,
+@pytest.mark.parametrize("kind", DETAIL_KINDS)
+@pytest.mark.asyncio
+async def test_unscrubbed_detail_stays_out_of_cores_issues_field(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: FailureKind,
 ) -> None:
     """Core's ``issues`` field carries the data and placeholders of a
     persistent issue, which would put the unscrubbed detail beside the
     scrubbed copy."""
-    for kind in ("package", "start"):
-        _fail_bring_up(kind, "detail")
+    entry = await _setup_server_entry(hass, data={DATA_ACCESS_TOKEN: "tok-abc"})
+    await _fail_bring_up(hass, monkeypatch, entry, kind, "failed with tok-abc")
 
-    assert not any(issue.is_persistent for issue in registry.issues.values())
+    result = await _download(hass, hass_client, entry)
+
+    assert result["issues"]
+    assert "tok-abc" not in json.dumps(result["issues"])
 
 
+@pytest.mark.parametrize(
+    ("options", "data", "secrets"),
+    [
+        (None, SECRET_DATA, SECRET_DATA),
+        (SECRET_OPTIONS, None, SECRET_OPTIONS),
+    ],
+    ids=["stored-data", "stored-options"],
+)
 @pytest.mark.asyncio
-async def test_no_secret_value_appears_in_the_file() -> None:
+async def test_no_secret_value_appears_in_the_file(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, Any] | None,
+    data: dict[str, Any] | None,
+    secrets: dict[str, Any],
+) -> None:
     """Every stored secret is set and echoed in the startup error; none of the
-    values may reach the serialized download."""
-    every_secret = [*SECRET_DATA.values(), *SECRET_OPTIONS.values()]
-    _fail_bring_up("start", "start failed: " + " | ".join(every_secret))
-    entry = _server_entry(SECRET_OPTIONS, SECRET_DATA)
+    values may reach the downloaded file.
 
-    result = await _diagnostics(FakeHass([entry]))
+    Stored data keys and option overrides are verified separately so overrides
+    do not mask unscrubbed data keys.
+    """
+    entry = await _setup_server_entry(hass, options=options, data=data)
+    every_secret = [
+        value
+        for key, value in (*entry.data.items(), *entry.options.items())
+        if key in secrets and isinstance(value, str) and value
+    ]
+    await _fail_bring_up(
+        hass, monkeypatch, entry, "start", "start failed: " + " | ".join(every_secret)
+    )
+
+    result = await _download(hass, hass_client, entry)
     serialized = json.dumps(result)
 
     leaked = [value for value in every_secret if value in serialized]
     assert leaked == []
-    assert result["server"]["startup_error"]["issue_id"] == ISSUE_START_FAILED
-    assert result["server"]["startup_error"]["detail"].startswith("start failed: ")
-    assert "**REDACTED**" in result["server"]["startup_error"]["detail"]
+    startup_error = result["data"]["server"]["startup_error"]
+    assert startup_error["issue_id"] == ISSUE_START_FAILED
+    assert startup_error["detail"].startswith("start failed: ")
+    assert "**REDACTED**" in startup_error["detail"]
 
 
 @pytest.mark.asyncio
-async def test_padded_override_is_scrubbed_in_its_stripped_form() -> None:
+async def test_padded_override_is_scrubbed_in_its_stripped_form(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The options keep the override as typed, but the server strips it before
     it reaches the error message."""
-    _fail_bring_up("package", "Could not install the server ('tok-abc.tgz')")
-    entry = _server_entry({OPT_PIP_SPEC: " tok-abc.tgz "})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: " tok-abc.tgz "})
+    await _fail_bring_up(
+        hass,
+        monkeypatch,
+        entry,
+        "package",
+        "Could not install the server ('tok-abc.tgz')",
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
     assert "tok-abc" not in json.dumps(result)
 
@@ -241,33 +310,47 @@ async def test_padded_override_is_scrubbed_in_its_stripped_form() -> None:
 )
 @pytest.mark.asyncio
 async def test_url_credentials_are_scrubbed_even_when_not_stored(
-    url: str, scrubbed: str
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    scrubbed: str,
 ) -> None:
     """pip echoes index URLs from its own configuration, which never reach the
     entry. A raw ``@`` or ``?`` in the password must not leave part of it."""
-    _fail_bring_up("package", f"index {url} failed")
+    entry = await _setup_server_entry(hass)
+    await _fail_bring_up(hass, monkeypatch, entry, "package", f"index {url} failed")
 
-    result = await _diagnostics(FakeHass([_server_entry()]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"]["detail"] == f"index {scrubbed} failed"
+    assert result["data"]["server"]["startup_error"]["detail"] == (
+        f"index {scrubbed} failed"
+    )
 
 
 @pytest.mark.asyncio
-async def test_secret_containing_another_is_replaced_whole() -> None:
+async def test_secret_containing_another_is_replaced_whole(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A value that contains a shorter secret is replaced as one piece, so no
     remainder of the longer secret survives around the shorter one's marker.
 
     Four nested values: replacing in any order but longest first fails here.
     """
-    _fail_bring_up("package", "pip failed for x-tarball-tok-abc.tgz")
-    entry = _server_entry(
+    entry = await _setup_server_entry(
+        hass,
         {OPT_PIP_SPEC: "x-tarball-tok-abc.tgz", OPT_SERVER_URL: "tarball-tok-abc"},
         {DATA_ACCESS_TOKEN: "tok-abc", DATA_REFRESH_TOKEN_ID: "tok"},
     )
+    await _fail_bring_up(
+        hass, monkeypatch, entry, "package", "pip failed for x-tarball-tok-abc.tgz"
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"] == {
+    assert result["data"]["server"]["startup_error"] == {
         "issue_id": ISSUE_PACKAGE_FAILED,
         "detail": "pip failed for **REDACTED**",
     }
@@ -275,18 +358,26 @@ async def test_secret_containing_another_is_replaced_whole() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spec", ["ha-mcp", "ha-mcp-dev==8.7.0"])
-async def test_plain_server_pin_is_not_scrubbed(spec: str) -> None:
+async def test_plain_server_pin_is_not_scrubbed(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    spec: str,
+) -> None:
     """``last_pip_spec`` holds a plain server pin (bare or ``==``-pinned) when
     no override is set; it is not a secret, so the error keeps it."""
-    _fail_bring_up("package", f"Could not install {spec}")
-    entry = _server_entry(data={DATA_LAST_PIP_SPEC: spec})
+    entry = await _setup_server_entry(hass, data={DATA_LAST_PIP_SPEC: spec})
+    await _fail_bring_up(
+        hass, monkeypatch, entry, "package", f"Could not install {spec}"
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"]["detail"] == f"Could not install {spec}"
+    assert result["data"]["server"]["startup_error"]["detail"] == (
+        f"Could not install {spec}"
+    )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "override",
     [
@@ -295,68 +386,113 @@ async def test_plain_server_pin_is_not_scrubbed(spec: str) -> None:
     ],
     ids=["trailing-option", "local-version-label"],
 )
+@pytest.mark.asyncio
 async def test_override_that_starts_like_a_server_pin_is_scrubbed(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
     override: str,
 ) -> None:
     """Only a whole server pin with a public version is kept: an override
     that merely starts with one carries whatever was typed after it (a local
     version label takes any text), and the install error quotes the spec
     whole."""
-    _fail_bring_up("package", f"Could not install the server ({override!r}): ...")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
+    await _fail_bring_up(
+        hass,
+        monkeypatch,
+        entry,
+        "package",
+        f"Could not install the server ({override!r}): ...",
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
     assert "tok.abc" not in json.dumps(result)
 
 
 @pytest.mark.asyncio
-async def test_version_too_long_to_parse_does_not_break_the_download() -> None:
+async def test_version_too_long_to_parse_does_not_break_the_download(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A digit run past int()'s limit makes ``Version`` raise ValueError rather
     than InvalidVersion; the override is then scrubbed like any other."""
     override = "ha-mcp==1" + "0" * 5000
-    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
+    await _fail_bring_up(
+        hass,
+        monkeypatch,
+        entry,
+        "package",
+        f"Could not install the server ({override!r}): x",
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"]["detail"] == (
+    assert result["data"]["server"]["startup_error"]["detail"] == (
         "Could not install the server ('**REDACTED**'): x"
     )
 
 
 @pytest.mark.asyncio
-async def test_override_is_scrubbed_in_its_quoted_form() -> None:
+async def test_override_is_scrubbed_in_its_quoted_form(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The install error quotes the spec with ``repr()``, which doubles a
     backslash, so the stored value no longer appears in the text as typed."""
     override = "https://host/pkg.tgz?sig=tok\\abc"
-    _fail_bring_up("package", f"Could not install the server ({override!r}): x")
-    entry = _server_entry({OPT_PIP_SPEC: override})
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: override})
+    await _fail_bring_up(
+        hass,
+        monkeypatch,
+        entry,
+        "package",
+        f"Could not install the server ({override!r}): x",
+    )
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"]["detail"] == (
+    assert result["data"]["server"]["startup_error"]["detail"] == (
         "Could not install the server ('**REDACTED**'): x"
     )
 
 
 @pytest.mark.asyncio
 async def test_issue_restored_after_restart_is_not_reported(
-    registry: RecordingIssueRegistry,
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    hass_storage: dict[str, Any],
+    issue_registry: ir.IssueRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core restores a non-persistent issue inactive and without data or
     placeholders; it describes no current attempt."""
-    registry.issues[ISSUE_START_FAILED] = SimpleNamespace(
-        active=False, data=None, translation_placeholders=None
-    )
+    entry = await _setup_server_entry(hass)
+    await _fail_bring_up(hass, monkeypatch, entry, "start", "start failed: something")
+    # Core writes the registry to storage after its save delay, then reads it
+    # back as it does at the next start.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=SAVE_DELAY_LONG))
+    await hass.async_block_till_done()
+    stored = hass_storage[ir.STORAGE_KEY]["data"]["issues"]
+    assert ISSUE_START_FAILED in [issue["issue_id"] for issue in stored]
+    await ir.async_load(hass)
+    restored = issue_registry.async_get_issue(DOMAIN, ISSUE_START_FAILED)
+    assert restored is not None
+    assert restored.active is False
 
-    result = await _diagnostics(FakeHass([_server_entry()]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"]["startup_error"] is None
+    assert result["data"]["server"]["startup_error"] is None
 
 
 @pytest.mark.asyncio
-async def test_server_summary_reports_configured_options() -> None:
+async def test_server_summary_reports_configured_options(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator
+) -> None:
     """Each configured option reaches the file."""
     options = {
         OPT_PIP_SPEC: "ha-mcp==8.6.0",
@@ -365,11 +501,11 @@ async def test_server_summary_reports_configured_options() -> None:
         OPT_EXTERNAL_URL: "https://ha.example.com",
     }
 
-    entry = _server_entry(options, {DATA_ACCESS_ENABLED: False})
+    entry = await _setup_server_entry(hass, options, {DATA_ACCESS_ENABLED: False})
 
-    result = await _diagnostics(FakeHass([entry]))
+    result = await _download(hass, hass_client, entry)
 
-    assert result["server"] == {
+    assert result["data"]["server"] == {
         "installed_server_version": "8.7.0",
         "package_override_set": True,
         "access_enabled": False,
@@ -394,6 +530,8 @@ async def test_server_summary_reports_configured_options() -> None:
 )
 @pytest.mark.asyncio
 async def test_installed_version_reads_the_installing_distribution_first(
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
     installed_version_calls: list[Any],
     paired_spec: list[str | None],
     pin: str | None,
@@ -405,20 +543,24 @@ async def test_installed_version_reads_the_installing_distribution_first(
     The default spec is no override; without a manifest pin ``ha-mcp`` is read
     first."""
     paired_spec[0] = pin
+    entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: pip_spec})
 
-    await _diagnostics(FakeHass([_server_entry({OPT_PIP_SPEC: pip_spec})]))
+    await _download(hass, hass_client, entry)
 
     assert installed_version_calls == [first]
 
 
 @pytest.mark.parametrize("pip_spec", [None, "", DEFAULT_PIP_SPEC])
 @pytest.mark.asyncio
-async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
+async def test_server_summary_defaults_for_unset_options(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator, pip_spec: str | None
+) -> None:
     """Unset options read as the defaults bring-up applies; an empty pip spec
     or the default spec in the field is not an override."""
     options = {} if pip_spec is None else {OPT_PIP_SPEC: pip_spec}
+    entry = await _setup_server_entry(hass, options)
 
-    server = (await _diagnostics(FakeHass([_server_entry(options)])))["server"]
+    server = (await _download(hass, hass_client, entry))["data"]["server"]
 
     assert server["package_override_set"] is False
     assert server["access_enabled"] is True
@@ -428,45 +570,76 @@ async def test_server_summary_defaults_for_unset_options(pip_spec: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("alive", "task_done"), [(True, False), (False, True)], ids=["up", "crashed"]
+    ("alive", "finished"), [(True, False), (False, True)], ids=["up", "crashed"]
 )
 @pytest.mark.asyncio
 async def test_running_and_bring_up_follow_the_live_objects(
-    monkeypatch: pytest.MonkeyPatch, alive: bool, task_done: bool
+    hass: HomeAssistant,
+    hass_client: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    alive: bool,
+    finished: bool,
 ) -> None:
     """The manager and the finished bring-up task stay in ``hass.data`` after
-    the server thread dies, so both flags must read their live state."""
-    monkeypatch.setattr(
-        eserver.EmbeddedServerManager, "is_running", property(lambda self: alive)
-    )
-    manager = object.__new__(eserver.EmbeddedServerManager)
-    bringup = SimpleNamespace(done=lambda: task_done)
-    hass = FakeHass(
-        [_server_entry()], data={DATA_MANAGER: manager, DATA_BRINGUP_TASK: bringup}
-    )
+    the server thread dies, so both flags must read their live state.
 
-    server = (await _diagnostics(hass))["server"]
+    "up": the worker thread is alive while bring-up still waits for it to be
+    ready. "crashed": bring-up finished and the thread is gone.
+    """
+    release = asyncio.Event()
+
+    async def _start(manager: EmbeddedServerManager) -> None:
+        await release.wait()
+
+    if finished:
+        release.set()
+    monkeypatch.setattr(EmbeddedServerManager, "async_start", _start)
+    if alive:
+        monkeypatch.setattr(
+            EmbeddedServerManager, "is_running", property(lambda manager: True)
+        )
+    monkeypatch.setattr(esetup, "async_bring_up_server", async_bring_up_server)
+    monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock(return_value=False))
+    monkeypatch.setattr(esetup, "async_register_llm_api", AsyncMock())
+
+    entry = await _setup_server_entry(hass)
+    try:
+        if finished:
+            await hass.async_block_till_done(wait_background_tasks=True)
+        server = (await _download(hass, hass_client, entry))["data"]["server"]
+    finally:
+        release.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert server["running"] is alive
-    assert server["bring_up_in_progress"] is not task_done
+    assert server["bring_up_in_progress"] is not finished
 
 
 @pytest.mark.asyncio
-async def test_tools_only_install_lists_entries_without_server() -> None:
+async def test_tools_only_install_lists_entries_without_server(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator
+) -> None:
     """A tools entry predating the marker has no ``entry_type``; it reads as
     the tools entry, and the summary carries no server section."""
-    result = await _diagnostics(FakeHass([_entry({})]))
+    entry = await _setup_entry(hass, {})
 
-    assert result == {
+    result = await _download(hass, hass_client, entry)
+
+    assert result["data"] == {
         "entries": [{"entry_type": "tools", "state": "loaded", "disabled_by": None}],
         "server": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_server_entry_listed_after_the_tools_entry_is_found() -> None:
+async def test_server_entry_listed_after_the_tools_entry_is_found(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator
+) -> None:
     """The tools entry's download describes a server entry listed after it."""
-    result = await _diagnostics(FakeHass([_entry({}), _server_entry()]))
+    tools_entry = await _setup_entry(hass, {})
+    await _setup_server_entry(hass)
 
-    assert [e["entry_type"] for e in result["entries"]] == ["tools", "server"]
-    assert result["server"] is not None
+    result = await _download(hass, hass_client, tools_entry)
+
+    assert [e["entry_type"] for e in result["data"]["entries"]] == ["tools", "server"]
+    assert result["data"]["server"] is not None

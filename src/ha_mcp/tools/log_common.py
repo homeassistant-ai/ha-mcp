@@ -108,8 +108,15 @@ def _collect_log_warnings(
     slug: str | None,
     order: Literal["newest", "oldest"],
     offset: int | str,
+    hours_back: int | None = None,
+    search: str | None = None,
 ) -> list[str]:
     warnings: list[str] = []
+    if source not in ("logbook", "supervisor", "system_service") and hours_back:
+        warnings.append(
+            "Parameter 'hours_back' only applies to source='logbook', "
+            f"'supervisor' or 'system_service'; ignored for source='{source}'"
+        )
     if source == "logger" and order != "newest":
         warnings.append(
             "Parameter 'order' does not apply to source='logger' "
@@ -145,10 +152,17 @@ def _collect_log_warnings(
             "Parameter 'slug' only applies to source='supervisor' or "
             f"'system_service'; ignored for source='{source}'"
         )
-    if source not in ("logbook", "error_log", "fault_log") and offset:
+    if source in ("supervisor", "system_service") and offset:
+        if search or (hours_back is None and isinstance(offset, int)):
+            warnings.append(
+                f"Parameter 'offset' applies to source='{source}' only on a "
+                "page read (hours_back and no search); ignored here"
+            )
+    elif source not in ("logbook", "error_log", "fault_log") and offset:
         warnings.append(
-            "Parameter 'offset' only applies to source='logbook', 'error_log' "
-            f"or 'fault_log'; ignored for source='{source}'"
+            "Parameter 'offset' only applies to source='logbook', 'error_log', "
+            "'fault_log', or 'supervisor'/'system_service' with hours_back; "
+            f"ignored for source='{source}'"
         )
     return warnings
 

@@ -1,319 +1,215 @@
-"""Unit tests for search fallback functionality (issue #214).
+"""Exact-match ``ha_search`` on an install without the component (issue #214).
 
-Tests the graceful degradation search method:
-- _exact_match_search: Fallback exact substring matching
-
-The legacy ``_partial_results_search`` was removed in #1170 (finding 6).
-Its behavior was a useless score-0 entity dump that masked errors;
-exceptions now propagate to callers instead.
+``exact_match=True`` (the default) matches the query as a substring of the
+entity_id or friendly name. Without the ha_mcp_tools component the server
+answers it itself from Core's states and entity registry, so every state and
+registry row here is Core's own, read through the server's client.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.tools.search.entities import _exact_match_search
-
-
-class MockClient:
-    """Mock Home Assistant client for testing.
-
-    ``_exact_match_search`` now also calls ``send_websocket_message``
-    to fetch the entity registry for the hidden_by filter (#1170 finding
-    9). The mock returns an empty success response, which is treated as
-    "no entities are hidden" by the fallback.
-    """
-
-    def __init__(self, entities: list[dict]):
-        self.entities = entities
-
-    async def get_states(self) -> list[dict]:
-        return self.entities
-
-    async def send_websocket_message(self, payload: dict) -> dict:
-        return {"success": True, "result": []}
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 
 
-class TestExactMatchSearch:
-    """Test _exact_match_search fallback function."""
+def _hidden(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, object_id: str
+) -> None:
+    """Register ``light.<object_id>`` as hidden by the user and give it a state."""
+    entry = entity_registry.async_get_or_create(
+        "light",
+        "test",
+        object_id,
+        suggested_object_id=object_id,
+        hidden_by=er.RegistryEntryHider.USER,
+    )
+    assert entry.entity_id == f"light.{object_id}"
+    hass.states.async_set(
+        entry.entity_id, "on", {"friendly_name": f"Hidden {object_id}"}
+    )
 
-    @pytest.fixture
-    def sample_entities(self):
-        """Sample entities for testing."""
-        return [
-            {
-                "entity_id": "light.living_room",
-                "attributes": {"friendly_name": "Living Room Light"},
-                "state": "on",
-            },
-            {
-                "entity_id": "light.bedroom",
-                "attributes": {"friendly_name": "Bedroom Light"},
-                "state": "off",
-            },
-            {
-                "entity_id": "switch.kitchen",
-                "attributes": {"friendly_name": "Kitchen Switch"},
-                "state": "on",
-            },
-            {
-                "entity_id": "sensor.temperature",
-                "attributes": {"friendly_name": "Temperature Sensor"},
-                "state": "22.5",
-            },
-        ]
 
-    @pytest.mark.asyncio
-    async def test_exact_match_finds_entity_id_substring(self, sample_entities):
-        """Exact match finds entities by entity_id substring."""
-        client = MockClient(sample_entities)
-        result = await _exact_match_search(client, "living", None, 10)
+@pytest.fixture
+async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> SearchTools:
+    """The search tools on Core holding a few lights, a switch and a sensor."""
+    # ``config`` serves the entity-registry reads.
+    assert await async_setup_component(hass, "config", {})
+    hass.states.async_set(
+        "light.living_room", "on", {"friendly_name": "Living Room Light"}
+    )
+    hass.states.async_set("light.bedroom", "off", {"friendly_name": "Bedroom Light"})
+    hass.states.async_set("switch.kitchen", "on", {"friendly_name": "Kitchen Switch"})
+    hass.states.async_set(
+        "sensor.temperature", "22.5", {"friendly_name": "Temperature Sensor"}
+    )
+    return SearchTools(core_client, SmartSearchTools(client=core_client))
 
-        assert result["success"] is True
-        assert result["search_type"] == "exact_match"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["entity_id"] == "light.living_room"
-        assert result["results"][0]["match_type"] == "exact_match"
 
-    @pytest.mark.asyncio
-    async def test_exact_match_opt_in_membership(self, sample_entities):
-        """Legacy exact search normalizes explicit membership only on request."""
-        sample_entities[0]["attributes"]["entity_id"] = {
-            "light.member_two",
-            "light.member_one",
+def _ids(result: dict[str, Any]) -> list[str]:
+    return [row["entity_id"] for row in result["entities"]]
+
+
+async def test_entity_id_fragment_finds_the_entity(tools: SearchTools) -> None:
+    result = await tools.ha_search(query="living")
+
+    assert result["success"] is True
+    assert _ids(result) == ["light.living_room"]
+    assert result["entities"][0]["match_type"] == "exact_match"
+
+
+async def test_friendly_name_fragment_finds_the_entity(
+    hass: HomeAssistant, tools: SearchTools
+) -> None:
+    """A fragment found only in the friendly name still matches."""
+    hass.states.async_set("light.lamp_1", "on", {"friendly_name": "Reading Lamp"})
+
+    result = await tools.ha_search(query="reading")
+
+    assert _ids(result) == ["light.lamp_1"]
+
+
+async def test_match_ignores_case(tools: SearchTools) -> None:
+    result = await tools.ha_search(query="LIVING")
+
+    assert _ids(result) == ["light.living_room"]
+
+
+async def test_domain_filter_drops_other_domains(
+    hass: HomeAssistant, tools: SearchTools
+) -> None:
+    hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen Light"})
+
+    unfiltered = await tools.ha_search(query="kitchen")
+    filtered = await tools.ha_search(query="kitchen", domain_filter="switch")
+
+    assert sorted(_ids(unfiltered)) == ["light.kitchen", "switch.kitchen"]
+    assert _ids(filtered) == ["switch.kitchen"]
+    assert filtered["entities"][0]["domain"] == "switch"
+
+
+async def test_no_match_is_an_empty_successful_answer(tools: SearchTools) -> None:
+    result = await tools.ha_search(query="nonexistent")
+
+    assert result["success"] is True
+    assert result["entities"] == []
+    assert result["entity_total_matches"] == 0
+
+
+async def test_limit_caps_the_page_not_the_total(tools: SearchTools) -> None:
+    result = await tools.ha_search(query="light", limit=1)
+
+    assert len(result["entities"]) == 1
+    assert result["entity_total_matches"] == 2
+
+
+async def test_whole_name_match_ranks_above_a_fragment_match(
+    hass: HomeAssistant, tools: SearchTools
+) -> None:
+    """A query equal to a friendly name outranks one that only contains it,
+    even where the entity_id order says otherwise."""
+    hass.states.async_set("light.a_desk_lamp", "on", {"friendly_name": "Desk Lamp"})
+    hass.states.async_set("light.z_lamp", "on", {"friendly_name": "Lamp"})
+
+    result = await tools.ha_search(query="lamp")
+
+    assert _ids(result) == ["light.z_lamp", "light.a_desk_lamp"]
+    first, second = result["entities"]
+    assert first["score"] > second["score"]
+
+
+async def test_membership_is_reported_only_on_request(
+    hass: HomeAssistant, tools: SearchTools
+) -> None:
+    """A group's members come back, sorted, only when ``result_fields`` asks."""
+    hass.states.async_set(
+        "light.living_room",
+        "on",
+        {
+            "friendly_name": "Living Room Light",
+            "entity_id": ["light.member_two", "light.member_one"],
+        },
+    )
+
+    default = await tools.ha_search(query="living")
+    requested = await tools.ha_search(
+        query="living",
+        result_fields=["entity_id", "is_group", "member_entity_ids"],
+    )
+
+    assert "is_group" not in default["entities"][0]
+    assert requested["entities"] == [
+        {
+            "entity_id": "light.living_room",
+            "is_group": True,
+            "member_entity_ids": ["light.member_one", "light.member_two"],
         }
-        client = MockClient(sample_entities)
-
-        default = await _exact_match_search(client, "living", None, 10)
-        requested = await _exact_match_search(
-            client,
-            "living",
-            None,
-            10,
-            membership_fields=("is_group", "member_entity_ids"),
-        )
-
-        assert "is_group" not in default["results"][0]
-        assert requested["results"][0]["is_group"] is True
-        assert requested["results"][0]["member_entity_ids"] == [
-            "light.member_one",
-            "light.member_two",
-        ]
-
-    @pytest.mark.asyncio
-    async def test_exact_match_withholds_hidden_member_when_excluded(self):
-        """include_hidden=False applies to IDs nested in membership metadata."""
-
-        class HiddenMemberClient(MockClient):
-            async def send_websocket_message(self, payload: dict) -> dict:
-                """Return visibility metadata that hides one group member."""
-                return {
-                    "success": True,
-                    "result": [
-                        {"entity_id": "light.hidden_member", "hidden_by": "user"}
-                    ],
-                }
-
-        client = HiddenMemberClient(
-            [
-                {
-                    "entity_id": "light.group",
-                    "attributes": {
-                        "friendly_name": "Group",
-                        "group_entities": [
-                            "light.hidden_member",
-                            "light.visible_member",
-                        ],
-                    },
-                    "state": "on",
-                }
-            ]
-        )
-        result = await _exact_match_search(
-            client,
-            "group",
-            None,
-            10,
-            include_hidden=False,
-            membership_fields=("is_group", "member_entity_ids"),
-        )
-
-        assert result["results"] == [
-            {
-                "entity_id": "light.group",
-                "friendly_name": "Group",
-                "domain": "light",
-                "state": "on",
-                "score": 100,
-                "match_type": "exact_match",
-                "is_group": True,
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_exact_match_finds_friendly_name_substring(self, sample_entities):
-        """Exact match finds entities by friendly_name substring."""
-        client = MockClient(sample_entities)
-        result = await _exact_match_search(client, "bedroom", None, 10)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 1
-        assert result["results"][0]["entity_id"] == "light.bedroom"
-
-    @pytest.mark.asyncio
-    async def test_exact_match_case_insensitive(self, sample_entities):
-        """Exact match is case insensitive."""
-        client = MockClient(sample_entities)
-        result = await _exact_match_search(client, "LIVING", None, 10)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 1
-        assert result["results"][0]["entity_id"] == "light.living_room"
-
-    @pytest.mark.asyncio
-    async def test_exact_match_with_domain_filter(self, sample_entities):
-        """Exact match respects domain_filter."""
-        client = MockClient(sample_entities)
-        # "light" appears in multiple entity types, but filter to switches
-        result = await _exact_match_search(client, "kitchen", "switch", 10)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 1
-        assert result["results"][0]["entity_id"] == "switch.kitchen"
-        assert result["results"][0]["domain"] == "switch"
-
-    @pytest.mark.asyncio
-    async def test_exact_match_no_results(self, sample_entities):
-        """Exact match returns empty results for non-matching query."""
-        client = MockClient(sample_entities)
-        result = await _exact_match_search(client, "nonexistent", None, 10)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 0
-        assert result["total_matches"] == 0
-
-    @pytest.mark.asyncio
-    async def test_exact_match_respects_limit(self, sample_entities):
-        """Exact match respects the limit parameter."""
-        client = MockClient(sample_entities)
-        # "light" appears in multiple entities
-        result = await _exact_match_search(client, "light", None, 1)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 1
-
-    @pytest.mark.asyncio
-    async def test_exact_match_perfect_match_higher_score(self, sample_entities):
-        """Perfect matches have higher score than partial matches."""
-        client = MockClient(sample_entities)
-        result = await _exact_match_search(client, "light", None, 10)
-
-        assert result["success"] is True
-        # Results should be sorted by score
-        scores = [r["score"] for r in result["results"]]
-        assert scores == sorted(scores, reverse=True)
-
-    @pytest.mark.asyncio
-    async def test_exact_match_includes_hidden_with_penalty_by_default(
-        self, sample_entities
-    ):
-        """Hidden entities surface in default results with a score
-        penalty (option c from issue #1170 finding 9). The penalty
-        ensures visible matches sort above hidden ones without
-        excluding the hidden entries entirely.
-        """
-
-        class HidingClient(MockClient):
-            async def send_websocket_message(self, payload):
-                return {
-                    "success": True,
-                    "result": [
-                        {"entity_id": "light.bedroom", "hidden_by": "user"},
-                    ],
-                }
-
-        client = HidingClient(sample_entities)
-        result = await _exact_match_search(client, "bedroom", None, 10)
-        by_id = {r["entity_id"]: r for r in result["results"]}
-        assert "light.bedroom" in by_id, (
-            "hidden entity should be in default results (option c)"
-        )
-        assert by_id["light.bedroom"]["score"] < 100, (
-            f"hidden entity should carry penalty: {by_id['light.bedroom']}"
-        )
-        # If a visible "bedroom" match exists at score 100, it must outrank
-        # the penalised hidden entry.
-        visible_bedroom = next(
-            (
-                r
-                for eid, r in by_id.items()
-                if eid != "light.bedroom" and "bedroom" in eid.lower()
-            ),
-            None,
-        )
-        if visible_bedroom is not None:
-            assert visible_bedroom["score"] >= by_id["light.bedroom"]["score"], (
-                f"visible match must rank ≥ hidden: {by_id}"
-            )
-
-    @pytest.mark.asyncio
-    async def test_exact_match_include_hidden_false_filters(self, sample_entities):
-        """``include_hidden=False`` filters hidden entities out entirely."""
-
-        class HidingClient(MockClient):
-            async def send_websocket_message(self, payload):
-                return {
-                    "success": True,
-                    "result": [
-                        {"entity_id": "light.bedroom", "hidden_by": "user"},
-                    ],
-                }
-
-        client = HidingClient(sample_entities)
-        result = await _exact_match_search(
-            client, "bedroom", None, 10, include_hidden=False
-        )
-        entity_ids = [r["entity_id"] for r in result["results"]]
-        assert "light.bedroom" not in entity_ids
+    ]
 
 
-class TestSearchFallbackResponse:
-    """Test the response format matches issue #214 requirements."""
+async def test_hidden_member_is_withheld_when_hidden_entities_are_excluded(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, tools: SearchTools
+) -> None:
+    """``include_hidden=False`` also covers ids nested in a group's members:
+    the list is withheld, the group signal stays."""
+    _hidden(hass, entity_registry, "hidden_member")
+    hass.states.async_set(
+        "light.group",
+        "on",
+        {
+            "friendly_name": "Group",
+            "group_entities": ["light.hidden_member", "light.visible_member"],
+        },
+    )
+    fields = ["entity_id", "is_group", "member_entity_ids"]
 
-    @pytest.mark.asyncio
-    async def test_exact_match_response_format(self):
-        """Verify exact match response format."""
-        entities = [
-            {
-                "entity_id": "light.test",
-                "attributes": {"friendly_name": "Test Light"},
-                "state": "on",
-            }
-        ]
-        client = MockClient(entities)
-        result = await _exact_match_search(client, "test", None, 10)
+    shown = await tools.ha_search(query="group", result_fields=fields)
+    withheld = await tools.ha_search(
+        query="group", include_hidden=False, result_fields=fields
+    )
 
-        # Verify expected fields from issue #214
-        assert "success" in result
-        assert "results" in result
-        assert result["success"] is True
+    assert shown["entities"] == [
+        {
+            "entity_id": "light.group",
+            "is_group": True,
+            "member_entity_ids": ["light.hidden_member", "light.visible_member"],
+        }
+    ]
+    assert withheld["entities"] == [{"entity_id": "light.group", "is_group": True}]
 
 
-class TestExactMatchSearchCancelledPropagation:
-    """Lock down the CancelledError re-raise added to _exact_match_search
-    after asyncio.gather(return_exceptions=True). Pre-fix the captured
-    cancellation hit the `hidden_filter_unavailable:` log path and the
-    function continued — the canceller waited forever.
-    """
+async def test_hidden_entity_is_kept_but_ranked_below_visible_ones(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, tools: SearchTools
+) -> None:
+    """By default a hidden entity stays in the results with a score penalty,
+    so an equally good visible match sorts above it (#1170 finding 9)."""
+    _hidden(hass, entity_registry, "guest_room")
+    hass.states.async_set(
+        "light.guest_room_lamp", "on", {"friendly_name": "Guest Room Lamp"}
+    )
 
-    @pytest.mark.asyncio
-    async def test_cancelled_on_registry_task_propagates(self):
-        import asyncio
+    result = await tools.ha_search(query="guest_room")
 
-        class CancellingClient:
-            async def get_states(self):
-                return []
+    assert _ids(result) == ["light.guest_room_lamp", "light.guest_room"]
+    visible, hidden = result["entities"]
+    assert hidden["score"] < visible["score"]
 
-            async def send_websocket_message(self, payload):
-                raise asyncio.CancelledError()
 
-        with pytest.raises(asyncio.CancelledError):
-            await _exact_match_search(CancellingClient(), "x", None, 10)
+async def test_hidden_entity_is_dropped_when_hidden_entities_are_excluded(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, tools: SearchTools
+) -> None:
+    _hidden(hass, entity_registry, "guest_room")
+    hass.states.async_set(
+        "light.guest_room_lamp", "on", {"friendly_name": "Guest Room Lamp"}
+    )
+
+    result = await tools.ha_search(query="guest_room", include_hidden=False)
+
+    assert _ids(result) == ["light.guest_room_lamp"]

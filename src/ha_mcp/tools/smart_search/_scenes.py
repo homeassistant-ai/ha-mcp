@@ -312,11 +312,11 @@ class SceneSearchMixin(ConfigFetchMixin):
             return (sid, None, "timeout")
         except Exception as e:  # noqa: BLE001
             if is_timeout_error(e):
-                # Client-side HTTP timeout arrived wrapped; still a
+                # Client-side timeout arrived wrapped; still a
                 # timeout. See is_timeout_error in _fetch.
                 logger.debug(
                     f"Scene individual config fetch ({sid}) timed "
-                    f"out (client-side HTTP timeout): {e}"
+                    f"out (client-side timeout): {e}"
                 )
                 return (sid, None, "timeout")
             logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")

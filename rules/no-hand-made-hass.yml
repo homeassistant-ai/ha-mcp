@@ -31,8 +31,6 @@ ignores:
   - "tests/src/unit/test_card_definitions.py"
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_card_review_round6.py"
-  - "tests/src/unit/test_component_repairs.py"
-  - "tests/src/unit/test_component_store_records.py"
   - "tests/src/unit/test_component_ws_logbook.py"
   - "tests/src/unit/test_config_flow.py"
   - "tests/src/unit/test_custom_component_file_writes.py"

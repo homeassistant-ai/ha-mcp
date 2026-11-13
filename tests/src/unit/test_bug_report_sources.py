@@ -1,40 +1,61 @@
-"""Unit tests for ha_report_issue's identifier and install collectors
-(bug_report_sources) and the report they feed."""
+"""ha_report_issue's identifier and install collectors, on a real Core.
+
+The report redacts this instance's own hostnames and addresses, read from
+Core's ``network/url`` and ``network`` commands, and states the install from
+``system_health/info``. Core's network adapters come from ``ifaddr`` in a unit
+test, so a test that needs particular adapters gives Core its own.
+"""
 
 import asyncio
-from types import SimpleNamespace
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import httpx
+import ifaddr
 import pytest
+from aiohttp import web
+from homeassistant.components.network import async_reload_adapters
+from homeassistant.const import KEY_DATA_LOGGING
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.system_info import async_get_system_info
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import ErrorLogPage
-from ha_mcp.tools import bug_report_sources, tools_bug_report
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.websocket_client import (
+    DEFAULT_COMMAND_WAIT_TIMEOUT,
+    HomeAssistantWebSocketClient,
+)
+from ha_mcp.tools import bug_report_sources
 from ha_mcp.tools.bug_report_redaction import KnownIdentifiers
 from ha_mcp.tools.bug_report_sources import collect_known_identifiers, fetch_ha_install
-from ha_mcp.tools.bug_report_templates import _format_ha_install_value
+from ha_mcp.tools.tools_bug_report import BugReportTools
+from ha_mcp.utils.usage_logger import log_tool_call
 
-NETWORK_URL = {"internal": "http://172.17.0.3:8123", "external": None, "cloud": None}
-NETWORK = {
-    "adapters": [
-        {
-            "name": "lo",
-            "enabled": False,
-            "ipv4": [{"address": "127.0.0.1", "network_prefix": 8}],
-            "ipv6": [{"address": "::1", "network_prefix": 128}],
-        },
-        {
-            "name": "eth0",
-            "enabled": True,
-            "ipv4": [{"address": "192.168.1.150", "network_prefix": 24}],
-            "ipv6": [{"address": "fe80::364d:ad1c:8b5b:e0f5", "network_prefix": 64}],
-        },
+from ._core_client import refused_url
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
+
+ETH0 = ifaddr.Adapter(
+    "eth0",
+    "eth0",
+    [
+        ifaddr.IP("192.168.1.150", 24, "eth0"),
+        ifaddr.IP(("fe80::364d:ad1c:8b5b:e0f5", 0, 2), 64, "eth0"),
     ],
-    "configured_adapters": [],
-}
-HA_INFO = {
-    "version": "core-2026.10.4",
+    index=2,
+)
+LOOPBACK = ifaddr.Adapter(
+    "lo",
+    "lo",
+    [ifaddr.IP("127.0.0.1", 8, "lo"), ifaddr.IP(("::1", 0, 0), 128, "lo")],
+    index=1,
+)
+# What Core reports for a Home Assistant Container install, which a unit test
+# cannot be.
+CONTAINER_INFO = {
+    "version": "2026.10.4",
     "installation_type": "Home Assistant Container",
     "dev": False,
     "hassio": False,
@@ -47,310 +68,306 @@ HA_INFO = {
     "os_version": "7.0.0-1017-azure",
     "arch": "x86_64",
     "timezone": "America/Toronto",
-    "config_dir": "/config",
 }
 
 
-def _ws_client(replies: dict[str, Any], base_url: str) -> SimpleNamespace:
-    async def send(message: dict[str, Any]) -> dict[str, Any]:
-        # Every identifier read carries its own short deadline (#2916 review).
-        # Well under the client's 30 s default command wait.
-        assert 0 < message["_wait_timeout"] <= 10
-        return replies[message["type"]]
+async def _set_up_network(hass: HomeAssistant, *adapters: ifaddr.Adapter) -> None:
+    """Set up ``network`` with these interfaces.
 
-    return SimpleNamespace(send_websocket_message=send, base_url=base_url)
+    ``http`` has already loaded Core's adapters from the plugin's own
+    ``ifaddr`` answer, so Core reloads them, as when the host's interfaces
+    change.
+    """
+    assert await async_setup_component(hass, "network", {})
+    with patch(
+        "homeassistant.components.network.util.ifaddr.get_adapters",
+        return_value=list(adapters),
+    ):
+        await async_reload_adapters(hass)
 
 
-def _ok(result: Any) -> dict[str, Any]:
-    return {"success": True, "result": result}
+@pytest.fixture
+def disconnect_spy() -> Iterator[Any]:
+    """Count WebSocket disconnects; each still runs."""
+    with patch.object(
+        HomeAssistantWebSocketClient,
+        "disconnect",
+        autospec=True,
+        side_effect=HomeAssistantWebSocketClient.disconnect,
+    ) as spy:
+        yield spy
 
 
 class TestCollectKnownIdentifiers:
-    @pytest.mark.asyncio
-    async def test_reads_urls_adapters_and_the_configured_url(self) -> None:
-        replies = {
-            "network/url": _ok(
-                {
-                    "internal": "http://172.17.0.3:8123",
-                    "external": "https://Home.Example.org",
-                    "cloud": None,
-                }
-            ),
-            "network": _ok(NETWORK),
-        }
-        client = _ws_client(replies, "http://ha.example.net:8123")
-        identifiers, warning = await collect_known_identifiers(client)
+    async def test_reads_core_urls_and_adapter_addresses(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _set_up_network(hass, LOOPBACK, ETH0)
+        await hass.config.async_update(
+            internal_url="http://172.17.0.3:8123",
+            external_url="https://Home.Example.org",
+        )
+
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as sent:
+            identifiers, warning = await collect_known_identifiers(core_client)
+
         assert warning is None
+        # The client's own base URL is loopback, like the lo adapter: neither
+        # identifies anybody.
         assert identifiers == KnownIdentifiers(
-            hosts=frozenset({"home.example.org", "ha.example.net"}),
+            hosts=frozenset({"home.example.org"}),
             addresses=frozenset(
                 {"172.17.0.3", "192.168.1.150", "fe80::364d:ad1c:8b5b:e0f5"}
             ),
         )
+        # Every identifier read carries its own short deadline (#2916 review),
+        # well under the client's default command wait.
+        waits = [call.args[0]["_wait_timeout"] for call in sent.await_args_list]
+        assert len(waits) == 2
+        assert all(0 < wait < DEFAULT_COMMAND_WAIT_TIMEOUT for wait in waits)
 
-    @pytest.mark.asyncio
-    async def test_loopback_and_single_label_hosts_stay_readable(self) -> None:
-        """``supervisor`` is the app's own proxy URL host: redacting it would
-        blank every mention of the Supervisor in the logs."""
-        replies = {
-            "network/url": _ok(
-                {"internal": "http://homeassistant:8123", "external": None}
-            ),
-            "network": _ok({"adapters": [NETWORK["adapters"][0]]}),
-        }
-        client = _ws_client(replies, "http://supervisor/core")
-        identifiers, warning = await collect_known_identifiers(client)
+    async def test_loopback_and_single_label_hosts_stay_readable(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A single-label name (``homeassistant``, or ``supervisor`` in the
+        app's proxy URL) is generic: redacting it would blank every mention of
+        the word in the logs."""
+        await _set_up_network(hass, LOOPBACK)
+        await hass.config.async_update(internal_url="http://homeassistant:8123")
+
+        identifiers, warning = await collect_known_identifiers(core_client)
+
         assert warning is None
         assert identifiers == KnownIdentifiers()
 
-    @pytest.mark.asyncio
-    async def test_client_without_a_configured_url_is_tolerated(self) -> None:
-        """The collector never raises; a client with no ``base_url`` (test
-        doubles, or a future client type) just contributes no host."""
-        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
-        client = SimpleNamespace(
-            send_websocket_message=_ws_client(replies, "").send_websocket_message
-        )
-        identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers == KnownIdentifiers()
-        assert warning is None
+    async def test_absolute_fqdn_is_stored_without_its_trailing_dot(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _set_up_network(hass)
+        await hass.config.async_update(internal_url="http://ha.example.net.:8123")
 
-    @pytest.mark.asyncio
-    async def test_absolute_fqdn_is_stored_without_its_trailing_dot(self) -> None:
-        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
-        client = _ws_client(replies, "http://ha.example.net.:8123")
-        identifiers, _ = await collect_known_identifiers(client)
+        identifiers, _ = await collect_known_identifiers(core_client)
+
         assert identifiers.hosts == frozenset({"ha.example.net"})
 
-    @pytest.mark.asyncio
-    async def test_failed_url_read_still_reads_the_adapters(self) -> None:
+    async def test_dropped_url_read_still_reads_the_adapters(
+        self,
+        hass: HomeAssistant,
+        gateway: Gateway,
+        gateway_client: HomeAssistantClient,
+    ) -> None:
         """The two reads are independent: a transient failure of one must not
         drop what the other would have contributed."""
-        replies = {
-            "network/url": {
-                "success": False,
-                "error": "Command failed: timeout",
-                "error_code": "timeout",
-            },
-            "network": _ok(NETWORK),
-        }
-        client = _ws_client(replies, "http://ha.example.net:8123")
-        identifiers, warning = await collect_known_identifiers(client)
+        await _set_up_network(hass, ETH0)
+        gateway.drops.add("network/url")
+
+        identifiers, warning = await collect_known_identifiers(gateway_client)
+
         assert identifiers == KnownIdentifiers(
-            hosts=frozenset({"ha.example.net"}),
-            addresses=frozenset({"192.168.1.150", "fe80::364d:ad1c:8b5b:e0f5"}),
+            addresses=frozenset({"192.168.1.150", "fe80::364d:ad1c:8b5b:e0f5"})
         )
         assert warning is not None
-        assert "network/url: timeout" in warning
-        assert "network:" not in warning.replace("network/url:", "")
+        assert "network/url: " in warning
+        assert "network: " not in warning
 
-    @pytest.mark.asyncio
-    async def test_malformed_configured_url_is_skipped(self) -> None:
-        replies = {"network/url": _ok({}), "network": _ok({"adapters": []})}
-        client = _ws_client(replies, "http://[bad:8123")
-        identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers == KnownIdentifiers()
-        assert warning is None
-
-    @pytest.mark.asyncio
     async def test_a_read_that_never_answers_is_abandoned_at_the_deadline(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The deadline covers connecting too, not only the reply wait, so a
-        socket that hangs before the command is sent cannot stall the report."""
-        monkeypatch.setattr(bug_report_sources, "_IDENTIFIER_READ_DEADLINE_S", 0.05)
+        """A read that hangs cannot stall the report. The client's socket is
+        opened first, so only the hung read can reach the deadline."""
+        await _set_up_network(hass, ETH0)
+        await hass.config.async_update(external_url="https://home.example.org")
+        await core_client.send_websocket_message({"type": "network/url"})
+        monkeypatch.setattr(bug_report_sources, "IDENTIFIER_READ_DEADLINE_S", 1.0)
+        never = asyncio.Event()
 
-        async def send(message: dict[str, Any]) -> dict[str, Any]:
-            if message["type"] == "network/url":
-                await asyncio.sleep(5)
-            return _ok(NETWORK)
+        async def adapters_never_load(hass: HomeAssistant) -> None:
+            await never.wait()
 
-        client = SimpleNamespace(
-            send_websocket_message=send, base_url="http://ha.example.net:8123"
-        )
-        identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers.hosts == frozenset({"ha.example.net"})
-        assert "192.168.1.150" in identifiers.addresses
+        try:
+            with patch(
+                "homeassistant.components.network.websocket.async_get_network",
+                adapters_never_load,
+            ):
+                identifiers, warning = await collect_known_identifiers(core_client)
+        finally:
+            never.set()
+
+        assert identifiers.hosts == frozenset({"home.example.org"})
         assert warning is not None
-        assert "network/url: TimeoutError" in warning
+        assert "network: TimeoutError" in warning
 
-    @pytest.mark.asyncio
-    async def test_failed_adapter_read_keeps_what_was_read_and_warns(self) -> None:
+    async def test_refused_adapter_read_keeps_the_urls_and_warns(
+        self, hass: HomeAssistant, read_only_client: HomeAssistantClient
+    ) -> None:
         """``network`` is admin-only in Core while ``network/url`` is not, so a
         non-admin token must still get the URL hosts redacted."""
-        replies = {
-            "network/url": _ok(NETWORK_URL),
-            # The client's failure envelope: a string error plus error_code.
-            "network": {
-                "success": False,
-                "error": "Command failed: Unauthorized",
-                "error_code": "unauthorized",
-            },
-        }
-        client = _ws_client(replies, "http://ha.example.net:8123")
-        identifiers, warning = await collect_known_identifiers(client)
-        assert identifiers == KnownIdentifiers(
-            hosts=frozenset({"ha.example.net"}), addresses=frozenset({"172.17.0.3"})
-        )
+        await _set_up_network(hass, ETH0)
+        await hass.config.async_update(internal_url="http://172.17.0.3:8123")
+
+        identifiers, warning = await collect_known_identifiers(read_only_client)
+
+        assert identifiers == KnownIdentifiers(addresses=frozenset({"172.17.0.3"}))
         assert warning is not None
         assert "network: unauthorized" in warning
 
-    @pytest.mark.asyncio
-    async def test_transport_failure_keeps_the_configured_host(self) -> None:
+    async def test_no_answer_keeps_the_configured_host(self) -> None:
         """The server's own Home Assistant host needs no read, so it is redacted
         even when the WebSocket is down; the exception text may name that host,
         so the warning never echoes it."""
-        client = SimpleNamespace(
-            send_websocket_message=AsyncMock(
-                side_effect=ConnectionError("cannot reach ha.example.net")
-            ),
-            base_url="http://ha.example.net:8123",
+        client = HomeAssistantClient(
+            base_url="http://ha.example.net:8123", token="token", verify_ssl=False
         )
-        identifiers, warning = await collect_known_identifiers(client)
+        try:
+            with patch.object(
+                client,
+                "send_websocket_message",
+                AsyncMock(
+                    side_effect=HomeAssistantConnectionError(
+                        "cannot reach ha.example.net"
+                    )
+                ),
+            ):
+                identifiers, warning = await collect_known_identifiers(client)
+        finally:
+            await client.close()
+
         assert identifiers == KnownIdentifiers(hosts=frozenset({"ha.example.net"}))
         assert warning is not None
-        assert "network/url: ConnectionError; network: ConnectionError" in warning
+        assert (
+            "network/url: HomeAssistantConnectionError; "
+            "network: HomeAssistantConnectionError" in warning
+        )
         assert "ha.example.net" not in warning
 
+    async def test_malformed_configured_url_is_skipped(self) -> None:
+        """A malformed server URL gets no answer and has no host to redact;
+        the collector still returns instead of raising."""
+        client = HomeAssistantClient(
+            base_url="http://[bad:8123", token="token", verify_ssl=False
+        )
+        try:
+            identifiers, warning = await collect_known_identifiers(client)
+        finally:
+            await client.close()
 
-def _ws_with_event(
-    event_response: Any = None, error: Exception | None = None
-) -> MagicMock:
-    ws = MagicMock()
-    ws.send_command_with_event = AsyncMock(
-        return_value=({"success": True}, event_response), side_effect=error
-    )
-    ws.disconnect = AsyncMock()
-    return ws
+        assert identifiers == KnownIdentifiers()
+        assert warning is not None
 
 
 class TestFetchHaInstall:
-    @pytest.fixture
-    def client(self) -> SimpleNamespace:
-        return SimpleNamespace(base_url="http://ha:8123", token="t", verify_ssl=True)
-
-    @pytest.mark.asyncio
     async def test_keeps_install_facts_and_drops_personal_ones(
-        self, client, monkeypatch
-    ):
-        event = {
-            "event": {"type": "initial", "data": {"homeassistant": {"info": HA_INFO}}}
-        }
-        ws = _ws_with_event(event)
-        monkeypatch.setattr(
-            bug_report_sources,
-            "get_connected_ws_client",
-            AsyncMock(return_value=(ws, None)),
-        )
-        install = await fetch_ha_install(client)
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        disconnect_spy: Any,
+    ) -> None:
+        assert await async_setup_component(hass, "homeassistant", {})
+        assert await async_setup_component(hass, "system_health", {})
+        info = await async_get_system_info(hass)
+
+        install = await fetch_ha_install(core_client)
+
         assert install is not None
-        assert install["installation_type"] == "Home Assistant Container"
-        assert install["os_version"] == "7.0.0-1017-azure"
+        for fact in ("installation_type", "os_name", "os_version", "python_version"):
+            assert install[fact] == info[fact]
         for personal in ("user", "config_dir", "timezone"):
             assert personal not in install
-        ws.disconnect.assert_awaited_once()
+        disconnect_spy.assert_awaited_once()
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("error", [TimeoutError(), RuntimeError("boom")])
+    @pytest.mark.parametrize("failure", ["no_answer", "not_set_up"])
     async def test_failed_read_is_none_and_disconnects(
-        self, client, monkeypatch, error
-    ):
-        ws = _ws_with_event(error=error)
-        monkeypatch.setattr(
-            bug_report_sources,
-            "get_connected_ws_client",
-            AsyncMock(return_value=(ws, None)),
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        disconnect_spy: Any,
+        failure: str,
+    ) -> None:
+        if failure == "no_answer":
+            assert await async_setup_component(hass, "system_health", {})
+            with patch.object(
+                HomeAssistantWebSocketClient,
+                "send_command_with_event",
+                side_effect=TimeoutError(),
+            ):
+                assert await fetch_ha_install(core_client) is None
+        else:
+            # Core answers ``unknown_command`` without ``system_health``.
+            assert await fetch_ha_install(core_client) is None
+        disconnect_spy.assert_awaited_once()
+
+    async def test_unreachable_websocket_is_none(
+        self, hass_access_token: str, socket_enabled: None
+    ) -> None:
+        client = HomeAssistantClient(
+            base_url=refused_url(),
+            token=hass_access_token,
+            verify_ssl=False,
         )
-        assert await fetch_ha_install(client) is None
-        ws.disconnect.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_unreachable_websocket_is_none(self, client, monkeypatch):
-        monkeypatch.setattr(
-            bug_report_sources,
-            "get_connected_ws_client",
-            AsyncMock(return_value=(None, {"error": "refused"})),
-        )
-        assert await fetch_ha_install(client) is None
+        try:
+            assert await fetch_ha_install(client) is None
+        finally:
+            await client.close()
 
 
-class TestFormatHaInstallValue:
-    def test_container_install(self) -> None:
-        install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
-        assert _format_ha_install_value({"ha_install": install}) == (
-            "Home Assistant Container; Linux 7.0.0-1017-azure "
-            "(x86_64, container amd64); Python 3.14.9"
-        )
-
-    def test_install_without_container_arch(self) -> None:
-        install = {
-            "installation_type": "Home Assistant Core",
-            "os_name": "Linux",
-            "os_version": "6.8.0",
-            "arch": "aarch64",
-            "python_version": "3.13.7",
-        }
-        assert _format_ha_install_value({"ha_install": install}) == (
-            "Home Assistant Core; Linux 6.8.0 (aarch64); Python 3.13.7"
-        )
-
-    def test_unavailable(self) -> None:
-        assert _format_ha_install_value({"ha_install": None}) == (
-            "unknown (system_health unavailable)"
-        )
+@pytest.fixture
+def log_file(hass: HomeAssistant, tmp_path: Path) -> Path:
+    """The file Core serves as its error log; asked for before ``core_client``,
+    whose ``api`` setup only serves the log when Core knows the file."""
+    path = tmp_path / "home-assistant.log"
+    path.write_text(
+        "2026-10-30 ERROR (MainThread) [custom] Lost 172.17.0.3 link\n",
+        encoding="utf-8",
+    )
+    hass.data[KEY_DATA_LOGGING] = str(path)
+    return path
 
 
-class TestReportRedactsKnownIdentifiers:
+async def _set_up_reporting_core(hass: HomeAssistant, info: dict[str, Any]) -> Any:
+    """Core with its network, an internal URL and ``system_health``.
+
+    Returns the patch that makes Core report ``info`` as its system info.
+    """
+    await _set_up_network(hass, ETH0)
+    await hass.config.async_update(internal_url="http://172.17.0.3:8123")
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "system_health", {})
+    return patch(
+        "homeassistant.helpers.system_info.async_get_system_info", return_value=info
+    )
+
+
+class TestReport:
     """A bare address of this instance has no network context the regex rules
     can see, so before the known-identifier pass it reached the report."""
 
-    def _report(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        replies: dict[str, Any],
-        install: dict[str, Any] | None,
-    ) -> tools_bug_report.BugReportTools:
-        client = _ws_client(replies, "http://127.0.0.1:8123")
-        client.get_config = AsyncMock(return_value={"version": "2026.10.4"})
-        client.get_states = AsyncMock(return_value=[])
-        client.get_error_log = AsyncMock(
-            return_value=ErrorLogPage(
-                text="2026-10-30 ERROR (MainThread) [custom] Lost 172.17.0.3 link\n",
-                has_more=False,
-            )
-        )
-        recent = [
-            {
-                "timestamp": "2026-10-30T12:00:00",
-                "tool_name": "ha_call_service",
-                "success": False,
-                "execution_time_ms": 5,
-                "error_message": "Setup failed for 172.17.0.3",
-            }
-        ]
-        monkeypatch.setattr(tools_bug_report, "get_recent_logs", lambda **_: recent)
-        monkeypatch.setattr(tools_bug_report, "get_startup_logs", list)
-        monkeypatch.setattr(tools_bug_report, "read_info", AsyncMock(return_value=None))
-        monkeypatch.setattr(
-            tools_bug_report, "fetch_ha_install", AsyncMock(return_value=install)
-        )
-        report = tools_bug_report.BugReportTools(client)
-        for name in (
-            "_detect_component_version",
-            "_detect_tools_entry_status",
-            "_detect_server_entry_status",
-        ):
-            monkeypatch.setattr(report, name, AsyncMock(return_value=None))
-        return report
-
-    @pytest.mark.asyncio
     async def test_bare_known_address_is_redacted_in_every_log(
-        self, monkeypatch
+        self,
+        hass: HomeAssistant,
+        log_file: Path,
+        core_client: HomeAssistantClient,
     ) -> None:
-        install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
-        replies = {"network/url": _ok(NETWORK_URL), "network": _ok(NETWORK)}
-        report = self._report(monkeypatch, replies, install)
-        result = await report.ha_report_issue(report_type="runtime_bug")
+        system_info = await _set_up_reporting_core(hass, CONTAINER_INFO)
+        log_tool_call(
+            "ha_call_service",
+            {},
+            execution_time_ms=5,
+            success=False,
+            error_message="Setup failed for 172.17.0.3",
+        )
+
+        with system_info:
+            result = await BugReportTools(core_client).ha_report_issue(
+                report_type="runtime_bug"
+            )
+
         body = result["issue_body"]
         assert "172.17.0.3" not in body
         assert "172.17.0.3" not in result["formatted_report"]
@@ -363,39 +380,68 @@ class TestReportRedactsKnownIdentifiers:
         )
         assert "warnings" not in result
 
-    @pytest.mark.asyncio
-    async def test_bare_known_address_is_redacted_in_the_addon_log(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_install_without_container_arch(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
-        """The app log is scrubbed at fetch time, inside the identifier scope,
-        so the real Supervisor read is mocked rather than the fetcher."""
-        install = {k: HA_INFO[k] for k in bug_report_sources._HA_INSTALL_KEYS}
-        replies = {"network/url": _ok(NETWORK_URL), "network": _ok(NETWORK)}
-        report = self._report(monkeypatch, replies, install)
-        monkeypatch.setattr(
-            tools_bug_report, "_detect_installation_method", lambda: "addon"
+        core_install = {
+            **CONTAINER_INFO,
+            "installation_type": "Home Assistant Core",
+            "docker": False,
+            "container_arch": None,
+            "os_version": "6.8.0",
+            "arch": "aarch64",
+            "python_version": "3.13.7",
+        }
+        system_info = await _set_up_reporting_core(hass, core_install)
+
+        with system_info:
+            result = await BugReportTools(core_client).ha_report_issue(
+                report_type="runtime_bug"
+            )
+
+        assert (
+            "- **Home Assistant Install:** Home Assistant Core; Linux 6.8.0 "
+            "(aarch64); Python 3.13.7" in result["issue_body"]
         )
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-token")
-        addon_log = httpx.Response(200, text="INFO ha_mcp: upstream is 172.17.0.3\n")
-        with patch("httpx.AsyncClient.get", return_value=addon_log):
-            result = await report.ha_report_issue(report_type="runtime_bug")
+
+    async def test_bare_known_address_is_redacted_in_the_app_log(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aiohttp_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The app log is scrubbed at fetch time, inside the identifier scope."""
+
+        async def own_logs(request: web.Request) -> web.Response:
+            return web.Response(text="INFO ha_mcp: upstream is 172.17.0.3\n")
+
+        supervisor_app = web.Application()
+        supervisor_app.router.add_get("/addons/self/logs", own_logs)
+        supervisor = await aiohttp_client(supervisor_app)
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-token")
+        monkeypatch.setenv(
+            "SUPERVISOR_BASE_URL", str(supervisor.make_url("")).rstrip("/")
+        )
+        system_info = await _set_up_reporting_core(hass, CONTAINER_INFO)
+
+        with system_info:
+            result = await BugReportTools(core_client).ha_report_issue(
+                report_type="runtime_bug"
+            )
+
         assert "172.17.0.3" not in result["addon_logs"]
         assert "upstream is [IP]" in result["addon_logs"]
         assert "upstream is [IP]" in result["issue_body"]
 
-    @pytest.mark.asyncio
     async def test_failed_identifier_read_is_reported_not_fatal(
-        self, monkeypatch
+        self, core_client: HomeAssistantClient
     ) -> None:
-        replies = {
-            "network/url": {
-                "success": False,
-                "error": "Command failed: Unauthorized",
-                "error_code": "unauthorized",
-            }
-        }
-        report = self._report(monkeypatch, replies, None)
-        result = await report.ha_report_issue(report_type="runtime_bug")
+        """Without ``network`` and ``system_health`` Core rejects both reads."""
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
+
         assert result["success"] is True
         assert len(result["warnings"]) == 1
         assert "network/url" in result["warnings"][0]

@@ -22,8 +22,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_camera
 from ha_mcp.tools.tools_camera import CameraTools
 
-from ._camera_test_helpers import error_body as _error_body
 from ._camera_test_helpers import png_bytes as _png
+from ._tool_errors import error_of
 
 
 class TestImage(ImageEntity):
@@ -90,7 +90,7 @@ async def test_dimensions_rejected_for_image_entities(
             entity_id="image.qr_code", **{dimension: 320}
         )
 
-    error = _error_body(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert dimension in error["message"]
     stream.assert_not_called()
@@ -120,7 +120,7 @@ async def test_declared_oversize_is_refused(
     with pytest.raises(ToolError) as exc_info:
         await CameraTools(core_client).ha_get_camera_image(entity_id="image.huge")
 
-    assert _error_body(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+    assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
     body = json.loads(exc_info.value.args[0])
     assert body["limit_bytes"] == 1024
     assert body["entity_id"] == "image.huge"
@@ -148,7 +148,7 @@ async def test_unknown_image_entity_is_not_found(
     with pytest.raises(ToolError) as exc_info:
         await CameraTools(core_client).ha_get_camera_image(entity_id="image.missing")
 
-    error = _error_body(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "ENTITY_NOT_FOUND"
     assert "camera" not in error["message"].lower()
 
@@ -161,4 +161,4 @@ async def test_unavailable_image_is_a_service_error(
     with pytest.raises(ToolError) as exc_info:
         await CameraTools(core_client).ha_get_camera_image(entity_id="image.broken")
 
-    assert _error_body(exc_info)["code"] == "SERVICE_CALL_FAILED"
+    assert error_of(exc_info)["code"] == "SERVICE_CALL_FAILED"

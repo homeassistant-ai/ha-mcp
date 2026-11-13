@@ -32,9 +32,9 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
-    _is_ssl_error,
 )
 from ..client.supervisor_client import make_supervisor_httpx_client
+from ..client.transport_errors import is_ssl_error
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -1367,7 +1367,7 @@ def _raise_connect_failure(
     A certificate-verification failure with verification enabled gets the TLS
     remedy; everything else keeps the route-appropriate network guidance.
     """
-    if _is_ssl_error(e) and client.verify_ssl:
+    if is_ssl_error(e) and client.verify_ssl:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,

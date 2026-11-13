@@ -25,33 +25,13 @@ async def approval_ws_client(server: Any) -> Any:
     # only the ``oauth-mode-token`` placeholder -- so an
     # unparameterised call would authenticate the response
     # subscription as nobody, and a request could be announced over
-    # REST on a channel that can never carry the answer back.
-    # Read once, and catch the miss explicitly: a per-attribute
-    # ``getattr`` with a default would swallow an AttributeError
-    # raised anywhere INSIDE the OAuth proxy's resolution, hand
-    # back None, and silently authenticate as the placeholder the
-    # whole change exists to avoid. Three separate reads would also
-    # be three separate resolutions, with nothing tying them to one
-    # client. A client with no credentials at all is the token
-    # deployments' normal case: pooled default connection.
+    # REST on a channel that can never carry the answer back. With no
+    # request context the proxy raises HomeAssistantAuthError, which
+    # must propagate rather than fall back to the pooled connection.
     client = server.client
-    url: str | None
-    token: str | None
-    verify_ssl: bool | None
-    try:
-        url = client.base_url
-        token = client.token
-        verify_ssl = client.verify_ssl
-    except AttributeError:
-        logger.debug(
-            "policy decisions: %s exposes no per-request credentials; "
-            "opening the approval-response channel on the pooled "
-            "default connection",
-            type(client).__name__,
-            exc_info=True,
-        )
-        url = token = verify_ssl = None
-    return await get_websocket_client(url=url, token=token, verify_ssl=verify_ssl)
+    return await get_websocket_client(
+        url=client.base_url, token=client.token, verify_ssl=client.verify_ssl
+    )
 
 
 async def emit_approval_result_as(
@@ -66,12 +46,15 @@ async def emit_approval_result_as(
     from ..client.rest_client import HomeAssistantClient
     from .events import emit_approval_result
 
-    # Credentials read the way ``approval_ws_client`` reads them,
-    # and for the same reason: this runs in a bus handler, not in a
-    # request, so in OAuth mode ``server.client`` resolves to nobody
-    # and the proxy raises rather than handing back a usable client.
-    # A fresh REST client over the snapshot keeps the result going
-    # out as the same identity the request was announced with.
+    # Credentials come from ``server.client`` for the same reason as in
+    # ``approval_ws_client``: in OAuth mode it is a proxy to the current
+    # request's client. This runs in a bus handler, not in a request,
+    # so the proxy resolves to nobody and raises rather than handing
+    # back a usable client. Unlike there, that failure is caught and
+    # logged on purpose: the decision is already applied, and only its
+    # result event is lost. A fresh REST client over the snapshot keeps
+    # the result going out as the same identity the request was
+    # announced with.
     client = server.client
     url: str | None
     token_value: str | None

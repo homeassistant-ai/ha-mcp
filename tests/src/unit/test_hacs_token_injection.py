@@ -1,26 +1,44 @@
-"""Unit tests for the HACS GitHub-token injection helper.
+"""The pre-boot edits of Core's stored config entries for the E2E images.
 
-``inject_hacs_token`` is the shared pure transform behind both CI
-injection paths (the testcontainer seed copy in ``e2e/conftest.py`` and
-the HAOS qcow2 pre-boot edit in ``haos_runtime.inject_hacs_token_in_qcow2``).
-It authenticates HACS in CI so repository adds don't ride the shared-IP
-60 req/h unauthenticated GitHub budget — the long-standing HACS-install
-e2e flake ("GitHub Ratelimit error" in the HA core log).
+``inject_hacs_token`` is the shared transform behind both CI injection paths
+(the testcontainer seed copy in ``e2e/conftest.py`` and the HAOS qcow2
+pre-boot edit in ``haos_runtime.inject_hacs_token_in_qcow2``). It
+authenticates HACS in CI so repository adds don't ride the shared-IP 60 req/h
+unauthenticated GitHub budget, the long-standing HACS-install e2e flake
+("GitHub Ratelimit error" in the HA core log).
+
+Every document below is what Core writes to ``.storage/core.config_entries``:
+the entries are Core's own storage records of real config entries.
 
 ``haos_runtime`` is loaded by file path: its module-level imports are
 stdlib-only, so this collects everywhere, without assuming ``tests/src``
 is importable as a package.
 """
 
+import copy
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+from homeassistant.config_entries import (
+    STORAGE_KEY,
+    STORAGE_VERSION,
+    STORAGE_VERSION_MINOR,
+)
+from homeassistant.helpers.json import json_bytes
+from pytest_homeassistant.common import MockConfigEntry
 
 HAOS_RUNTIME_PATH = Path(__file__).resolve().parents[1] / "haos_runtime.py"
 
 
-def _load_haos_runtime():
+def _load_haos_runtime() -> ModuleType:
     spec = importlib.util.spec_from_file_location("haos_runtime", HAOS_RUNTIME_PATH)
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -30,156 +48,131 @@ def _load_haos_runtime():
 haos_runtime = _load_haos_runtime()
 
 
-def _doc(entries):
-    return {"version": 1, "data": {"entries": entries}}
+def _stored(entry: MockConfigEntry) -> dict[str, Any]:
+    """The entry as Core stores it."""
+    stored: dict[str, Any] = json.loads(json_bytes(entry.as_storage_fragment))
+    return stored
 
 
-def test_patches_hacs_entry_and_returns_true():
-    doc = _doc(
-        [
-            {"domain": "sun", "data": {}},
-            {"domain": "hacs", "data": {}, "options": {"experimental": False}},
-        ]
+def _doc(*entries: MockConfigEntry) -> dict[str, Any]:
+    """A ``.storage/core.config_entries`` document holding ``entries``."""
+    return {
+        "version": STORAGE_VERSION,
+        "minor_version": STORAGE_VERSION_MINOR,
+        "key": STORAGE_KEY,
+        "data": {"entries": [_stored(entry) for entry in entries]},
+    }
+
+
+def _server_entry() -> MockConfigEntry:
+    return MockConfigEntry(
+        domain="ha_mcp_tools",
+        entry_id=haos_runtime.HA_MCP_SERVER_ENTRY_ID,
+        data={"entry_type": "server"},
+        options={},
     )
+
+
+def test_hacs_entry_gets_the_token_and_keeps_the_rest_of_the_entry() -> None:
+    doc = _doc(
+        MockConfigEntry(domain="sun"),
+        MockConfigEntry(domain="hacs", options={"experimental": False}),
+    )
+    before = copy.deepcopy(doc["data"]["entries"])
+
     assert haos_runtime.inject_hacs_token(doc, "ghs_test_token") is True
+
     hacs = doc["data"]["entries"][1]
     # Same shape HACS' own config flow persists after device-flow auth.
     assert hacs["data"] == {"token": "ghs_test_token"}
-    # Only ``data`` is replaced — the rest of the entry is untouched.
-    assert hacs["options"] == {"experimental": False}
+    # Only ``data`` is replaced, the rest of the entry is untouched.
+    assert {k: v for k, v in hacs.items() if k != "data"} == {
+        k: v for k, v in before[1].items() if k != "data"
+    }
+    assert doc["data"]["entries"][0] == before[0]
 
 
-def test_replaces_existing_stale_token():
-    doc = _doc([{"domain": "hacs", "data": {"token": "stale"}}])
+def test_a_stale_token_is_replaced() -> None:
+    doc = _doc(MockConfigEntry(domain="hacs", data={"token": "stale"}))
     assert haos_runtime.inject_hacs_token(doc, "fresh") is True
     assert doc["data"]["entries"][0]["data"] == {"token": "fresh"}
 
 
-def test_no_hacs_entry_returns_false_and_leaves_doc_untouched():
-    entries = [{"domain": "sun", "data": {}}, {"domain": "demo", "data": {"a": 1}}]
-    doc = _doc([dict(e) for e in entries])
+def test_a_document_without_hacs_is_left_untouched() -> None:
+    doc = _doc(MockConfigEntry(domain="sun"), MockConfigEntry(domain="demo"))
+    before = copy.deepcopy(doc)
     assert haos_runtime.inject_hacs_token(doc, "tok") is False
-    assert doc == _doc(entries)
+    assert doc == before
 
 
-def test_other_entries_untouched_when_hacs_patched():
-    doc = _doc(
-        [
-            {"domain": "demo", "data": {"keep": True}},
-            {"domain": "hacs", "data": {}},
-        ]
-    )
-    haos_runtime.inject_hacs_token(doc, "tok")
-    assert doc["data"]["entries"][0] == {"domain": "demo", "data": {"keep": True}}
-
-
-def test_qcow2_injector_is_noop_without_token(monkeypatch, tmp_path):
+def test_qcow2_injector_is_noop_without_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """No GITHUB_TOKEN -> no guestfish invocation, no exception."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-    def _fail(*args, **kwargs):
+    def _fail(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("guestfish must not run without GITHUB_TOKEN")
 
     monkeypatch.setattr(haos_runtime.subprocess, "run", _fail)
     haos_runtime.inject_hacs_token_in_qcow2(tmp_path / "image.qcow2")
 
 
-# ---------------------------------------------------------------------------
-# _set_embedded_server_pip_spec (#1527) - same pure-transform contract as
-# inject_hacs_token above: entry_id-keyed (domain is shared with the tools
-# entry), in-place, boolean found/not-found.
-# ---------------------------------------------------------------------------
+# set_embedded_server_pip_spec (#1527): matched by entry_id, because the
+# server entry shares its domain with the tools entry.
 
 
-def _entries_doc(entries):
-    return {"data": {"entries": entries}}
-
-
-def test_pip_spec_patches_only_the_server_entry():
-    doc = _entries_doc(
-        [
-            {"entry_id": "other", "domain": "ha_mcp_tools", "options": {}},
-            {"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID, "options": {}},
-        ]
+def test_pip_spec_and_admin_token_reach_only_the_server_entry() -> None:
+    doc = _doc(
+        MockConfigEntry(domain="ha_mcp_tools", entry_id="other"), _server_entry()
     )
+
     assert (
-        haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl", "tok") is True
+        haos_runtime.set_embedded_server_pip_spec(doc, "file:///w.whl", "tok") is True
     )
-    entries = doc["data"]["entries"]
-    assert entries[1]["options"]["pip_spec"] == "file:///w.whl"
-    assert "pip_spec" not in entries[0]["options"]
 
-
-def test_the_staged_server_entry_gets_an_administrator_token():
+    tools, server = doc["data"]["entries"]
+    assert server["options"]["pip_spec"] == "file:///w.whl"
     # #2427: the component no longer creates its own administrator.
-    doc = _entries_doc([{"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID}])
-    haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl", "tok")
-    assert doc["data"]["entries"][0]["data"]["admin_token"] == "tok"
+    assert server["data"]["admin_token"] == "tok"
+    assert server["data"]["entry_type"] == "server"
+    assert "pip_spec" not in tools["options"]
+    assert "admin_token" not in tools["data"]
 
 
-def test_pip_spec_creates_options_when_absent():
-    doc = _entries_doc([{"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID}])
-    assert (
-        haos_runtime._set_embedded_server_pip_spec(doc, "ha-mcp==9.9.9", "tok") is True
+def test_pip_spec_without_a_server_entry_leaves_the_document_untouched() -> None:
+    doc = _doc(
+        MockConfigEntry(
+            domain="ha_mcp_tools", entry_id="other", options={"pip_spec": "keep"}
+        )
     )
-    assert doc["data"]["entries"][0]["options"]["pip_spec"] == "ha-mcp==9.9.9"
+    before = copy.deepcopy(doc)
+    assert haos_runtime.set_embedded_server_pip_spec(doc, "x", "tok") is False
+    assert doc == before
 
 
-def test_pip_spec_returns_false_and_leaves_doc_untouched_when_missing():
-    doc = _entries_doc([{"entry_id": "other", "options": {"pip_spec": "keep"}}])
-    assert haos_runtime._set_embedded_server_pip_spec(doc, "x", "tok") is False
-    assert doc["data"]["entries"][0]["options"]["pip_spec"] == "keep"
+# remove_tools_entry (#2292): the transform behind the no-tools lanes' qcow2
+# pre-boot edit (remove_tools_entry_in_qcow2), discriminated the way the
+# component itself dispatches (data.entry_type == "server" is the server
+# entry; anything else under the ha_mcp_tools domain is the tools entry).
 
 
-# ---------------------------------------------------------------------------
-# remove_tools_entry (#2292) - the pure transform behind the no-tools lanes'
-# qcow2 pre-boot edit (remove_tools_entry_in_qcow2). Same contract family as
-# the transforms above: in-place, discriminated the way the component itself
-# dispatches (data.entry_type == "server" is the server entry; anything else
-# under the ha_mcp_tools domain is the tools entry).
-# ---------------------------------------------------------------------------
-
-
-def test_removes_tools_entry_and_keeps_server_entry():
-    doc = _entries_doc(
-        [
-            {"domain": "sun", "data": {}},
-            {
-                "domain": "ha_mcp_tools",
-                "entry_id": "e2e_test_ha_mcp_tools_entry",
-                "data": {},
-            },
-            {
-                "domain": "ha_mcp_tools",
-                "entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID,
-                "data": {"entry_type": "server"},
-            },
-        ]
+def test_the_tools_entry_is_removed_and_the_server_entry_kept() -> None:
+    doc = _doc(
+        MockConfigEntry(domain="sun"),
+        MockConfigEntry(domain="ha_mcp_tools", entry_id="e2e_test_ha_mcp_tools_entry"),
+        _server_entry(),
     )
-    removed = haos_runtime.remove_tools_entry(doc)
-    assert removed == ["e2e_test_ha_mcp_tools_entry"]
+
+    assert haos_runtime.remove_tools_entry(doc) == ["e2e_test_ha_mcp_tools_entry"]
+
     remaining = doc["data"]["entries"]
     assert [e["domain"] for e in remaining] == ["sun", "ha_mcp_tools"]
-    assert remaining[1]["data"]["entry_type"] == "server"
+    assert remaining[1]["entry_id"] == haos_runtime.HA_MCP_SERVER_ENTRY_ID
 
 
-def test_missing_entry_type_means_tools_entry():
-    """A ha_mcp_tools entry with no data.entry_type at all is the tools entry —
-    the same default the component's own setup dispatcher applies."""
-    doc = _entries_doc([{"domain": "ha_mcp_tools", "entry_id": "legacy"}])
-    assert haos_runtime.remove_tools_entry(doc) == ["legacy"]
-    assert doc["data"]["entries"] == []
-
-
-def test_no_tools_entry_returns_empty_and_leaves_doc_untouched():
-    entries = [
-        {"domain": "sun", "data": {}},
-        {
-            "domain": "ha_mcp_tools",
-            "entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID,
-            "data": {"entry_type": "server"},
-        },
-    ]
-    doc = _entries_doc([dict(e, data=dict(e["data"])) for e in entries])
+def test_a_document_without_a_tools_entry_is_left_untouched() -> None:
+    doc = _doc(MockConfigEntry(domain="sun"), _server_entry())
+    before = copy.deepcopy(doc)
     assert haos_runtime.remove_tools_entry(doc) == []
-    assert doc == _entries_doc(entries)
+    assert doc == before

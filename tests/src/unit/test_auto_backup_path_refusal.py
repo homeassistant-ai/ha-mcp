@@ -14,7 +14,6 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,12 +34,9 @@ from ha_mcp.tools.auto_backup import PathNotAllowedError, with_auto_backup
 from ha_mcp.tools.backup_on_demand import capture_on_demand
 
 from ._backup_restore_helpers import backup_tool
+from ._tool_errors import error_body
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
-
-
-def _payload(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc.value))
 
 
 @pytest.fixture
@@ -98,7 +94,7 @@ async def test_refused_path_write_reports_the_refusal(
         await tool(path="/backup/x.txt")
 
     assert any(call.args[:2] == (DOMAIN, "read_file") for call in spy.call_args_list)
-    payload = _payload(exc)
+    payload = error_body(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert payload["error"]["message"] == "Path not allowed: /backup/x.txt"
     assert payload["path"] == "/backup/x.txt"
@@ -158,7 +154,7 @@ async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
     with pytest.raises(ToolError) as exc:
         await tool(scope="edits", action=action, backup_name="file-x")
 
-    payload = _payload(exc)
+    payload = error_body(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     message = payload["error"]["message"]
     assert message.startswith(f"Cannot {action} 'file-x': its live file")
@@ -176,7 +172,7 @@ async def test_on_demand_capture_of_a_refused_path_reports_the_refusal(
     with pytest.raises(ToolError) as exc:
         await capture_on_demand(mgr, "file", "/backup/x.txt")
 
-    payload = _payload(exc)
+    payload = error_body(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert payload["path"] == "/backup/x.txt"
 

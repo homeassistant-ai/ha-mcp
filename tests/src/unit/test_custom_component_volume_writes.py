@@ -39,12 +39,6 @@ from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 FileService = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``."""
-    return hass_tmp_config_dir
-
-
 async def _file_service(hass: HomeAssistant, allowed: str) -> FileService:
     """Set the tools entry up with ``allowed`` as an extra directory and return
     a caller of its services that presents the caller token."""

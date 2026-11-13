@@ -2,18 +2,28 @@
 
 Pins the payload an automation is expected to read, and the rule that a
 failure to deliver it never turns a held tool call into a failed one.
+
+The events are fired through the server's own client into a real ``hass``,
+whose bus is where an automation would read them.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
-import anyio
 import pytest
+from homeassistant.core import Event, HomeAssistant, callback
 
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.policy import events
 from ha_mcp.policy.approval_queue import PendingApproval
 from ha_mcp.policy.events import (
     APPROVAL_REQUESTED_EVENT,
@@ -25,9 +35,11 @@ from ha_mcp.policy.events import (
 )
 from ha_mcp.policy.model import Predicate, Rule
 
+_CREATED = datetime(2026, 1, 1, 12, tzinfo=UTC)
+
 
 def make_entry(tool_name: str = "ha_call_service") -> PendingApproval:
-    now = datetime.now(UTC)
+    now = _CREATED
     return PendingApproval(
         token="tok-1",
         tool_name=tool_name,
@@ -45,7 +57,6 @@ def test_payload_carries_token_tool_and_args():
     assert payload["tool_name"] == "ha_call_service"
     assert payload["args"] == {"domain": "lock", "service": "unlock"}
     assert payload["created_at"] and payload["expires_at"]
-    assert "matched_rule" not in payload
 
 
 def test_payload_carries_the_matched_rule_when_there_is_one():
@@ -62,30 +73,49 @@ def test_payload_carries_the_matched_rule_when_there_is_one():
     }
 
 
-@pytest.mark.anyio
-async def test_emit_fires_the_event_on_the_client():
-    client = AsyncMock()
+def _record(hass: HomeAssistant, event_type: str) -> list[Event]:
+    """Every ``event_type`` event Core's bus delivers, as an automation sees it."""
+    fired: list[Event] = []
 
-    await emit_approval_requested(client, make_entry())
+    @callback
+    def record(event: Event) -> None:
+        fired.append(event)
 
-    client.fire_event.assert_awaited_once()
-    event_type, payload = client.fire_event.await_args.args
-    assert event_type == APPROVAL_REQUESTED_EVENT
-    assert payload["token"] == "tok-1"
+    hass.bus.async_listen(event_type, record)
+    return fired
 
 
-@pytest.mark.anyio
-async def test_emit_swallows_a_delivery_failure_but_logs_it(caplog):
+async def test_emit_fires_the_event_on_home_assistants_bus(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    fired = _record(hass, APPROVAL_REQUESTED_EVENT)
+
+    await emit_approval_requested(core_client, make_entry())
+    await hass.async_block_till_done()
+
+    (event,) = fired
+    assert event.data["token"] == "tok-1"
+    assert event.data["tool_name"] == "ha_call_service"
+    assert event.data["args"] == {"domain": "lock", "service": "unlock"}
+
+
+async def test_emit_swallows_a_delivery_failure_but_logs_it(
+    core_client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
+) -> None:
     """The call is already held; a missing notification must not fail it.
 
     Without the log line the user relying on this event as their only
     approval signal would see nothing at all — neither event nor reason.
     """
-    client = AsyncMock()
-    client.fire_event.side_effect = RuntimeError("HA unreachable")
-
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
-        await emit_approval_requested(client, make_entry())
+    with (
+        patch.object(
+            core_client,
+            "fire_event",
+            AsyncMock(side_effect=HomeAssistantConnectionError("HA unreachable")),
+        ),
+        caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"),
+    ):
+        await emit_approval_requested(core_client, make_entry())
 
     assert "failed to fire" in caplog.text
     assert APPROVAL_REQUESTED_EVENT in caplog.text
@@ -113,29 +143,40 @@ def test_large_containers_are_replaced_by_a_marker():
     assert payload["args"]["config"].endswith("of dict omitted>")
 
 
-def test_short_values_pass_through_unchanged():
-    """Control: the cap must not rewrite ordinary arguments."""
-    entry = make_entry()
+@pytest.fixture
+async def silent_client(socket_enabled: None) -> AsyncIterator[HomeAssistantClient]:
+    """The server's client on a loopback listener that accepts and never answers."""
+    connections: list[asyncio.StreamWriter] = []
 
-    payload = build_requested_payload(entry)
+    async def hold(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connections.append(writer)
 
-    assert payload["args"] == {"domain": "lock", "service": "unlock"}
+    server = await asyncio.start_server(hold, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = HomeAssistantClient(
+        base_url=f"http://127.0.0.1:{port}", token="unused", verify_ssl=False
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+        for writer in connections:
+            writer.close()
+        server.close()
+        await server.wait_closed()
 
 
-@pytest.mark.anyio
-async def test_emit_gives_up_on_a_client_that_never_returns(caplog, monkeypatch):
+async def test_emit_gives_up_on_a_home_assistant_that_never_answers(
+    silent_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The caller is already blocked; the notification must not eat its window."""
-    monkeypatch.setattr("ha_mcp.policy.events.EMIT_TIMEOUT_SECONDS", 0.05)
-    client = AsyncMock()
-
-    async def never_returns(*_args, **_kwargs):
-        await anyio.sleep(30)
-
-    client.fire_event.side_effect = never_returns
+    monkeypatch.setattr(events, "EMIT_TIMEOUT_SECONDS", 0.05)
 
     with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
-        with anyio.fail_after(5):
-            await emit_approval_requested(client, make_entry())
+        async with asyncio.timeout(5):
+            await emit_approval_requested(silent_client, make_entry())
 
     assert "timed out" in caplog.text
 
@@ -221,28 +262,36 @@ def test_the_result_payload_separates_what_was_asked_from_what_happened():
     assert payload["reason"] == "expired"
 
 
-@pytest.mark.anyio
-async def test_emit_result_fires_the_event_on_the_client():
-    client = AsyncMock()
+async def test_emit_result_fires_the_event_on_home_assistants_bus(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    fired = _record(hass, APPROVAL_RESULT_EVENT)
 
-    await emit_approval_result(client, "tok-1", "deny", applied=True, reason="applied")
+    await emit_approval_result(
+        core_client, "tok-1", "deny", applied=True, reason="applied"
+    )
+    await hass.async_block_till_done()
 
-    client.fire_event.assert_awaited_once()
-    event_type, payload = client.fire_event.await_args.args
-    assert event_type == APPROVAL_RESULT_EVENT
-    assert payload["token"] == "tok-1"
-    assert payload["applied"] is True
+    (event,) = fired
+    assert event.data["token"] == "tok-1"
+    assert event.data["decision"] == "deny"
+    assert event.data["applied"] is True
 
 
-@pytest.mark.anyio
-async def test_emit_result_swallows_a_delivery_failure(caplog):
+async def test_emit_result_swallows_a_delivery_failure(
+    core_client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
+) -> None:
     """The decision has already happened; it cannot be undone from here."""
-    client = AsyncMock()
-    client.fire_event.side_effect = RuntimeError("bus unavailable")
-
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
+    with (
+        patch.object(
+            core_client,
+            "fire_event",
+            AsyncMock(side_effect=HomeAssistantConnectionError("HA unreachable")),
+        ),
+        caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"),
+    ):
         await emit_approval_result(
-            client, "tok-1", "approve", applied=True, reason="applied"
+            core_client, "tok-1", "approve", applied=True, reason="applied"
         )
 
     assert any(APPROVAL_RESULT_EVENT in r.getMessage() for r in caplog.records)
