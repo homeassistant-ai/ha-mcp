@@ -3,7 +3,7 @@
 A ``next_offset`` token is opaque to a caller, who passes it back; these tests
 drive the public tool, ``LogTools.get_logs``, over real HTTP against
 ``FakeGatewayd`` (``_journal_gatewayd.py``) and check what a token may be
-used for: which log, which order and window it continues, what it is refused
+used for: which log and window it continues, what it is refused
 on, and which parameters the tool flags as ignored. The paging itself is in
 ``test_supervisor_logs_hours_back.py``, the token's text in
 ``test_journal_window_reads.py``.
@@ -16,7 +16,7 @@ import pytest
 from homeassistant.components.api import DATA_LOGGING
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.journal_window import EPOCH, Order, WindowToken
+from ha_mcp.client.journal_window import EPOCH, WindowToken
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._gateway import gateway as gateway
@@ -32,17 +32,14 @@ from ._journal_gatewayd import (
 from ._journal_gatewayd import gatewayd as gatewayd
 from ._journal_gatewayd import in_app_client as in_app_client
 from ._journal_gatewayd import journal_proxy as journal_proxy
-from ._journal_gatewayd import proxied_client as proxied_client
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-# The first line a second page of a 2-hour window of per_minute(300), in 50s.
-_SECOND_PAGE_STARTS = {"oldest": "m70", "newest": "m50"}
 
-
-async def first_page(client: HomeAssistantClient, order: Order) -> dict[str, Any]:
-    return await ask(client, limit=50, hours_back=2, order=order)
+async def first_page(client: HomeAssistantClient) -> dict[str, Any]:
+    """The first 50 entries of a 2-hour window; per_minute(300) continues at m70."""
+    return await ask(client, limit=50, hours_back=2)
 
 
 @pytest.mark.usefixtures("clock")
@@ -51,12 +48,11 @@ class TestATokenCarriesItsRead:
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
         gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, "oldest")
+        first = await first_page(in_app_client)
         second = await ask(
             in_app_client,
             limit=50,
             hours_back=9,
-            order="oldest",
             offset=first["next_offset"],
         )
         assert second["hours_back"] == 2
@@ -64,43 +60,25 @@ class TestATokenCarriesItsRead:
         assert "hours_back=9 does not match" in second["warnings"][0]
         assert "hours_back=2" in second["pagination_hint"]
 
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
     async def test_a_token_alone_continues_its_read(
-        self, order: Order, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
-        # Neither hours_back nor order is repeated: both come from the token.
+        # hours_back is not repeated: it comes from the token, unflagged.
         gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, order)
+        first = await first_page(in_app_client)
         second = await ask(in_app_client, limit=50, offset=first["next_offset"])
         assert second["hours_back"] == 2
-        assert second["order"] == order
+        assert second["order"] == "oldest"
         assert "warnings" not in second
-        assert second["log"].splitlines()[0] == _SECOND_PAGE_STARTS[order]
-        assert f"order='{order}'" in second["pagination_hint"]
+        assert second["log"].splitlines()[0] == "m70"
+        assert "hours_back=2" in second["pagination_hint"]
 
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
-    async def test_a_different_order_with_a_token_is_flagged(
-        self, order: Order, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
-    ):
-        # Like a different hours_back, it is flagged and the token's is kept.
-        gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, order)
-        other: Order = "newest" if order == "oldest" else "oldest"
-        second = await ask(
-            in_app_client, limit=50, order=other, offset=first["next_offset"]
-        )
-        assert second["order"] == order
-        assert second["log"].splitlines()[0] == _SECOND_PAGE_STARTS[order]
-        assert f"order='{other}' does not match" in second["warnings"][0]
-
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
     @pytest.mark.parametrize(
         ("source", "slug"),
         [("system_service", "core"), ("supervisor", "core_ssh")],
     )
     async def test_a_token_for_another_log_is_refused(
         self,
-        order: Order,
         source: str,
         slug: str,
         gatewayd: FakeGatewayd,
@@ -109,7 +87,7 @@ class TestATokenCarriesItsRead:
         # The cursor names an entry of one journal stream; read against
         # another it would continue from the wrong place without an error.
         gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, order)
+        first = await first_page(in_app_client)
         sent = len(gatewayd.requests)
         with pytest.raises(ToolError, match="continues the log of 'host'") as raised:
             await ask(
@@ -129,27 +107,20 @@ class TestATokenCarriesItsRead:
             ("system_service", "host", "host"),
         ],
     )
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
     async def test_a_token_reaches_the_journal(
         self,
-        order: Order,
         source: str,
         slug: str,
         path: str,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
     ):
-        # Oldest-first continues 5 entries after the 11th (m49): from m44.
-        # Newest-first from the window's first entry (m59) with skip 30: the
-        # page is the 30 entries before that position, m59..m30, shown m30 first.
+        # The page continues 5 entries after the 11th (m49): from m44.
         gatewayd.load(per_minute(60))
-        cursor = gatewayd.cursor(10 if order == "oldest" else 0)
-        skip = 5 if order == "oldest" else 30
-        token = str(WindowToken(order, EPOCH, 2, path, cursor, skip))
+        token = str(WindowToken(EPOCH, 2, path, gatewayd.cursor(10), 5))
         out = await ask(in_app_client, source=source, slug=slug, offset=token)
-        first_line = "m44" if order == "oldest" else "m30"
-        assert out["log"].splitlines()[0] == first_line
-        assert out["order"] == order
+        assert out["log"].splitlines()[0] == "m44"
+        assert gatewayd.requests[-1].path.endswith(f"/{path}/logs")
 
     async def test_a_malformed_token_is_refused(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
@@ -165,14 +136,14 @@ class TestATokenOnTheWrongSource:
     async def test_a_window_token_on_the_error_log_is_refused(
         self, core_client: HomeAssistantClient
     ):
-        token = str(WindowToken("oldest", EPOCH, 2, "host", "s=a;i=1", 5))
+        token = str(WindowToken(EPOCH, 2, "host", "s=a;i=1", 5))
         with pytest.raises(ToolError, match="Invalid 'offset' token for source='error"):
             await ask(core_client, source="error_log", slug=None, offset=token)
 
     async def test_a_window_token_on_the_logbook_is_refused(
         self, core_client: HomeAssistantClient
     ):
-        token = str(WindowToken("oldest", EPOCH, 2, "host", "s=a;i=1", 5))
+        token = str(WindowToken(EPOCH, 2, "host", "s=a;i=1", 5))
         with pytest.raises(ToolError, match="Cursor tokens only apply"):
             await ask(core_client, source="logbook", slug=None, offset=token)
 
@@ -242,14 +213,10 @@ class TestIgnoredParameterWarning:
         out = await ask(in_app_client, source=source, slug=slug, hours_back=3)
         assert not any("hours_back" in w for w in warnings_of(out))
 
-    @pytest.mark.parametrize(
-        ("hours_back", "order", "search"),
-        [(None, "oldest", None), (2, "newest", None), (2, "oldest", "needle")],
-    )
+    @pytest.mark.parametrize(("hours_back", "search"), [(None, None), (2, "needle")])
     async def test_offset_where_the_journal_cannot_page_is_flagged(
         self,
         hours_back: int | None,
-        order: Order,
         search: str | None,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
@@ -258,14 +225,13 @@ class TestIgnoredParameterWarning:
         out = await ask(
             in_app_client,
             hours_back=hours_back,
-            order=order,
             search=search,
             offset=50,
             limit=50,
         )
         assert any("'offset'" in w for w in warnings_of(out))
 
-    async def test_offset_on_an_oldest_first_window_is_not_flagged(
+    async def test_an_integer_offset_on_a_page_read_is_not_flagged(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
         gatewayd.load(per_minute(120))
@@ -274,19 +240,9 @@ class TestIgnoredParameterWarning:
             source="supervisor",
             slug="core_ssh",
             hours_back=2,
-            order="oldest",
             offset=50,
             limit=50,
         )
-        assert not any("offset" in w for w in warnings_of(out))
-
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
-    async def test_a_token_alone_is_not_flagged(
-        self, order: Order, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
-    ):
-        gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, order)
-        out = await ask(in_app_client, limit=50, offset=first["next_offset"])
         assert not any("offset" in w for w in warnings_of(out))
 
     async def test_a_token_with_a_search_is_flagged(
@@ -294,7 +250,7 @@ class TestIgnoredParameterWarning:
     ):
         # A search reads the whole window at once; the token has no use there.
         gatewayd.load(per_minute(300))
-        first = await first_page(in_app_client, "oldest")
+        first = await first_page(in_app_client)
         out = await ask(
             in_app_client,
             search="m",

@@ -158,12 +158,6 @@ def _collect_log_warnings(
                 f"Parameter 'offset' applies to source='{source}' only on a "
                 "page read (hours_back and no search); ignored here"
             )
-        elif isinstance(offset, int) and order != "oldest":
-            warnings.append(
-                "An integer 'offset' applies only with order='oldest'; a "
-                "newest-first page read continues with its 'next_offset' "
-                "token. Ignored here"
-            )
     elif source not in ("logbook", "error_log", "fault_log") and offset:
         warnings.append(
             "Parameter 'offset' only applies to source='logbook', 'error_log', "

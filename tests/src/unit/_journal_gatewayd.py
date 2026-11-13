@@ -4,24 +4,20 @@
 passes a client's ``Range`` header to gatewayd and sends the first entry's
 cursor back as ``X-First-Cursor``. It answers ranges the way
 ``journal-gatewayd.c`` does: entries in journal order, whose timestamps need
-not be in order; seek to a cursor, to the first entry stamped at or after
-``since``, to the tail (a negative skip) or to the head (a skip of 0, ``-0``
-included); a negative skip past the head clamps to the head, a positive one
-past the end returns nothing; count by ENTRY; end at the first entry stamped
-after ``until`` when one is given.
-
-A positive skip past the journal's end is answered two ways. systemd 258, and
-Home Assistant OS 16 and later through its patch of gatewayd, return nothing.
-Gatewayd before systemd 258 returns the last entry: ``sd_journal_next_skip``
-reports how far it got and gatewayd prints where it stopped. A test that reads
-past the end runs against both (``both_gatewayds``, ``FakeGatewayd.clamps``);
-the others run against the first.
+not be in order; seek to a cursor, to an entry stamped at or after ``since``
+(by bisection, as ``journal_file_move_to_entry_by_realtime`` does through
+``generic_array_bisect``; here over one entry array), to the tail (a negative
+skip) or to the head (a skip of 0, ``-0`` included); a negative skip past the
+head clamps to the head, a positive one past the end returns nothing (systemd
+258, and Home Assistant OS through its own patch of gatewayd); count by ENTRY;
+end at the first entry stamped after ``until`` when one is given.
 
 The fixtures put the fake where the server's client reaches Supervisor: at
-``SUPERVISOR_BASE_URL`` for the app (``in_app_client``), or behind Core's
-hassio proxy path (``proxied_client``); ``journal_client`` is both.
-Core's own proxy imports ``aiohasupervisor``, which a unit test does not
-install, so the proxy path is a route of the reverse proxy in ``_gateway``.
+``SUPERVISOR_BASE_URL`` for the app (``in_app_client``), or at the client's
+``/api/hassio/<path>/logs`` path outside the app (``hassio_path_client``);
+``journal_client`` is both. The second does not run Core's hassio proxy:
+that proxy imports ``aiohasupervisor``, which a unit test does not install, so
+the path is a route of the reverse proxy in ``_gateway`` answered by the fake.
 """
 
 from __future__ import annotations
@@ -38,7 +34,6 @@ import pytest
 from aiohttp import web
 from freezegun.api import FrozenDateTimeFactory
 
-from ha_mcp.client.journal_window import Order
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_logs import LogTools
 
@@ -73,15 +68,10 @@ class Seen:
 
 
 class FakeGatewayd:
-    """A journal of ``(epoch seconds, lines)`` entries, in journal order.
-
-    ``clamps`` selects the pre-258 answer to a skip past the end: the last
-    entry instead of nothing. The ``gatewayd`` fixture sets it.
-    """
+    """A journal of ``(epoch seconds, lines)`` entries, in journal order."""
 
     def __init__(self, entries: list[Entry]) -> None:
         self.entries = entries
-        self.clamps = False
         # Every Range answered, and every request that reached ``handle``.
         self.ranges: list[str] = []
         self.requests: list[Seen] = []
@@ -97,9 +87,6 @@ class FakeGatewayd:
         # From this entry on the journal has a new seqnum id, as after a
         # journal reset; its seqnums start again at 1.
         self.reset_at: int | None = None
-        # Entries from index ``other_id[0]`` up to ``other_id[1]`` come from
-        # another journal file, with a seqnum id of their own.
-        self.other_id: tuple[int, int] | None = None
         # Entries before this index have been vacuumed away.
         self.head = 0
         # Never answer: the Supervisor is stuck.
@@ -129,8 +116,6 @@ class FakeGatewayd:
         reset = self.reset_at is not None and index >= self.reset_at
         seqnum = index - (self.reset_at or 0) + 1 if reset else index + 1
         seqnum_id = 2 if reset else 1
-        if self.other_id and self.other_id[0] <= index < self.other_id[1]:
-            seqnum, seqnum_id = index - self.other_id[0] + 1, 3
         stamp = self.entries[index][0] * 1_000_000
         return f"s={seqnum_id:032x};i={seqnum:x};b={7:032x};m={index:x};t={stamp:x};x=0"
 
@@ -151,25 +136,33 @@ class FakeGatewayd:
                 position = self.head  # a skip of 0, "-0" included, seeks the head
             if skip < 0:
                 return max(position + skip, self.head), count  # clamped to the head
-            return self._past_end(position + skip), count
+            return position + skip, count
         match = _REALTIME.match(range_header)
         assert match, f"unexpected Range {range_header!r}"
         since = int(match[1]) if match[1] else 0
         skip, count = int(match[3]), int(match[4])
         assert skip >= 0
-        first = next(
-            (i for i, e in enumerate(self.entries) if i >= self.head and e[0] >= since),
-            len(self.entries),
-        )
-        if first == len(self.entries):
-            return first, count  # nothing at or after since, in every version
-        return self._past_end(first + skip), count
+        return self.seek(since) + skip, count
 
-    def _past_end(self, start: int) -> int:
-        """Before systemd 258 a forward skip past the end stops on the last entry."""
-        if self.clamps and self.entries and start >= len(self.entries):
-            return len(self.entries) - 1
-        return start
+    def seek(self, since: float) -> int:
+        """Where a ``realtime=<since>`` seek lands, as gatewayd bisects for it.
+
+        The last entry is tested first: when it is stamped before ``since``
+        nothing is selected. Otherwise the range narrows to the left while the
+        middle entry is stamped at or after ``since``. With stamps out of order
+        that is not always the first such entry, as in gatewayd.
+        """
+        left, right = self.head, len(self.entries)
+        if left == right or self.entries[right - 1][0] < since:
+            return right
+        right -= 1
+        while left < right:
+            middle = (left + right) // 2
+            if self.entries[middle][0] >= since:
+                right = middle
+            else:
+                left = middle + 1
+        return left
 
     def answer(self, range_header: str) -> str:
         return self.reply(range_header)[0]
@@ -226,19 +219,10 @@ class FakeGatewayd:
         return web.Response(text=text, headers=headers)
 
 
-# Marks a test, or a class whose tests all take ``gatewayd``, to run against
-# both answers to a skip past the journal's end.
-both_gatewayds = pytest.mark.parametrize(
-    "gatewayd", [False, True], indirect=True, ids=["empty-past-end", "clamps"]
-)
-
-
 @pytest.fixture
-def gatewayd(request: pytest.FixtureRequest) -> FakeGatewayd:
-    """An empty journal; ``both_gatewayds`` picks the answer past its end."""
-    journal = FakeGatewayd([])
-    journal.clamps = getattr(request, "param", False)
-    return journal
+def gatewayd() -> FakeGatewayd:
+    """An empty journal."""
+    return FakeGatewayd([])
 
 
 @pytest.fixture
@@ -260,7 +244,7 @@ async def in_app_client(
 
 @pytest.fixture
 async def journal_proxy(gateway: Gateway, gatewayd: FakeGatewayd) -> Gateway:
-    """``gateway`` answering Core's hassio log paths from the fake journal.
+    """``gateway`` answering the client's ``/api/hassio/<path>/logs`` from the fake journal.
 
     Takes effect for ``gateway_client`` only when requested before it.
     """
@@ -269,21 +253,21 @@ async def journal_proxy(gateway: Gateway, gatewayd: FakeGatewayd) -> Gateway:
 
 
 @pytest.fixture
-async def proxied_client(
+async def hassio_path_client(
     journal_proxy: Gateway,
     gateway_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[HomeAssistantClient]:
-    """The server's client outside the app: logs come through Core's proxy."""
+    """The server's client outside the app, reading ``/api/hassio/<path>/logs``."""
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     yield gateway_client
 
 
-@pytest.fixture(params=["in-app", "through-core"])
+@pytest.fixture(params=["in-app", "hassio-path"])
 def journal_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
     """The client on each route the journal is reached by."""
-    name = "in_app_client" if request.param == "in-app" else "proxied_client"
+    name = "in_app_client" if request.param == "in-app" else "hassio_path_client"
     client: HomeAssistantClient = request.getfixturevalue(name)
     return client
 
@@ -319,7 +303,6 @@ async def ask(client: HomeAssistantClient, **overrides: Any) -> dict[str, Any]:
 async def page_through(
     clock: FrozenDateTimeFactory,
     client: HomeAssistantClient,
-    order: Order,
     limit: int,
     hours_back: int,
     between: Callable[[int], None] | None = None,
@@ -328,7 +311,7 @@ async def page_through(
 
     ``between(n)`` runs before page ``n`` (from 1), to log entries meanwhile.
     """
-    window = {"hours_back": hours_back, "limit": limit, "order": order}
+    window = {"hours_back": hours_back, "limit": limit}
     clock.move_to(NOW)
     pages = [await ask(client, **window)]
     while pages[-1]["has_more"]:
@@ -344,20 +327,13 @@ def joined(pages: list[dict[str, Any]]) -> list[str]:
     return [line for page in pages for line in page["log"].splitlines()]
 
 
-def window_oracle(
-    journal: FakeGatewayd, since: datetime, order: Order = "oldest"
-) -> list[str]:
+def window_oracle(journal: FakeGatewayd, since: datetime) -> list[str]:
     """The window straight from the fake's entries, without any Range.
 
-    Every entry from the first one stamped at or after ``since`` (where
-    gatewayd's seek lands, also when stamps are out of order) to the end.
+    Every entry from where gatewayd's seek lands for ``since`` to the end.
     """
-    start = next(
-        (i for i, e in enumerate(journal.entries) if e[0] >= since.timestamp()),
-        len(journal.entries),
-    )
-    lines = [line for _, entry in journal.entries[start:] for line in entry]
-    return lines if order == "oldest" else list(reversed(lines))
+    start = journal.seek(since.timestamp())
+    return [line for _, entry in journal.entries[start:] for line in entry]
 
 
 def hinted_call(hint: str) -> dict[str, Any]:

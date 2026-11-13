@@ -5,7 +5,8 @@
 are the pieces they are built from. The reads run over real
 HTTP against ``FakeGatewayd`` (``_journal_gatewayd.py``) with the server's
 real client on a real ``hass``, as the app reaches Supervisor directly
-(``in_app_client``) or through Core's hassio proxy (``proxied_client``).
+(``in_app_client``) or at its ``/api/hassio/...`` path outside the app
+(``hassio_path_client``).
 The tool-level paging tests are in ``test_supervisor_logs_hours_back.py``.
 """
 
@@ -16,7 +17,6 @@ import pytest
 
 from ha_mcp.client.journal_window import (
     EPOCH,
-    Order,
     WindowToken,
     parse_window_token,
     read_logs_page,
@@ -38,17 +38,16 @@ from ._journal_gatewayd import (
     FakeGatewayd,
     ask,
     at,
-    both_gatewayds,
     per_minute,
 )
 from ._journal_gatewayd import (
     clock as clock,
 )
 from ._journal_gatewayd import gatewayd as gatewayd
+from ._journal_gatewayd import hassio_path_client as hassio_path_client
 from ._journal_gatewayd import in_app_client as in_app_client
 from ._journal_gatewayd import journal_client as journal_client
 from ._journal_gatewayd import journal_proxy as journal_proxy
-from ._journal_gatewayd import proxied_client as proxied_client
 
 
 class TestRanges:
@@ -73,46 +72,27 @@ class TestWindowStart:
 
 
 class TestTokens:
-    @pytest.mark.parametrize(
-        ("order", "skip", "before"),
-        [("oldest", 5, ""), ("newest", 5, ""), ("newest", 0, "s=a;i=1;m=2")],
-    )
-    def test_a_token_round_trips(self, order: Order, skip: int, before: str):
-        token = WindowToken(
-            order, NOW, 2, "addons/core_ssh", "s=a;i=1;t=5", skip, before
-        )
+    def test_a_token_round_trips(self):
+        token = WindowToken(NOW, 2, "addons/core_ssh", "s=a;i=1;t=5", 5)
         assert parse_window_token(str(token)) == token
 
     @pytest.mark.parametrize(
         ("token", "reason"),
         [
             ("window:", "a window token reads"),
-            ("window:sideways:1:1:host:c::0", "a window token reads"),
-            ("window:oldest:x:1:host:c::0", "a window token reads"),
-            ("window:oldest:1:x:host:c::0", "a window token reads"),
-            ("window:oldest:1:1::c::0", "a window token reads"),  # no path
-            ("window:oldest:1:1:host:::0", "a window token reads"),  # no cursor
-            ("window:oldest:1:1:host:c:", "a window token reads"),  # no skip
-            (
-                "window:oldest:1:1:host:c::x",
-                "a window token reads",
-            ),  # skip not a number
-            ("window:oldest:1:1:host:c::\u00b2", "a window token reads"),  # not decimal
-            (
-                "window:oldest:1:1:host:c:d:0",
-                "a window token reads",
-            ),  # oldest-first has no before
-            (
-                "window:newest:1:1:host:c::0",
-                "a window token reads",
-            ),  # neither a before nor a position
-            ("window:newest:1:1:host:c:d:3", "a window token reads"),  # both
-            ("window:oldest:99999999999999999999:1:host:c::0", "out of range"),
+            ("window:x:1:host:c:0", "a window token reads"),
+            ("window:1:x:host:c:0", "a window token reads"),
+            ("window:1:1::c:0", "a window token reads"),  # no path
+            ("window:1:1:host::0", "a window token reads"),  # no cursor
+            ("window:1:1:host:c:", "a window token reads"),  # no skip
+            ("window:1:1:host:c:x", "a window token reads"),  # skip not a number
+            ("window:1:1:host:c:\u00b2", "a window token reads"),  # not decimal
+            ("window:99999999999999999999:1:host:c:0", "out of range"),
         ],
     )
     def test_a_malformed_token_is_refused(self, token: str, reason: str):
         # Each differs from a token that parses by this one defect.
-        assert parse_window_token("window:oldest:1:1:host:c::0")
+        assert parse_window_token("window:1:1:host:c:0")
         with pytest.raises(ValueError, match=reason):
             parse_window_token(token)
 
@@ -126,8 +106,9 @@ class TestTheFakeMatchesGatewayd:
 
     Derived from systemd v256 ``request_reader_entries`` and ``request_handler
     _entries`` (seek, then ``sd_journal_previous_skip(-n_skip + 1)`` or
-    ``sd_journal_next_skip(n_skip + 1)``), and the v258 guard against a skip
-    past the end. Keeps the fake honest when it changes.
+    ``sd_journal_next_skip(n_skip + 1)``), the v258 guard against a skip past
+    the end, and the bisection behind a ``realtime=`` seek. Keeps the fake
+    honest when it changes.
     """
 
     @pytest.mark.parametrize(
@@ -156,21 +137,19 @@ class TestTheFakeMatchesGatewayd:
         assert gatewayd.answer(range_).splitlines() == answer
 
     @pytest.mark.parametrize(
-        ("range_", "answer_before_258"),
-        [
-            ("entries=<2>:3:1", ["m0"]),
-            ("entries=:7:1", ["m0"]),
-            (f"realtime={at(2)}::3:1", ["m0"]),
-        ],
+        "range_", ["entries=<2>:3:1", "entries=:7:1", f"realtime={at(2)}::3:1"]
     )
-    @both_gatewayds
-    def test_a_skip_past_the_end_is_answered_both_ways(
-        self, range_: str, answer_before_258: list[str], gatewayd: FakeGatewayd
-    ):
+    def test_a_skip_past_the_end_is_empty(self, range_: str, gatewayd: FakeGatewayd):
         gatewayd.load(per_minute(5))
-        range_ = range_.replace("<2>", gatewayd.cursor(2))
-        answered = gatewayd.answer(range_).splitlines()
-        assert answered == (answer_before_258 if gatewayd.clamps else [])
+        assert gatewayd.answer(range_.replace("<2>", gatewayd.cursor(2))) == ""
+
+    def test_a_realtime_seek_bisects_past_a_late_stamp(self, gatewayd: FakeGatewayd):
+        # A clock step stamped m124 at NOW. Bisecting for 120 minutes back never
+        # tests it, so the seek lands on m120, not on the first entry stamped
+        # at or after the start.
+        gatewayd.load(per_minute(150))
+        gatewayd.entries[25] = (at(0), ["m124"])
+        assert gatewayd.answer(f"realtime={at(120)}::0:1") == "m120"
 
 
 @pytest.mark.usefixtures("clock")
@@ -184,7 +163,6 @@ class TestReadWindow:
         assert read.lines == [f"m{m}" for m in range(120, -1, -1)]
         assert len(gatewayd.ranges) == 1  # a short window needs no probe
 
-    @both_gatewayds
     async def test_a_multi_line_entry_at_the_cap_is_not_mistaken_for_overflow(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -200,7 +178,6 @@ class TestReadWindow:
         assert read.lines[-3:] == ["Traceback:", "  File x", "Error"]
         assert read.lines[0] == "m50"  # nothing from before the window
 
-    @both_gatewayds
     async def test_an_oversized_window_returns_its_newest_entries(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -212,7 +189,6 @@ class TestReadWindow:
         assert read.lines == [f"m{m}" for m in range(99, -1, -1)]
 
     @pytest.mark.parametrize("blank", ["   ", ""])
-    @both_gatewayds
     async def test_a_blank_entry_past_the_cap_still_counts_as_more(
         self, blank: str, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -248,7 +224,6 @@ class TestReadWindow:
         read = await read_window(in_app_client, "dns", NOW - timedelta(hours=1))
         assert read.complete and read.lines == []
 
-    @both_gatewayds
     async def test_a_window_of_exactly_the_cap_is_complete(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -271,21 +246,21 @@ class TestRoutes:
         assert seen.query == {"no_colors": "true"}
         assert seen.authorization == f"Bearer {SUPERVISOR_TOKEN}"
 
-    async def test_outside_the_app_the_range_goes_through_core(
-        self, gatewayd: FakeGatewayd, proxied_client: HomeAssistantClient
+    async def test_outside_the_app_the_range_goes_to_the_hassio_path(
+        self, gatewayd: FakeGatewayd, hassio_path_client: HomeAssistantClient
     ):
-        await read_window(proxied_client, "supervisor", NOW - timedelta(hours=1))
+        await read_window(hassio_path_client, "supervisor", NOW - timedelta(hours=1))
         seen = gatewayd.requests[0]
         assert seen.path == "/api/hassio/supervisor/logs"
         assert seen.range is not None and seen.range.startswith("realtime=")
-        assert seen.authorization == f"Bearer {proxied_client.token}"
+        assert seen.authorization == f"Bearer {hassio_path_client.token}"
 
     @pytest.mark.usefixtures("clock")
     async def test_the_first_page_reads_the_same_on_both_routes(
         self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ):
         gatewayd.load(per_minute(3000))
-        out = await ask(journal_client, limit=500, hours_back=2, order="oldest")
+        out = await ask(journal_client, limit=500, hours_back=2)
         assert gatewayd.ranges[0] == f"realtime={at(120)}::0:500"
         assert out["log"].splitlines() == [f"m{m}" for m in range(120, -1, -1)]
         assert out["has_more"] is False
@@ -298,7 +273,7 @@ class TestRoutes:
 class TestTheDeadline:
     """Real time: ``asyncio.timeout`` never fires under a frozen clock."""
 
-    @pytest.mark.parametrize("read", ["window", "newest page", "oldest page"])
+    @pytest.mark.parametrize("read", ["window", "page"])
     async def test_a_stuck_supervisor_cannot_hang_the_read(
         self, read: str, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -320,7 +295,6 @@ class TestTheDeadline:
                 if read == "window":
                     await read_logs_window(client, "supervisor", since)
                 else:
-                    order: Order = "newest" if read == "newest page" else "oldest"
-                    await read_logs_page(client, "supervisor", since, 1, order, 5)
+                    await read_logs_page(client, "supervisor", since, 1, 5)
         finally:
             await client.close()

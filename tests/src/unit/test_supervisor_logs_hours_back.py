@@ -1,21 +1,20 @@
 """``hours_back`` on ``ha_get_logs(source="supervisor"|"system_service")``.
 
-The journal selects the window: both orders start from its first entry
-(``Range: realtime=<since>``), and every later page is read from a cursor
-Supervisor sent as ``X-First-Cursor``, which Supervisor and Core's hassio
-proxy pass through. The tests drive the public tool,
-``LogTools.get_logs``, over real HTTP against ``FakeGatewayd``
-(``_journal_gatewayd.py``; the reads under it are in
+The journal selects the window and serves it oldest-first: the first page
+starts at its first entry (``Range: realtime=<since>``), and every later page
+is read from a cursor Supervisor sent as ``X-First-Cursor``. The tests drive
+the public tool, ``LogTools.get_logs``, over real HTTP against
+``FakeGatewayd`` (``_journal_gatewayd.py``; the reads under it are in
 ``test_journal_window_reads.py``, tokens and ignored parameters in
 ``test_supervisor_logs_window_tokens.py``), which answers ranges the way
 ``journal-gatewayd.c`` does, so they check what the tool returns for what the
 journal holds, not a copy of the selection. The server's client is the real
 one on a real ``hass`` (``core_client``); it reaches the journal as the app
-does (``in_app_client``) or through Core's hassio proxy (``proxied_client``).
+does (``in_app_client``) or at its ``/api/hassio/...`` path outside the app
+(``hassio_path_client``).
 
-A test that reads past the journal's end runs against both answers to a skip
-past it (``both_gatewayds``). The clock is frozen at ``NOW`` and moved a minute
-between pages, as the real one moves.
+The clock is frozen at ``NOW`` and moved a minute between pages, as the real
+one moves.
 """
 
 from datetime import timedelta
@@ -25,12 +24,7 @@ import pytest
 from freezegun.api import FrozenDateTimeFactory
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.journal_window import (
-    EPOCH,
-    Order,
-    WindowToken,
-    parse_window_token,
-)
+from ha_mcp.client.journal_window import EPOCH
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._gateway import gateway as gateway
@@ -40,7 +34,6 @@ from ._journal_gatewayd import (
     FakeGatewayd,
     ask,
     at,
-    both_gatewayds,
     hinted_call,
     joined,
     page_through,
@@ -51,18 +44,33 @@ from ._journal_gatewayd import (
     clock as clock,
 )
 from ._journal_gatewayd import gatewayd as gatewayd
+from ._journal_gatewayd import hassio_path_client as hassio_path_client
 from ._journal_gatewayd import in_app_client as in_app_client
 from ._journal_gatewayd import journal_client as journal_client
 from ._journal_gatewayd import journal_proxy as journal_proxy
-from ._journal_gatewayd import proxied_client as proxied_client
 
 # Reaches before 1970, which the window defines as the whole journal.
 _WHOLE_JOURNAL = 10**12
 
 
 @pytest.mark.usefixtures("clock")
-@both_gatewayds
-class TestOldestFirstPages:
+class TestPages:
+    async def test_pages_run_from_the_window_start_to_its_end(
+        self,
+        clock: FrozenDateTimeFactory,
+        gatewayd: FakeGatewayd,
+        journal_client: HomeAssistantClient,
+    ):
+        gatewayd.load(per_minute(3000))
+        pages = await page_through(clock, journal_client, 50, 2)
+        assert joined(pages) == [f"m{m}" for m in range(120, -1, -1)]
+        assert [p["returned_lines"] for p in pages] == [50, 50, 21]
+        assert {p["order"] for p in pages} == {"oldest"}
+        assert gatewayd.ranges[0] == f"realtime={at(120)}::0:50"
+        assert pages[-1]["has_more"] is False
+        assert "next_offset" not in pages[-1]
+        assert "window_complete" not in pages[0]
+
     async def test_pages_continue_from_an_entry_while_the_clock_moves_on(
         self,
         clock: FrozenDateTimeFactory,
@@ -77,7 +85,6 @@ class TestOldestFirstPages:
         pages = await page_through(
             clock,
             in_app_client,
-            "oldest",
             limit=50,
             hours_back=2,
             between=lambda n: gatewayd.log(-n, f"new{n}"),
@@ -87,7 +94,8 @@ class TestOldestFirstPages:
         assert lines[121:] == [f"new{n}" for n in range(1, len(pages))]
         assert all(p["window_start"] == "2026-11-05T10:00:00+00:00" for p in pages)
         assert gatewayd.ranges[0] == f"realtime={at(120)}::0:50"
-        assert "offset='window:oldest:" in pages[0]["pagination_hint"]
+        assert "order='oldest'" in pages[0]["pagination_hint"]
+        assert f"offset='window:{at(120)}:2:host:" in pages[0]["pagination_hint"]
 
     async def test_an_integer_offset_skips_into_the_window(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
@@ -157,65 +165,30 @@ class TestOldestFirstPages:
         rest = await ask(in_app_client, slug="core", offset=out["next_offset"])
         assert rest["log"] == "m10"
 
+    async def test_an_empty_journal_is_an_empty_page(
+        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+    ):
+        # Supervisor sends no X-First-Cursor for an empty answer. Taking that
+        # for a proxy that dropped the header would refuse a quiet service's
+        # window instead of returning it empty.
+        out = await ask(in_app_client, limit=50, hours_back=1)
+        assert out["log"] == "" and out["has_more"] is False
 
-@pytest.mark.usefixtures("clock")
-@both_gatewayds
-class TestNewestFirstPages:
-    async def test_pages_run_back_to_the_window_start_and_stop_there(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        journal_client: HomeAssistantClient,
+    async def test_a_window_older_than_the_journal_is_empty(
+        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+    ):
+        gatewayd.load([(at(300), ["old"])])
+        out = await ask(in_app_client, limit=50, hours_back=1)
+        assert out["log"] == "" and out["has_more"] is False
+
+    async def test_a_window_of_one_page_is_read_in_one_request(
+        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
         gatewayd.load(per_minute(3000))
-        pages = await page_through(clock, journal_client, "newest", 50, 2)
-        assert joined(pages) == [f"m{m}" for m in range(121)]
-        assert [p["returned_lines"] for p in pages] == [50, 50, 21]
-        assert gatewayd.ranges[0] == f"realtime={at(120)}::0:50"
-        assert pages[-1]["has_more"] is False
-        assert "next_offset" not in pages[-1]
-        assert "window_complete" not in pages[0]
-
-    async def test_a_page_that_reaches_the_window_start_exactly_has_no_more(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load(per_minute(3000))
-        pages = await page_through(clock, in_app_client, "newest", 121, 2)
-        assert len(pages) == 1
-        assert joined(pages) == [f"m{m}" for m in range(121)]
-
-    async def test_a_whole_journal_window_stops_at_the_head(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load(per_minute(120))
-        pages = await page_through(clock, in_app_client, "newest", 50, 24)
-        assert joined(pages) == [f"m{m}" for m in range(120)]
-
-    async def test_a_one_entry_page_is_the_newest_entry(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load(per_minute(10))
-        pages = await page_through(clock, in_app_client, "newest", 1, 1)
-        assert joined(pages) == [f"m{m}" for m in range(10)]
-
-    async def test_a_one_entry_journal(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load([(at(5), ["only"])])
-        pages = await page_through(clock, in_app_client, "newest", 50, 1)
-        assert joined(pages) == ["only"]
+        out = await ask(in_app_client, limit=100, hours_back=1)
+        assert out["log"].splitlines() == [f"m{m}" for m in range(60, -1, -1)]
+        assert out["has_more"] is False
+        assert len(gatewayd.requests) == 1
 
     @pytest.mark.parametrize("size", [250, 10_000, 100_000])
     async def test_the_requests_of_a_page_do_not_grow_with_the_window(
@@ -223,122 +196,78 @@ class TestNewestFirstPages:
     ):
         # Every request counts against the client's one deadline, and a real
         # journal answers a deep skip in seconds. An entry an hour apart puts
-        # the window's start exactly ``size`` entries back, 50 older ones
-        # before it.
+        # the window's start exactly ``size`` entries back.
         gatewayd.load([(at(60 * m), [f"m{m}"]) for m in range(size + 49, -1, -1)])
         hours_back = size - 1
         sent = len(gatewayd.requests)
         first = await ask(in_app_client, limit=100, hours_back=hours_back)
-        assert first["log"].splitlines() == [f"m{m}" for m in range(100)]
-        assert len(gatewayd.requests) - sent <= 6
+        top = size - 1
+        assert first["log"].splitlines() == [f"m{m}" for m in range(top, top - 100, -1)]
+        assert len(gatewayd.requests) - sent <= 3  # the page, its end probe, reread
         sent = len(gatewayd.requests)
-        middle = await ask(in_app_client, limit=100, offset=first["next_offset"])
-        assert middle["log"].splitlines() == [f"m{m}" for m in range(100, 200)]
-        assert len(gatewayd.requests) - sent <= 3  # the first entry's check, the page
-        # The page before the window's first entry is cut there: 60 entries.
-        start = parse_window_token(first["next_offset"]).since
-        last = WindowToken(
-            "newest",
-            start,
-            hours_back,
-            "host",
-            gatewayd.cursor(50),
-            0,
-            gatewayd.cursor(110),
-        )
-        sent = len(gatewayd.requests)
-        out = await ask(in_app_client, limit=100, offset=str(last))
-        assert out["returned_lines"] == 60 and out["has_more"] is False
-        # The window's first entry is checked, then bisected (log2(limit)),
-        # verified and read.
-        assert len(gatewayd.requests) - sent <= 12
-
-    @pytest.mark.parametrize("hours_back", [2, _WHOLE_JOURNAL])
-    @pytest.mark.parametrize("limit", [7, 50])
-    async def test_the_pages_are_the_oldest_first_read_reversed(
-        self,
-        hours_back: int,
-        limit: int,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        # Entries logged between the newest-first pages are not part of the
-        # read and do not move a page: no gap, no overlap, no new line.
-        gatewayd.load(per_minute(150))
-        gatewayd.entries[40] = (gatewayd.entries[40][0], ["Traceback", " File", "Err"])
-        since = EPOCH if hours_back == _WHOLE_JOURNAL else NOW - timedelta(hours=2)
-        expected = window_oracle(gatewayd, since)
-        oldest = await page_through(clock, in_app_client, "oldest", limit, hours_back)
-        newest = await page_through(
-            clock,
-            in_app_client,
-            "newest",
-            limit,
-            hours_back,
-            between=lambda n: gatewayd.log(-n, f"new{n}"),
-        )
-        assert joined(oldest) == expected
-        assert joined(newest) == list(reversed(expected))
+        second = await ask(in_app_client, limit=100, offset=first["next_offset"])
+        assert second["log"].splitlines() == [
+            f"m{m}" for m in range(top - 100, top - 200, -1)
+        ]
+        assert len(gatewayd.requests) - sent <= 4  # and the token's entry check
 
 
 @pytest.mark.usefixtures("clock")
-class TestNewestFirstWindowsThatNeverReachTheEnd:
-    """Nothing here probes past the journal's end, so one gatewayd answers for both."""
-
-    async def test_an_empty_journal(
-        self,
-        clock: FrozenDateTimeFactory,
-        in_app_client: HomeAssistantClient,
-    ):
-        pages = await page_through(clock, in_app_client, "newest", 50, 1)
-        assert pages[0]["log"] == "" and pages[0]["has_more"] is False
-
-    async def test_a_window_older_than_the_journal_is_empty(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load([(at(300), ["old"])])
-        pages = await page_through(clock, in_app_client, "newest", 50, 1)
-        assert joined(pages) == []
-
-    async def test_lines_are_shown_newest_first(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
-    ):
-        gatewayd.load(
-            [(at(30), ["Traceback:", "  File x", "Error"]), (at(20), ["m20"])]
-        )
-        out = await ask(in_app_client, slug="core", limit=5, hours_back=1)
-        assert out["log"].splitlines() == ["m20", "Error", "  File x", "Traceback:"]
-
-    async def test_a_window_of_one_page_is_read_in_one_request(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+class TestOrderNewestWithAWindow:
+    async def test_it_is_served_oldest_first_with_a_warning(
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ):
         gatewayd.load(per_minute(3000))
-        out = await ask(in_app_client, limit=100, hours_back=1)
-        assert out["log"].splitlines() == [f"m{m}" for m in range(61)]
-        assert out["has_more"] is False
-        assert len(gatewayd.requests) == 1
+        out = await ask(journal_client, limit=50, hours_back=2, order="newest")
+        assert out["log"].splitlines() == [f"m{m}" for m in range(120, 70, -1)]
+        assert out["order"] == "oldest"
+        assert any("served oldest-first" in w for w in out["warnings"])
+        follow = await ask(
+            journal_client, limit=50, order="newest", offset=out["next_offset"]
+        )
+        assert follow["log"].splitlines()[0] == "m70"
+        assert any("served oldest-first" in w for w in follow["warnings"])
 
 
 @pytest.mark.usefixtures("clock")
-@both_gatewayds
-class TestTheWindowEnds:
-    """Paging stops at the window's end on both gatewayd versions."""
+class TestAVacuumedEntry:
+    async def test_a_token_whose_entry_is_gone_is_refused_not_misread(
+        self,
+        clock: FrozenDateTimeFactory,
+        gatewayd: FakeGatewayd,
+        in_app_client: HomeAssistantClient,
+    ):
+        # Gatewayd seeks a vacuumed cursor on to the next entry left, and the
+        # skip counts from there: entries the read never returned would be
+        # skipped, reported as success.
+        gatewayd.load(per_minute(400))
+        window = {"hours_back": 24, "limit": 5}
+        first = await ask(in_app_client, **window)
+        second = await ask(in_app_client, **window, offset=first["next_offset"])
+        assert second["log"].splitlines() == [f"m{m}" for m in range(394, 389, -1)]
+        gatewayd.head = 13  # the journal drops its oldest entries
+        sent = len(gatewayd.requests)
+        with pytest.raises(ToolError) as raised:
+            await ask(in_app_client, **window, offset=second["next_offset"])
+        message = str(raised.value)
+        assert "no longer in the journal" in message
+        assert "RESOURCE_NOT_FOUND" in message
+        assert "Start a new read without 'offset'" in message
+        assert "Ensure Supervisor is available" not in message
+        assert len(gatewayd.requests) - sent == 1  # refused before any page
 
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
+
+@pytest.mark.usefixtures("clock")
+class TestTheWindowEnds:
     async def test_one_entry_pages_end(
         self,
-        order: Order,
         clock: FrozenDateTimeFactory,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
     ):
         gatewayd.load(per_minute(5))
-        pages = await page_through(clock, in_app_client, order, 1, 1)
-        assert joined(pages) == window_oracle(gatewayd, NOW - timedelta(hours=1), order)
+        pages = await page_through(clock, in_app_client, 1, 1)
+        assert joined(pages) == window_oracle(gatewayd, NOW - timedelta(hours=1))
         assert len(pages) == 5
 
     async def test_a_traceback_as_the_windows_last_entry_ends_paging(
@@ -354,13 +283,12 @@ class TestTheWindowEnds:
                 (at(10), ["Traceback", " File", "Error"]),
             ]
         )
-        pages = await page_through(clock, in_app_client, "oldest", 3, 1)
+        pages = await page_through(clock, in_app_client, 3, 1)
         assert joined(pages) == ["a", "b", "Traceback", " File", "Error"]
         assert pages[-1]["has_more"] is False
 
 
 @pytest.mark.usefixtures("clock")
-@both_gatewayds
 class TestFollowingTheHint:
     """An agent copies the printed call; the pages must equal the window.
 
@@ -370,21 +298,17 @@ class TestFollowingTheHint:
     continuation must come from the token alone.
     """
 
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
     @pytest.mark.parametrize("limit", [2, 7, 50])
     async def test_the_hinted_calls_read_the_window_exactly(
         self,
-        order: Order,
         limit: int,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
     ):
         gatewayd.load(per_minute(60))
         gatewayd.entries[20] = (gatewayd.entries[20][0], ["Traceback", " File", "Err"])
-        out = await ask(
-            in_app_client, hours_back=_WHOLE_JOURNAL, limit=limit, order=order
-        )
-        expected = window_oracle(gatewayd, EPOCH, order)
+        out = await ask(in_app_client, hours_back=_WHOLE_JOURNAL, limit=limit)
+        expected = window_oracle(gatewayd, EPOCH)
         pages = [out]
         while out["has_more"]:
             assert len(pages) < 400, "paging does not end"
@@ -395,23 +319,19 @@ class TestFollowingTheHint:
             out = await ask(in_app_client, **hinted_call(out["pagination_hint"]))
             pages.append(out)
         lines = joined(pages)
-        if order == "oldest":
-            # Oldest-first reaches the journal's end, so it also reads what
-            # was logged meanwhile, in order, after the window as it stood.
-            assert lines[: len(expected)] == expected
-            assert all(line.startswith("logged") for line in lines[len(expected) :])
-        else:
-            assert lines == expected
+        # The read reaches the journal's end, so it also reads what was
+        # logged meanwhile, in order, after the window as it stood.
+        assert lines[: len(expected)] == expected
+        assert all(line.startswith("logged") for line in lines[len(expected) :])
 
 
 @pytest.mark.usefixtures("clock")
-@both_gatewayds
 class TestOutOfOrderStamps:
     """After a clock step an entry can be stamped before entries logged earlier.
 
-    The window is what the journal's ``realtime=`` seek selects, in both
-    orders: from the first entry it lands on to the journal's end, whatever
-    the stamps after it say.
+    The window runs from where the journal's ``realtime=`` seek lands to the
+    journal's end, whatever the stamps after it say: no ``until`` is sent, so
+    an out-of-order stamp cannot end a read.
     """
 
     @staticmethod
@@ -431,143 +351,42 @@ class TestOutOfOrderStamps:
         for back in early:
             self.stamp_early(gatewayd, back)
         expected = window_oracle(gatewayd, NOW - timedelta(hours=2))
-        assert len(expected) == 121  # the window holds the early ones too
-        oldest = await page_through(clock, in_app_client, "oldest", 50, 2)
-        newest = await page_through(clock, in_app_client, "newest", 50, 2)
-        assert joined(oldest) == expected
-        assert joined(newest) == list(reversed(expected))
-
-    async def test_a_late_stamp_before_the_window_starts_it_there(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        # The seek lands on the first entry stamped at or after the start,
-        # which here is an entry the clock step stamped late.
-        gatewayd.load(per_minute(150))
-        gatewayd.entries[-125] = (at(0), gatewayd.entries[-125][1])
-        expected = window_oracle(gatewayd, NOW - timedelta(hours=2))
-        assert len(expected) == 125
-        oldest = await page_through(clock, in_app_client, "oldest", 50, 2)
-        newest = await page_through(clock, in_app_client, "newest", 50, 2)
-        assert joined(oldest) == expected
-        assert joined(newest) == list(reversed(expected))
+        pages = await page_through(clock, in_app_client, 50, 2)
+        assert joined(pages) == expected
+        assert {f"m{back - 1}" for back in early} <= set(expected)
 
 
 @pytest.mark.usefixtures("clock")
-@both_gatewayds
 class TestAJournalReset:
-    """A new seqnum id in the journal's tail leaves its cursors unordered.
-
-    When the first page's oldest entry is in another id than the window's first
-    (a reset at 100), the pages count the window from its first entry and read
-    by position. When it is in the same id (a reset at 149, only the newest
-    entry), they read back by cursor. Both are the oldest-first read reversed,
-    with nothing logged meanwhile moving a page.
-    """
-
-    @pytest.mark.parametrize(("reset_at", "by_position"), [(100, True), (149, False)])
-    @pytest.mark.parametrize("limit", [7, 50])
-    async def test_the_pages_are_the_oldest_first_read_reversed(
-        self,
-        reset_at: int,
-        by_position: bool,
-        limit: int,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load(per_minute(150))
-        gatewayd.reset_at = reset_at
-        expected = window_oracle(gatewayd, NOW - timedelta(hours=2))
-        oldest = await page_through(clock, in_app_client, "oldest", limit, 2)
-        newest = await page_through(
-            clock,
-            in_app_client,
-            "newest",
-            limit,
-            2,
-            between=lambda n: gatewayd.log(-n, f"new{n}"),
-        )
-        assert joined(oldest) == expected
-        assert joined(newest) == list(reversed(expected))
-        # The page's oldest entry is in the new id (so unordered against the
-        # window's first) for a reset at 100, and in the old one for 149. The
-        # token says which mode the read is in, and the read keeps it.
-        modes = {parse_window_token(p["next_offset"]).before == "" for p in newest[:-1]}
-        assert modes == {by_position}
-
-    async def test_a_reset_before_the_window_does_not_change_the_mode(
+    async def test_a_new_seqnum_id_does_not_change_the_pages(
         self,
         clock: FrozenDateTimeFactory,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
     ):
+        # Pages continue from cursors alone; a reset's new seqnum id in the
+        # window must not end or reorder them.
         gatewayd.load(per_minute(150))
-        gatewayd.reset_at = 10  # the window starts at entry 29, after it
-        newest = await page_through(clock, in_app_client, "newest", 50, 2)
-        token = parse_window_token(newest[0]["next_offset"])
-        assert token.before != "" and token.skip == 0
-        assert joined(newest) == [f"m{m}" for m in range(121)]
+        gatewayd.reset_at = 100
+        pages = await page_through(clock, in_app_client, 7, 2)
+        assert joined(pages) == window_oracle(gatewayd, NOW - timedelta(hours=2))
 
 
 @pytest.mark.usefixtures("clock")
-class TestAJournalThatChangesUnderANewestFirstRead:
-    """What cursors cannot prove is an error naming the way out, never a short page."""
-
-    async def test_another_seqnum_id_inside_the_window_is_refused(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        # Entries 305-315 come from a second journal file with an id of its
-        # own. The page whose oldest entry is one of them cannot tell whether
-        # it reaches the window's first; it must not guess and drop the rest.
-        gatewayd.load(per_minute(400))
-        gatewayd.other_id = (305, 316)
-        oldest = await page_through(clock, in_app_client, "oldest", 45, 24)
-        assert len(joined(oldest)) == 400
-        with pytest.raises(ToolError, match="order='oldest'"):
-            await page_through(clock, in_app_client, "newest", 45, 24)
-
-    async def test_a_vacuumed_first_entry_is_refused_not_repeated(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        gatewayd.load(per_minute(400))
-        window = {"hours_back": 24, "limit": 100, "order": "newest"}
-        first = await ask(in_app_client, **window)
-        second = await ask(in_app_client, **window, offset=first["next_offset"])
-        gatewayd.head = 150  # the journal drops its oldest entries
-        sent = len(gatewayd.requests)
-        with pytest.raises(ToolError, match="no longer in the journal"):
-            await ask(in_app_client, **window, offset=second["next_offset"])
-        assert len(gatewayd.requests) - sent == 1  # refused before any page
-
-
-@pytest.mark.usefixtures("clock")
-@both_gatewayds
 class TestEntriesLoggedDuringARead:
     """The journal grows between any two requests, not only between pages."""
 
-    @pytest.mark.parametrize("order", ["oldest", "newest"])
     @pytest.mark.parametrize("limit", [1, 3, 10])
     async def test_no_entry_is_skipped_or_repeated(
         self,
-        order: Order,
         limit: int,
         clock: FrozenDateTimeFactory,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
     ):
         # Multi-line entries let a page reach ``limit`` lines with fewer
-        # entries, so its end probe runs past the journal's end, where an
-        # entry logged between two probes once made a clamping gatewayd's
-        # answers disagree and skipped what followed.
+        # entries, so its end probe and the token's skip run across entries
+        # logged after the page was read.
         gatewayd.load(
             [
                 (at(m), ["tb", " at", "err"] if m % 4 == 0 else [f"e{m}"])
@@ -582,56 +401,15 @@ class TestEntriesLoggedDuringARead:
                 gatewayd.entries.append((at(0), lines))
 
         gatewayd.after_each = log_one
-        pages = await page_through(clock, in_app_client, order, limit, 1)
+        pages = await page_through(clock, in_app_client, limit, 1)
         gatewayd.after_each = None
         lines = joined(pages)
-        if order == "oldest":
-            # No gap and no repeat; only what was logged after the last page
-            # was read can be missing from its end.
-            expected = window_oracle(gatewayd, NOW - timedelta(hours=1))
-            assert lines == expected[: len(lines)]
-            assert all(line.startswith("mid") for line in expected[len(lines) :])
-            assert "e1" in lines
-        else:
-            # Newest-first ends at the tail its first page saw; what was logged
-            # after that is not part of the read, and the rest is read whole.
-            expected = window_oracle(gatewayd, NOW - timedelta(hours=1))
-            assert lines == list(reversed(expected[: len(lines)]))
-            assert all(line.startswith("mid") for line in expected[len(lines) :])
-            assert lines[-1] == "e30"
-
-    async def test_an_entry_logged_between_end_probes_is_not_skipped(
-        self,
-        clock: FrozenDateTimeFactory,
-        gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
-    ):
-        # The last page holds 4 entries in 12 lines, so its end probe (10
-        # entries on) runs past the end. Before systemd 258 that answers with
-        # the last entry; an entry logged right after it made a second forward
-        # probe answer differently, which once read as "more follows" and
-        # continued from past the end, skipping what had been logged.
-        gatewayd.load(
-            [(at(m), [f"e{m}"]) for m in range(40, 20, -1)]
-            + [(at(m), [f"tb{m}", " at", "err"]) for m in range(20, 16, -1)]
-        )
-        last_page = gatewayd.cursor(20)  # tb20, where the third page starts
-        logging = False
-        logged = iter(range(6))
-
-        def log_from_the_end_probe(range_: str) -> None:
-            nonlocal logging
-            logging = logging or last_page in range_
-            if logging and (n := next(logged, None)) is not None:
-                gatewayd.entries.append((at(0), [f"mid{n}"]))
-
-        gatewayd.after_each = log_from_the_end_probe
-        pages = await page_through(clock, in_app_client, "oldest", 10, 1)
-        gatewayd.after_each = None
-        lines = joined(pages)
+        # No gap and no repeat; only what was logged after the last page was
+        # read can be missing from its end.
         expected = window_oracle(gatewayd, NOW - timedelta(hours=1))
         assert lines == expected[: len(lines)]
         assert all(line.startswith("mid") for line in expected[len(lines) :])
+        assert "e1" in lines
 
     @pytest.mark.parametrize("per_request", [1, 2, 3])
     async def test_entries_logged_after_a_short_page_was_read_are_not_skipped(
@@ -657,7 +435,7 @@ class TestEntriesLoggedDuringARead:
                     gatewayd.entries.append((at(0), [f"mid{n}", f"mid{n}+"]))
 
         gatewayd.after_each = log_some
-        pages = await page_through(clock, in_app_client, "oldest", 10, 1)
+        pages = await page_through(clock, in_app_client, 10, 1)
         gatewayd.after_each = None
         lines = joined(pages)
         expected = window_oracle(gatewayd, NOW - timedelta(hours=1))
@@ -701,7 +479,6 @@ class TestSearchedWindow:
         assert "pagination_hint" not in out
 
     @pytest.mark.usefixtures("clock")
-    @both_gatewayds
     async def test_an_oversized_search_points_to_the_page_read(
         self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
     ):
@@ -756,12 +533,9 @@ class TestErrorsAndDefaults:
         assert "App is not installed" in message
         assert "systemd" not in message
 
-    @pytest.mark.parametrize(
-        ("order", "offset"), [("oldest", 0), ("newest", 0), ("oldest", 5)]
-    )
+    @pytest.mark.parametrize("offset", [0, 5])
     async def test_a_page_without_a_cursor_says_so(
         self,
-        order: Order,
         offset: int,
         gatewayd: FakeGatewayd,
         in_app_client: HomeAssistantClient,
@@ -772,7 +546,7 @@ class TestErrorsAndDefaults:
         gatewayd.load(per_minute(10))
         gatewayd.send_cursor = False
         with pytest.raises(ToolError, match="X-First-Cursor"):
-            await ask(in_app_client, limit=2, hours_back=1, order=order, offset=offset)
+            await ask(in_app_client, limit=2, hours_back=1, offset=offset)
 
     async def test_without_hours_back_the_newest_lines_are_read_as_before(
         self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient

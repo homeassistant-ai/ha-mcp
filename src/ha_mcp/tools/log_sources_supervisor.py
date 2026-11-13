@@ -17,6 +17,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
 from ..client.journal_window import (
+    WindowRestart,
     parse_window_token,
     read_logs_page,
     read_logs_window,
@@ -53,14 +54,13 @@ class SupervisorLogSourcesMixin:
         source: str,
         slug: str,
         hours_back: int,
-        order: str,
         limit: int,
         offset: str | None = None,
     ) -> str:
         """A copyable page read of the window, continuing from ``offset`` if given."""
         call = (
             f"ha_get_logs(source={source!r}, slug={slug!r}, "
-            f"hours_back={hours_back}, order={order!r}, limit={limit}"
+            f"hours_back={hours_back}, order='oldest', limit={limit}"
         )
         if offset is not None:
             call += f", offset={offset!r}"
@@ -77,31 +77,26 @@ class SupervisorLogSourcesMixin:
         offset: int | str,
         now: datetime | None,
     ) -> dict[str, Any]:
-        """One page of the window, served by the journal and continued by token.
+        """One page of the window, oldest-first, served by the journal and continued by token.
 
-        The first page starts at the window's first entry (oldest-first, an
-        integer ``offset`` entries in) or ends at the window's last. A later
-        page passes the ``next_offset`` token back: it carries the window's
-        start and exact journal entries, so the window does not move between
-        calls. Oldest-first, that is the page before's first entry and a skip
-        from it. Newest-first, it is the window's first entry plus either the
-        oldest entry of the page before (read back from it), or, when the
-        journal's cursors cannot be ordered, a position counted from the first
-        entry.
+        The first page starts at the window's first entry, or an integer
+        ``offset`` entries in. A later page passes the ``next_offset`` token
+        back: it carries the window's start, the first entry of the page
+        before and a skip from it, so the window does not move between calls.
+        The journal serves a window oldest-first only, so ``order='newest'``
+        is answered oldest-first with a warning.
         """
         read_at = now or datetime.now(UTC)
         resume = None
         warnings: list[str] = []
+        if order == "newest":
+            warnings.append(
+                "A time window (hours_back) is served oldest-first: the journal "
+                "selects it from its start and pages forward. order='newest' was "
+                "not applied; omit hours_back for the newest lines."
+            )
         if isinstance(offset, str):
             resume = parse_window_token(offset)
-            if order is not None and resume.order != order:
-                warnings.append(
-                    f"order='{order}' does not match the read this 'offset' "
-                    f"token continues (order='{resume.order}'); the token's "
-                    "order is kept. Start a new read without the token for "
-                    "the other order."
-                )
-            order = resume.order
             if resume.path != path:
                 raise_tool_error(
                     create_error_response(
@@ -123,27 +118,37 @@ class SupervisorLogSourcesMixin:
         else:
             assert hours_back is not None  # routed here only with hours_back
             since = window_start(read_at, hours_back)
-            order = order or "newest"
-        page = await read_logs_page(
-            self._client,
-            path,
-            since,
-            hours_back,
-            order,
-            limit,
-            resume,
-            offset if isinstance(offset, int) else 0,
-        )
-        lines = page.lines if order == "oldest" else list(reversed(page.lines))
+        try:
+            page = await read_logs_page(
+                self._client,
+                path,
+                since,
+                hours_back,
+                limit,
+                resume,
+                offset if isinstance(offset, int) else 0,
+            )
+        except WindowRestart as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    str(e),
+                    context={"source": source, "slug": slug},
+                    suggestions=[
+                        "Start a new read without 'offset': "
+                        + self._window_call(source, slug, hours_back, limit)
+                    ],
+                )
+            )
         data: dict[str, Any] = {
             "success": True,
             "source": source,
             "slug": slug,
-            "log": "\n".join(lines),
-            "total_lines": len(lines),
-            "returned_lines": len(lines),
+            "log": "\n".join(page.lines),
+            "total_lines": len(page.lines),
+            "returned_lines": len(page.lines),
             "limit": limit,
-            "order": order,
+            "order": "oldest",
             "offset": offset,
             "hours_back": hours_back,
             "window_start": since.isoformat(timespec="seconds"),
@@ -156,9 +161,7 @@ class SupervisorLogSourcesMixin:
             data["next_offset"] = page.next_token
             data["pagination_hint"] = (
                 "More entries of the window follow. To continue, use: "
-                + self._window_call(
-                    source, slug, hours_back, order, limit, page.next_token
-                )
+                + self._window_call(source, slug, hours_back, limit, page.next_token)
             )
         return data
 
@@ -204,9 +207,7 @@ class SupervisorLogSourcesMixin:
         complete = fields["window_complete"]
         paging: dict[str, Any] = {"has_more": unreturned > 0 or not complete}
         if not complete:
-            start = self._window_call(
-                source, slug, fields["hours_back"], "oldest", limit
-            )
+            start = self._window_call(source, slug, fields["hours_back"], limit)
             paging["pagination_hint"] = (
                 f"Only the newest {cap} entries of the window were searched; "
                 "its older entries cannot be searched in one read. To read the "
@@ -238,7 +239,7 @@ class SupervisorLogSourcesMixin:
         Without ``hours_back``: the newest lines, read through ``read_tail``
         (Supervisor's tail, sized to ``limit`` or the search window). With
         ``hours_back`` (or a ``next_offset`` token) and no search: one page of
-        the window in ``order``, served by the journal, so any part of the
+        the window, oldest-first, served by the journal, so any part of the
         window can be reached. With ``hours_back`` and a search: the whole
         window, up to ``MAX_ENTRIES`` entries, searched, newest matches shown;
         ``offset`` does not apply there.

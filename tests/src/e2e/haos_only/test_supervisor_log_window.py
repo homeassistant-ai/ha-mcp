@@ -18,8 +18,6 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.client.journal_window import parse_window_token
-
 from ..utilities.assertions import MCPAssertions
 
 pytestmark = [pytest.mark.haos_only]
@@ -85,35 +83,35 @@ async def test_oldest_first_pages_meet_without_a_gap(mcp_client: Any) -> None:
     assert min(first_stamps) < min(tail_stamps)
 
 
-async def test_newest_first_pages_continue_back_in_time(mcp_client: Any) -> None:
-    """The second newest-first page ends where the first one began."""
+async def test_order_newest_with_a_window_is_served_oldest_first(
+    mcp_client: Any,
+) -> None:
+    """The journal serves a window oldest-first; 'newest' says so, not reverses it."""
     window = _host(hours_back=_WHOLE_JOURNAL, limit=50)
     async with MCPAssertions(mcp_client) as mcp:
-        first = await mcp.call_tool_success("ha_get_logs", window)
-        second = await mcp.call_tool_success(
-            "ha_get_logs", {**window, "offset": first["next_offset"]}
+        newest = await mcp.call_tool_success(
+            "ha_get_logs", {**window, "order": "newest"}
+        )
+        oldest = await mcp.call_tool_success(
+            "ha_get_logs", {**window, "order": "oldest"}
         )
 
-    assert first["has_more"] is True, first
-    # Read back by cursor; a fall to counting by position would be slow.
-    assert parse_window_token(first["next_offset"]).before != "", first
-    first_stamps = _entry_times(first["log"])
-    second_stamps = _entry_times(second["log"])
-    assert first_stamps and second_stamps
-    assert max(second_stamps) <= min(first_stamps)
-    assert second["log"] != first["log"]
+    assert newest["order"] == "oldest", newest
+    assert any("served oldest-first" in w for w in newest.get("warnings", []))
+    assert newest["log"] == oldest["log"]
 
 
 async def test_paging_ends_at_the_journal_end_without_repeating(
     mcp_client: Any,
 ) -> None:
-    """Small pages of a quiet service's whole journal end, and start with one read.
+    """Small pages of a quiet service's whole journal end, without a repeat.
 
-    Gatewayd before systemd 258 answers a skip past the end with the last
-    entry, which once made paging repeat it or never end. ``multicast`` logs
-    little after boot, so its journal is a few pages of 2 entries. Oldest-first
-    paging follows the journal to its end, so an entry logged meanwhile may
-    follow the single read's lines; they are a prefix of what was paged.
+    ``multicast`` logs little after boot, so its journal is a few pages of 2
+    entries. Oldest-first paging follows the journal to its end, so an entry
+    logged meanwhile may follow the first single read's lines: they are a
+    prefix of what was paged. A second single read after paging holds every
+    entry paged, so the paged lines are a prefix of it, which a repeated
+    entry would break.
     """
     window = {
         "source": "system_service",
@@ -133,45 +131,11 @@ async def test_paging_ends_at_the_journal_end_without_repeating(
                     {**window, "limit": 2, "offset": pages[-1]["next_offset"]},
                 )
             )
+        after = await mcp.call_tool_success("ha_get_logs", {**window, "limit": 500})
+        assert after["has_more"] is False, "multicast logged more than expected"
 
-    paged = "\n".join(page["log"] for page in pages if page["log"])
-    whole_lines = whole["log"].splitlines()
-    assert whole_lines
-    assert paged.splitlines()[: len(whole_lines)] == whole_lines
-
-
-async def test_newest_first_pages_are_the_oldest_first_read_reversed(
-    mcp_client: Any,
-) -> None:
-    """Small newest-first pages of a quiet service's journal run back to its start.
-
-    ``multicast`` logs little after boot, so its whole journal is a few pages
-    of 2 entries. Both orders start from the same first entry, so the pages
-    read back to front are the single oldest-first read; an entry logged
-    meanwhile can only follow it.
-    """
-    window = {
-        "source": "system_service",
-        "slug": "multicast",
-        "hours_back": _WHOLE_JOURNAL,
-    }
-    async with MCPAssertions(mcp_client) as mcp:
-        whole = await mcp.call_tool_success(
-            "ha_get_logs", {**window, "order": "oldest", "limit": 500}
-        )
-        assert whole["has_more"] is False, "multicast logged more than expected"
-        pages = [await mcp.call_tool_success("ha_get_logs", {**window, "limit": 2})]
-        while pages[-1]["has_more"]:
-            assert len(pages) < 300, "paging does not end"
-            pages.append(
-                await mcp.call_tool_success(
-                    "ha_get_logs",
-                    {**window, "limit": 2, "offset": pages[-1]["next_offset"]},
-                )
-            )
-
-    assert parse_window_token(pages[0]["next_offset"]).before != "", pages[0]
     paged = [line for page in pages for line in page["log"].splitlines()]
     whole_lines = whole["log"].splitlines()
     assert whole_lines
-    assert list(reversed(paged))[: len(whole_lines)] == whole_lines
+    assert paged[: len(whole_lines)] == whole_lines
+    assert after["log"].splitlines()[: len(paged)] == paged
