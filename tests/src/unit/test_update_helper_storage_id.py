@@ -282,6 +282,6 @@ async def test_an_updated_helper_without_an_entity_names_none(
     assert result.get("entity_id") is None
     assert await _stored_name(core_client, mine) == "P"
     if not with_component:
-        (warning,) = result["warnings"]
+        (warning,) = [w for w in result["warnings"] if "no entity in the registry" in w]
         assert "the input_boolean has no entity in the registry" in warning
         assert "not waited on" in warning

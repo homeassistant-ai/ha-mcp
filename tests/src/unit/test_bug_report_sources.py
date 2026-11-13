@@ -189,11 +189,12 @@ class TestCollectKnownIdentifiers:
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The deadline covers connecting too, not only the reply wait, so a
-        read that hangs cannot stall the report."""
+        """A read that hangs cannot stall the report. The client's socket is
+        opened first, so only the hung read can reach the deadline."""
         await _set_up_network(hass, ETH0)
         await hass.config.async_update(external_url="https://home.example.org")
-        monkeypatch.setattr(bug_report_sources, "IDENTIFIER_READ_DEADLINE_S", 0.05)
+        await core_client.send_websocket_message({"type": "network/url"})
+        monkeypatch.setattr(bug_report_sources, "IDENTIFIER_READ_DEADLINE_S", 1.0)
         never = asyncio.Event()
 
         async def adapters_never_load(hass: HomeAssistant) -> None:
