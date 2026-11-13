@@ -658,43 +658,37 @@ class TestSystemTools:
         logger.info(f"Unknown include warnings: {data['warnings']}")
 
     @pytest.mark.asyncio
-    async def test_get_system_health_with_themes(self, mcp_client):
+    async def test_get_system_health_dialog_sections(self, mcp_client):
         """
-        Test: Get system health with themes data.
+        Test: the baseline labels and the System information and Integration
+        startup dialog sections come from Core.
 
-        Verifies that include='themes' adds theme names and defaults to the
-        system health response. Live instances may have zero themes (minimal
-        installs), so count >= 0 is the only hard assertion.
+        Supervisor runs only on a Supervisor install, so on other backends the
+        section reports its absence.
         """
-        logger.info("Testing get system health with themes include...")
-
         result = await mcp_client.call_tool(
-            "ha_get_system_health", {"include": "themes"}
+            "ha_get_system_health", {"include": "integration_startup,supervisor"}
         )
         data = parse_mcp_result(result)
+        assert data.get("success"), extract_error_message(data)
 
-        if not data.get("success"):
-            error_msg = extract_error_message(data)
-            if "not available" in error_msg.lower():
-                pytest.skip("system_health not available in test environment")
-            else:
-                pytest.fail(f"Get system health with themes failed: {error_msg}")
+        health_info = data["health_info"]
+        assert health_info["lovelace"]["name"] == "Dashboards"
+        assert health_info["homeassistant"]["labels"]["version"] == "Version"
 
-        assert "health_info" in data, "Missing 'health_info' field"
-        assert "themes" in data, "Missing 'themes' field when include='themes'"
+        startup = data["integration_startup"]
+        seconds = [setup["seconds"] for setup in startup["integrations"]]
+        assert startup["count"] == len(seconds) > 0
+        assert seconds == sorted(seconds, reverse=True)
 
-        themes = data["themes"]
-        assert "themes" in themes, "Themes should contain 'themes' list"
-        assert "count" in themes, "Themes should contain 'count'"
-        assert "default_theme" in themes, "Themes should contain 'default_theme'"
-        assert "default_dark_theme" in themes, (
-            "Themes should contain 'default_dark_theme' (None when unset)"
-        )
-        assert isinstance(themes["themes"], list), "Themes list should be a list"
-        assert isinstance(themes["count"], int), "Count should be an int"
-        assert themes["count"] >= 0, "Count should be non-negative"
-
-        logger.info(f"System health with themes: {themes['count']} themes found")
+        supervisor = data["supervisor"]
+        if "error" in supervisor:
+            assert supervisor["error"] == (
+                "Supervisor is not available on this installation"
+            )
+        else:
+            assert isinstance(supervisor["resolution"]["unhealthy"], list)
+            assert "cpu_percent" in supervisor["core_stats"]
 
 
 @pytest.mark.system
@@ -910,68 +904,6 @@ class TestSystemToolsIntegration:
             )
 
         logger.info("fields= projection test passed")
-
-
-class TestGetSystemHealthDiagnosticsE2E:
-    """E2E coverage for include='diagnostics' on ha_get_system_health."""
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_without_config_entry_id_returns_error_subdict(
-        self, mcp_client
-    ):
-        """include='diagnostics' without config_entry_id returns an error inside
-        result['diagnostics'] — the outer call still succeeds (matches the
-        repairs/zha_network embed pattern)."""
-        logger.info("Testing include='diagnostics' without config_entry_id...")
-
-        result = await mcp_client.call_tool(
-            "ha_get_system_health", {"include": "diagnostics"}
-        )
-        data = parse_mcp_result(result)
-        if not data.get("success"):
-            error_msg = str(data.get("error", ""))
-            if "not available" in error_msg.lower():
-                pytest.skip("system_health not available in test environment")
-            else:
-                pytest.fail(f"Outer call should succeed; got: {error_msg}")
-        assert "diagnostics" in data, "Missing 'diagnostics' sub-dict"
-        diag = data["diagnostics"]
-        assert "error" in diag, f"Expected error in diagnostics sub-dict, got: {diag}"
-        assert "config_entry_id" in diag["error"]
-        assert "ha_get_integration" in diag["error"]
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_with_config_entry_id_returns_subdict(self, mcp_client):
-        """include='diagnostics' + a real config_entry_id returns either a
-        populated data payload or a graceful 404 error — same contract as the
-        helper test."""
-        logger.info("Locating a config entry to probe diagnostics on...")
-        list_result = await mcp_client.call_tool("ha_get_integration", {})
-        list_data = parse_mcp_result(list_result)
-        entries = list_data.get("entries") or list_data.get("results") or []
-        if not entries:
-            pytest.skip("No config entries loaded in test container")
-        entry_id = entries[0].get("entry_id")
-
-        result = await mcp_client.call_tool(
-            "ha_get_system_health",
-            {"include": "diagnostics", "config_entry_id": entry_id},
-        )
-        data = parse_mcp_result(result)
-        if not data.get("success"):
-            error_msg = str(data.get("error", ""))
-            if "not available" in error_msg.lower():
-                pytest.skip("system_health not available in test environment")
-            else:
-                pytest.fail(f"Outer call should succeed; got: {error_msg}")
-        assert "diagnostics" in data
-        diag = data["diagnostics"]
-        assert diag.get("config_entry_id") == entry_id
-        has_data = "data" in diag
-        has_error = "error" in diag
-        assert has_data ^ has_error, (
-            f"Diagnostics sub-dict should have exactly one of 'data' or 'error'. Got: {diag}"
-        )
 
 
 @pytest.mark.system

@@ -240,11 +240,8 @@ async def test_snapshot_fetched_once_for_multi_section_call() -> None:
     assert health_ws.zwave_status_calls == 1
 
     assert resp["zwave_network"]["controller"]["name"] == "Z-Stick"
-    assert resp["matter_network"] == {
-        "config_entry_id": "cfg-matter",
-        "state": "loaded",
-        "title": "Matter Hub",
-    }
+    matter = resp["matter_network"]
+    assert (matter["config_entry_id"], matter["title"]) == ("cfg-matter", "Matter Hub")
     orphan_ids = {
         i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
     }

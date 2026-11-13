@@ -126,3 +126,37 @@ async def test_a_failed_repairs_read_is_reported_in_the_section(
 
     assert result["repairs"]["error"]
     assert result["repairs"]["issues"] == []
+
+
+async def test_repairs_carry_the_data_the_repairs_page_reads(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    await _set_up_repairs(hass, tmp_path)
+    _create_issue(hass, "with_data", data={"flow_id": "reauth-flow"})
+    _create_issue(hass, "without_data")
+
+    result = await _repairs(core_client)
+
+    data = {i["issue_id"]: i["data"] for i in result["repairs"]["issues"]}
+    assert data == {"with_data": {"flow_id": "reauth-flow"}, "without_data": None}
+
+
+async def test_a_repair_without_core_strings_is_named_in_a_warning(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    await _set_up_repairs(hass, tmp_path)
+    mock_integration(hass, MockModule("repairs_probe"))
+    ir.async_create_issue(
+        hass,
+        "repairs_probe",
+        "untranslated",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="missing",
+    )
+
+    result = await _repairs(core_client)
+
+    (issue,) = result["repairs"]["issues"]
+    assert "title" not in issue
+    assert any("repairs_probe.untranslated" in w for w in result["warnings"])

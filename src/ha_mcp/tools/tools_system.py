@@ -21,14 +21,12 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
-from .coercion import JSON_STRING_COERCION
 from .component_api import (
     component_supports,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
-from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
 from .helpers import (
     exception_to_structured_error,
     get_connected_ws_client,
@@ -37,10 +35,19 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .system_health_sections import add_repair_texts, read_system_health
+from .system_health_sections import (
+    add_health_labels,
+    add_repair_data,
+    add_repair_texts,
+    read_integration_startup,
+    read_matter_network,
+    read_supervisor,
+    read_system_health,
+    reraise_if_fatal,
+)
 from .system_restart import restart_home_assistant
 from .tool_hints import read_only_hints, write_hints
-from .util_helpers import filter_active_repairs, summarize_theme_listing
+from .util_helpers import filter_active_repairs
 
 logger = logging.getLogger(__name__)
 
@@ -90,42 +97,6 @@ def _build_system_snapshot_slices(
         states=result["states"],
         registry={"success": True, "result": result["entities"]},
     )
-
-
-def _reraise_if_fatal(exc: BaseException) -> None:
-    """Re-raise exceptions that must unwind rather than be demoted to an
-    embedded section error:
-
-    - ``CancelledError`` / ``KeyboardInterrupt`` / ``SystemExit`` (all
-      ``BaseException`` but not ``Exception``) — task cancellation and
-      interpreter exit.
-    - ``ToolError`` — carries the MCP ``isError`` contract.
-    - ``HomeAssistantConnectionError`` — once the HA transport is dead the
-      remaining section fetches will fail anyway, so propagate the root
-      cause as ``isError=true`` rather than embed N per-section connection
-      errors. The codebase's ``rest_client._request`` already wraps
-      ``OSError`` / timeout / transport failures into this class, so it is
-      the single fatal class to gate on.
-
-    This implements the cross-section policy proposed in #1624: a dead
-    connection fails loud rather than degrade per-section. Every section
-    helper in ``ha_get_system_health`` routes its ``except Exception`` block
-    through this gate as its first line, so the policy is consistent across
-    the ws ``sections`` gather pre-pass and every inline section. Recoverable
-    ``Exception``-level failures still fall through to the caller's
-    embed-as-error handling.
-    """
-    # Local import: ``rest_client`` imports from tool helpers transitively,
-    # so a module-level import here would risk a circular import in the
-    # tools package.
-    from ..client.rest_client import HomeAssistantConnectionError
-
-    if (
-        isinstance(exc, ToolError)
-        or not isinstance(exc, Exception)
-        or isinstance(exc, HomeAssistantConnectionError)
-    ):
-        raise exc
 
 
 # Mapping of reload targets to their service domains and services
@@ -403,7 +374,7 @@ class SystemTools:
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            # Local import mirrors ``_reraise_if_fatal``: rest_client imports
+            # Local import: rest_client imports
             # from the tool helpers transitively, so a module-level import
             # would risk a circular import in the tools package.
             from ..client.rest_client import HomeAssistantAPIError
@@ -472,7 +443,7 @@ class SystemTools:
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
         annotations=read_only_hints(
-            "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
+            "Get System Health (incl. ZHA/Z-Wave/Thread/Matter networks)",
             open_world=True,
         ),
     )
@@ -484,21 +455,21 @@ class SystemTools:
             Field(
                 description=(
                     "Comma-separated extra sections: 'repairs' (Repair items with "
-                    "the title and description the Repairs page shows, active "
-                    "only unless include_dismissed_repairs=True); "
+                    "the title, description and data the Repairs page shows, "
+                    "active only unless include_dismissed_repairs=True); "
                     "'zha_network' (ZHA devices with radio signal summary: name, "
                     "LQI, RSSI); 'zha_network_full' (all ZHA device details; large "
                     "on 100+ device networks); 'zwave_network' (Z-Wave JS driver "
                     "connection, controller and node status); "
                     "'thread_network' (the Thread datasets Home Assistant knows, "
                     "and its OTBR border routers; no network keys); "
-                    "'matter_network' (Matter integration presence: "
-                    "config_entry_id, state, title; per-node health is in Matter "
-                    "node diagnostics); 'themes' (installed theme names, count, "
-                    "default_theme, default_dark_theme); 'diagnostics' "
-                    "(per-integration diagnostics dump, integration-defined JSON; "
-                    "REQUIRES config_entry_id; payloads can be large — pair with "
-                    "diagnostics_fields or diagnostics_truncate_at_bytes); "
+                    "'matter_network' (what the Matter panel shows: the config "
+                    "entry, device_count, offline_count and the network topology, "
+                    "nodes and connections capped at 50 each); "
+                    "'supervisor' (Supervisor installs: resolution info with the "
+                    "unhealthy and unsupported reasons, and the Core and "
+                    "Supervisor container stats); 'integration_startup' (each "
+                    "integration's setup time in seconds, slowest first); "
                     "'config_check' (validate the HA configuration, the "
                     "pre-restart check ha_restart runs automatically; returns "
                     "Core's {result: valid|invalid, errors, warnings}, the "
@@ -509,7 +480,9 @@ class SystemTools:
                     "entries HA restored on startup that the loaded integration no "
                     "longer provides, each with entity_id + platform for cleanup "
                     "via ha_remove_entity; unknown-state entities and "
-                    "merely-offline devices are excluded)."
+                    "merely-offline devices are excluded). Integration "
+                    "diagnostics are in ha_get_integration(include_diagnostics=True) "
+                    "and themes in ha_manage_theme(action='list')."
                 )
             ),
         ] = None,
@@ -523,60 +496,15 @@ class SystemTools:
                 )
             ),
         ] = False,
-        config_entry_id: Annotated[
-            str | None,
-            Field(
-                description="Config entry ID of the integration (find via ha_get_integration). Required when include contains 'diagnostics'."
-            ),
-        ] = None,
-        device_id: Annotated[
-            str | None,
-            Field(
-                description="With include='diagnostics', return the device-scoped dump for this device instead of the full integration dump. Some integrations only expose config-entry-level dumps."
-            ),
-        ] = None,
-        diagnostics_fields: Annotated[
-            list[str] | str | None,
-            JSON_STRING_COERCION,
-            Field(
-                description="Top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Accepts a JSON list or comma-separated string. Only applies with include='diagnostics'."
-            ),
-        ] = None,
-        diagnostics_truncate_at_bytes: Annotated[
-            int | None,
-            Field(
-                ge=1,
-                description="Byte cap on the serialized diagnostics payload (post-projection / post-data_path). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000. Only applies with include='diagnostics'.",
-            ),
-        ] = None,
-        diagnostics_data_path: Annotated[
-            str | None,
-            Field(
-                description="Dotted path into the diagnostics data sub-tree (e.g. 'data.devices' for ZHA per-device records). Walks into the post-fields payload. Resolution failures replace data with null and surface data_path_error. Only applies with include='diagnostics'."
-            ),
-        ] = None,
-        diagnostics_data_offset: Annotated[
-            int | None,
-            Field(
-                ge=0,
-                description="Pagination start index for list-valued diagnostics_data_path results. Only applies with include='diagnostics'.",
-            ),
-        ] = 0,
-        diagnostics_data_limit: Annotated[
-            int | None,
-            Field(
-                ge=1,
-                description="Pagination window for list-valued diagnostics_data_path results; data becomes {path, items, offset, limit, total, has_more}. Only applies with include='diagnostics'.",
-            ),
-        ] = None,
     ) -> dict[str, Any]:
-        """Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
+        """Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, Thread and Matter networks.
 
         Returns health check results from integrations, system resources, and
         connectivity; available information varies by installation type and
-        loaded integrations. Checks that Home Assistant runs in the background
-        are awaited up to a deadline; one still running shows as pending, with
-        a warning. Optional sections are selected with `include`.
+        loaded integrations. Each domain carries the ``name`` and key ``labels``
+        the System information dialog shows. Checks that Home Assistant runs in
+        the background are awaited up to a deadline; one still running shows as
+        pending, with a warning. Optional sections are selected with `include`.
 
         The result may include ``ha_mcp_update`` ``{current, latest,
         update_available}``. When update_available is true, tell the user a newer
@@ -584,13 +512,13 @@ class SystemTools:
 
         EXAMPLES:
         - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")
-        - Page a list-valued diagnostics sub-tree: ha_get_system_health(include="diagnostics", config_entry_id="abc", diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.
+        - ha_get_system_health(include="supervisor,integration_startup")
         """
         includes = self._parse_includes(include)
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         # Sections that require the system_health WebSocket connection; the
-        # REST-based sections (config_check, diagnostics) do not.
+        # REST-based sections (config_check, supervisor, dead_entities) do not.
         ws_backed = {
             "repairs",
             "zha_network",
@@ -598,7 +526,7 @@ class SystemTools:
             "zwave_network",
             "thread_network",
             "matter_network",
-            "themes",
+            "integration_startup",
         }
 
         ws_client = None
@@ -614,7 +542,7 @@ class SystemTools:
                 # catch cannot swallow an unrelated ToolError.
                 #
                 # Degrade gracefully ONLY when the caller asked for a REST-based
-                # section (config_check / diagnostics / dead_entities) that can
+                # section (config_check / supervisor / dead_entities) that can
                 # still be served without the WebSocket. config_check is the
                 # pure-REST replacement for the removed ha_check_config tool, so
                 # it must not depend on the health WebSocket (the
@@ -626,7 +554,7 @@ class SystemTools:
                 # (the health baseline itself) or only WS-backed sections, the
                 # baseline WAS the deliverable: re-raise so the failure surfaces
                 # as isError=true, exactly as before this change.
-                if not (includes & {"config_check", "diagnostics", "dead_entities"}):
+                if not (includes & {"config_check", "supervisor", "dead_entities"}):
                     raise
                 logger.warning("system_health baseline unavailable: %s", health_err)
                 ws_client = None
@@ -661,7 +589,7 @@ class SystemTools:
             want_zwave = "zwave_network" in includes
             want_thread = "thread_network" in includes
             want_matter = "matter_network" in includes
-            want_themes = "themes" in includes
+            want_startup = "integration_startup" in includes
 
             if ws_client is None:
                 # Health WebSocket unavailable: WS-backed sections can't run.
@@ -678,10 +606,10 @@ class SystemTools:
                     want_zwave=want_zwave,
                     want_thread=want_thread,
                     want_matter=want_matter,
-                    want_themes=want_themes,
+                    want_startup=want_startup,
                 )
                 want_repairs = want_zha = want_zwave = want_thread = want_matter = (
-                    want_themes
+                    want_startup
                 ) = False
 
             want_dead_entities = "dead_entities" in includes
@@ -690,8 +618,8 @@ class SystemTools:
             # every consuming section below, when the component supports it and
             # at least one consuming section was actually requested — never
             # fetched (and never counted against the component) for a call that
-            # only wants repairs/zha_network/thread_network/themes/diagnostics/
-            # config_check. ``None`` (capability miss, command error/timeout, or
+            # only wants repairs/zha_network/thread_network/integration_startup/
+            # supervisor/config_check. ``None`` (capability miss, command error/timeout, or
             # a malformed slice) means every consuming section below falls back
             # to its own legacy fetch — all-or-nothing per call, never a partial
             # hybrid. Only the slices a requested section actually needs are
@@ -714,28 +642,17 @@ class SystemTools:
                 want_zwave=want_zwave,
                 want_thread=want_thread,
                 want_matter=want_matter,
-                want_themes=want_themes,
+                want_startup=want_startup,
             )
             await self._gather_and_attribute(sections, result)
 
-            await self._run_diagnostics_section(
-                result,
-                includes,
-                config_entry_id,
-                device_id,
-                diagnostics_fields,
-                diagnostics_truncate_at_bytes,
-                diagnostics_data_path,
-                diagnostics_data_offset,
-                diagnostics_data_limit,
-            )
+            if "supervisor" in includes:
+                result["supervisor"] = await read_supervisor(self._client)
 
             if "config_check" in includes:
                 # REST call on self._client (POST /config/core/check_config),
-                # not a ws_client command — so it runs inline like diagnostics
-                # rather than in the ws ``sections`` gather above. Standalone
-                # ``if`` (not chained to diagnostics) so both can be requested
-                # in one call.
+                # not a ws_client command — so it runs inline rather than in
+                # the ws ``sections`` gather above.
                 result["config_check"] = await self._fetch_config_check()
 
             await self._run_dead_entities_section(result, snapshot, want_dead_entities)
@@ -779,9 +696,9 @@ class SystemTools:
             "zwave_network",
             "thread_network",
             "matter_network",
-            "diagnostics",
+            "integration_startup",
+            "supervisor",
             "config_check",
-            "themes",
             "dead_entities",
         }
         unknown = includes - VALID_INCLUDES
@@ -789,6 +706,12 @@ class SystemTools:
             result.setdefault("warnings", []).append(
                 f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
             )
+        for section, replacement in (
+            ("diagnostics", "ha_get_integration(include_diagnostics=True)"),
+            ("themes", "ha_manage_theme(action='list')"),
+        ):
+            if section in unknown:
+                result["warnings"].append(f"'{section}' moved to {replacement}")
 
     @staticmethod
     def _stub_ws_unavailable(
@@ -801,7 +724,7 @@ class SystemTools:
         want_zwave: bool,
         want_thread: bool,
         want_matter: bool,
-        want_themes: bool,
+        want_startup: bool,
     ) -> None:
         """Stub each requested WS-backed section as an error and add a summary
         warning when the health WebSocket is unavailable.
@@ -819,8 +742,8 @@ class SystemTools:
             result["thread_network"] = {"error": ws_error}
         if want_matter:
             result["matter_network"] = {"error": ws_error}
-        if want_themes:
-            result["themes"] = {"error": ws_error}
+        if want_startup:
+            result["integration_startup"] = {"error": ws_error}
         unavailable = sorted(includes & ws_backed)
         if unavailable:
             result.setdefault("warnings", []).append(
@@ -840,7 +763,7 @@ class SystemTools:
         want_zwave: bool,
         want_thread: bool,
         want_matter: bool,
-        want_themes: bool,
+        want_startup: bool,
     ) -> list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]]:
         """Build the list of ``(name, coroutine)`` WS-backed sections to gather."""
         sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
@@ -875,7 +798,7 @@ class SystemTools:
             sections.append(
                 (
                     "matter_network",
-                    self._fetch_matter_network(
+                    read_matter_network(
                         ws_client,
                         prefetched_entries=(
                             snapshot.config_entries if snapshot else None
@@ -883,8 +806,13 @@ class SystemTools:
                     ),
                 )
             )
-        if want_themes:
-            sections.append(("themes", self._fetch_themes(ws_client)))
+        if want_startup:
+            sections.append(
+                (
+                    "integration_startup",
+                    read_integration_startup(ws_client, self._client),
+                )
+            )
         return sections
 
     @staticmethod
@@ -908,13 +836,13 @@ class SystemTools:
         # inside a helper would otherwise be silently demoted to
         # ``{"error": "ToolError: …"}`` and break the MCP
         # ``isError=true`` contract for the whole tool.
-        # ``_reraise_if_fatal`` encapsulates the policy (cancellation,
+        # ``reraise_if_fatal`` encapsulates the policy (cancellation,
         # interpreter-exit, ``ToolError``, and the codebase's transport
         # ``HomeAssistantConnectionError``) — the single source of
         # truth shared with each section helper's ``except`` chain.
         for section_result in gathered:
             if isinstance(section_result, BaseException):
-                _reraise_if_fatal(section_result)
+                reraise_if_fatal(section_result)
         for (section_name, _), section_result in zip(sections, gathered, strict=True):
             if isinstance(section_result, Exception):
                 # Last-resort fallback: emit a minimal ``{error: ...}``
@@ -940,85 +868,6 @@ class SystemTools:
                 ):
                     result.setdefault("warnings", []).extend(bubbled)
                 result[section_name] = section_result
-
-    async def _run_diagnostics_section(
-        self,
-        result: dict[str, Any],
-        includes: set[str],
-        config_entry_id: str | None,
-        device_id: str | None,
-        diagnostics_fields: list[str] | str | None,
-        diagnostics_truncate_at_bytes: int | None,
-        diagnostics_data_path: str | None,
-        diagnostics_data_offset: int | None,
-        diagnostics_data_limit: int | None,
-    ) -> None:
-        """Coerce diagnostics args and run the diagnostics section, or warn when
-        diagnostics-only args were passed without ``include=diagnostics``.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
-        # Diagnostics-related coercions live outside the includes branch
-        # so the orphan-args warning at the ``elif`` after the
-        # ``if "diagnostics" in includes`` block (see below) can see
-        # canonicalised values — passing ``diagnostics_data_offset=20``
-        # without ``include=diagnostics`` would otherwise slip past the gate.
-        fields_list = parse_diagnostics_fields(diagnostics_fields)
-        truncate_bytes = diagnostics_truncate_at_bytes
-        data_offset_int = (
-            diagnostics_data_offset if diagnostics_data_offset is not None else 0
-        )
-        data_limit_int = diagnostics_data_limit
-        # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
-        # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
-        # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
-        # downstream.
-        if diagnostics_data_path is not None and not isinstance(
-            diagnostics_data_path, str
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "diagnostics_data_path must be a string, got "
-                    f"{type(diagnostics_data_path).__name__}",
-                    context={"parameter": "diagnostics_data_path"},
-                )
-            )
-
-        if "diagnostics" in includes:
-            # ``fetch_integration_diagnostics`` carries the empty-id guard
-            # (returns {"config_entry_id": ..., "error": ...}); calling it
-            # unconditionally keeps the missing-id error shape consistent
-            # with the populated path instead of returning a bare
-            # ``{"error": ...}`` sub-dict on the inline branch. Forward
-            # ``config_entry_id`` as-is (None / "") so the helper's echo
-            # field reflects what the caller actually passed.
-            result["diagnostics"] = await fetch_integration_diagnostics(
-                self._client,
-                config_entry_id,
-                device_id,
-                fields=fields_list,
-                truncate_at_bytes=truncate_bytes,
-                data_path=diagnostics_data_path,
-                data_offset=data_offset_int,
-                data_limit=data_limit_int,
-            )
-        elif (
-            config_entry_id
-            or device_id
-            or diagnostics_fields is not None
-            or diagnostics_truncate_at_bytes is not None
-            or diagnostics_data_path is not None
-            or diagnostics_data_limit is not None
-            or data_offset_int > 0
-        ):
-            result.setdefault("warnings", []).append(
-                "config_entry_id, device_id, diagnostics_fields, "
-                "diagnostics_truncate_at_bytes, diagnostics_data_path, "
-                "diagnostics_data_offset, and/or diagnostics_data_limit "
-                "were provided but ignored because 'diagnostics' is not "
-                "in include"
-            )
 
     async def _run_dead_entities_section(
         self,
@@ -1118,6 +967,10 @@ class SystemTools:
             await self._safe_disconnect(ws_client)
             raise
 
+        if label_warnings := await add_health_labels(
+            self._client, result["health_info"]
+        ):
+            result.setdefault("warnings", []).extend(label_warnings)
         return ws_client, result
 
     async def _fetch_system_snapshot(
@@ -1223,10 +1076,11 @@ class SystemTools:
                 }
                 if dismissed_count := len(all_issues) - len(visible_issues):
                     repairs["dismissed_count"] = dismissed_count
-                if text_warnings := await add_repair_texts(
-                    self._client, visible_issues
-                ):
-                    repairs["_warnings"] = text_warnings
+                if issue_warnings := [
+                    *await add_repair_texts(self._client, visible_issues),
+                    *await add_repair_data(ws_client, visible_issues),
+                ]:
+                    repairs["_warnings"] = issue_warnings
             else:
                 err = repairs_result.get("error") or {}
                 err_msg = (
@@ -1237,7 +1091,7 @@ class SystemTools:
                 )
                 repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"
         return repairs
@@ -1283,7 +1137,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zha') for full device list."
                     )
         except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             logger.warning("Failed to fetch ZHA network data: %s", e)
             zha_network["error"] = f"ZHA integration not available or error: {e}"
         return zha_network
@@ -1356,7 +1210,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zwave_js') for full device list."
                     )
         except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             logger.warning("Failed to fetch Z-Wave network data: %s", e)
             zwave_network["error"] = (
                 f"Z-Wave JS integration not available or error: {e}"
@@ -1406,98 +1260,12 @@ class SystemTools:
         except HomeAssistantCommandError as e:
             thread_network["error"] = f"OTBR border routers not available: {e}"
         except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             logger.warning("Failed to fetch Thread network data: %s", e)
             thread_network["error"] = (
                 f"Thread/OTBR integration not available or error: {e}"
             )
         return thread_network
-
-    @staticmethod
-    async def _fetch_matter_network(
-        ws_client: Any,
-        *,
-        prefetched_entries: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Fetch a lightweight Matter integration-presence summary.
-
-        Resolves the Matter config entry via ``config_entries/get`` (filtering
-        ``domain == "matter"``) and returns its ``config_entry_id``, ``state``
-        and ``title``. Matter exposes health *per node* via the
-        ``matter/node_diagnostics`` command, so this section is deliberately an
-        integration presence/state summary, not a per-device dump. Returns
-        ``{"error": "Matter integration not found"}`` when no Matter entry
-        exists.
-
-        ``prefetched_entries`` (the component's ``system_snapshot``
-        ``config_entries`` slice, re-wrapped in the ``{success, result:
-        [...]}`` envelope) skips the ``config_entries/get`` WS call when
-        given — mirrors ``_fetch_zwave_network``.
-        """
-        matter_network: dict[str, Any] = {}
-        try:
-            # ``config_entries/get`` (underscore) is the canonical command —
-            # the slash form is rejected as "Unknown command" (same caveat the
-            # zwave helper documents above).
-            entries_result = (
-                prefetched_entries
-                if prefetched_entries is not None
-                else await ws_client.send_command("config_entries/get")
-            )
-            matter_entry = None
-            if entries_result.get("success"):
-                for entry in entries_result.get("result", []):
-                    if entry.get("domain") == "matter":
-                        matter_entry = entry
-                        break
-
-            if matter_entry is None:
-                matter_network["error"] = "Matter integration not found"
-                return matter_network
-
-            matter_network = {
-                "config_entry_id": matter_entry.get("entry_id"),
-                "state": matter_entry.get("state"),
-                "title": matter_entry.get("title"),
-            }
-        except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
-            logger.warning("Failed to fetch Matter network data: %s", e)
-            matter_network["error"] = f"Matter integration not available or error: {e}"
-        return matter_network
-
-    @staticmethod
-    async def _fetch_themes(ws_client: Any) -> dict[str, Any]:
-        """Fetch installed theme names and defaults from Home Assistant.
-
-        Returns theme NAMES plus defaults, not the full per-theme CSS variable
-        dicts (installed community themes can carry hundreds of variables; this
-        section is a listing/verify surface, not a content dump).
-        """
-        themes_data: dict[str, Any] = {
-            "themes": [],
-            "count": 0,
-            "default_theme": None,
-            "default_dark_theme": None,
-        }
-        try:
-            themes_result = await ws_client.send_command("frontend/get_themes")
-            if themes_result.get("success"):
-                themes_data = summarize_theme_listing(themes_result.get("result") or {})
-            else:
-                err = themes_result.get("error") or {}
-                err_msg = (
-                    err.get("message") if isinstance(err, dict) else str(err)
-                ) or "unknown error"
-                logger.warning(
-                    "frontend/get_themes returned success=false: %s", err_msg
-                )
-                themes_data["error"] = f"Themes data not available: {err_msg}"
-        except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
-            logger.warning("Failed to fetch themes: %s", e)
-            themes_data["error"] = f"Themes data not available: {e}"
-        return themes_data
 
     @staticmethod
     def _ws_result_list(
@@ -1514,7 +1282,7 @@ class SystemTools:
         exception type, or wrong-shape description) so the caller can
         attribute the failure rather than substitute a fixed "unavailable"
         message that hides the root cause (auth vs command error vs
-        malformed envelope). Fatal exceptions (per ``_reraise_if_fatal``)
+        malformed envelope). Fatal exceptions (per ``reraise_if_fatal``)
         unwind instead of being returned as an error string.
 
         A dead transport never reaches this helper as an envelope:
@@ -1523,12 +1291,12 @@ class SystemTools:
         exception from ``gather(return_exceptions=True)`` below or by
         propagating out of the await — and dead entities, being a detector
         whose short list would read as "nothing is dead", fails loud on it
-        via the ordinary ``_reraise_if_fatal`` path.
+        via the ordinary ``reraise_if_fatal`` path.
         """
         if isinstance(resp, BaseException):
             # gather(return_exceptions=True) hands back the raw exception; let
             # truly-fatal ones unwind instead of masking them as "unavailable".
-            _reraise_if_fatal(resp)
+            reraise_if_fatal(resp)
             return None, f"{type(resp).__name__}: {resp}"
         if not isinstance(resp, dict):
             return None, f"unexpected response type: {type(resp).__name__}"
@@ -1599,7 +1367,7 @@ class SystemTools:
         if isinstance(states, BaseException):
             # Truly-fatal errors must propagate, not demote to a section
             # error string (mirrors the ws sections gather pre-pass).
-            _reraise_if_fatal(states)
+            reraise_if_fatal(states)
             dead["error"] = f"Could not fetch entity states: {states}"
             return None
         if not isinstance(states, list):
@@ -1833,13 +1601,13 @@ class SystemTools:
                     "confirmed-dead entity with ha_remove_entity(entity_id)."
                 )
         except ToolError:
-            # A ToolError (incl. one re-raised by _reraise_if_fatal) carries the
+            # A ToolError (incl. one re-raised by reraise_if_fatal) carries the
             # MCP isError contract — let it reach ha_get_system_health's own
             # ``except ToolError: raise`` instead of being demoted to a section
             # error string here (.gemini/styleguide.md structured-error guard pattern).
             raise
         except Exception as e:
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             # ``logger.exception`` so an unexpected diff bug gets a full
             # traceback rather than a one-line warning that hides the
             # site of the regression.
@@ -1864,7 +1632,7 @@ class SystemTools:
         try:
             config_result: dict[str, Any] = await self._client.check_config()
         except Exception as e:  # noqa: BLE001
-            _reraise_if_fatal(e)
+            reraise_if_fatal(e)
             logger.warning("Failed to check config: %s", e)
             return {"error": f"Config check not available: {e}"}
         return config_result
