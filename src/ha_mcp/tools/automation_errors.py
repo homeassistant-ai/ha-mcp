@@ -33,7 +33,7 @@ _INVALID_KEY = re.compile(r"Invalid (trigger|condition) ['\"]([^'\"]+)['\"] spec
 
 # Bounds the wait for a platform subscription's first event, which Core sends
 # right after the subscription result.
-_DESCRIPTIONS_TIMEOUT_S = 5.0
+DESCRIPTIONS_TIMEOUT_S = 5.0
 
 
 def section_from_status(status: str | None) -> str | None:
@@ -97,7 +97,7 @@ async def _subscription_first_event(client: Any, command: str) -> dict[str, Any]
         logger.debug("%s failed: %s", command, exc)
         return None
     try:
-        message = await asyncio.wait_for(queue.get(), timeout=_DESCRIPTIONS_TIMEOUT_S)
+        message = await asyncio.wait_for(queue.get(), timeout=DESCRIPTIONS_TIMEOUT_S)
     except TimeoutError:
         return None
     finally:
@@ -140,16 +140,25 @@ def _platform_condition(config: dict[str, Any]) -> bool:
     )
 
 
-def _text_suggestions(core_text: str, config: dict[str, Any]) -> list[str]:
+_ROOT_ONLY_FIELDS = frozenset({"triggers", "trigger", "conditions"})
+
+
+def _root_field_in_action(config: dict[str, Any]) -> bool:
+    actions = config.get("actions", config.get("action"))
+    steps = actions if isinstance(actions, list) else [actions]
+    return any(isinstance(s, dict) and _ROOT_ONLY_FIELDS & s.keys() for s in steps)
+
+
+def text_suggestions(core_text: str, config: dict[str, Any]) -> list[str]:
     """Targeted hints for Core rejections agents commonly cause."""
     lowered = core_text.lower()
     suggestions = []
-    if "unexpected keyword argument" in lowered:
+    if "unable to determine action" in lowered and _root_field_in_action(config):
         suggestions.append(
             "A root-level field such as alias, triggers or conditions is inside "
             "an action step."
         )
-    elif "'variables'" in core_text and "dictionary" in core_text:
+    elif "'variables'" in core_text and "expected a mapping" in lowered:
         suggestions.append(
             "variables must be a dict mapping names to values, "
             'e.g. {"variables": {"my_var": 42}}'
@@ -173,7 +182,7 @@ async def raise_core_rejection(
 ) -> NoReturn:
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
-    suggestions = _text_suggestions(core_text, config)
+    suggestions = text_suggestions(core_text, config)
     match = _INVALID_KEY.search(core_text)
     if match:
         kind = cast(Literal["trigger", "condition"], match.group(1))
