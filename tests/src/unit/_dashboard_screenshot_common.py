@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+import pytest
+
+from ha_mcp import config
+
 _PNG = b"\x89PNG\r\n\x1a\nunit"
 
 
@@ -93,3 +97,16 @@ def fake_dashboard_capture(
         ),
         legacy_full_page_fallback=legacy_full_page_fallback,
     )
+
+
+def fresh_settings() -> config.Settings:
+    """The server's settings, built again from the current environment."""
+    config.reset_global_settings()
+    return config.get_global_settings()
+
+
+def set_settings(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+    """Set fields on the server's real settings for one test."""
+    settings = config.get_global_settings()
+    for name, value in fields.items():
+        monkeypatch.setattr(settings, name, value)
