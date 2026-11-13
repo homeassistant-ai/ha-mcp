@@ -354,8 +354,12 @@ def test_token_repair_catalog_explains_every_refusal(catalog_path: str) -> None:
 
 
 @pytest.fixture
-def pip_allowed(hass: HomeAssistant) -> None:
-    """Home Assistant started without ``--skip-pip``, so it installs packages."""
+def pip_allowed(hass: HomeAssistant, flows: RepairsFlowManager) -> None:
+    """Home Assistant started without ``--skip-pip``, so it installs packages.
+
+    Set after ``flows`` loads the component, so Core does not pip-install the
+    requirements of its after_dependencies.
+    """
     hass.config.skip_pip = False
 
 
