@@ -331,8 +331,17 @@ async def test_closest_keys_come_from_the_keys_domain_first(
             },
             "variables",
         ),
+        (
+            {
+                "alias": "porch",
+                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
+                "conditions": [{"platform": "state", "entity_id": "light.porch"}],
+                "actions": [],
+            },
+            "'platform'",
+        ),
     ],
-    ids=["root-field-in-action-step", "variables-not-a-dict"],
+    ids=["root-field-in-action-step", "variables-not-a-dict", "condition-as-trigger"],
 )
 async def test_rejection_hint_names_what_core_objected_to(
     hass: HomeAssistant,
@@ -361,32 +370,3 @@ async def test_a_misspelt_action_gets_no_root_field_hint(
     core_text = await _core_rejection(hass, core_client, config)
 
     assert text_suggestions(core_text, config) == []
-
-
-async def test_service_key_rejection_gets_no_rename_hint(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """Core renames ``service`` to ``action`` inside an action step, so a
-    rejected ``service`` key sits outside one; telling the caller to rename
-    it sent them after the wrong fix. A condition written as a trigger, which
-    Core does reject, still gets its hint, so the hints are not simply off."""
-    service_config = {
-        "alias": "porch",
-        "triggers": [{"trigger": "state", "entity_id": "light.porch", "service": "x"}],
-        "actions": [],
-    }
-    service_text = await _core_rejection(hass, core_client, service_config)
-    assert not any(
-        "service:" in s for s in text_suggestions(service_text, service_config)
-    )
-
-    platform_config = {
-        "alias": "porch",
-        "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
-        "conditions": [{"platform": "state", "entity_id": "light.porch"}],
-        "actions": [],
-    }
-    platform_text = await _core_rejection(hass, core_client, platform_config)
-    assert any(
-        "'platform'" in s for s in text_suggestions(platform_text, platform_config)
-    )
