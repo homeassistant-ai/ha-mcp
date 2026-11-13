@@ -137,6 +137,14 @@ def _held_write(hass: HomeAssistant, command: str, key: str, value: str) -> _Cor
     return _CoreWrites(hass, command, lambda msg: msg.get(key) == value, hold=True)
 
 
+async def _cancel_and_wait(*tasks: asyncio.Future[Any]) -> None:
+    """Cancel what is still running and wait for it, so no task outlives the
+    test (a finished task keeps its result)."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _first_wins_race(
     entered: asyncio.Event,
     release: asyncio.Event,
@@ -160,8 +168,11 @@ async def _first_wins_race(
                 await asyncio.gather(*waits, return_exceptions=True)
     finally:
         release.set()
-        async with asyncio.timeout(_WAIT_S):
-            await asyncio.wait(tasks)
+        try:
+            async with asyncio.timeout(_WAIT_S):
+                await asyncio.wait(tasks)
+        finally:
+            await _cancel_and_wait(*tasks)
     return [task.result() for task in tasks]
 
 
@@ -194,8 +205,7 @@ async def _after_lock_wait(
                 await locks.waiting.wait()
             meanwhile()
         except BaseException:
-            pending.cancel()
-            await asyncio.gather(pending, return_exceptions=True)
+            await _cancel_and_wait(pending)
             raise
     return pending
 
@@ -511,8 +521,7 @@ async def test_bulk_entity_write_rechecks_a_reference_deleted_while_it_waited(
                     await ready_written.wait()
                 delete()
             except BaseException:
-                pending.cancel()
-                await asyncio.gather(pending, return_exceptions=True)
+                await _cancel_and_wait(pending)
                 raise
     finally:
         unsubscribe()
@@ -854,14 +863,17 @@ async def test_failed_restore_frees_both_entity_ids(
     try:
         async with asyncio.timeout(_WAIT_S):
             await readback.entered.wait()
-        if failure == "cancelled":
-            restore.cancel()
-            expected: type[BaseException] = asyncio.CancelledError
-        else:
-            no_answer.start()
-            expected = BackupRestoreError
-    finally:
+    except BaseException:
         readback.release.set()
+        await _cancel_and_wait(restore)
+        raise
+    if failure == "cancelled":
+        restore.cancel()
+        expected: type[BaseException] = asyncio.CancelledError
+    else:
+        no_answer.start()
+        expected = BackupRestoreError
+    readback.release.set()
     try:
         with pytest.raises(expected):
             await asyncio.wait_for(restore, _WAIT_S)
