@@ -29,6 +29,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.visibility.identifier_aliases import BARE_IDENTIFIER_ARGS
 from ha_mcp.visibility.model import VisibilityConfig
 
+from .._registered_tools import all_registered_tools
 from .._visibility_core import (
     enforce_hiding,
     error_body,
@@ -36,7 +37,6 @@ from .._visibility_core import (
     register_entity,
     unreached_call_next,
 )
-from .._registered_tools import all_registered_tools
 from ._chained_enforcement import (
     _ChainedEnforcement,
     _returns,

@@ -613,9 +613,7 @@ class TestBugReportTool:
 
     def test_sanitize_log_text_redacts_generated_secret_path(self):
         """The generated ``/private_<token>`` connect path is redacted."""
-        out = sanitize_log_text(
-            "on http://0.0.0.0:9583/private_T6tSJxqYuTESTtoken/mcp"
-        )
+        out = sanitize_log_text("on http://0.0.0.0:9583/private_T6tSJxqYuTESTtoken/mcp")
         assert "/private_T6tSJxqYuTESTtoken" not in out
         assert "[REDACTED_SECRET_PATH]" in out
 
