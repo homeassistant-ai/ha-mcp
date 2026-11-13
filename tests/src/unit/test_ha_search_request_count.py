@@ -177,7 +177,7 @@ async def test_get_entities_by_area_fetches_device_registry_when_visibility_disa
     area_registry.async_create("Kitchen")
 
     with _spies(core_client) as sent:
-        await smart_tools.get_entities_by_area("Kitchen", group_by_domain=False)
+        await smart_tools.get_entities_by_area("Kitchen")
 
     assert sent.ws_types()["config/device_registry/list"] == 1
 

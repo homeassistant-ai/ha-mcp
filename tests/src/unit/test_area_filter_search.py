@@ -516,6 +516,33 @@ async def test_misspelling_close_to_two_floors_expands_neither(
     assert "West Wing" in warning
 
 
+async def test_floor_with_an_empty_name_is_named_by_its_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+    entity_registry: er.EntityRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    """Core lets a floor be renamed to an empty name, keeping its id; the
+    expansion warning still says which floor was expanded, by that id."""
+    floor = floor_registry.async_create("Attic")
+    floor_registry.async_update(floor.floor_id, name="")
+    room = area_registry.async_create("Attic room", floor_id=floor.floor_id)
+    _add_entity(
+        hass,
+        entity_registry,
+        "light.attic_lamp",
+        friendly_name="Attic Lamp",
+        area_id=room.id,
+    )
+
+    result = await _search(core_client, floor.floor_id)
+
+    assert _ids(result) == {"light.attic_lamp"}
+    warning = next(w for w in _warnings(result) if "expanded" in w)
+    assert f"({floor.floor_id})" in warning
+
+
 async def test_area_listing_is_grouped_by_domain_only_when_asked(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,

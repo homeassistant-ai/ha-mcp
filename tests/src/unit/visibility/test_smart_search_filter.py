@@ -98,9 +98,7 @@ async def test_area_listing_hides_entity_and_counts_only_visible(
 ) -> None:
     _hide_diagnostic(set_config)
 
-    res = await search.get_entities_by_area(
-        area_query="Kitchen", group_by_domain=False, include_hidden=True
-    )
+    res = await search.get_entities_by_area(area_query="Kitchen", include_hidden=True)
 
     blob = json.dumps(res)
     assert "sensor.drop" not in blob
@@ -114,9 +112,7 @@ async def test_area_listing_with_filter_disabled_lists_both(
 ) -> None:
     set_config(enabled=False, exclude_categories=["diagnostic"])
 
-    res = await search.get_entities_by_area(
-        area_query="Kitchen", group_by_domain=False, include_hidden=True
-    )
+    res = await search.get_entities_by_area(area_query="Kitchen", include_hidden=True)
 
     blob = json.dumps(res)
     assert "sensor.drop" in blob

@@ -53,8 +53,8 @@ class EntityModesMixin(EntityEnrichmentMixin):
     ) -> dict[str, Any]:
         """Search within area entities using fuzzy matching against a query string."""
         # Collect entities from all matched areas, applying domain_filter if present.
-        # _ha_search_entities calls get_entities_by_area with group_by_domain=True,
-        # so area_result["areas"][id]["entities"] is always a dict keyed by domain.
+        # get_entities_by_area groups each area's entities by domain, so
+        # area_result["areas"][id]["entities"] is always a dict keyed by domain.
         all_area_entities = []
         for area_id in sorted(area_result.get("areas", {})):
             area_data = area_result["areas"][area_id]
