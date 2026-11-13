@@ -16,7 +16,6 @@ own tests set them up; only the hardware below each library is replaced:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,19 +32,23 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from zigpy.application import ControllerApplication
-from zwave_js_server.const import NodeStatus, SecurityClass
-from zwave_js_server.model.driver import Driver
+from zwave_js_server.const import NodeStatus
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import tools_registry
 from ha_mcp.tools.tools_registry import RegistryTools
 
 from ._client_spies import sent_messages
+from ._zwave_js import (
+    HOME_ID,
+    NODE_ID,
+    node_state,
+    set_up_zwave_js,
+    zwave_js_server_connection,
+)
 
 _IEEE = "00:11:22:33:44:55:66:77"
 _COORDINATOR_IEEE = "00:15:8d:00:02:32:4f:32"
-_HOME_ID = 3232323232
-_NODE_ID = 5
 
 
 @pytest.fixture(autouse=True)
@@ -70,77 +73,20 @@ def _device(hass: HomeAssistant, domain: str, identifier: str) -> dr.DeviceEntry
 
 @pytest.fixture
 def zwave_js_server() -> Iterator[MagicMock]:
-    """The Z-Wave JS server connection, as Core's ``client`` fixture mocks it.
-
-    Its driver is zwave-js-server-python's real ``Driver``, holding node 5 as
-    the server reports it: alive, routing, S2-authenticated.
-    """
-    stop_listening = asyncio.Event()
-    with patch(
-        "homeassistant.components.zwave_js.ZwaveClient", autospec=True
-    ) as client_class:
-        client = client_class.return_value
-
-        async def connect() -> None:
-            stop_listening.clear()
-            client.connected = True
-
-        async def listen(driver_ready: asyncio.Event) -> None:
-            driver_ready.set()
-            await stop_listening.wait()
-
-        async def disconnect() -> None:
-            stop_listening.set()
-            client.connected = False
-
-        client.connect = AsyncMock(side_effect=connect)
-        client.listen = AsyncMock(side_effect=listen)
-        client.disconnect = AsyncMock(side_effect=disconnect)
-        client.driver = Driver(
-            client,
-            {
-                "controller": {"homeId": _HOME_ID, "ownNodeId": 1},
-                "nodes": [
-                    {
-                        "nodeId": _NODE_ID,
-                        "index": 0,
-                        "status": NodeStatus.ALIVE,
-                        "ready": True,
-                        "isControllerNode": False,
-                        "isRouting": True,
-                        "isSecure": True,
-                        "highestSecurityClass": SecurityClass.S2_AUTHENTICATED,
-                        "zwavePlusVersion": 2,
-                        "values": [],
-                        "endpoints": [
-                            {"nodeId": _NODE_ID, "index": 0, "commandClasses": []}
-                        ],
-                    }
-                ],
-            },
-            {"enabled": True, "level": "info", "logToFile": False},
-        )
-        # The server's reply to each setup command: nothing provisioned, no
-        # device config changed.
-        client.async_send_command.return_value = {}
+    """The Z-Wave JS server connection, holding node 5 with no values."""
+    with zwave_js_server_connection(node_state([])) as client:
         yield client
 
 
 @pytest.fixture
 async def zwave_js(hass: HomeAssistant, zwave_js_server: MagicMock) -> MockConfigEntry:
     """Core's ``zwave_js`` integration, connected to ``zwave_js_server``."""
-    entry = MockConfigEntry(
-        domain="zwave_js", data={"url": "ws://test.org"}, unique_id=str(_HOME_ID)
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
+    return await set_up_zwave_js(hass)
 
 
 @pytest.mark.parametrize(
     "identifier",
-    [None, f"{_HOME_ID}-{_NODE_ID}-134:3:100"],
+    [None, f"{HOME_ID}-{NODE_ID}-134:3:100"],
     ids=["node", "node-with-product"],
 )
 async def test_zwave_node_id_and_status_come_from_the_identifier(
@@ -159,7 +105,7 @@ async def test_zwave_node_id_and_status_come_from_the_identifier(
     registry = dr.async_get(hass)
     if identifier is None:
         dev = registry.async_get_device_by_identifier(
-            ("zwave_js", f"{_HOME_ID}-{_NODE_ID}"), zwave_js.entry_id
+            ("zwave_js", f"{HOME_ID}-{NODE_ID}"), zwave_js.entry_id
         )
         assert dev is not None
     else:
@@ -173,9 +119,9 @@ async def test_zwave_node_id_and_status_come_from_the_identifier(
     assert result["success"] is True
     device = result["device"]
     assert device["integration_type"] == "zwave_js"
-    assert device["node_id"] == _NODE_ID
+    assert device["node_id"] == NODE_ID
     # Z-Wave JS's whole reply, including fields such as ``ready``.
-    assert device["node_status"]["node_id"] == _NODE_ID
+    assert device["node_status"]["node_id"] == NODE_ID
     assert device["node_status"]["status"] == NodeStatus.ALIVE
     assert device["node_status"]["ready"] is True
     assert {"type": "zwave_js/node_status", "device_id": dev.id} in [
@@ -369,7 +315,7 @@ async def test_zha_device_gets_ieee_address_and_radio_metrics(
         ),
         (
             "zwave_js",
-            f"{_HOME_ID}-{_NODE_ID}",
+            f"{HOME_ID}-{NODE_ID}",
             "enrich_zwave_status",
             "zwave_js/node_status",
             ("integration_type", "zwave_js"),

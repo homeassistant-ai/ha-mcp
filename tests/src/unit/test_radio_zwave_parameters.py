@@ -1,29 +1,30 @@
 """Z-Wave parameter reads work without Home Assistant entities.
 
-The server's client talks to a real ``hass``. Z-Wave JS needs a Z-Wave server,
-so it is a mock integration whose two parameter commands are registered on
-Core's own WebSocket API with the schemas Core's ``zwave_js`` gives them, and
-answer in the shape Core's handlers build. The device and entity registries,
-``config/entity_registry/get``, Core's error replies and the socket are Core's.
+The server's client talks to a real ``hass`` running Core's real ``zwave_js``
+integration, so ``zwave_js/get_config_parameters`` and
+``zwave_js/get_raw_config_parameter`` are answered by Core's own handlers. Only
+the Z-Wave JS server connection below zwave-js-server-python is a mock
+(``_zwave_js``): node 5's configuration values are the node state the server
+sends, and a raw read is the server's answer to the library's
+``endpoint.get_raw_config_parameter_value`` command.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import probatio
 import pytest
-from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
+from pytest_homeassistant.typing import WebSocketGenerator
+from zwave_js_server.const import CommandClass
+from zwave_js_server.exceptions import FailedZWaveCommand
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
@@ -35,150 +36,127 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_radio import RadioTools
 
 from ._client_spies import sent_messages
+from ._component_core import ws_result
+from ._zwave_js import (
+    HOME_ID,
+    NODE_ID,
+    node_state,
+    set_up_zwave_js,
+    zwave_js_server_connection,
+)
 
-_DOMAIN = "zwave_js"
 
-
-def parameter(
+def config_value(
     value: Any, *, endpoint: int = 0, mask: int | None = None
 ) -> dict[str, Any]:
-    """One parameter as Core's ``zwave_js/get_config_parameters`` reports it."""
-    return {
-        "property": 3,
-        "property_key": mask,
+    """Parameter 3 (or its ``mask`` bits) as the Z-Wave JS server reports it."""
+    data: dict[str, Any] = {
+        "commandClass": CommandClass.CONFIGURATION,
+        "commandClassName": "Configuration",
         "endpoint": endpoint,
-        "configuration_value_type": "manual_entry" if mask is None else "enumerated",
+        "property": 3,
+        "propertyName": "Ramp rate",
+        "ccVersion": 1,
         "metadata": {
-            "description": None,
-            "label": "Ramp rate",
             "type": "number",
+            "readable": True,
+            "writeable": True,
+            "label": "Ramp rate",
             "min": 0,
             "max": 99,
-            "unit": None,
-            "writeable": True,
-            "readable": True,
             "default": 0,
             "states": {"0": "Immediate"},
+            "valueSize": 1,
+            "format": 0,
+            "allowManualEntry": True,
+            "isFromConfig": True,
         },
         "value": value,
     }
-
-
-RawRead = Callable[[websocket_api.ActiveConnection, dict[str, Any]], Any]
-
-
-@dataclass
-class ZwaveNetwork:
-    """What the Z-Wave server knows about the one node of the test."""
-
-    device_id: str
-    parameters: dict[str, Any] = field(default_factory=dict)
-    raw_read: RawRead | None = None
-
-
-def _register_commands(hass: HomeAssistant, network: ZwaveNetwork) -> None:
-    """Register the integration's two parameter commands on Core."""
-
-    def node_found(connection: websocket_api.ActiveConnection, msg: dict) -> bool:
-        if msg["device_id"] == network.device_id:
-            return True
-        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Node not found")
-        return False
-
-    @websocket_api.require_admin
-    @websocket_api.websocket_command(
-        {
-            probatio.Required("type"): f"{_DOMAIN}/get_config_parameters",
-            probatio.Required("device_id"): str,
-        }
-    )
-    @websocket_api.async_response
-    async def get_config_parameters(
-        hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
-    ) -> None:
-        if node_found(connection, msg):
-            connection.send_result(msg["id"], network.parameters)
-
-    @websocket_api.require_admin
-    @websocket_api.websocket_command(
-        {
-            probatio.Required("type"): f"{_DOMAIN}/get_raw_config_parameter",
-            probatio.Required("device_id"): str,
-            probatio.Required("property"): int,
-        }
-    )
-    @websocket_api.async_response
-    async def get_raw_config_parameter(
-        hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
-    ) -> None:
-        if not node_found(connection, msg):
-            return
-        assert network.raw_read is not None, "the node was not asked to answer"
-        value = await network.raw_read(connection, msg)
-        if value is not None:
-            connection.send_result(msg["id"], {"value": value})
-
-    websocket_api.async_register_command(hass, get_config_parameters)
-    websocket_api.async_register_command(hass, get_raw_config_parameter)
-
-
-def answers(value: Any) -> RawRead:
-    async def read(connection: websocket_api.ActiveConnection, msg: dict) -> Any:
-        return value
-
-    return read
+    if mask is not None:
+        data["propertyKey"] = mask
+    return data
 
 
 @pytest.fixture
-async def network(
+def node_values() -> list[dict[str, Any]]:
+    """Node 5's configuration values; a test overrides it by parametrizing."""
+    return [config_value(8)]
+
+
+@pytest.fixture
+def server(node_values: list[dict[str, Any]]) -> Iterator[MagicMock]:
+    """The Z-Wave JS server connection, holding node 5 with ``node_values``."""
+    with zwave_js_server_connection(node_state(node_values)) as client:
+        yield client
+
+
+@pytest.fixture
+async def device_id(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     device_registry: dr.DeviceRegistry,
-) -> ZwaveNetwork:
-    """A Z-Wave JS entry with one node device and no entities."""
+    server: MagicMock,
+) -> str:
+    """The device Core's ``zwave_js`` registers for node 5."""
     assert await async_setup_component(hass, "config", {})
-    mock_integration(hass, MockModule(_DOMAIN))
-    entry = MockConfigEntry(domain=_DOMAIN)
-    entry.add_to_hass(hass)
-    device = device_registry.async_get_or_create(
-        config_entry_id=entry.entry_id, identifiers={(_DOMAIN, "3245146787-5")}
+    entry = await set_up_zwave_js(hass)
+    device = device_registry.async_get_device_by_identifier(
+        ("zwave_js", f"{HOME_ID}-{NODE_ID}"), entry.entry_id
     )
-    zwave = ZwaveNetwork(device_id=device.id)
-    _register_commands(hass, zwave)
-    return zwave
+    assert device is not None
+    return device.id
 
 
 def sent_types(spy: AsyncMock) -> list[str]:
-    return [call.args[0]["type"] for call in spy.call_args_list]
+    return [sent.args[0]["type"] for sent in spy.call_args_list]
 
 
 async def read_param(
-    client: HomeAssistantClient, network: ZwaveNetwork, **params: Any
+    client: HomeAssistantClient, device_id: str, **params: Any
 ) -> dict[str, Any]:
     return await RadioTools(client).ha_manage_radio(
         radio="zwave",
         action="get_config_param",
-        device_id=network.device_id,
+        device_id=device_id,
         params={"property": 3, **params},
     )
 
 
 async def failed_read(
-    client: HomeAssistantClient, network: ZwaveNetwork, **params: Any
+    client: HomeAssistantClient, device_id: str, **params: Any
 ) -> dict[str, Any]:
     with pytest.raises(ToolError) as exc:
-        await read_param(client, network, **params)
+        await read_param(client, device_id, **params)
     body: dict[str, Any] = json.loads(str(exc.value))
     return body
 
 
+@pytest.mark.parametrize(
+    "node_values", [[config_value(0), config_value(5, endpoint=1)]]
+)
 async def test_parameters_need_no_config_entities_and_preserve_metadata(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    device_id: str,
 ) -> None:
-    network.parameters = {
-        "root": parameter(0),
-        "endpoint": parameter(5, endpoint=1),
-    }
+    """Core's own reply comes back unchanged with the node's entities removed."""
+    for entity in er.async_entries_for_device(
+        entity_registry, device_id, include_disabled_entities=True
+    ):
+        entity_registry.async_remove(entity.entity_id)
+    await hass.async_block_till_done()
+    assert not er.async_entries_for_device(
+        entity_registry, device_id, include_disabled_entities=True
+    )
+    core_reply = await ws_result(
+        await hass_ws_client(hass),
+        "zwave_js/get_config_parameters",
+        device_id=device_id,
+    )
+    assert len(core_reply) == 2
 
     with (
         sent_messages(core_client) as spy,
@@ -187,27 +165,36 @@ async def test_parameters_need_no_config_entities_and_preserve_metadata(
         ) as service,
     ):
         result = await RadioTools(core_client).ha_manage_radio(
-            radio="zwave", action="get_config_params", device_id=network.device_id
+            radio="zwave", action="get_config_params", device_id=device_id
         )
 
-    assert result["parameters"] == network.parameters
+    assert result["parameters"] == core_reply
+    assert {p["endpoint"] for p in result["parameters"].values()} == {0, 1}
+    assert all(
+        p["metadata"]["states"] == {"0": "Immediate"}
+        for p in result["parameters"].values()
+    )
     assert result["source"] == "cache"
     assert result["refresh_requested"] is False
-    assert sent_types(spy) == [f"{_DOMAIN}/get_config_parameters"]
+    assert sent_types(spy) == ["zwave_js/get_config_parameters"]
     service.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "node_values",
+    [
+        [
+            config_value(0),
+            config_value(2, endpoint=1, mask=15),
+            config_value(3, endpoint=1, mask=240),
+        ]
+    ],
+)
 async def test_cached_read_selects_endpoint_and_bit_mask_without_polling(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, device_id: str
 ) -> None:
-    network.parameters = {
-        "root": parameter(0),
-        "other": parameter(2, endpoint=1, mask=15),
-        "selected": parameter(3, endpoint=1, mask=240),
-    }
-
     with sent_messages(core_client) as spy:
-        result = await read_param(core_client, network, endpoint=1, property_key=240)
+        result = await read_param(core_client, device_id, endpoint=1, property_key=240)
 
     assert result["parameter"]["value"] == 3
     assert result["parameter"]["property_key"] == 240
@@ -217,41 +204,43 @@ async def test_cached_read_selects_endpoint_and_bit_mask_without_polling(
 
 async def test_disabled_entity_is_only_an_optional_device_resolver(
     core_client: HomeAssistantClient,
-    network: ZwaveNetwork,
     entity_registry: er.EntityRegistry,
+    device_id: str,
 ) -> None:
-    network.parameters = {"root": parameter(0)}
-    entity = entity_registry.async_get_or_create(
-        "number",
-        _DOMAIN,
-        "3245146787-5-112-0-3",
-        device_id=network.device_id,
-        suggested_object_id="example_disabled",
-        disabled_by=er.RegistryEntryDisabler.USER,
-    )
+    """Core registers parameter 3's number entity disabled by default."""
+    numbers = [
+        entity
+        for entity in er.async_entries_for_device(
+            entity_registry, device_id, include_disabled_entities=True
+        )
+        if entity.domain == "number"
+    ]
+    assert len(numbers) == 1
+    assert numbers[0].disabled
+    entity_id = numbers[0].entity_id
 
     with sent_messages(core_client) as spy:
         result = await RadioTools(core_client).ha_manage_radio(
             radio="zwave",
             action="get_config_param",
-            entity_id=entity.entity_id,
+            entity_id=entity_id,
             params={"property": 3},
         )
 
-    assert result["parameter"]["value"] == 0
-    assert result["device_id"] == network.device_id
+    assert result["parameter"]["value"] == 8
+    assert result["device_id"] == device_id
     assert "warnings" not in result
     assert sent_types(spy) == [
         "config/entity_registry/get",
-        f"{_DOMAIN}/get_config_parameters",
+        "zwave_js/get_config_parameters",
     ]
 
 
+@pytest.mark.parametrize("node_values", [[config_value(2, mask=15)]])
 async def test_refresh_reads_raw_value_without_substituting_cached_partial(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, server: MagicMock, device_id: str
 ) -> None:
-    network.parameters = {"partial": parameter(2, mask=15)}
-    network.raw_read = answers(12)
+    server.async_send_command.return_value = {"value": 12}
 
     with (
         sent_messages(core_client) as spy,
@@ -259,7 +248,7 @@ async def test_refresh_reads_raw_value_without_substituting_cached_partial(
             core_client, "call_service", wraps=core_client.call_service
         ) as service,
     ):
-        result = await read_param(core_client, network, refresh=True)
+        result = await read_param(core_client, device_id, refresh=True)
 
     assert result["parameter"]["value"] == 12
     assert result["parameter"]["property_key"] is None
@@ -268,10 +257,10 @@ async def test_refresh_reads_raw_value_without_substituting_cached_partial(
     assert result["source"] == "device_request"
     assert result["refresh_requested"] is True
     assert [call.args[0] for call in spy.call_args_list] == [
-        {"type": f"{_DOMAIN}/get_config_parameters", "device_id": network.device_id},
+        {"type": "zwave_js/get_config_parameters", "device_id": device_id},
         {
-            "type": f"{_DOMAIN}/get_raw_config_parameter",
-            "device_id": network.device_id,
+            "type": "zwave_js/get_raw_config_parameter",
+            "device_id": device_id,
             "property": 3,
         },
     ]
@@ -292,73 +281,62 @@ async def test_refresh_reads_raw_value_without_substituting_cached_partial(
     ],
 )
 async def test_invalid_identifiers_and_unsupported_refresh_never_send_commands(
-    core_client: HomeAssistantClient, network: ZwaveNetwork, params: dict[str, Any]
+    core_client: HomeAssistantClient, device_id: str, params: dict[str, Any]
 ) -> None:
     with sent_messages(core_client) as spy, pytest.raises(ToolError):
         await RadioTools(core_client).ha_manage_radio(
             radio="zwave",
             action="get_config_param",
-            device_id=network.device_id,
+            device_id=device_id,
             params=params,
         )
     spy.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "parameters",
+    "node_values",
     [
-        pytest.param({}, id="absent"),
-        pytest.param({"partial": parameter(2, mask=15)}, id="only-a-partial"),
+        pytest.param([], id="absent"),
+        pytest.param([config_value(2, mask=15)], id="only-a-partial"),
     ],
 )
 async def test_missing_cached_parameter_does_not_implicitly_poll(
-    core_client: HomeAssistantClient,
-    network: ZwaveNetwork,
-    parameters: dict[str, Any],
+    core_client: HomeAssistantClient, device_id: str
 ) -> None:
     """A partial parameter is not mistaken for the full one asked for."""
-    network.parameters = parameters
-
     with sent_messages(core_client) as spy, pytest.raises(ToolError, match="not found"):
-        await read_param(core_client, network)
+        await read_param(core_client, device_id)
 
     assert spy.await_count == 1
 
 
 async def test_ha_failure_never_substitutes_a_cached_value(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, server: MagicMock, device_id: str
 ) -> None:
-    network.parameters = {"root": parameter(8)}
+    """Core turns the server's failed Get into its own error reply."""
+    server.async_send_command.side_effect = FailedZWaveCommand(
+        "raw-read", 201, "Timeout while waiting for a response from the node"
+    )
 
-    async def node_gone(connection: websocket_api.ActiveConnection, msg: dict) -> Any:
-        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Node not found")
+    body = await failed_read(core_client, device_id, refresh=True)
 
-    network.raw_read = node_gone
-
-    body = await failed_read(core_client, network, refresh=True)
-
-    assert body["ha_error_code"] == websocket_api.ERR_NOT_FOUND
+    assert body["ha_error_code"] == "zwave_error"
     assert "parameter" not in body
 
 
 async def test_unknown_raw_failure_keeps_details_without_claiming_a_cause(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, server: MagicMock, device_id: str
 ) -> None:
-    """Core answers unknown_error for empty results and unrelated handler failures."""
-    network.parameters = {"root": parameter(8)}
-
-    async def driver_asserts(
-        connection: websocket_api.ActiveConnection, msg: dict
-    ) -> Any:
-        raise AssertionError("no value in the driver's reply")
-
-    network.raw_read = driver_asserts
+    """A server result without a value fails the library's assertion, which
+    Core answers as unknown_error, the code it also uses for unrelated
+    handler failures."""
+    server.async_send_command.return_value = {}
 
     with sent_messages(core_client) as spy:
-        body = await failed_read(core_client, network, refresh=True)
+        body = await failed_read(core_client, device_id, refresh=True)
 
-    assert body["ha_error_code"] == websocket_api.ERR_UNKNOWN_ERROR
-    assert body["device_id"] == network.device_id
+    assert body["ha_error_code"] == "unknown_error"
+    assert body["device_id"] == device_id
     assert body["property"] == 3
     assert "no cached fallback" in body["error"]["message"]
     assert "returned no value" not in body["error"]["message"]
@@ -367,19 +345,18 @@ async def test_unknown_raw_failure_keeps_details_without_claiming_a_cause(
     assert spy.await_count == 2
 
 
+@pytest.mark.parametrize("node_values", [[config_value(None)]])
 async def test_unknown_cached_value_remains_unknown(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, device_id: str
 ) -> None:
-    network.parameters = {"root": parameter(None)}
-
-    result = await read_param(core_client, network)
+    result = await read_param(core_client, device_id)
 
     assert result["parameter"]["value"] is None
     assert result["warnings"]
 
 
 async def test_list_cannot_silently_accept_a_refresh_request(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    core_client: HomeAssistantClient, device_id: str
 ) -> None:
     with (
         sent_messages(core_client) as spy,
@@ -388,24 +365,33 @@ async def test_list_cannot_silently_accept_a_refresh_request(
         await RadioTools(core_client).ha_manage_radio(
             radio="zwave",
             action="get_config_params",
-            device_id=network.device_id,
+            device_id=device_id,
             params={"refresh": True},
         )
     spy.assert_not_called()
 
 
 async def test_refresh_preserves_zero_and_marks_cached_metadata(
-    core_client: HomeAssistantClient, network: ZwaveNetwork
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    core_client: HomeAssistantClient,
+    server: MagicMock,
+    device_id: str,
 ) -> None:
-    network.parameters = {"root": parameter(8)}
-    network.raw_read = answers(0)
+    cached = await ws_result(
+        await hass_ws_client(hass),
+        "zwave_js/get_config_parameters",
+        device_id=device_id,
+    )
+    server.async_send_command.return_value = {"value": 0}
 
     result = await read_param(
-        core_client, network, endpoint=0, property_key=None, refresh=True
+        core_client, device_id, endpoint=0, property_key=None, refresh=True
     )
 
     assert result["parameter"]["value"] == 0
-    assert result["parameter"]["metadata"] == parameter(8)["metadata"]
+    assert len(cached) == 1
+    assert result["parameter"]["metadata"] == next(iter(cached.values()))["metadata"]
     assert result["metadata_source"] == "cache"
 
 
@@ -418,14 +404,16 @@ async def socket(core_client: HomeAssistantClient) -> HomeAssistantWebSocketClie
 
 
 @pytest.fixture
-async def asleep(network: ZwaveNetwork) -> AsyncIterator[None]:
-    """The node is asleep: the raw read waits until the test ends."""
+async def asleep(server: MagicMock, device_id: str) -> AsyncIterator[None]:
+    """The node is asleep: once Core is set up, the server holds the raw read
+    until the test ends."""
     woke = asyncio.Event()
 
-    async def queued(connection: websocket_api.ActiveConnection, msg: dict) -> Any:
+    async def queued(message: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         await woke.wait()
+        return {"value": 8}
 
-    network.raw_read = queued
+    server.async_send_command.side_effect = queued
     try:
         yield
     finally:
@@ -434,48 +422,48 @@ async def asleep(network: ZwaveNetwork) -> AsyncIterator[None]:
 
 async def test_refresh_timeout_explains_the_possible_wakeup_queue(
     core_client: HomeAssistantClient,
-    network: ZwaveNetwork,
+    device_id: str,
     socket: HomeAssistantWebSocketClient,
     asleep: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real bridge wraps the command deadline in a connection error."""
-    network.parameters = {"root": parameter(8)}
     # The server's own command deadline, cut so the test does not wait 30 s.
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 0.2)
 
     with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
-        body = await failed_read(core_client, network, refresh=True)
+        body = await failed_read(core_client, device_id, refresh=True)
 
     assert body["error"]["code"] == "TIMEOUT_WEBSOCKET"
     assert "no cached fallback" in body["error"]["message"]
     assert "queued" in body["error"]["message"]
     assert "wake" in body["error"]["suggestion"].lower()
-    assert body["device_id"] == network.device_id
+    assert body["device_id"] == device_id
     assert body["property"] == 3
     assert body["refresh_requested"] is True
-    assert body["ws_type"] == f"{_DOMAIN}/get_raw_config_parameter"
+    assert body["ws_type"] == "zwave_js/get_raw_config_parameter"
     assert spy.await_count == 2
 
 
 async def test_refresh_connection_loss_does_not_claim_a_sleeping_node(
     core_client: HomeAssistantClient,
-    network: ZwaveNetwork,
+    server: MagicMock,
+    device_id: str,
     socket: HomeAssistantWebSocketClient,
 ) -> None:
     """A dropped socket is distinct from a command deadline expiring."""
-    network.parameters = {"root": parameter(8)}
 
     async def connection_drops(
-        connection: websocket_api.ActiveConnection, msg: dict
-    ) -> Any:
-        # The connection goes away while the read waits for its answer.
+        message: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        # The connection goes away while the read waits for the node's answer.
         await socket.disconnect()
+        return {"value": 8}
 
-    network.raw_read = connection_drops
+    server.async_send_command.side_effect = connection_drops
 
-    body = await failed_read(core_client, network, refresh=True)
+    body = await failed_read(core_client, device_id, refresh=True)
 
     assert body["error"]["code"] == "CONNECTION_FAILED"
     assert "queued" not in body["error"]["message"]
-    assert body["device_id"] == network.device_id
+    assert body["device_id"] == device_id
