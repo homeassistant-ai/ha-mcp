@@ -7,7 +7,6 @@ via the Home Assistant entity registry API.
 
 import asyncio
 import logging
-import re
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -16,23 +15,45 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
+    HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
-from ..errors import ErrorCode, create_error_response
+from ..errors import (
+    ErrorCode,
+    create_entity_not_found_error,
+    create_error_response,
+)
 from ..utils.registry_update_lock import registry_update_locks
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
+    COMPONENT_VIA_HACS,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
+    ENTITY_ENRICH_FULL_NAME,
+    ComponentDiscoveryError,
+    component_serves,
     component_supports,
+    component_unasked_warning,
+    component_unusable_warning,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
 )
 from .config_helpers.registry import validate_registry_ids
-from .entity_expose_batch import apply_bulk_expose, changed_entity_ids
+from .entity_expose_batch import (
+    apply_bulk_expose,
+    changed_entity_ids,
+    expose_targets,
+    refresh_warning,
+    reject_unknown_assistants,
+)
+from .entity_exposure import (
+    get_entries_or_unregistered,
+    unregistered_lookup,
+    unregistered_row,
+)
 from .entity_param_parsing import (
     _parse_aliases_param,
     _parse_categories_param,
@@ -40,13 +61,24 @@ from .entity_param_parsing import (
     _parse_options_param,
     _parse_string_list_field,
 )
+from .entity_registry_reads import (
+    _GET_ENTRIES_CHUNK_SIZE,
+    NotInRegistry,
+    _extract_ws_error,
+    get_entries_raw,
+    resolve_by_unique_id,
+)
+from .entity_registry_wide import (
+    get_registry_wide,
+    is_registry_wide_call,
+    set_registry_wide,
+)
 from .entity_removal import remove_registry_entries, remove_registry_entry
 from .entity_update_fields import (
     build_name_visibility_fields,
     build_state_tag_fields,
     ensure_use_device_name_allowed,
     reject_name_with_use_device_name,
-    uses_device_name,
 )
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
@@ -54,6 +86,7 @@ from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
@@ -62,20 +95,18 @@ from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
-# The ha_mcp_tools/entity_enrich WS command: resolved area/floor/label NAMES +
-# aliases per entity_id, byte-shaped like the component's registry join. Named
-# once so the routing helper and its tests stay in lockstep.
+# The ha_mcp_tools/entity_enrich WS command: resolved area/floor/label NAMES,
+# aliases and the composed name per entity_id, byte-shaped like the component's
+# registry join. Named once so the routing helper and its tests stay in lockstep.
 WS_ENTITY_ENRICH = "ha_mcp_tools/entity_enrich"
 
-# Bounds the per-frame size of a bulk config/entity_registry/get_entries call
-# (extended entries, ~1KB each) so a large id list can't produce an over-cap
-# WebSocket frame. Matches the chunk size smart_search uses for the same
-# command. Typical bulk calls fit in a single chunk (one WS message).
-_GET_ENTRIES_CHUNK_SIZE = 500
 
 # Max entity IDs accepted by the bulk-removal path of ha_remove_entity. Mirrors
 # the cap the other bulk tools use (ha_get_state's _get_bulk_entity_states).
 _MAX_BULK_REMOVE = 100
+
+# What ha_get_entity's rows lack without the component's entity_enrich.
+_WITHOUT_ENRICHMENT = "the entries come without area, floor, label_names and full_name"
 
 _CLEAR_DEVICE_NAME_HINT = (
     "new_device_name cannot clear the device name; use ha_set_device(name='') "
@@ -83,74 +114,29 @@ _CLEAR_DEVICE_NAME_HINT = (
 )
 
 
-def _format_fetched_entity(entry: dict[str, Any]) -> dict[str, Any]:
-    """Project a raw HA entity-registry extended dict into ha_get_entity's shape.
-
-    Shared by the single-entity get, the bulk get_entries backend, and the
-    unique_id resolver so every ha_get_entity response carries the same keys.
-    """
-    return {
-        "entity_id": entry.get("entity_id"),
-        "name": entry.get("name"),
-        "uses_device_name": uses_device_name(entry),
-        "original_name": entry.get("original_name"),
-        "icon": entry.get("icon"),
-        "area_id": entry.get("area_id"),
-        "disabled_by": entry.get("disabled_by"),
-        "hidden_by": entry.get("hidden_by"),
-        "enabled": entry.get("disabled_by") is None,
-        "hidden": entry.get("hidden_by") is not None,
-        "aliases": entry.get("aliases", []),
-        "labels": entry.get("labels", []),
-        "categories": entry.get("categories", {}),
-        "device_class": entry.get("device_class"),
-        "original_device_class": entry.get("original_device_class"),
-        "options": entry.get("options", {}),
-        "platform": entry.get("platform"),
-        "device_id": entry.get("device_id"),
-        "config_entry_id": entry.get("config_entry_id"),
-        "unique_id": entry.get("unique_id"),
-    }
-
-
 async def fetch_entity_enrichment_via_component(
     client: Any, entity_ids: list[str]
 ) -> dict[str, dict[str, Any]] | None:
-    """One ``ha_mcp_tools/entity_enrich`` read; ``None`` ⇒ skip enrichment (legacy).
+    """The component's ``ha_mcp_tools/entity_enrich`` map for the ids.
 
-    Returns the component's ``{id: {area, floor, labels, aliases}}`` map (resolved
-    area/floor/label NAMES the raw registry entry lacks — it carries ``area_id`` /
-    label *ids*) or ``None`` when the component lacks the ``entity_enrich``
-    capability, was downgraded (``unknown_command`` → invalidate the cached caps),
-    or errored (logged). ``None`` means "no enrichment available", NOT "no such
-    entity": ``ha_get_entity``'s registry read already served the base record, so a
-    ``None`` here simply leaves the additive fields off — the enrichment is
-    strictly additive, so its absence changes nothing else. A
-    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
-    (re)connect — is caught here and mapped to ``None``: there is no legacy enrichment fetch (the base record is
-    already served), so a transport failure just skips enrichment rather than
-    escaping into and failing the whole ``ha_get_entity``. Follows the same
-    caps-gate discipline as ``component_devices.fetch_device_via_component``.
+    Returns ``{id: {area, floor, labels, aliases, full_name}}``: resolved
+    area/floor/label NAMES the raw registry entry lacks (it carries
+    ``area_id`` / label *ids*) and, with ``entity_enrich_full_name``, the name
+    Home Assistant shows. ``None`` when the component does not advertise the
+    command or no longer knows it (``unknown_command`` → invalidate the cached
+    caps), or when the command fails, gets no answer, loses its connection or
+    answers with a malformed result: the rows then stay as Core serves them.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
-    request cannot produce an over-cap WebSocket frame or stall in the optional
-    enrichment step. Enrichment stays all-or-nothing: any chunk failing or drifting
-    in shape returns ``None`` (legacy shape), never a partially-enriched response.
+    request cannot produce an over-cap WebSocket frame.
     """
-    if not entity_ids:
-        return None
     caps = await get_component_caps(client)
     if not (
         component_supports(caps, "entity_enrich")
         and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
     ):
         return None
-    ids = list(entity_ids)
-    chunks = [
-        ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-        for i in range(0, len(ids), _GET_ENTRIES_CHUNK_SIZE)
-    ]
     merged: dict[str, dict[str, Any]] = {}
     try:
         ws = await get_websocket_client(
@@ -158,73 +144,41 @@ async def fetch_entity_enrichment_via_component(
             token=client.token,
             verify_ssl=getattr(client, "verify_ssl", None),
         )
-        for chunk in chunks:
+        for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE):
+            chunk = entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
             result = raw.get("result")
-            if not isinstance(result, dict):
-                return None
-            entities = result.get("entities")
+            entities = result.get("entities") if isinstance(result, dict) else None
             if not isinstance(entities, dict):
                 return None
             merged.update(entities)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+    except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
         else:
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
-    except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError or any other error → skip
-        # enrichment (strictly additive; no legacy fetch dies here).
-        logger.warning(
-            "%s connection error; skipped enrichment: %r", WS_ENTITY_ENRICH, exc
-        )
-        return None
     return merged
 
 
 def _merge_entity_enrichment(
-    record: dict[str, Any], enrichment: dict[str, Any] | None
+    record: dict[str, Any], enrichment: dict[str, Any] | None, with_full_name: bool
 ) -> None:
-    """Additively attach resolved area/floor/label NAMES to an entity record.
+    """Attach the component's resolved names without overwriting a base key.
 
-    The base record already carries ``area_id`` and label *ids* (``labels``); the
-    component join adds the resolved, device-inherited NAMES under non-clobbering
-    keys — ``area`` / ``floor`` / ``label_names`` — so nothing existing is
-    overwritten. ``aliases`` is already on the base record (same set — the
-    component sorts, so ordering may differ — and the base value is authoritative),
-    so it is not re-added. A ``None`` / empty enrichment is a no-op: on a capability
-    miss the fields are simply absent, leaving the legacy response shape unchanged.
+    Adds ``area`` / ``floor`` / ``label_names`` (device-inherited NAMES; the base
+    record carries ``area_id`` and label ids) and, with ``with_full_name``,
+    ``full_name``, the name Home Assistant shows. ``aliases`` is not re-added:
+    the base record carries the same set (the component sorts it) and is
+    authoritative. A ``None`` / empty enrichment is a no-op.
     """
     if not enrichment:
         return
     record["area"] = enrichment.get("area")
     record["floor"] = enrichment.get("floor")
     record["label_names"] = enrichment.get("labels") or []
-
-
-def _match_registry_by_unique_id(
-    entries: list[dict[str, Any]],
-    unique_id: str,
-    domain: str | None,
-    platform: str | None,
-) -> list[dict[str, Any]]:
-    """Return formatted registry entries matching unique_id (+ optional filters).
-
-    ``domain`` is compared against the entity_id prefix (the registry's unique
-    key uses the entity domain); ``platform`` against the entry's platform.
-    """
-    matches: list[dict[str, Any]] = []
-    for entry in entries:
-        if entry.get("unique_id") != unique_id:
-            continue
-        entry_domain = (entry.get("entity_id") or "").split(".")[0]
-        if domain is not None and entry_domain != domain:
-            continue
-        if platform is not None and entry.get("platform") != platform:
-            continue
-        matches.append(_format_fetched_entity(entry))
-    return matches
+    if with_full_name:
+        record["full_name"] = enrichment["full_name"]
 
 
 def _single_entity_target(kw: dict[str, Any]) -> str:
@@ -239,79 +193,41 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
     return str(entity_id or "")
 
 
-def _format_entity_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    """Format entity registry entry for API response."""
-    return {
-        "entity_id": entry.get("entity_id"),
-        "name": entry.get("name"),
-        "original_name": entry.get("original_name"),
-        "icon": entry.get("icon"),
-        "area_id": entry.get("area_id"),
-        "disabled_by": entry.get("disabled_by"),
-        "hidden_by": entry.get("hidden_by"),
-        "aliases": entry.get("aliases", []),
-        "labels": entry.get("labels", []),
-        "categories": entry.get("categories", {}),
-        "device_class": entry.get("device_class"),
-        "original_device_class": entry.get("original_device_class"),
-        "options": entry.get("options", {}),
-    }
-
-
 def _expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
-    """The updates entry for expose_to; Core 2026.11+ says when nothing changed."""
+    """The updates entry for expose_to, saying so when Core changed nothing."""
     if unchanged:
         return f"expose_to={parsed_expose_to} (already set, nothing changed)"
     return f"expose_to={parsed_expose_to}"
 
 
-def _extract_ws_error(result: dict[str, Any]) -> str:
-    """Pull a user-readable message out of a failed WebSocket response.
-
-    Falls back to a static placeholder + warning log when HA returns an
-    empty or malformed error envelope, so the user-facing message never
-    degrades to literal "{}".
-    """
-    error = result.get("error")
-    if isinstance(error, dict):
-        msg = error.get("message")
-        if isinstance(msg, str) and msg:
-            return msg
-    elif isinstance(error, str) and error:
-        return error
-    logger.warning("HA WS response had no usable error detail: %r", result)
-    return "no error detail returned by Home Assistant"
-
-
 def _parse_set_entity_ids(
-    entity_id: str | list[str],
+    entity_id: str | list[str] | None,
 ) -> tuple[list[str], bool]:
     """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input."""
     if isinstance(entity_id, str):
         return [entity_id], False
-    elif isinstance(entity_id, list):
-        if not entity_id:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "entity_id list cannot be empty",
-                )
-            )
-        if not all(isinstance(e, str) for e in entity_id):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "All entity_id values must be strings",
-                )
-            )
-        return entity_id, len(entity_id) > 1
-    else:
+    if not isinstance(entity_id, list):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
             )
         )
+    if not entity_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "entity_id list cannot be empty",
+            )
+        )
+    if not all(isinstance(e, str) for e in entity_id):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "All entity_id values must be strings",
+            )
+        )
+    return entity_id, len(entity_id) > 1
 
 
 def _parse_get_entity_ids(
@@ -335,7 +251,6 @@ def _parse_get_entity_ids(
                 "success": True,
                 "entity_entries": [],
                 "count": 0,
-                "message": "No entities requested",
             },
         )
     if not all(isinstance(e, str) for e in entity_id):
@@ -354,12 +269,8 @@ def _validate_enabled_constraint(
 ) -> None:
     """Block registry-disable on automation and script entities.
 
-    Registry-disabling (enabled=False) removes the entity from the HA
-    state machine entirely, making it invisible in the UI and
-    unqueryable via state APIs until re-enabled AND the integration is
-    reloaded.  For automations, use
-    ha_config_set_automation(entity_id=..., enabled=...) to control their
-    runtime enabled state.  For scripts,
+    For automations, use ha_config_set_automation(entity_id=..., enabled=...)
+    to control their runtime enabled state.  For scripts,
     ha_config_set_script(script_id=..., run="stop") only stops a currently
     running execution; it does not disable the script, and Home Assistant
     has no script runtime enable/disable service.
@@ -373,9 +284,7 @@ def _validate_enabled_constraint(
             if _domain == "script":
                 message = (
                     "Cannot registry-disable script entities with "
-                    "ha_set_entity(enabled=False). This removes the entity from the "
-                    "state machine and hides it from the UI until it is re-enabled "
-                    "and scripts are reloaded. Use ha_config_set_script("
+                    "ha_set_entity(enabled=False). Use ha_config_set_script("
                     f"script_id='{blocked[0]}', run='stop') only to stop a "
                     "currently running execution; it does not disable the script. "
                     "Home Assistant has no script runtime enable/disable service."
@@ -388,18 +297,15 @@ def _validate_enabled_constraint(
             else:
                 message = (
                     f"Cannot registry-disable {_domain} entities with "
-                    "ha_set_entity(enabled=False). This removes the entity from the "
-                    "state machine and hides it from the UI until it is re-enabled "
-                    f"AND the {_domain}s are reloaded. Use "
+                    "ha_set_entity(enabled=False). Use "
                     f"ha_config_set_automation(entity_id='{blocked[0]}', "
-                    "enabled=False) instead to disable it without removing it."
+                    "enabled=False) instead."
                 )
                 suggestions = [
                     "Use ha_config_set_automation(entity_id=..., enabled=...) to "
-                    + "disable the automation (keeps it visible and manageable)",
+                    + "disable the automation",
                     "Use ha_config_set_automation(entity_id=..., enabled=True) to "
                     + "re-enable it later",
-                    "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
                 ]
             raise_tool_error(
                 create_error_response(
@@ -500,42 +406,30 @@ class EntityTools:
         labels_to_remove = set(parsed_labels)
         return [lbl for lbl in current_labels if lbl not in labels_to_remove]
 
-    def _validate_entity_rename(
-        self,
-        entity_id: str,
-        new_entity_id: str,
-        message: dict[str, Any],
-        updates_made: list[str],
-    ) -> None:
-        """Validate and apply a rename to the update message. Raises on invalid input."""
-        entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
-        if not re.match(entity_pattern, new_entity_id):
+    async def _automatic_entity_id(self, entity_id: str) -> str:
+        """The entity_id Core would generate for the entry now (the UI's restore)."""
+        result = await self._client.send_websocket_message(
+            {
+                "type": "config/entity_registry/get_automatic_entity_ids",
+                "entity_ids": [entity_id],
+            }
+        )
+        what = f"No automatic entity_id for {entity_id}"
+        context = {"entity_id": entity_id}
+        if not result.get("success"):
+            raise_core_refusal(what, result, context)
+        # Core lowercases the ids it is sent and keys its reply so.
+        automatic = (result.get("result") or {}).get(entity_id.lower())
+        if not automatic:
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid new_entity_id format: {new_entity_id}",
-                    suggestions=[
-                        "Use format: domain.object_id (lowercase letters, numbers, underscores only)"
-                    ],
-                    context={"new_entity_id": new_entity_id},
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"{what}: not in the entity registry",
+                    context=context,
+                    suggestions=["Use ha_search() to find valid entity IDs"],
                 )
             )
-        current_domain = entity_id.split(".", maxsplit=1)[0]
-        new_domain = new_entity_id.split(".", maxsplit=1)[0]
-        if current_domain != new_domain:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
-                    suggestions=[f"New entity_id must start with '{current_domain}.'"],
-                    context={
-                        "entity_id": entity_id,
-                        "new_entity_id": new_entity_id,
-                    },
-                )
-            )
-        message["new_entity_id"] = new_entity_id
-        updates_made.append(f"entity_id -> {new_entity_id}")
+        return str(automatic)
 
     async def _execute_registry_update(
         self,
@@ -544,9 +438,13 @@ class EntityTools:
         updates_made: list[str],
         new_entity_id: str | None,
     ) -> tuple[str, dict[str, Any], bool]:
-        """Send entity registry update. Returns (effective_entity_id, entity_entry, has_registry_updates)."""
+        """Send entity registry update. Returns (effective_entity_id, core_result, has_registry_updates).
+
+        ``core_result`` is Core's reply: ``entity_entry`` plus, when the update
+        enabled the entity, ``require_restart`` or ``reload_delay``.
+        """
         has_registry_updates = len(message) > 2  # more than just type + entity_id
-        entity_entry: dict[str, Any] = {}
+        core_result: dict[str, Any] = {}
 
         if has_registry_updates:
             logger.info(
@@ -555,38 +453,17 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                error_msg = _extract_ws_error(result)
-                suggestions = ["Verify the entity_id exists using ha_search()"]
-                if new_entity_id is not None:
-                    suggestions.extend(
-                        [
-                            "Check that the new entity_id doesn't already exist",
-                            "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
-                        ]
-                    )
-                else:
-                    suggestions.extend(
-                        [
-                            "Check that area_id exists if specified",
-                            "Some entities may not support all update options",
-                        ]
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to update entity: {error_msg}",
-                        context={"entity_id": entity_id},
-                        suggestions=suggestions,
-                    )
+                raise_core_refusal(
+                    "Failed to update entity", result, {"entity_id": entity_id}
                 )
 
-            entity_entry = result.get("result", {}).get("entity_entry", {})
+            core_result = dict(result.get("result") or {})
 
             # If entity was renamed, update entity_id for subsequent operations
             if new_entity_id:
                 entity_id = new_entity_id
 
-        return entity_id, entity_entry, has_registry_updates
+        return entity_id, core_result, has_registry_updates
 
     async def _apply_options_updates(
         self,
@@ -616,7 +493,6 @@ class EntityTools:
             }
             opts_result = await self._client.send_websocket_message(opts_msg)
             if not opts_result.get("success"):
-                err_msg = _extract_ws_error(opts_result)
                 partial = bool(options_succeeded) or has_registry_updates
                 msg_prefix = (
                     "Partially updated entity; failed updating options for"
@@ -635,20 +511,14 @@ class EntityTools:
                     "options_succeeded": options_succeeded,
                     "updates_applied": list(updates_made),
                 }
-                # Only include entity_entry when something actually mutated;
-                # _format_entity_entry({}) returns an all-None stub that's
-                # indistinguishable from "entity has nothing set". Mirrors
-                # the partial-context logic in _build_expose_failure_context.
+                # Only include entity_entry when something actually mutated,
+                # as _build_expose_failure_context does.
                 if partial:
-                    options_failure_context["entity_entry"] = _format_entity_entry(
-                        entity_entry
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"{msg_prefix} domain '{opts_domain}': {err_msg}",
-                        context=options_failure_context,
-                    )
+                    options_failure_context["entity_entry"] = entity_entry
+                raise_core_refusal(
+                    f"{msg_prefix} domain '{opts_domain}'",
+                    opts_result,
+                    options_failure_context,
                 )
             # HA returns the cumulative entity_entry on each per-domain
             # call, so last-call-wins reassignment leaves the final loop
@@ -664,53 +534,25 @@ class EntityTools:
     async def _apply_device_rename(
         self,
         entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         new_device_name: str | None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Rename the associated device. Returns (device_rename_result, entity_entry).
 
         ``new_device_name`` is already normalized: None means no rename.
+        The returned ``entity_entry`` is None for an entity without a registry entry.
         """
-        device_rename_result: dict[str, Any] | None = None
         if new_device_name is None:
-            return device_rename_result, entity_entry
+            return None, entity_entry
 
-        # If no registry update was sent, fetch entity_entry to get device_id
-        if not entity_entry:
-            device_lookup_msg: dict[str, Any] = {
-                "type": "config/entity_registry/get",
-                "entity_id": entity_id,
-            }
-            get_result = await self._client.send_websocket_message(device_lookup_msg)
-            if get_result.get("success"):
-                entity_entry = get_result.get("result") or {}
-            else:
-                logger.warning(
-                    "Entity registry lookup failed for %s: %s",
-                    entity_id,
-                    _extract_ws_error(get_result),
-                )
-                device_rename_result = {
-                    "warnings": [
-                        "Entity registry lookup failed — could not determine device. Retry may succeed."
-                    ],
-                    "lookup_failed": True,
-                }
+        # An entity without a registry entry has no device.
+        _, entity_entry = await self._resolve_target(entity_id, entity_entry)
 
-        device_id = entity_entry.get("device_id") if not device_rename_result else None
+        device_id = (entity_entry or {}).get("device_id")
         if not device_id:
-            # Only fire the "no device" warning when the registry lookup
-            # succeeded — otherwise the "lookup failed" warning set above
-            # already carries the more accurate signal, and a second
-            # "no associated device" claim would be unverified (we don't
-            # actually know what the registry says when the lookup failed).
-            if device_rename_result is None:
-                device_rename_result = {
-                    "warnings": [
-                        "Entity has no associated device — device rename skipped"
-                    ],
-                }
-            return device_rename_result, entity_entry
+            return {
+                "warnings": ["Entity has no associated device — device rename skipped"],
+            }, entity_entry
 
         device_msg: dict[str, Any] = {
             "type": "config/device_registry/update",
@@ -732,7 +574,7 @@ class EntityTools:
     def _build_expose_failure_context(
         self,
         entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         succeeded: dict[str, bool],
         failed: dict[str, bool],
         options_succeeded: dict[str, dict[str, Any]],
@@ -760,33 +602,62 @@ class EntityTools:
         }
         if prior_mutation:
             context["partial"] = True
-            context["entity_entry"] = _format_entity_entry(entity_entry)
+            context["entity_entry"] = entity_entry
             if options_succeeded:
                 context["options_succeeded"] = options_succeeded
             if device_rename_result and device_rename_result.get("success"):
                 context["device_rename_succeeded"] = True
         return context
 
+    async def _resolve_target(
+        self, entity_id: str, entity_entry: dict[str, Any] | None
+    ) -> tuple[str, dict[str, Any] | None]:
+        """The id Core knows the entity by, and its registry entry if any.
+
+        Same resolution as ``expose_targets``: an id Home Assistant does not
+        know is refused (ENTITY_NOT_FOUND). Callers pass an empty or missing
+        ``entity_entry`` only before any write, so the refusal leaves nothing
+        applied; a non-empty one is returned as it is.
+        """
+        if entity_entry:
+            return entity_entry["entity_id"], entity_entry
+        try:
+            entry = await self._fetch_entity(entity_id)
+        except NotInRegistry:
+            known = await unregistered_lookup(self._client, [entity_id])
+            if entity_id not in known:
+                raise_tool_error(create_entity_not_found_error(entity_id))
+            return known[entity_id][0], None
+        return entry["entity_id"], entry
+
     async def _apply_expose_to(
         self,
         entity_id: str,
         parsed_expose_to: dict[str, bool] | None,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         has_registry_updates: bool,
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
-    ) -> tuple[dict[str, bool] | None, dict[str, Any], bool]:
-        """Apply expose_to changes; returns (exposure_result, entity_entry, unchanged)."""
+        updates_made: list[str],
+    ) -> tuple[dict[str, bool] | None, dict[str, Any] | None, str | None]:
+        """Apply expose_to changes and add their entry to updates_made.
+
+        Returns (exposure_result, entity_entry, warning): entity_entry is None
+        for an entity without a registry entry, and warning says when the
+        entry could not be re-read after the write.
+        """
         if parsed_expose_to is None:
-            return None, entity_entry, False
-        if not parsed_expose_to and entity_entry:
-            return None, entity_entry, True
+            return None, entity_entry, None
+        target, entry = await self._resolve_target(entity_id, entity_entry)
+        if not parsed_expose_to:
+            updates_made.append(_expose_update(parsed_expose_to, True))
+            return None, entry, None
 
         # Group by should_expose value for efficient API calls
         expose_true = [a for a, v in parsed_expose_to.items() if v]
         expose_false = [a for a, v in parsed_expose_to.items() if not v]
         succeeded: dict[str, bool] = {}
-        changed: set[str] | None = set()
+        changed: set[str] = set()
 
         for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
             if not assistants:
@@ -795,11 +666,11 @@ class EntityTools:
             expose_msg: dict[str, Any] = {
                 "type": "homeassistant/expose_entity",
                 "assistants": assistants,
-                "entity_ids": [entity_id],
+                "entity_ids": [target],
                 "should_expose": should_expose,
             }
             logger.info(
-                f"{'Exposing' if should_expose else 'Hiding'} {entity_id} "
+                f"{'Exposing' if should_expose else 'Hiding'} {target} "
                 f"{'to' if should_expose else 'from'} {assistants}"
             )
             expose_result = await self._client.send_websocket_message(expose_msg)
@@ -809,7 +680,7 @@ class EntityTools:
                 failed = dict.fromkeys(assistants, should_expose)
                 context = self._build_expose_failure_context(
                     entity_id,
-                    entity_entry,
+                    entry,
                     succeeded,
                     failed,
                     options_succeeded,
@@ -821,86 +692,63 @@ class EntityTools:
                         ErrorCode.SERVICE_CALL_FAILED,
                         f"Exposure failed: {error_msg}",
                         context=context,
-                        suggestions=[
-                            "Check Home Assistant connection and entity availability"
-                        ],
                     )
                 )
 
             # Track successful exposures
             for a in assistants:
                 succeeded[a] = should_expose
-            reported = changed_entity_ids(expose_result)
-            changed = (
-                None if reported is None or changed is None else changed | reported
-            )
+            changed |= changed_entity_ids(expose_result)
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
-        unchanged = changed is not None and entity_id not in changed
+        unchanged = target not in changed
+        updates_made.append(_expose_update(parsed_expose_to, unchanged))
+        if entry is None:
+            return exposure_result, None, None
 
-        # Exposure mutates the registry entry's options, so refetch to return the
-        # post-exposure state. An empty expose_to applies nothing and lands
-        # here only when no earlier phase read the entry.
-        get_msg: dict[str, Any] = {
-            "type": "config/entity_registry/get",
-            "entity_id": entity_id,
-        }
-        get_result = await self._client.send_websocket_message(get_msg)
+        # Exposure mutates the registry entry's options, so refetch to return
+        # the post-exposure state. The exposure already committed: a failed
+        # refresh keeps the pre-exposure entry and says so.
+        try:
+            get_result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": target}
+            )
+        except HomeAssistantError as exc:
+            get_result = {"success": False, "error": str(exc)}
         if get_result.get("success"):
-            entity_entry = get_result.get("result") or {}
-        elif entity_entry:
-            # The exposure already committed; only the cosmetic post-exposure
-            # refresh failed. Keep the pre-exposure snapshot and warn rather
-            # than reporting the whole (successful) operation as a failure.
-            logger.warning(
-                f"Exposure applied to {entity_id} but its registry state could "
-                f"not be refreshed: {_extract_ws_error(get_result)}"
-            )
-        else:
-            # No prior-phase snapshot to fall back on -- surface the read
-            # failure with the actual WebSocket error.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Entity '{entity_id}' could not be read after applying "
-                    f"exposure changes: {_extract_ws_error(get_result)}",
-                    context={
-                        "entity_id": entity_id,
-                        "exposure_succeeded": exposure_result,
-                        "has_registry_updates": has_registry_updates,
-                        "options_succeeded": options_succeeded,
-                    },
-                    suggestions=[
-                        "Verify the entity_id exists using ha_search()",
-                        "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
-                    ],
-                )
-            )
-
-        return exposure_result, entity_entry, unchanged
+            return exposure_result, get_result.get("result") or {}, None
+        warning = refresh_warning(entity_id, _extract_ws_error(get_result))
+        logger.warning(warning)
+        return exposure_result, entry, warning
 
     def _build_entity_response(
         self,
         entity_id: str,
         original_entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         updates_made: list[str],
         new_entity_id: str | None,
         exposure_result: dict[str, bool] | None,
         device_rename_result: dict[str, Any] | None,
-        device_name_warning: str | None = None,
+        extra_warnings: list[str] | None = None,
+        core_extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the final response dict for a single-entity update."""
         response_data: dict[str, Any] = {
+            **(core_extras or {}),
             "success": True,
             "entity_id": entity_id,
             "updates": updates_made,
-            "entity_entry": _format_entity_entry(entity_entry),
-            "message": f"Entity updated: {', '.join(updates_made)}",
+            "entity_entry": entity_entry,
         }
 
-        # Include old_entity_id and rename warning when a rename was performed
-        if new_entity_id is not None:
+        # Include old_entity_id and rename warning when a rename was performed;
+        # Core lowercases the entity_id it is sent; a new_entity_id it
+        # accepts is already lowercase.
+        if (
+            new_entity_id is not None
+            and new_entity_id.lower() != original_entity_id.lower()
+        ):
             response_data["old_entity_id"] = original_entity_id
             response_data.setdefault("warnings", []).append(
                 "Remember to update any automations, scripts, or dashboards "
@@ -910,8 +758,8 @@ class EntityTools:
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
 
-        if device_name_warning is not None:
-            response_data.setdefault("warnings", []).append(device_name_warning)
+        if extra_warnings:
+            response_data.setdefault("warnings", []).extend(extra_warnings)
 
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
@@ -920,14 +768,11 @@ class EntityTools:
                 response_data.setdefault("warnings", []).extend(
                     device_rename_result["warnings"]
                 )
-            # Mark partial when a device rename was requested but didn't complete
-            # for an operational reason: WS-call failure (device_id present + warnings)
-            # or upstream registry lookup failure (lookup_failed marker). Not partial
-            # when the entity simply has no device — that's a no-op, not an incomplete
-            # operation.
-            if device_rename_result.get("warnings") and (
-                device_rename_result.get("device_id")
-                or device_rename_result.get("lookup_failed")
+            # Mark partial when the device rename failed (device_id present +
+            # warnings). Not partial when the entity simply has no device —
+            # that's a no-op, not an incomplete operation.
+            if device_rename_result.get("warnings") and device_rename_result.get(
+                "device_id"
             ):
                 response_data["partial"] = True
 
@@ -955,9 +800,8 @@ class EntityTools:
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         reject_name_with_use_device_name(name, use_device_name)
-        await ensure_use_device_name_allowed(
-            use_device_name, self._client, entity_id, self._fetch_entity
-        )
+        if new_entity_id == "auto":
+            new_entity_id = await self._automatic_entity_id(entity_id)
         # Normalized before Phase 3: a quote-only value must be rejected before the
         # entity registry write, and a blank one must not count as deferred work.
         device_name_blank = new_device_name is not None and not new_device_name.strip()
@@ -965,6 +809,10 @@ class EntityTools:
             new_device_name, "new_device_name", hint=_CLEAR_DEVICE_NAME_HINT
         )
         async with registry_update_locks("entity", entity_id, new_entity_id):
+            # Read under the lock: the main-entity write is built from this entry
+            current_entry = await ensure_use_device_name_allowed(
+                use_device_name, entity_id, self._fetch_entity
+            )
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
                 entity_id, parsed_labels, label_operation
@@ -987,6 +835,7 @@ class EntityTools:
                 icon,
                 device_class,
                 use_device_name,
+                current_entry,
             )
             build_state_tag_fields(
                 message,
@@ -1002,8 +851,11 @@ class EntityTools:
             if alias_note:
                 updates_made.append(alias_note)
             if new_entity_id is not None:
-                self._validate_entity_rename(
-                    entity_id, new_entity_id, message, updates_made
+                message["new_entity_id"] = new_entity_id
+                updates_made.append(
+                    f"entity_id -> {new_entity_id}"
+                    if new_entity_id.lower() != entity_id.lower()
+                    else "entity_id unchanged"
                 )
             # expose_to and device_name are appended to updates_made only after their
             # WS phases run (Phases 5-6), so the Phase-4 error context never claims
@@ -1052,11 +904,12 @@ class EntityTools:
             # Phase 3: Send entity registry update (covers all fields except expose_to)
             (
                 entity_id,
-                entity_entry,
+                core_result,
                 registry_updated,
             ) = await self._execute_registry_update(
                 entity_id, message, updates_made, new_entity_id
             )
+            entity_entry = core_result.pop("entity_entry", {})
 
             # Phase 4: Per-domain options; Phases 3-6 run under one hold of the lock
             entity_entry, options_succeeded = await self._apply_options_updates(
@@ -1076,16 +929,19 @@ class EntityTools:
                 updates_made.append(f"device_name -> {new_device_name}")
 
             # Phase 6: Expose to assistants
-            exposure_result, entity_entry, unchanged = await self._apply_expose_to(
+            (
+                exposure_result,
+                entity_entry,
+                exposure_warning,
+            ) = await self._apply_expose_to(
                 entity_id,
                 parsed_expose_to,
                 entity_entry,
                 registry_updated,
                 options_succeeded,
                 device_rename_result,
+                updates_made,
             )
-            if parsed_expose_to is not None:
-                updates_made.append(_expose_update(parsed_expose_to, unchanged))
 
         # Phase 7: Build response
         return self._build_entity_response(
@@ -1096,7 +952,8 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
-            device_name_warning,
+            [w for w in (device_name_warning, exposure_warning) if w],
+            core_result,
         )
 
     async def _bulk_registry_phase(
@@ -1172,62 +1029,50 @@ class EntityTools:
         parsed_expose_to: dict[str, bool],
         entry_by_id: dict[str, dict[str, Any] | None],
         updates_by_id: dict[str, list[str]],
-    ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Batch-expose eligible_ids, then refetch their post-exposure state.
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+        """Batch-expose eligible_ids, then refetch the registry entries among them.
 
-        Returns (still_eligible_ids, newly_failed). A batched-expose failure
-        is reported against every eligible id (the command acts on the whole
-        list atomically) — matching the old per-entity path where each entity
-        raised on its own expose failure — and clears eligibility. On success,
-        options mutate, so a single get_entries refetch refreshes each
-        entity_entry; a refetch failure keeps the pre-exposure snapshot since
-        the exposure already committed.
+        Returns (still_eligible_ids, newly_failed, warnings). An id that
+        ``expose_targets`` cannot resolve fails before the write. A failed
+        expose call is reported against every id it was sent for (each call
+        acts on the whole list) and clears eligibility. On success, options
+        mutate, so one get_entries refetch refreshes each registry entry; a
+        refetch failure keeps the pre-exposure entry, since the exposure
+        already committed, and adds a warning.
         """
+        targets, failed = await expose_targets(self._client, eligible_ids, entry_by_id)
+        eligible_ids = [eid for eid in eligible_ids if eid in targets]
+        if not eligible_ids:
+            return [], failed, []
         expose_error, changed = await apply_bulk_expose(
-            self._client, eligible_ids, parsed_expose_to, _extract_ws_error
+            self._client,
+            [targets[eid] for eid in eligible_ids],
+            parsed_expose_to,
+            _extract_ws_error,
         )
         if expose_error is not None:
-            failed = [
+            failed.extend(
                 {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
                 for eid in eligible_ids
-            ]
-            return [], failed
+            )
+            return [], failed, []
 
         for eid in eligible_ids:
-            unchanged = changed is not None and eid not in changed
+            unchanged = targets[eid] not in changed
             updates_by_id[eid].append(_expose_update(parsed_expose_to, unchanged))
-        refetched_raw, refetch_errors = await self._get_entries_raw(eligible_ids)
-        for eid in eligible_ids:
-            if eid in refetched_raw:
-                entry_by_id[eid] = _format_entity_entry(refetched_raw[eid])
-        # An id whose refetch failed AND that has no earlier registry snapshot
-        # (expose-only bulk never populates one) would otherwise be reported
-        # as a success row with entity_entry=None — e.g. a typo'd or deleted
-        # entity. The old per-entity path raised for exactly this case.
-        still_eligible: list[str] = []
-        newly_failed: list[dict[str, Any]] = []
-        for eid in eligible_ids:
-            if eid in refetch_errors and entry_by_id.get(eid) is None:
-                newly_failed.append(
-                    {
-                        "entity_id": eid,
-                        "error": (
-                            "Exposure command was sent, but the entity could "
-                            "not be verified in the registry: "
-                            f"{refetch_errors[eid]}"
-                        ),
-                    }
-                )
+        registered = [eid for eid in eligible_ids if entry_by_id.get(eid) is not None]
+        refetched, refetch_errors = await get_entries_raw(
+            self._client, [targets[eid] for eid in registered]
+        )
+        warnings: list[str] = []
+        for eid in registered:
+            if targets[eid] in refetched:
+                entry_by_id[eid] = refetched[targets[eid]]
             else:
-                still_eligible.append(eid)
-        if refetch_errors:
-            logger.warning(
-                "Bulk exposure applied but post-exposure refresh failed "
-                "for %d id(s); %d had a pre-exposure snapshot to return",
-                len(refetch_errors),
-                len(refetch_errors) - len(newly_failed),
-            )
-        return still_eligible, newly_failed
+                warnings.append(refresh_warning(eid, refetch_errors[targets[eid]]))
+        if warnings:
+            logger.warning("Bulk exposure applied; %s", " ".join(warnings))
+        return eligible_ids, failed, warnings
 
     async def _bulk_update_entities(
         self,
@@ -1268,8 +1113,9 @@ class EntityTools:
             entity_ids, parsed_categories, parsed_labels, label_operation
         )
 
+        warnings: list[str] = []
         if parsed_expose_to is not None and eligible_ids:
-            eligible_ids, expose_failed = await self._bulk_expose_phase(
+            eligible_ids, expose_failed, warnings = await self._bulk_expose_phase(
                 eligible_ids, parsed_expose_to, entry_by_id, updates_by_id
             )
             failed.extend(expose_failed)
@@ -1295,6 +1141,8 @@ class EntityTools:
         if failed:
             response["failed"] = failed
             response["partial"] = len(succeeded_list) > 0
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _fetch_entity(self, eid: str) -> dict[str, Any]:
@@ -1303,137 +1151,21 @@ class EntityTools:
             "type": "config/entity_registry/get",
             "entity_id": eid,
         }
-        result = await self._client.send_websocket_message(message)
+        # Not in the registry is an answer here, not a failure to log.
+        result = await self._client.send_websocket_message(
+            message, expected_error_codes=frozenset({"not_found"})
+        )
 
         if not result.get("success"):
-            raise ValueError(_extract_ws_error(result))
-
-        return _format_fetched_entity(result.get("result") or {})
-
-    async def _get_entries_raw(
-        self, entity_ids: list[str]
-    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-        """Bulk-fetch registry entries via chunked config/entity_registry/get_entries.
-
-        Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
-        entity_id to HA's raw extended registry dict; ``errors`` maps a failed
-        entity_id to a message. A ``null`` in HA's entries map (id not in the
-        registry) and a chunk-level WS failure both land in ``errors`` — this
-        reproduces the per-id not-found contract of the old one-get-per-id
-        fan-out, where every id got its own error. Callers project the raw
-        entries through whichever formatter their response shape needs.
-        """
-        raw: dict[str, dict[str, Any]] = {}
-        errors: dict[str, str] = {}
-        if not entity_ids:
-            return raw, errors
-
-        chunks = [
-            entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-            for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE)
-        ]
-        responses = await asyncio.gather(
-            *(
-                self._client.send_websocket_message(
-                    {
-                        "type": "config/entity_registry/get_entries",
-                        "entity_ids": chunk,
-                    }
-                )
-                for chunk in chunks
-            ),
-            return_exceptions=True,
-        )
-        for chunk, resp in zip(chunks, responses, strict=True):
-            if isinstance(resp, BaseException) and not isinstance(resp, Exception):
-                # Never swallow cancellation/shutdown into per-entity errors.
-                raise resp
-            if isinstance(resp, dict) and resp.get("success"):
-                result_map = resp.get("result") or {}
-                for eid in chunk:
-                    entry = result_map.get(eid)
-                    if entry is None:
-                        errors[eid] = "Entity not found"
-                    else:
-                        raw[eid] = entry
-                continue
-            # Whole-chunk failure (WS raised, or success=False): every id in
-            # the chunk failed, mirroring the old per-id fan-out behaviour.
-            msg = _extract_ws_error(resp) if isinstance(resp, dict) else str(resp)
-            for eid in chunk:
-                errors[eid] = msg
-        return raw, errors
-
-    async def _resolve_by_unique_id(
-        self,
-        unique_id: str,
-        domain: str | None,
-        platform: str | None,
-    ) -> dict[str, Any]:
-        """Resolve a stable unique_id to its entity_id(s) via one registry list.
-
-        The registry's unique key is (domain, platform, unique_id), so the same
-        unique_id can appear under multiple platforms — every match is returned
-        with a ``matches`` count so callers can disambiguate. ``domain`` /
-        ``platform`` narrow the match set when provided.
-        """
-        list_resp = await self._client.send_websocket_message(
-            {"type": "config/entity_registry/list"}
-        )
-        if not list_resp.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to list entity registry: {_extract_ws_error(list_resp)}",
-                    context={"unique_id": unique_id},
-                    suggestions=["Check Home Assistant connection and retry"],
-                )
+            if result.get("error_code") == "not_found":
+                raise NotInRegistry(_extract_ws_error(result))
+            raise_core_refusal(
+                f"Reading the registry entry of {eid} failed",
+                result,
+                {"entity_id": eid},
             )
 
-        matches = _match_registry_by_unique_id(
-            list_resp.get("result") or [], unique_id, domain, platform
-        )
-
-        if not matches:
-            filters = {"unique_id": unique_id}
-            if domain is not None:
-                filters["domain"] = domain
-            if platform is not None:
-                filters["platform"] = platform
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"No entity found with unique_id '{unique_id}'"
-                    + (
-                        f" (domain={domain}, platform={platform})"
-                        if domain is not None or platform is not None
-                        else ""
-                    ),
-                    context=filters,
-                    suggestions=[
-                        "unique_id must match exactly — it is the integration's "
-                        + "internal id, not the entity_id",
-                        "Drop the domain/platform filters if you set them",
-                        "Use ha_search() to browse entities and their platforms",
-                    ],
-                )
-            )
-
-        # config/entity_registry/list carries as_partial_dict, which omits
-        # aliases and the device_class override — those come back as their
-        # defaults ([] / None) in resolver mode. Callers needing them can
-        # re-query ha_get_entity(entity_id=...) with a resolved id.
-        response: dict[str, Any] = {
-            "success": True,
-            "unique_id": unique_id,
-            "matches": len(matches),
-            "entity_entries": matches,
-        }
-        if domain is not None:
-            response["domain"] = domain
-        if platform is not None:
-            response["platform"] = platform
-        return response
+        return result.get("result") or {}
 
     @tool(
         name="ha_set_entity",
@@ -1447,10 +1179,16 @@ class EntityTools:
     async def ha_set_entity(
         self,
         entity_id: Annotated[
-            str | list[str],
+            str | list[str] | None,
             JSON_STRING_COERCION,
-            Field(description="Entity ID or list of entity IDs to update."),
-        ],
+            Field(
+                description=(
+                    "Entity ID or list of entity IDs to update. Omit only for the "
+                    "registry-wide expose_new_entities and entity_id_parts."
+                ),
+                default=None,
+            ),
+        ] = None,
         area_id: Annotated[
             str | None,
             Field(
@@ -1465,8 +1203,8 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "Display name for the entity. Use empty string '' to remove custom "
-                    "name and revert to default. " + WHITESPACE_CLEARS_NOTE
+                    "The entity's own name part, not the full name. Use empty string '' to remove "
+                    "the custom name and revert to default. " + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1475,9 +1213,12 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "HA 2026.10's 'Use device name' switch. True names the entity "
-                    "after its device and follows device renames; False restores "
-                    "the integration's default name. Omit to leave it as is; not "
+                    "The entity dialog's 'Main entity of the device' switch. True "
+                    "names the entity after its device, following device renames, "
+                    "and like the dialog moves it from its own area to the "
+                    "device's. An entity without a name of its own already is the "
+                    "main entity and is left as is. False restores the "
+                    "integration's default name. Omit to leave it as is; not "
                     "combinable with name."
                 ),
                 default=None,
@@ -1513,8 +1254,8 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. Multiple domains are sent '
-                    "as separate registry updates. For 'Show As' use device_class; for "
+                    'e.g. {"sensor": {"display_precision": 2}}. '
+                    "For 'Show As' use device_class; for "
                     "voice-assistant exposure use expose_to, not "
                     "options.<assistant>.should_expose."
                 ),
@@ -1525,10 +1266,12 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "True to enable the entity, False to disable it. "
-                    "WARNING: Setting enabled=False is a registry-level disable — it completely "
-                    "removes the entity from the state machine and hides it from the UI. "
-                    "A reload or restart is required to restore it after re-enabling."
+                    "True to enable the entity, False to disable it. WARNING: "
+                    "enabled=False is a registry-level disable, not 'turning off': "
+                    "the entity leaves the state machine, the UI, dashboards and "
+                    "automations. Re-enabling returns Home Assistant's own answer: "
+                    "require_restart, or reload_delay (seconds until it reloads "
+                    "the integration itself)."
                 ),
                 default=None,
             ),
@@ -1599,8 +1342,39 @@ class EntityTools:
             Field(
                 description=(
                     "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "
-                    "Valid assistants: 'conversation' (Assist), 'cloud.alexa', 'cloud.google_assistant'. "
-                    'Example: {"conversation": true, "cloud.alexa": false}.'
+                    "Assistant IDs Home Assistant knows, today 'conversation' (Assist), 'cloud.alexa' "
+                    "and 'cloud.google_assistant'; it refuses any other name before any change is sent to it. "
+                    'Example: {"conversation": true, "cloud.alexa": false}. '
+                    "An entity without a registry entry is written under the id Home "
+                    "Assistant reads it by and answers with entity_entry null; an id "
+                    "Home Assistant does not know is refused before anything is written."
+                ),
+                default=None,
+            ),
+        ] = None,
+        expose_new_entities: Annotated[
+            dict[str, bool] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Registry-wide, no entity_id: each assistant's 'Expose new "
+                    "entities' switch, as a dict mapping assistant IDs to booleans "
+                    '(e.g. {"cloud.alexa": false}). Home Assistant refuses an '
+                    "assistant it does not know before any change is sent."
+                ),
+                default=None,
+            ),
+        ] = None,
+        entity_id_parts: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Registry-wide, no entity_id: the name parts new entity IDs "
+                    "are built from, in order. Home Assistant judges the list; "
+                    "today it takes 'area', 'floor', 'parent_device', 'device' "
+                    "and 'entity', and requires 'device' and 'entity'. [] "
+                    "restores Home Assistant's default."
                 ),
                 default=None,
             ),
@@ -1609,8 +1383,10 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "New entity ID to rename to (e.g., 'light.new_name'). "
-                    "Domain must match the original."
+                    "New entity ID to rename to (e.g., 'light.new_name'); the domain "
+                    "must stay the same. 'auto' takes the ID Home Assistant would "
+                    "generate for the entity now, like the UI's Restore entity ID "
+                    "(no rename when the entity already has it)."
                 ),
                 default=None,
             ),
@@ -1619,9 +1395,10 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "New display name for the associated device. "
-                    "If provided, both entity and device are updated in one operation. "
-                    "Empty or whitespace-only never changes the device name: it is "
+                    "New display name for the associated device. An entity_id "
+                    "Home Assistant does not know is refused; an entity without a "
+                    "device gets a warning. Empty or whitespace-only never changes "
+                    "the device name: it is "
                     "reported under warnings when other fields are given and is an "
                     "error when it is the only update. To clear the device name use "
                     "ha_set_device(name='')."
@@ -1630,7 +1407,7 @@ class EntityTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Update entity properties in the entity registry.
+        """Update entity registry entries, or without entity_id the registry-wide settings.
 
         Allows modifying entity metadata such as area assignment, display name,
         icon, "Show As" device class override, per-domain registry options,
@@ -1654,14 +1431,13 @@ class EntityTools:
         scripts, templates, or dashboards. All consumers of the old entity_id must
         be updated manually — HA does not propagate the rename automatically.
 
-        Rename limitations:
-        - Entity history is preserved (HA 2022.4+)
-        - Entities without unique IDs cannot be renamed
-        - Entities disabled by their integration cannot be renamed
+        Rename limitation: an entity without a unique ID cannot be renamed.
 
-        DEVICE RENAME:
-        new_device_name can be combined with new_entity_id to rename both in one
-        call. The device is looked up automatically.
+        REGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home
+        Assistant's `settings`, the `expose_new_entities` written, and the values
+        they replace
+        (`previous_settings`, `previous_expose_new_entities`). ha_get_entity()
+        reads them.
 
         Use ha_search() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
@@ -1670,15 +1446,12 @@ class EntityTools:
         - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
         - Set Show As: ha_set_entity("binary_sensor.zone_10", device_class="window")
         - Set sensor precision: ha_set_entity("sensor.power", options={"sensor": {"display_precision": 2}})
+        - Stop exposing new entities to Alexa: ha_set_entity(expose_new_entities={"cloud.alexa": false})
         - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
         - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
         - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
 
-        ENABLED/DISABLED WARNING:
-        A disabled entity will NOT appear in state queries, dashboards, or
-        automations until re-enabled AND the integration is reloaded. This is
-        NOT the same as "turning off" an entity.
-
+        AUTOMATIONS AND SCRIPTS:
         For automations and scripts, enabled=False is blocked. For automations,
         use ha_config_set_automation(entity_id="automation.xxx", enabled=False)
         (or enabled=True to re-enable).
@@ -1687,16 +1460,6 @@ class EntityTools:
         Home Assistant has no script runtime enable/disable service.
         """
         try:
-            entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
-
-            # Per-element empty/whitespace check — the list-empty check above
-            # rejects ``[]`` but not ``[""]``; without this guard, an empty
-            # entity_id would propagate to the entity-registry update WS call
-            # and surface as a misleading HA "entity not found".
-            for eid in entity_ids:
-                validate_identifier_not_empty(eid, "entity_id")
-
-            # Validate: bulk operations only support categories, labels, and expose_to
             single_entity_params = {
                 "area_id": area_id,
                 "name": name,
@@ -1711,6 +1474,32 @@ class EntityTools:
                 "new_entity_id": new_entity_id,
                 "new_device_name": new_device_name,
             }
+            if is_registry_wide_call(
+                entity_id,
+                {
+                    "expose_new_entities": expose_new_entities,
+                    "entity_id_parts": entity_id_parts,
+                },
+                {
+                    **single_entity_params,
+                    "categories": categories,
+                    "labels": labels,
+                    "expose_to": expose_to,
+                },
+            ):
+                return await set_registry_wide(
+                    self._client, expose_new_entities, entity_id_parts
+                )
+            entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
+
+            # Per-element empty/whitespace check — the list-empty check above
+            # rejects ``[]`` but not ``[""]``; without this guard, an empty
+            # entity_id would propagate to the entity-registry update WS call
+            # and surface as a misleading HA "entity not found".
+            for eid in entity_ids:
+                validate_identifier_not_empty(eid, "entity_id")
+
+            # Validate: bulk operations only support categories, labels, and expose_to
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
             ]
@@ -1734,6 +1523,7 @@ class EntityTools:
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
+            await reject_unknown_assistants(self._client, parsed_expose_to)
 
             # Reject invalid shared references before any bulk writes. Each
             # entity also revalidates under its lock to catch references deleted
@@ -1825,36 +1615,79 @@ class EntityTools:
                 default=None,
             ),
         ] = None,
+        exposed_to: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Without entity_id and unique_id: list only the entities "
+                    "exposed to this voice assistant, an ID Home Assistant knows "
+                    "(today 'conversation', 'cloud.alexa', 'cloud.google_assistant'). "
+                    "Adds `assistant` and its `expose_new_entities` flag; leaves "
+                    "out `summary`."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Get entity registry information for one or more entities.
+        """Get entity registry entries, or without an entity the registry settings and exposed entities.
 
-        Returns detailed entity registry metadata: area, custom name/icon,
-        original name, disabled_by/hidden_by (with enabled/hidden shorthands),
-        aliases (a null entry = the entity's own name), labels, categories,
-        device_class override, per-domain options, platform, device_id,
-        config_entry_id and unique_id.
+        Returns each entry as Home Assistant's entity registry serves it
+        (`config/entity_registry/get` / `get_entries`): area_id, name override,
+        original_name, icon, disabled_by/hidden_by, aliases (a null alias is the
+        entity's own name), labels, categories, device_class, capabilities,
+        entity_category, per-domain options, platform, device_id,
+        config_entry_id, unique_id and `next_name_part`. An entity with a
+        device_id and no name of its own (`name: ""`, or `name: null` with no
+        `original_name`) is the main entity of its device (the dialog's "Main
+        entity of the device" switch). Plus the enrichment keys below.
 
         RESOLVER MODE:
-        Pass unique_id (instead of entity_id) to resolve a stable integration
-        unique_id to its entity_id(s). Since the registry's unique key is
-        (domain, platform, unique_id), the same unique_id can match multiple
-        platforms — all matches are returned in entity_entries with a `matches`
-        count. Narrow with domain/platform. Resolver reads as_partial_dict, so
-        aliases and the device_class override come back as defaults ([]/null).
+        Pass unique_id to resolve it to its entity_id(s). Since the registry's
+        unique key is (domain, platform, unique_id), the same unique_id can match
+        multiple platforms — all matches are returned in entity_entries with a
+        `matches` count. Narrow with domain/platform.
 
         When config_entry_id is non-null — e.g. for UI-created template / group /
         utility_meter / derivative helpers — pass it to
         ``ha_get_integration(entry_id=..., include_options=True)`` to read the
         helper's current config (template body, group members, etc.) without
-        scanning a domain list. Voice-assistant exposure is stored under options
-        but is set via ha_set_entity(expose_to=...).
+        scanning a domain list.
 
-        Resolved-name enrichment (present only when the ha_mcp_tools component
-        advertises it; otherwise these keys are absent): `area` (assigned area
-        NAME, device-inherited when the entity has none), `floor`, and
-        `label_names`. This tool's base `labels` carries the label ids;
-        ha_search result_fields and ha_get_entity_exposure instead emit the
-        resolved names under `labels`.
+        Resolved-name enrichment on an entity_id or unique_id lookup, served by the
+        ha_mcp_tools component (absent without it, and a warning says which
+        fields are missing and whether to install or update the component):
+        `full_name` (the name Home Assistant shows, composed from the parent
+        device, device and entity names; null when it has none),
+        `area` (assigned area NAME, device-inherited when the entity has none),
+        `floor`, and `label_names`. This tool's base `labels` carries the label ids;
+        ha_search result_fields and the exposure listing's `entity_info`
+        instead emit the resolved names under `labels`.
+
+        VOICE ASSISTANT EXPOSURE:
+        An entity with a registry entry keeps its exposure in the entry's
+        `options` (`options.<assistant>.should_expose`; absent while nothing is
+        stored); ha_set_entity(expose_to=...) sets it. An entity without a
+        registry entry that has a state, or is stored as exposed, returns
+        `entity_entry: null` with `exposed_to` (the assistants Home Assistant has
+        stored as exposed) and
+        `is_exposed_anywhere`; a list call returns such entities under
+        `unregistered_entities`.
+
+        WITHOUT entity_id AND unique_id: returns the registry-wide state:
+        `settings` (Home Assistant's `config/entity_registry/settings/get`:
+        `entity_id_parts`, the name parts new entity IDs are built from, null
+        for Home Assistant's default) and `exposed_entities`, the entities
+        exposed to at least one voice assistant as Home Assistant's
+        `expose_entity/list` map, with `count` and a per-assistant `summary`
+        (an assistant with no exposed entity is left out). An entity missing
+        from that map is not stored as exposed: either it is stored as not
+        exposed, or nothing is stored yet and Home Assistant applies its own
+        default when an assistant first asks (it depends on the assistant's
+        expose-new-entities flag and on the entity). When the ha_mcp_tools
+        component advertises it, `entity_info` names each listed entity:
+        domain, area, floor and labels (plus friendly_name and state when it
+        has a state). Without it the listing has no `entity_info`, and a
+        warning says whether to install or update the component.
 
         RELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()
         for current state/attributes; ha_search() to find entities.
@@ -1863,8 +1696,24 @@ class EntityTools:
         - Single entity: ha_get_entity("sensor.temperature")
         - Multiple entities: ha_get_entity(["light.living_room", "switch.porch"])
         - Resolve a unique_id: ha_get_entity(unique_id="00:11:22:33", domain="sensor")
+        - Entities exposed to Alexa: ha_get_entity(exposed_to="cloud.alexa")
+        - Registry settings and all exposed entities: ha_get_entity()
         """
         try:
+            if exposed_to is not None and (
+                entity_id is not None or unique_id is not None
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "exposed_to lists the exposed entities; it takes no "
+                        "entity_id or unique_id.",
+                        suggestions=[
+                            "Drop exposed_to: an entry's exposure is in its options",
+                            "Drop entity_id/unique_id to list the exposed entities",
+                        ],
+                    )
+                )
             # Resolver mode (unique_id) is mutually exclusive with entity_id.
             if unique_id is not None:
                 if entity_id is not None:
@@ -1879,19 +1728,13 @@ class EntityTools:
                         )
                     )
                 logger.info(f"Resolving unique_id '{unique_id}' to entity_id(s)")
-                return await self._resolve_by_unique_id(unique_id, domain, platform)
-
-            if entity_id is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "Provide entity_id (an id or list) or unique_id.",
-                        suggestions=[
-                            "ha_get_entity('sensor.temperature')",
-                            "ha_get_entity(unique_id='abc123') to resolve a unique_id",
-                        ],
-                    )
+                resolved = await resolve_by_unique_id(
+                    self._client, unique_id, domain, platform
                 )
+                if warning := await self._enrich_entries(resolved["entity_entries"]):
+                    resolved["warnings"] = [warning]
+                return resolved
+
             # domain/platform are resolver-only filters (unique_id is None here).
             if domain is not None or platform is not None:
                 raise_tool_error(
@@ -1905,6 +1748,8 @@ class EntityTools:
                     )
                 )
 
+            if entity_id is None:
+                return await get_registry_wide(self._client, exposed_to)
             return await self._get_by_entity_id(entity_id)
 
         except ToolError:
@@ -1922,29 +1767,29 @@ class EntityTools:
         logger.info(f"Getting entity registry entry for {eid}")
         try:
             result = await self._fetch_entity(eid)
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Entity not found: {e}",
-                    context={"entity_id": eid},
-                    suggestions=[
-                        "Use ha_search() to find valid entity IDs",
-                        "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
-                    ],
+        except NotInRegistry:
+            # Without a registry entry, an entity has exposure settings only
+            # once Core stored some, in its separate exposed-entities store;
+            # Core knows it by its state, or while an assistant has it stored
+            # as exposed.
+            try:
+                known = await unregistered_lookup(self._client, [eid])
+            except HomeAssistantError as exc:
+                exception_to_structured_error(
+                    exc, context={"entity_id": eid, "registry_entry": None}
                 )
-            )
-        # Additive area/floor/label-name enrichment via the component when it
-        # advertises entity_enrich; a capability miss leaves the fields off
-        # (legacy shape unchanged).
-        enriched = await fetch_entity_enrichment_via_component(self._client, [eid])
-        if enriched is not None:
-            _merge_entity_enrichment(result, enriched.get(eid))
-        return {
+            if eid not in known:
+                raise_tool_error(create_entity_not_found_error(eid))
+            return {"success": True, **unregistered_row(eid, known[eid][1])}
+        warning = await self._enrich_entries([result])
+        response: dict[str, Any] = {
             "success": True,
             "entity_id": eid,
             "entity_entry": result,
         }
+        if warning:
+            response["warnings"] = [warning]
+        return response
 
     async def _get_by_entity_id(self, entity_id: str | list[str]) -> dict[str, Any]:
         """Look up entities by entity_id (single or bulk list)."""
@@ -1955,53 +1800,74 @@ class EntityTools:
         if not is_bulk:
             return await self._get_single_entity(entity_ids[0])
 
-        # Bulk case - fetch all entities in one chunked get_entries call
-        # (native HA bulk command) instead of one registry get per id.
         logger.info(f"Getting entity registry entries for {len(entity_ids)} entities")
-        raw_map, error_map = await self._get_entries_raw(entity_ids)
+        raw_map, known, error_map = await get_entries_or_unregistered(
+            self._client, entity_ids
+        )
 
         # Iterate the requested ids (not the map) to preserve request order and
-        # duplicate handling; each id is classified found/error exactly as the
-        # old per-id fan-out did.
+        # duplicate handling; each id is found, unregistered, or an error.
         entity_entries: list[dict[str, Any]] = []
+        unregistered_entities: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for eid in entity_ids:
             raw = raw_map.get(eid)
             if raw is not None:
-                entity_entries.append(_format_fetched_entity(raw))
+                entity_entries.append(raw)
+            elif eid in known:
+                unregistered_entities.append(unregistered_row(eid, known[eid][1]))
             else:
-                errors.append(
-                    {
-                        "entity_id": eid,
-                        "error": error_map.get(eid, "Entity not found"),
-                    }
-                )
+                errors.append({"entity_id": eid, "error": error_map[eid]})
 
-        # Additive area/floor/label-name enrichment for the found entities via the
-        # component's entity_enrich capability; missing ⇒ fields simply absent.
-        found_ids: list[str] = [
-            e["entity_id"]
-            for e in entity_entries
-            if isinstance(e.get("entity_id"), str)
-        ]
-        enriched = await fetch_entity_enrichment_via_component(self._client, found_ids)
-        if enriched is not None:
-            for entry in entity_entries:
-                entry_id = entry.get("entity_id")
-                if isinstance(entry_id, str):
-                    _merge_entity_enrichment(entry, enriched.get(entry_id))
+        warning = await self._enrich_entries(entity_entries)
 
         response: dict[str, Any] = {
             "success": True,
             "count": len(entity_entries),
             "entity_entries": entity_entries,
         }
+        if warning:
+            response["warnings"] = [warning]
+        if unregistered_entities:
+            response["unregistered_entities"] = unregistered_entities
         if errors:
             response["errors"] = errors
             response["suggestions"] = [
                 "Use ha_search() to find valid entity IDs for failed lookups"
             ]
         return response
+
+    async def _enrich_entries(self, entity_entries: list[dict[str, Any]]) -> str | None:
+        """Add the component's entity_enrich fields to the found entries.
+
+        Returns a warning whenever the entries come without some of them: no
+        component answered (install it), the component is too old for the
+        command, its command failed, or it predates ``full_name`` (update it),
+        or it could not be asked.
+        """
+        found_ids = [e["entity_id"] for e in entity_entries]
+        if not found_ids:
+            return None
+        # Read before the fetch: an unknown_command there drops the cached caps.
+        # Strict, so a refused or failed probe is not taken for no component.
+        try:
+            caps = await get_component_caps(self._client, strict=True)
+        except ComponentDiscoveryError as exc:
+            return component_unasked_warning(exc, _WITHOUT_ENRICHMENT)
+        enriched = await fetch_entity_enrichment_via_component(self._client, found_ids)
+        if enriched is None:
+            return component_unusable_warning(caps, _WITHOUT_ENRICHMENT)
+        with_full_name = await component_serves(self._client, ENTITY_ENRICH_FULL_NAME)
+        for entry in entity_entries:
+            _merge_entity_enrichment(
+                entry, enriched.get(entry["entity_id"]), with_full_name
+            )
+        if with_full_name:
+            return None
+        return (
+            "The ha_mcp_tools component predates full_name, so the entries come "
+            f"without it. Update it {COMPONENT_VIA_HACS}"
+        )
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
         """Validate the id list, then remove the ids one at a time; registry

@@ -7,6 +7,8 @@ tool, and the old name has to stay out of the catalog.
 
 import json
 import logging
+from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.automation.trace import AutomationTrace
@@ -17,13 +19,21 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.renamed_tools import RENAMED_PARAMETERS
+from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,
 )
+from ha_mcp.tools.tools_entities import register_entity_tools
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
+from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
+
+from ._tool_errors import error_of
 
 
 @pytest.fixture
@@ -61,6 +71,16 @@ def _make_mcp() -> FastMCP:
         }
 
     @mcp.tool()
+    async def ha_get_entity(
+        entity_id: str | None = None, exposed_to: str | None = None
+    ) -> dict:
+        return {
+            "tool": "ha_get_entity",
+            "entity_id": entity_id,
+            "exposed_to": exposed_to,
+        }
+
+    @mcp.tool()
     async def ha_config_get_automation(entity_id: str) -> dict:
         return {"tool": "ha_config_get_automation", "entity_id": entity_id}
 
@@ -81,6 +101,7 @@ _RETIRED_CALLS = {
     "ha_manage_addon": {"slug": "core_ssh"},
     "ha_get_blueprint": {"path": "user/motion.yaml"},
     "ha_import_blueprint": {"url": "https://example.com/bp.yaml"},
+    "ha_get_entity_exposure": {"assistant": "cloud.alexa"},
 }
 
 
@@ -119,6 +140,7 @@ async def test_the_old_names_stay_out_of_the_catalog():
         "ha_get_app",
         "ha_manage_app",
         "ha_manage_blueprints",
+        "ha_get_entity",
         "ha_config_get_automation",
         "ha_config_remove_automation",
         "ha_get_automation_traces",
@@ -357,3 +379,109 @@ async def test_the_stale_list_warning_keeps_the_tools_own_warnings():
     warnings = result.structured_content["warnings"]
     assert warnings[0] == "Backup skipped."
     assert len(warnings) == 2 and "`identifier`" in warnings[1]
+
+
+# The retired exposure call with an entity_id, in each shape it reaches the
+# server: by name, through the read proxy, and double-wrapped in the proxy.
+_EXPOSURE_CALL_SHAPES = {
+    "by_name": lambda args: ("ha_get_entity_exposure", args),
+    "proxy": lambda args: (
+        "ha_call_read_tool",
+        {"name": "ha_get_entity_exposure", "arguments": args},
+    ),
+    "double_wrapped": lambda args: (
+        "ha_call_read_tool",
+        {
+            "name": "ha_call_read_tool",
+            "arguments": {"name": "ha_get_entity_exposure", "arguments": args},
+        },
+    ),
+}
+
+
+@pytest.fixture
+async def exposure_mcp(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> AsyncIterator[FastMCP]:
+    """The real ha_get_entity behind the alias and the search proxies."""
+    for domain in ("config", "homeassistant"):
+        assert await async_setup_component(hass, domain, {})
+    er.async_get(hass).async_get_or_create(
+        "light", "demo", "lamp", suggested_object_id="lamp"
+    )
+    mcp = FastMCP("test")
+    mcp.add_middleware(RenamedToolAliasMiddleware(get_client=lambda: core_client))
+    register_entity_tools(mcp, core_client)
+    mcp.add_transform(CategorizedSearchTransform(get_client=lambda: core_client))
+    with catalog_endpoint("search"):
+        yield mcp
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_core_judges_the_retired_assistant_sent_with_an_entity_id(
+    exposure_mcp: FastMCP, shape: str
+) -> None:
+    """The old tool refused an unknown assistant next to an entity_id;
+    ha_get_entity has no place for the name, so Core judges it first."""
+    with pytest.raises(ToolError) as exc_info:
+        await exposure_mcp.call_tool(
+            *_EXPOSURE_CALL_SHAPES[shape](
+                {"entity_id": "light.lamp", "assistant": "bogus"}
+            )
+        )
+
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_no_answer_to_the_assistant_check_is_a_structured_error(
+    exposure_mcp: FastMCP,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+) -> None:
+    monkeypatch.setattr(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await exposure_mcp.call_tool(
+            *_EXPOSURE_CALL_SHAPES[shape](
+                {"entity_id": "light.lamp", "assistant": "conversation"}
+            )
+        )
+
+    body = json.loads(str(exc_info.value))
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+    # The check's own error, not ha_get_entity's read failing the same way.
+    assert body["assistant"] == "conversation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_a_retired_entity_read_without_an_assistant_reads_the_entity(
+    exposure_mcp: FastMCP, shape: str
+) -> None:
+    result = await exposure_mcp.call_tool(
+        *_EXPOSURE_CALL_SHAPES[shape]({"entity_id": "light.lamp"})
+    )
+
+    assert result.structured_content["entity_entry"]["entity_id"] == "light.lamp"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(_EXPOSURE_CALL_SHAPES))
+async def test_a_known_retired_assistant_with_an_entity_id_reads_the_entity(
+    exposure_mcp: FastMCP, shape: str
+) -> None:
+    result = await exposure_mcp.call_tool(
+        *_EXPOSURE_CALL_SHAPES[shape](
+            {"entity_id": "light.lamp", "assistant": "conversation"}
+        )
+    )
+
+    assert result.structured_content["entity_entry"]["entity_id"] == "light.lamp"

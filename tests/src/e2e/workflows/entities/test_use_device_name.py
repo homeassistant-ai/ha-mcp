@@ -1,20 +1,14 @@
-"""Home Assistant 2026.10 "Use device name" through ha_set_entity (issue #2611).
+"""The entity dialog's main-entity switch through ha_set_entity (issue #2611).
 
-HA stores the switch as an entity-registry ``name`` of ``""`` and then shows the
-device name as the entity's friendly name. ``ha_set_entity(name="")`` keeps its
-revert-to-default meaning; ``use_device_name`` carries the new state. Cores
-before 2026.10 store ``""`` but render the default name, so the tool refuses the
-switch there instead of silently doing the opposite of what was asked.
+On an entity with an integration name, HA stores the switch as an
+entity-registry ``name`` of ``""`` and then shows the device name as its
+friendly name. ``ha_set_entity(name="")`` keeps its revert-to-default meaning;
+``use_device_name`` carries the new state.
 """
 
-import json
-import os
 from typing import Any
 
-import httpx
 import pytest
-from packaging.version import Version
-from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
 
@@ -27,17 +21,6 @@ from ...utilities.cleanup import CleanupSteps
 # default_config's sun integration: has_entity_name with a "Sun" device, so the
 # friendly name visibly changes between "Sun Next dawn" and "Sun".
 ENTITY = "sensor.sun_next_dawn"
-
-
-async def _ha_supports_use_device_name() -> bool:
-    url = os.environ["HOMEASSISTANT_URL"].rstrip("/")
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.get(
-            f"{url}/api/config",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"},
-        )
-    response.raise_for_status()
-    return Version(response.json()["version"]).release[:2] >= (2026, 10)
 
 
 async def _entry(mcp_client: Client) -> dict[str, Any]:
@@ -61,10 +44,8 @@ async def _friendly_name(mcp_client: Client) -> str | None:
 @pytest.mark.registry
 class TestUseDeviceName:
     async def test_switch_on_and_off(self, mcp_client: Client) -> None:
-        """On a 2026.10 Core the switch stores ``""`` and the friendly name
-        becomes the device name; off restores the integration default."""
-        if not await _ha_supports_use_device_name():
-            pytest.skip("Use device name needs Home Assistant 2026.10")
+        """The switch stores ``""`` and the friendly name becomes the device
+        name; off restores the integration default."""
         before = await _entry(mcp_client)
         default_friendly = await _friendly_name(mcp_client)
         try:
@@ -76,7 +57,6 @@ class TestUseDeviceName:
             assert on.get("success"), on
             entry = await _entry(mcp_client)
             assert entry["name"] == "", entry
-            assert entry["uses_device_name"] is True, entry
             assert await _friendly_name(mcp_client) == "Sun"
 
             off = parse_mcp_result(
@@ -87,7 +67,6 @@ class TestUseDeviceName:
             assert off.get("success"), off
             entry = await _entry(mcp_client)
             assert entry["name"] is None, entry
-            assert entry["uses_device_name"] is False, entry
             assert await _friendly_name(mcp_client) == default_friendly
         finally:
             with CleanupSteps() as cleanup, cleanup.step():
@@ -101,19 +80,6 @@ class TestUseDeviceName:
                 await MCPAssertions(mcp_client).call_tool_success(
                     "ha_set_entity", {"entity_id": ENTITY, **restore}
                 )
-
-    async def test_refused_on_older_core(self, mcp_client: Client) -> None:
-        if await _ha_supports_use_device_name():
-            pytest.skip(
-                "Core supports Use device name; the refusal path is for older Cores"
-            )
-        mcp = MCPAssertions(mcp_client)
-        data = await mcp.call_tool_failure(
-            "ha_set_entity", {"entity_id": ENTITY, "use_device_name": True}
-        )
-        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
-        assert "2026.10" in json.dumps(data), data
-        assert (await _entry(mcp_client))["name"] is None
 
     async def test_rejected_together_with_name(self, mcp_client: Client) -> None:
         mcp = MCPAssertions(mcp_client)
