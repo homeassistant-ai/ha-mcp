@@ -412,8 +412,21 @@ class TestExposeToWithoutRegistryEntry:
         assert result["warnings"] == [
             "Entity has no associated device — device rename skipped"
         ]
+        assert result["entity_entry"] is None
         settings = core_exposed.async_get_entity_settings(hass, "zone.home")
         assert settings["cloud.alexa"]["should_expose"] is True
+
+    async def test_a_device_rename_alone_leaves_the_entry_null(
+        self, hass: HomeAssistant, tools: EntityTools
+    ) -> None:
+        hass.states.async_set("zone.home", "0")
+
+        result = await tools.ha_set_entity(entity_id="zone.home", new_device_name="X")
+
+        assert result["warnings"] == [
+            "Entity has no associated device — device rename skipped"
+        ]
+        assert result["entity_entry"] is None
 
     async def test_a_device_rename_of_an_unknown_id_is_refused(
         self, tools: EntityTools

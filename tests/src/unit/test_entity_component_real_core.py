@@ -12,19 +12,21 @@ from typing import Any
 import pytest
 from homeassistant.components import websocket_api as core_websocket_api
 from homeassistant.components.homeassistant import exposed_entities as core_exposed
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools import websocket_api
 from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_api import (
     COMPONENT_INSTALL_HINT,
+    COMPONENT_VIA_HACS,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_ENRICH_FULL_NAME,
 )
@@ -34,10 +36,8 @@ from ha_mcp.tools.tools_entities import WS_ENTITY_ENRICH, EntityTools
 from ._core_staging import never_answers, revokes_the_token, served_by
 from ._tool_errors import _error
 
-_VIA_HACS = (
-    "via HACS (the Marketplace on Home Assistant 2026.11+) and restart Home Assistant."
-)
 _WITHOUT_ENRICHMENT = "the entries come without area, floor, label_names and full_name"
+_WITHOUT_ENTITY_INFO = "the listing comes without entity_info (names and areas)"
 
 
 @pytest.fixture(autouse=True)
@@ -75,17 +75,28 @@ def tools(component_core_client: HomeAssistantClient) -> EntityTools:
     return EntityTools(component_core_client)
 
 
+async def _rows(
+    tools: EntityTools, entity_id: str
+) -> list[tuple[dict[str, Any], list[str] | None]]:
+    """The row and the warnings of each way to ask for one entity by id."""
+    single = await tools.ha_get_entity(entity_id=entity_id)
+    bulk = await tools.ha_get_entity(entity_id=[entity_id])
+    unique = await tools.ha_get_entity(unique_id="power")
+    return [
+        (single["entity_entry"], single.get("warnings")),
+        (bulk["entity_entries"][0], bulk.get("warnings")),
+        (unique["entity_entries"][0], unique.get("warnings")),
+    ]
+
+
 async def test_a_row_carries_the_name_home_assistant_shows(
     tools: EntityTools, power: str
 ) -> None:
-    single = await tools.ha_get_entity(entity_id=power)
-    bulk = await tools.ha_get_entity(entity_id=[power, power])
-
-    assert single["entity_entry"]["original_name"] == "Power"
-    assert single["entity_entry"]["full_name"] == "Power strip Power"
-    assert [e["full_name"] for e in bulk["entity_entries"]] == ["Power strip Power"] * 2
-    assert "warnings" not in single
-    assert "warnings" not in bulk
+    for entry, warnings in await _rows(tools, power):
+        assert entry["original_name"] == "Power"
+        assert entry["full_name"] == "Power strip Power"
+        assert entry["label_names"] == []
+        assert warnings is None
 
 
 async def test_a_component_that_predates_full_name_says_so(
@@ -97,40 +108,26 @@ async def test_a_component_that_predates_full_name_says_so(
         [cap for cap in system.CAPABILITIES if cap != ENTITY_ENRICH_FULL_NAME],
     )
 
-    single = await tools.ha_get_entity(entity_id=power)
-    bulk = await tools.ha_get_entity(entity_id=[power])
-
-    for entry, warnings in (
-        (single["entity_entry"], single["warnings"]),
-        (bulk["entity_entries"][0], bulk["warnings"]),
-    ):
+    for entry, warnings in await _rows(tools, power):
         # The rest of the enrichment is still served.
         assert entry["label_names"] == []
         assert "full_name" not in entry
         assert warnings == [
             "The ha_mcp_tools component predates full_name, so the entries come "
-            "without it. Update it " + _VIA_HACS
+            "without it. Update it " + COMPONENT_VIA_HACS
         ]
 
 
 async def test_without_a_component_the_rows_say_to_install_it(
     core_client: HomeAssistantClient, power: str
 ) -> None:
-    tools = EntityTools(core_client)
-
-    single = await tools.ha_get_entity(entity_id=power)
-    bulk = await tools.ha_get_entity(entity_id=[power])
-
-    for entry, warnings in (
-        (single["entity_entry"], single["warnings"]),
-        (bulk["entity_entries"][0], bulk["warnings"]),
-    ):
+    for entry, warnings in await _rows(EntityTools(core_client), power):
         assert entry["original_name"] == "Power"
         assert "area" not in entry
         assert "full_name" not in entry
         assert warnings == [
             f"No ha_mcp_tools component answered, so {_WITHOUT_ENRICHMENT}. "
-            "Install it " + _VIA_HACS
+            "Install it " + COMPONENT_VIA_HACS
         ]
 
 
@@ -153,35 +150,26 @@ async def test_a_component_too_old_for_the_enrichment_says_to_update_it(
         [cap for cap in system.CAPABILITIES if cap != dropped],
     )
 
-    result = await tools.ha_get_entity(entity_id=power)
-
-    assert "area" not in result["entity_entry"]
-    assert result["warnings"] == [
-        f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-        "Update it " + _VIA_HACS
-    ]
-
-
-@callback
-def _unknown(
-    hass: HomeAssistant,
-    connection: core_websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    connection.send_error(msg["id"], "unknown_command", "Unknown command.")
+    for entry, warnings in await _rows(tools, power):
+        assert "area" not in entry
+        assert warnings == [
+            f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
+            "Update it " + COMPONENT_VIA_HACS
+        ]
 
 
 async def test_an_advertised_enrich_command_core_does_not_know_says_to_update(
     hass: HomeAssistant, tools: EntityTools, power: str
 ) -> None:
-    served_by(hass, WS_ENTITY_ENRICH, _unknown)
+    # Core answers unknown_command for a command nothing registers.
+    hass.data[core_websocket_api.DOMAIN].pop(WS_ENTITY_ENRICH)
 
     result = await tools.ha_get_entity(entity_id=power)
 
     assert "area" not in result["entity_entry"]
     assert result["warnings"] == [
         f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-        "Update it " + _VIA_HACS
+        "Update it " + COMPONENT_VIA_HACS
     ]
 
 
@@ -216,13 +204,7 @@ async def test_a_failing_enrich_command_keeps_cores_rows_and_warns(
 
     monkeypatch.setattr(er, "async_get_full_entity_name", unreadable)
 
-    single = await tools.ha_get_entity(entity_id=power)
-    bulk = await tools.ha_get_entity(entity_id=[power])
-
-    for entry, warnings in (
-        (single["entity_entry"], single["warnings"]),
-        (bulk["entity_entries"][0], bulk["warnings"]),
-    ):
+    for entry, warnings in await _rows(tools, power):
         assert entry["entity_id"] == power
         assert "area" not in entry
         assert "full_name" not in entry
@@ -231,6 +213,71 @@ async def test_a_failing_enrich_command_keeps_cores_rows_and_warns(
             "come without area, floor, label_names and full_name. "
             + COMPONENT_INSTALL_HINT
         ]
+
+
+async def test_a_listing_the_component_serves_names_its_entities_without_warning(
+    hass: HomeAssistant, tools: EntityTools, power: str
+) -> None:
+    core_exposed.async_expose_entity(hass, "conversation", power, True)
+
+    result = await tools.ha_get_entity()
+
+    assert set(result["entity_info"]) == {power}
+    assert "warnings" not in result
+
+
+@pytest.mark.parametrize("call", [{}, {"exposed_to": "conversation"}])
+async def test_without_a_component_the_listing_says_to_install_it(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    power: str,
+    call: dict[str, str],
+) -> None:
+    core_exposed.async_expose_entity(hass, "conversation", power, True)
+
+    result = await EntityTools(core_client).ha_get_entity(**call)
+
+    assert set(result["exposed_entities"]) == {power}
+    assert "entity_info" not in result
+    assert result["warnings"] == [
+        f"No ha_mcp_tools component answered, so {_WITHOUT_ENTITY_INFO}. "
+        "Install it " + COMPONENT_VIA_HACS
+    ]
+
+
+@pytest.mark.parametrize("dropped", ["exposure", DEVICE_REGISTRY_CHILD_SEMANTICS])
+async def test_a_component_too_old_for_the_listing_says_to_update_it(
+    monkeypatch: pytest.MonkeyPatch, tools: EntityTools, dropped: str
+) -> None:
+    monkeypatch.setattr(
+        system,
+        "CAPABILITIES",
+        [cap for cap in system.CAPABILITIES if cap != dropped],
+    )
+
+    result = await tools.ha_get_entity()
+
+    assert "entity_info" not in result
+    assert result["warnings"] == [
+        f"The ha_mcp_tools component is too old, so {_WITHOUT_ENTITY_INFO}. "
+        "Update it " + COMPONENT_VIA_HACS
+    ]
+
+
+async def test_a_listing_whose_component_probe_fails_says_it_could_not_ask(
+    monkeypatch: pytest.MonkeyPatch, tools: EntityTools
+) -> None:
+    def unreadable(*_: Any) -> None:
+        raise HomeAssistantError("Info unreadable")
+
+    monkeypatch.setattr(websocket_api, "_do_info", unreadable)
+
+    result = await tools.ha_get_entity()
+
+    assert "entity_info" not in result
+    [warning] = result["warnings"]
+    assert warning.startswith("The ha_mcp_tools component could not be asked (")
+    assert warning.endswith(f"), so {_WITHOUT_ENTITY_INFO}.")
 
 
 async def test_a_failing_exposure_command_is_the_tools_error(

@@ -6,8 +6,9 @@
 ``ha_mcp_tools/entity_enrich`` frame additively decorates each record with the
 resolved area/floor NAMES and label NAMES the raw registry entry lacks (it
 carries ``area_id`` / label ids). These tests pin the additive merge, that
-the enrichment keys are ABSENT on a capability miss (legacy shape unchanged)
-and on ``unknown_command`` (which also invalidates the cached caps).
+the enrichment keys are ABSENT on a capability miss, with a warning to install
+or update the component, and on ``unknown_command`` (which also invalidates the
+cached caps).
 """
 
 from __future__ import annotations

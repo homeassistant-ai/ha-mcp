@@ -36,6 +36,8 @@ from .component_api import (
     ComponentDiscoveryError,
     component_serves,
     component_supports,
+    component_unasked_warning,
+    component_unusable_warning,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
@@ -122,17 +124,15 @@ async def fetch_entity_enrichment_via_component(
     Returns ``{id: {area, floor, labels, aliases, full_name}}``: resolved
     area/floor/label NAMES the raw registry entry lacks (it carries
     ``area_id`` / label *ids*) and, with ``entity_enrich_full_name``, the name
-    Home Assistant shows. ``None`` for no ids, or when the component does not
-    advertise the command or no longer knows it (``unknown_command`` →
-    invalidate the cached caps): the rows then stay as Core serves them. Any
-    other failure of the advertised command raises.
+    Home Assistant shows. ``None`` when the component does not advertise the
+    command or no longer knows it (``unknown_command`` → invalidate the cached
+    caps): the rows then stay as Core serves them. Any other failure of the
+    advertised command raises.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
     request cannot produce an over-cap WebSocket frame.
     """
-    if not entity_ids:
-        return None
     caps = await get_component_caps(client)
     if not (
         component_supports(caps, "entity_enrich")
@@ -560,21 +560,21 @@ class EntityTools:
     async def _apply_device_rename(
         self,
         entity_id: str,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         new_device_name: str | None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Rename the associated device. Returns (device_rename_result, entity_entry).
 
         ``new_device_name`` is already normalized: None means no rename.
+        ``entity_entry`` is None for an entity without a registry entry.
         """
         if new_device_name is None:
             return None, entity_entry
 
         # An entity without a registry entry has no device.
-        _, entry = await self._resolve_target(entity_id, entity_entry)
-        entity_entry = entry or {}
+        _, entity_entry = await self._resolve_target(entity_id, entity_entry)
 
-        device_id = entity_entry.get("device_id")
+        device_id = (entity_entry or {}).get("device_id")
         if not device_id:
             return {
                 "warnings": ["Entity has no associated device — device rename skipped"],
@@ -636,12 +636,12 @@ class EntityTools:
         return context
 
     async def _resolve_target(
-        self, entity_id: str, entity_entry: dict[str, Any]
+        self, entity_id: str, entity_entry: dict[str, Any] | None
     ) -> tuple[str, dict[str, Any] | None]:
         """The id Core knows the entity by, and its registry entry if any.
 
         Same resolution as ``expose_targets``: an id Home Assistant does not
-        know is refused (ENTITY_NOT_FOUND). Callers pass an empty
+        know is refused (ENTITY_NOT_FOUND). Callers pass an empty or missing
         ``entity_entry`` only before any write, so the refusal leaves nothing
         applied; a non-empty one is returned as it is.
         """
@@ -660,7 +660,7 @@ class EntityTools:
         self,
         entity_id: str,
         parsed_expose_to: dict[str, bool] | None,
-        entity_entry: dict[str, Any],
+        entity_entry: dict[str, Any] | None,
         has_registry_updates: bool,
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
@@ -1472,9 +1472,7 @@ class EntityTools:
         scripts, templates, or dashboards. All consumers of the old entity_id must
         be updated manually — HA does not propagate the rename automatically.
 
-        Rename limitations:
-        - Entity history is preserved (HA 2022.4+)
-        - Entities without unique IDs cannot be renamed
+        Rename limitation: an entity without a unique ID cannot be renamed.
 
         REGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home
         Assistant's `settings`, the `expose_new_entities` written, and the values
@@ -1696,7 +1694,7 @@ class EntityTools:
         helper's current config (template body, group members, etc.) without
         scanning a domain list.
 
-        Resolved-name enrichment on an entity_id lookup, served by the
+        Resolved-name enrichment on an entity_id or unique_id lookup, served by the
         ha_mcp_tools component (absent without it, and a warning says which
         fields are missing and whether to install or update the component):
         `full_name` (the name Home Assistant shows, composed from the parent
@@ -1729,7 +1727,8 @@ class EntityTools:
         expose-new-entities flag and on the entity). When the ha_mcp_tools
         component advertises it, `entity_info` names each listed entity:
         domain, area, floor and labels (plus friendly_name and state when it
-        has a state).
+        has a state). Without it the listing has no `entity_info`, and a
+        warning says whether to install or update the component.
 
         RELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()
         for current state/attributes; ha_search() to find entities.
@@ -1770,9 +1769,12 @@ class EntityTools:
                         )
                     )
                 logger.info(f"Resolving unique_id '{unique_id}' to entity_id(s)")
-                return await resolve_by_unique_id(
+                resolved = await resolve_by_unique_id(
                     self._client, unique_id, domain, platform
                 )
+                if warning := await self._enrich_entries(resolved["entity_entries"]):
+                    resolved["warnings"] = [warning]
+                return resolved
 
             # domain/platform are resolver-only filters (unique_id is None here).
             if domain is not None or platform is not None:
@@ -1892,10 +1894,7 @@ class EntityTools:
         try:
             caps = await get_component_caps(self._client, strict=True)
         except ComponentDiscoveryError as exc:
-            return (
-                f"The ha_mcp_tools component could not be asked ({exc}), so "
-                f"{_WITHOUT_ENRICHMENT}."
-            )
+            return component_unasked_warning(exc, _WITHOUT_ENRICHMENT)
         try:
             enriched = await fetch_entity_enrichment_via_component(
                 self._client, found_ids
@@ -1906,15 +1905,7 @@ class EntityTools:
                 f"{_WITHOUT_ENRICHMENT}. {COMPONENT_INSTALL_HINT}"
             )
         if enriched is None:
-            if caps is None:
-                return (
-                    f"No ha_mcp_tools component answered, so {_WITHOUT_ENRICHMENT}. "
-                    f"Install it {COMPONENT_VIA_HACS}"
-                )
-            return (
-                f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-                f"Update it {COMPONENT_VIA_HACS}"
-            )
+            return component_unusable_warning(caps, _WITHOUT_ENRICHMENT)
         with_full_name = await component_serves(self._client, ENTITY_ENRICH_FULL_NAME)
         for entry in entity_entries:
             _merge_entity_enrichment(

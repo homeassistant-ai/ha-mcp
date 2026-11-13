@@ -53,11 +53,13 @@ async def get_registry_wide(client: Any, assistant: str | None) -> dict[str, Any
     settings = await _registry_ws(
         client, _SETTINGS_GET, "Reading entity registry settings"
     )
-    exposed_entities, entity_info = await read_exposure(client)
+    exposed_entities, entity_info, warning = await read_exposure(client)
     response = {
         "settings": settings,
         **list_exposures(exposed_entities, entity_info, assistant),
     }
+    if warning:
+        response["warnings"] = [warning]
     if assistant is not None:
         response["assistant"] = assistant
         response["expose_new_entities"] = expose_new

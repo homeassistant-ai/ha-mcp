@@ -21,7 +21,10 @@ from ..errors import ErrorCode, create_error_response
 from .component_api import (
     COMPONENT_INSTALL_HINT,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
+    ComponentDiscoveryError,
     component_supports,
+    component_unasked_warning,
+    component_unusable_warning,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
@@ -41,6 +44,7 @@ WS_EXPOSURE = "ha_mcp_tools/exposure"
 # State reads one bulk lookup keeps in flight, so a long list of ids without
 # a registry entry does not take every connection of the client's pool.
 STATE_READS_AT_ONCE = 10
+_WITHOUT_ENTITY_INFO = "the listing comes without entity_info (names and areas)"
 
 
 async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
@@ -51,7 +55,9 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     same entries as Core's ``homeassistant/expose_entity/list`` map. ``None``
     when the component does not advertise the command, or no longer knows it
     (``unknown_command`` → invalidate the cached caps). Any other failure of
-    the advertised command is the tool's error, naming the component.
+    the advertised command is the tool's error, naming the component, except
+    a dropped connection, which ends the call as ``CONNECTION_FAILED`` and
+    names none.
     """
     caps = await get_component_caps(client)
     if not (
@@ -81,24 +87,41 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     return result
 
 
-async def read_exposure(client: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Core's exposed-entity map, plus each entity's names when the component serves them.
+async def read_exposure(
+    client: Any,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """Core's exposed-entity map, each entity's names when the component serves
+    them, and a warning when it does not.
 
     Prefers the component's in-process read when advertised: the same map as
     ``expose_entity/list`` plus an ``entity_info`` enrichment (names/areas), so
-    a caller needs no second ha_search to name an exposed entity. Reads
-    Core's list, with no ``entity_info``, when the component does not serve
-    the command (``_fetch_exposure_via_component``).
+    a caller needs no second ha_search to name an exposed entity. Otherwise
+    reads Core's list, with no ``entity_info``, and the warning says why: no
+    component answered (install it), it predates the command (update it), or
+    it could not be asked (``_fetch_exposure_via_component``).
     """
-    component = await _fetch_exposure_via_component(client)
+    # Strict, so a refused or failed probe is not taken for no component.
+    try:
+        caps = await get_component_caps(client, strict=True)
+    except ComponentDiscoveryError as exc:
+        component = None
+        warning = component_unasked_warning(exc, _WITHOUT_ENTITY_INFO)
+    else:
+        component = await _fetch_exposure_via_component(client)
+        warning = (
+            None
+            if component is not None
+            else component_unusable_warning(caps, _WITHOUT_ENTITY_INFO)
+        )
     if component is not None:
-        return component["exposed_entities"], component["entity_info"]
+        return component["exposed_entities"], component["entity_info"], None
     result = await client.send_websocket_message(
         {"type": "homeassistant/expose_entity/list"}
     )
     if not result.get("success"):
         raise_core_refusal("Failed to get exposure settings", result)
-    return (result.get("result") or {}).get("exposed_entities") or {}, {}
+    exposed = (result.get("result") or {}).get("exposed_entities") or {}
+    return exposed, {}, warning
 
 
 def list_exposures(

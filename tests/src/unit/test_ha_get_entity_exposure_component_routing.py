@@ -7,7 +7,9 @@ frame returns the same map PLUS an additive ``entity_info`` enrichment
 (friendly_name/domain/area/floor/labels). These tests pin: the component-served
 list shape (Core's map unchanged, enrichment additive), and the routes to
 Core's ``homeassistant/expose_entity/list`` — capability miss and
-``unknown_command`` (which also invalidates the cached caps).
+``unknown_command`` (which also invalidates the cached caps). The warning that
+says why the listing lacks ``entity_info`` is pinned in
+``test_entity_component_real_core.py``.
 """
 
 from __future__ import annotations
@@ -86,9 +88,8 @@ async def _listing(
     client: RoutingClient, assistant: str | None = None
 ) -> dict[str, Any]:
     """The exposure listing ``ha_get_entity`` returns without an entity."""
-    return entity_exposure.list_exposures(
-        *await entity_exposure.read_exposure(client), assistant
-    )
+    exposed, info, _warning = await entity_exposure.read_exposure(client)
+    return entity_exposure.list_exposures(exposed, info, assistant)
 
 
 def _exposure_calls(ws: Any) -> list[Any]:
