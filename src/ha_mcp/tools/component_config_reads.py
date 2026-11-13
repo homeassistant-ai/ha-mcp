@@ -87,8 +87,7 @@ async def fetch_entity_lookup_via_component(
     cached caps), command error/timeout (logged), a connection-establishment
     failure (logged — see the module docstring: the resolvers' legacy paths ride
     the WS bridge / REST, NOT this pooled socket, so a transport
-    failure must fall back rather than abort a landed write), or a shape-drift
-    payload (no ``matches`` list). Same error-taxonomy and silent fallback as
+    failure must fall back rather than abort a landed write). Same error-taxonomy and silent fallback as
     ``component_devices.fetch_device_via_component``.
     """
     caps = await get_component_caps(client)
@@ -119,14 +118,7 @@ async def fetch_entity_lookup_via_component(
             "%s connection error; falling back to legacy: %r", WS_ENTITY_LOOKUP, exc
         )
         return None
-    result = raw.get("result")
-    matches = result.get("matches") if isinstance(result, dict) else None
-    if not isinstance(matches, list):
-        logger.debug(
-            "%s returned a malformed result (no 'matches' list); falling back to legacy",
-            WS_ENTITY_LOOKUP,
-        )
-        return None
+    matches: list[dict[str, Any]] = raw["result"]["matches"]
     return matches
 
 
@@ -140,34 +132,6 @@ def _unavailable(error: str) -> dict[str, Any]:
     return {"status": "unavailable", "error": error}
 
 
-def _answer_shape_error(result: Any) -> str | None:
-    """Why *result* is not a ``config_references`` answer, or None if it is."""
-    if not isinstance(result, dict) or not isinstance(result.get("status"), str):
-        return "no status"
-    if result["status"] != "ok":
-        return None if result.get("error") else "no error for a failed check"
-    fields = {
-        "missing": ("kind", "value"),
-        "mismatches": ("path", "kind", "name", "entity_id"),
-    }
-    for key, strings in fields.items():
-        items = result.get(key)
-        if not isinstance(items, list) or not all(
-            isinstance(item, dict)
-            and all(isinstance(item.get(k), str) for k in strings)
-            and (
-                key != "mismatches"
-                or (
-                    isinstance(item.get("offered"), list)
-                    and all(isinstance(o, str) for o in item["offered"])
-                )
-            )
-            for item in items
-        ):
-            return f"malformed {key}"
-    return None
-
-
 async def fetch_config_references_via_component(
     client: Any, kind: str, config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -179,8 +143,8 @@ async def fetch_config_references_via_component(
     lookups. It answers ``{"status": "ok", "missing": [...], "mismatches":
     [...]}``, ``{"status": "invalid", "error": ...}`` when Core's validator
     refuses the config, or ``{"status": "unavailable", "error": ...}``. An
-    absent or outdated component, a command or transport failure and an answer
-    of the wrong shape are answered the same unavailable way, naming the cause:
+    absent or outdated component and a command or transport failure are
+    answered the same unavailable way, naming the cause:
     the write goes on and the caller reports the references as unchecked. There
     is no REST/WebSocket fallback by design: Core serves the target lookups,
     ``validate_config`` for a config's trigger, condition and action lists, and
@@ -219,10 +183,5 @@ async def fetch_config_references_via_component(
         # A soft check must never abort the write it accompanies.
         logger.warning("%s connection error", WS_CONFIG_REFERENCES, exc_info=True)
         return _unavailable(str(exc) or type(exc).__name__)
-    result = raw.get("result")
-    if (shape := _answer_shape_error(result)) is not None or not isinstance(
-        result, dict
-    ):
-        logger.warning("%s answered with %s: %r", WS_CONFIG_REFERENCES, shape, result)
-        return _unavailable(f"{WS_CONFIG_REFERENCES} answered with {shape}")
+    result: dict[str, Any] = raw["result"]
     return result
