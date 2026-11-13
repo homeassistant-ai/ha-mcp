@@ -2,13 +2,13 @@
 
 ``ha_get_system_health`` fetched ``config_entries/get`` up to THREE separate
 times per call (once each inside ``_fetch_zwave_network``,
-``_fetch_matter_network``, and ``_fetch_dead_entities``) plus a whole-registry
+``read_matter_network``, and ``_fetch_dead_entities``) plus a whole-registry
 ``config/entity_registry/list`` dump for ``dead_entities`` — a TOCTOU across
 sections, since each fetch could see a different instant of the registries.
 When the component advertises ``system_snapshot``, ONE
 ``ha_mcp_tools/system_snapshot`` read replaces all of that: its
 ``config_entries`` slice feeds ``_fetch_zwave_network`` +
-``_fetch_matter_network`` (the ``zwave_js/network_status`` call itself is
+``read_matter_network`` (the ``zwave_js/network_status`` call itself is
 unchanged — system_snapshot doesn't reach into the radio integration), and its
 ``entities``/``states``/``config_entries`` slices feed ``_fetch_dead_entities``.
 Repairs always come from Core's ``repairs/list_issues``.

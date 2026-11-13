@@ -184,17 +184,18 @@ async def add_repair_data(ws_client: Any, issues: list[dict[str, Any]]) -> list[
     return ["The data of these repairs could not be read: " + "; ".join(unread)]
 
 
-async def add_health_labels(client: Any, health_info: dict[str, Any]) -> list[str]:
-    """Give each domain the ``name`` and key ``labels`` the System information
-    dialog shows.
+async def add_health_labels(client: Any, result: dict[str, Any]) -> None:
+    """Give each domain in ``result["health_info"]`` the ``name`` and key
+    ``labels`` the System information dialog shows.
 
     The name is Core's ``title`` string for the domain and each label is
     Core's ``component.<domain>.system_health.info.<key>`` string, in the
-    configured language. Returns the warnings for strings that could not be
-    read.
+    configured language. Strings that could not be read become warnings in
+    ``result``.
     """
+    health_info = result["health_info"]
     if not health_info:
-        return []
+        return
     language, warning = await configured_language(client, "system health labels")
     warnings = [warning] if warning else []
     domains = sorted(health_info)
@@ -203,22 +204,25 @@ async def add_health_labels(client: Any, health_info: dict[str, Any]) -> list[st
         fetch_flow_strings(client, domains, "title", language=language),
     )
     if labels is None or titles is None:
-        return [
-            *warnings,
+        warnings.append(
             "Home Assistant's system health labels could not be read, so the "
-            "health info carries raw keys only",
-        ]
-    for domain, entry in health_info.items():
-        if name := flow_text(titles, domain, "title", None):
-            entry["name"] = name
-        entry_labels = {
-            key: text
-            for key in entry.get("info") or {}
-            if (text := flow_text(labels, domain, f"system_health.info.{key}", None))
-        }
-        if entry_labels:
-            entry["labels"] = entry_labels
-    return warnings
+            "health info carries raw keys only"
+        )
+    else:
+        for domain, entry in health_info.items():
+            if name := flow_text(titles, domain, "title", None):
+                entry["name"] = name
+            entry_labels = {
+                key: text
+                for key in entry.get("info") or {}
+                if (
+                    text := flow_text(labels, domain, f"system_health.info.{key}", None)
+                )
+            }
+            if entry_labels:
+                entry["labels"] = entry_labels
+    if warnings:
+        result.setdefault("warnings", []).extend(warnings)
 
 
 async def read_integration_startup(ws_client: Any, client: Any) -> dict[str, Any]:
@@ -271,7 +275,8 @@ async def read_supervisor(client: Any) -> dict[str, Any]:
     section: dict[str, Any] = {}
     for key, reply in zip(SUPERVISOR_ENDPOINTS, replies, strict=True):
         if isinstance(reply, BaseException):
-            reraise_if_fatal(reply)
+            if not isinstance(reply, ToolError):
+                reraise_if_fatal(reply)
             section[key] = {"error": f"Not available: {reply}"}
         else:
             section[key] = reply.get("result")

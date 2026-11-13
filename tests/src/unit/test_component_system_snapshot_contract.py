@@ -1,7 +1,7 @@
 """Contract test for the component-``system_snapshot`` seam.
 
 The component's ``_do_system_snapshot`` and the server's
-``_fetch_zwave_network`` / ``_fetch_matter_network`` / ``_fetch_dead_entities``
+``_fetch_zwave_network`` / ``read_matter_network`` / ``_fetch_dead_entities``
 were written against the same design contract but never against each other's
 code. This suite drives the REAL ``_do_system_snapshot`` (fake hass, real
 registry/state joins) through the REAL ``ha_get_system_health``

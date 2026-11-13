@@ -18,7 +18,11 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -64,7 +68,7 @@ class _SystemSnapshotSlices:
     (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``search/overview.py``).
 
     ``config_entries`` / ``registry`` are wrapped in the ``{success, result}``
-    envelope ``_fetch_zwave_network`` / ``_fetch_matter_network`` /
+    envelope ``_fetch_zwave_network`` / ``read_matter_network`` /
     ``_fetch_dead_entities`` (via ``_ws_result_list``) already unwrap;
     ``states`` stays the bare list matching ``get_states()``, which
     ``_fetch_dead_entities`` reads directly.
@@ -374,11 +378,6 @@ class SystemTools:
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            # Local import: rest_client imports
-            # from the tool helpers transitively, so a module-level import
-            # would risk a circular import in the tools package.
-            from ..client.rest_client import HomeAssistantAPIError
-
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 raise_tool_error(
                     create_error_response(
@@ -569,6 +568,8 @@ class SystemTools:
                         "returning REST-based sections only."
                     ],
                 }
+
+            await add_health_labels(self._client, result)
 
             # Warn about unrecognized include values
             self._warn_unknown_includes(result, includes)
@@ -967,10 +968,6 @@ class SystemTools:
             await self._safe_disconnect(ws_client)
             raise
 
-        if label_warnings := await add_health_labels(
-            self._client, result["health_info"]
-        ):
-            result.setdefault("warnings", []).extend(label_warnings)
         return ws_client, result
 
     async def _fetch_system_snapshot(
@@ -982,7 +979,7 @@ class SystemTools:
         """One ``ha_mcp_tools/system_snapshot`` read; ``None`` ⇒ every consuming
         section runs its own legacy fetch.
 
-        Threads into ``_fetch_zwave_network`` + ``_fetch_matter_network``
+        Threads into ``_fetch_zwave_network`` + ``read_matter_network``
         (config_entries — the zwave_js/matter status calls themselves are
         unchanged), and ``_fetch_dead_entities`` (entities + states +
         config_entries), collapsing what was up to 3x ``config_entries/get``

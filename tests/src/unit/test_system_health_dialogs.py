@@ -13,6 +13,7 @@ from unittest.mock import patch
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_system import SystemTools
 
@@ -91,7 +92,7 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
     replies: dict[str, Any] = {
         "/resolution/info": {"success": True, "result": {"unhealthy": ["docker"]}},
         "/core/stats": {"success": True, "result": {"cpu_percent": 3.5}},
-        "/supervisor/stats": RuntimeError("Supervisor busy"),
+        "/supervisor/stats": ToolError("Supervisor busy"),
     }
 
     async def supervisor(_client: Any, endpoint: str) -> dict[str, Any]:
