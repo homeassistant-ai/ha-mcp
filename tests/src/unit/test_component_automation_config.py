@@ -76,12 +76,6 @@ _BAD_TRIGGER: dict[str, Any] = {
 }
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core reads automations and blueprints from here."""
-    return hass_tmp_config_dir
-
-
 async def _load(hass: HomeAssistant, *automations: dict[str, Any]) -> None:
     """Load ``automations`` the way Core loads ``automations.yaml`` at start."""
     await write_config_files(

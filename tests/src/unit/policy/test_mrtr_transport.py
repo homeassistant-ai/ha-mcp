@@ -50,7 +50,8 @@ async def test_wire_continuation_is_bound_and_single_use(
 ) -> None:
     """Both direct and categorized calls carry sealed state, not JSON tool content."""
     mcp, queue, executed, _ = server
-    name, args = "ha_test_write", {"value": "original"}
+    name = "ha_test_write"
+    args: dict[str, object] = {"value": "original"}
     if proxy:
         mcp.add_transform(CategorizedSearchTransform())
         name, args = "ha_call_write_tool", {"name": name, "arguments": args}
@@ -74,7 +75,7 @@ async def test_wire_continuation_is_bound_and_single_use(
                 request_state=first.request_state + "tampered",
                 allow_input_required=True,
             )
-        changed = {"value": "changed"}
+        changed: dict[str, object] = {"value": "changed"}
         if proxy:
             changed = {"name": "ha_test_write", "arguments": changed}
         with pytest.raises(MCPError):

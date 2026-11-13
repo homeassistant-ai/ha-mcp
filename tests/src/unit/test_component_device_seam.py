@@ -10,10 +10,8 @@ component's output.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from operator import itemgetter
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -33,6 +31,8 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_radio import RadioTools
 from ha_mcp.tools.tools_registry import RegistryTools
 
+from ._client_spies import sent_commands
+
 # The whole-registry reads a single-device consumer must not fall back to.
 REGISTRY_DUMPS = {"config/device_registry/list", "config/entity_registry/list"}
 
@@ -49,13 +49,6 @@ async def socket(
         token=component_core_client.token,
         verify_ssl=False,
     )
-
-
-@contextmanager
-def _sent(socket: HomeAssistantWebSocketClient) -> Iterator[AsyncMock]:
-    """Spies on every command the tools send; it calls through."""
-    with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
-        yield spy
 
 
 def _types(spy: AsyncMock) -> set[str]:
@@ -118,7 +111,7 @@ class TestDeviceSeam:
             device_id=dev.id,
             disabled_by=er.RegistryEntryDisabler.USER,
         )
-        with _sent(socket) as spy:
+        with sent_commands(socket) as spy:
             resp = await RegistryTools(component_core_client).ha_get_device(
                 device_id=dev.id
             )
@@ -175,7 +168,7 @@ class TestDeviceSeam:
             parent_device_id=parent.id,
         )
         tools = RegistryTools(component_core_client)
-        with _sent(socket) as spy:
+        with sent_commands(socket) as spy:
             listed = await tools.ha_get_device()
             single = await tools.ha_get_device(device_id=child.id)
 
@@ -201,7 +194,7 @@ class TestDeviceSeam:
         component's row, or falls back to the whole device list, fails here.
         The entry was never set up, so Core refuses the removal itself."""
         with (
-            _sent(socket) as spy,
+            sent_commands(socket) as spy,
             pytest.raises(ToolError, match="does not support device removal"),
         ):
             await RegistryTools(component_core_client).ha_remove_device(
@@ -228,7 +221,7 @@ class TestDeviceSeam:
         """A ZHA action addresses the IEEE address in the ``identifiers`` of the
         row the component serves; a changed shape of that field fails here.
         ZHA is not loaded, so Core refuses ``zha/device`` itself."""
-        with _sent(socket) as spy, pytest.raises(ToolError):
+        with sent_commands(socket) as spy, pytest.raises(ToolError):
             await RadioTools(component_core_client).ha_manage_radio(
                 radio="zigbee", action="diagnostics", device_id=dev.id
             )

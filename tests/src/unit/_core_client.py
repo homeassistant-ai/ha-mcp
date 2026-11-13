@@ -7,6 +7,7 @@ listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
 
 from __future__ import annotations
 
+import socket
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,19 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from ha_mcp.client.rest_client import HomeAssistantClient
+
+
+def free_port() -> int:
+    """A loopback port nothing listens on once the probe lets it go."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+    return port
+
+
+def refused_url() -> str:
+    """A loopback URL whose port nothing listens on: the connect is refused."""
+    return f"http://127.0.0.1:{free_port()}"
 
 
 @pytest.fixture
@@ -53,6 +67,24 @@ async def core_client(
             await websocket_manager.disconnect()
         finally:
             await client.close()
+
+
+@pytest.fixture
+async def read_only_client(
+    core_client: HomeAssistantClient, hass_read_only_access_token: str
+) -> AsyncIterator[HomeAssistantClient]:
+    """The server's client on Core, with a non-admin user's token."""
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    client = HomeAssistantClient(
+        base_url=core_client.base_url,
+        token=hass_read_only_access_token,
+        verify_ssl=False,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 @pytest.fixture

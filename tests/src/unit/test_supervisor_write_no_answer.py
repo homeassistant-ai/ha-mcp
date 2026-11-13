@@ -16,7 +16,6 @@ the error the Supervisor call sees.
 
 import asyncio
 import json
-import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
@@ -38,6 +37,8 @@ from ha_mcp.client.websocket_client import (
 )
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.tools_addons import AddOnTools, get_addon_info
+
+from ._core_client import refused_url
 
 _APP_SUPPORT = "Check that this installation supports apps (add-ons)."
 
@@ -74,11 +75,8 @@ async def _core_down(
     hass: HomeAssistant, client: HomeAssistantClient
 ) -> AsyncIterator[HomeAssistantClient]:
     """Nothing listens where the client connects, as while Core restarts."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
     down = HomeAssistantClient(
-        base_url=f"http://127.0.0.1:{port}", token=client.token, verify_ssl=False
+        base_url=refused_url(), token=client.token, verify_ssl=False
     )
     try:
         yield down

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +20,7 @@ from ha_mcp.tools.flow_helper_lookup import _raise_platform_mismatch
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
+from ._tool_errors import error_of
 from .test_backup_manager import _StubClient, _StubSettings
 
 # The real Core read, kept before conftest's autouse fixture replaces it.
@@ -32,10 +32,6 @@ class _Client:
 
     def __init__(self, reply: Any) -> None:
         self._request = AsyncMock(return_value=reply)
-
-
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))["error"]
 
 
 @pytest.mark.asyncio
@@ -159,7 +155,7 @@ async def test_an_unknown_helper_type_is_refused_naming_the_known_ones(
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
         await call()
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "no_such_helper" in error["message"]
     suggestions = " | ".join(error["suggestions"])
@@ -180,7 +176,7 @@ async def test_a_failed_helper_flow_read_is_a_structured_connection_error(
     )
     with pytest.raises(ToolError) as exc_info:
         await call()
-    assert _error(exc_info)["code"] == "CONNECTION_FAILED"
+    assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
 
 
 def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -208,7 +204,7 @@ async def _update_unknown_helper_type(
         await HelperConfigTools(client).ha_config_set_helper(
             helper_type="no_such_helper", helper_id="entry_1", config={"x": 1}
         )
-    return _error(exc_info), client
+    return error_of(exc_info), client
 
 
 @pytest.mark.asyncio
@@ -410,7 +406,7 @@ async def test_an_on_demand_snapshot_of_an_unlisted_helper_type_is_refused(
     )
     with pytest.raises(ToolError) as exc_info:
         await _edits_create(mgr, "edits", "create", "helper_input_bolean", "x.y")
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry() -> None:
@@ -418,7 +414,7 @@ def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry() -> No
         _raise_platform_mismatch(
             "sensor.x", "template", "my_custom_helper", frozenset({"my_custom_helper"})
         )
-    assert _error(exc_info)["suggestion"] == (
+    assert error_of(exc_info)["suggestion"] == (
         "Pass helper_type='my_custom_helper', or omit helper_type."
     )
 

@@ -40,12 +40,6 @@ from ha_mcp.tools.component_config_entries import (
 )
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """A config directory of the test's own, so a ``secrets.yaml`` stays in it."""
-    return hass_tmp_config_dir
-
-
 def _add_entry(
     hass: HomeAssistant, *, domain: str = "mqtt", unique_id: str | None = None
 ) -> MockConfigEntry:

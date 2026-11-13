@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import httpx
 
@@ -797,10 +797,10 @@ class HomeAssistantClient:
             return {"changed_states": [], "service_response": result.get("response")}
         return []
 
-    async def get_services(self) -> dict[str, Any]:
+    async def get_services(self) -> list[dict[str, Any]]:
         """Get all available services."""
         logger.debug("Fetching available services")
-        return await self._request("GET", "/services")
+        return cast("list[dict[str, Any]]", await self._request("GET", "/services"))
 
     async def get_logbook(
         self,

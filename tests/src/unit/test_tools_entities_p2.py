@@ -8,7 +8,6 @@ Covers:
 """
 
 import asyncio
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +16,8 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_entities import register_entity_tools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
+
+from ._tool_errors import error_body
 
 
 def _make_client():
@@ -38,10 +39,6 @@ def _register(client):
     mcp.add_tool = capture_add_tool
     register_entity_tools(mcp, client)
     return registered
-
-
-def _error_body(exc_info) -> dict:
-    return json.loads(str(exc_info.value))
 
 
 # --------------------------------------------------------------------------
@@ -414,7 +411,7 @@ class TestBulkRemove:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id=[f"sensor.e{i}" for i in range(101)])
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "exceeds maximum" in body["error"]["message"]
         client.send_websocket_message.assert_not_called()
@@ -427,7 +424,7 @@ class TestBulkRemove:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id=[])
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "empty" in body["error"]["message"].lower()
 
@@ -439,7 +436,7 @@ class TestBulkRemove:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id=["sensor.a", "  "])
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
@@ -568,7 +565,7 @@ class TestUniqueIdResolver:
         with pytest.raises(ToolError) as exc_info:
             await tool(unique_id="nope")
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert "nope" in body["error"]["message"]
 
@@ -580,7 +577,7 @@ class TestUniqueIdResolver:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id="sensor.temp", unique_id="abc123")
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "exactly one" in body["error"]["message"].lower()
         client.send_websocket_message.assert_not_called()
@@ -593,7 +590,7 @@ class TestUniqueIdResolver:
         with pytest.raises(ToolError) as exc_info:
             await tool()
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
         client.send_websocket_message.assert_not_called()
 
@@ -605,7 +602,7 @@ class TestUniqueIdResolver:
         with pytest.raises(ToolError) as exc_info:
             await tool(entity_id="sensor.temp", domain="sensor")
 
-        body = _error_body(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "resolver filter" in body["error"]["message"]
 

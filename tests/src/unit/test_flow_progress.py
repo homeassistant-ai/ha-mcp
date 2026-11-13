@@ -50,12 +50,12 @@ from ha_mcp.tools.config_entry_flow_introspect import (
 )
 from ha_mcp.tools.integration_flow_steps import FlowTarget, drive_flow
 
-from ._addon_tool_helpers import _parse_tool_error
 from ._mock_flow_integration import (
     answer_translations,
     mock_flow_integration,
     open_flow_ids,
 )
+from ._tool_errors import error_body
 
 _DOMAIN = "flow_progress_probe"
 _SCANNING = {"progress": {"scanning": "Scanning {count} hubs."}}
@@ -369,7 +369,7 @@ async def test_a_step_out_of_progress_budget_keeps_the_flow_open_with_cores_text
     ):
         await _drive(client, target, start)
 
-    body = _parse_tool_error(exc_info)
+    body = error_body(exc_info)
     assert body["error"]["code"] == "TIMEOUT_OPERATION"
     assert body["progress_action"] == "scanning"
     assert body["progress_action_text"] == "Scanning 3 hubs."
@@ -424,10 +424,7 @@ async def test_a_lost_poll_answer_is_possibly_applied_in_every_flow_kind(
         with pytest.raises(ToolError) as exc_info:
             await _drive(client, target, start_then_lose_the_poll)
 
-    assert (
-        _parse_tool_error(exc_info)["status"]
-        == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
-    )
+    assert error_body(exc_info)["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
     aborted.assert_not_called()
 
 
@@ -449,10 +446,7 @@ async def test_a_lost_submit_answer_is_possibly_applied_in_every_flow_kind(
     ):
         await _drive(client, target, start, {"host": "10.0.0.2"})
 
-    assert (
-        _parse_tool_error(exc_info)["status"]
-        == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
-    )
+    assert error_body(exc_info)["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
     submitted.assert_awaited_once()
     aborted.assert_not_called()
 
@@ -475,7 +469,7 @@ async def test_a_lost_submit_answer_redacts_the_forms_password_value(
         await _drive(client, target, start, {"host": "10.0.0.2"})
 
     assert "sk-LIVE" not in str(exc_info.value)
-    schema = _parse_tool_error(exc_info)["details"]["data_schema"]
+    schema = error_body(exc_info)["details"]["data_schema"]
     assert "api_key" in [f["name"] for f in schema]
 
 

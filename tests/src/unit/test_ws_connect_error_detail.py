@@ -1,326 +1,199 @@
-"""Unit tests for surfacing *why* a WebSocket connection failed.
+"""Surfacing *why* a WebSocket connection failed.
 
 Regression coverage for the opaque-error problem behind issue #1464: a failed
 ``connect()`` used to bubble up only as "Failed to connect to Home Assistant
 WebSocket" with the real reason confined to a log line. These tests pin the
-reason being captured on the client and surfaced at both call sites (the
-pooled ``WebSocketManager.get_client`` path and the ``get_connected_ws_client``
-helper path).
+reason being captured on the client and surfaced at every call site (the
+pooled ``WebSocketManager.get_client`` path, the ``get_connected_ws_client``
+helper and the backup capture built on it).
+
+The failures are real: a loopback port nothing listens on refuses the
+connection, Core's own ``websocket_api`` rejects a token it never issued, and
+a second reader on a new socket takes Core's ``auth_required`` from the client.
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
-import ssl
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
+from ha_mcp.backup_zones import fetch_zone
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
+from ha_mcp.tools.helpers import get_connected_ws_client
 
-class _FakeWS:
-    """Minimal async-iterable websocket stand-in for connect() tests."""
+from ._core_client import refused_url
+from ._ws_transport import spawned_by
 
-    def __aiter__(self):
-        return self
+REJECTED_TOKEN = "super-secret-token-DO-NOT-LEAK"
 
-    async def __anext__(self):
-        raise StopAsyncIteration
-
-    async def close(self):
-        pass
-
-    async def send(self, *_args, **_kwargs):
-        pass
+# Core closes a socket whose token it refused; the client's close reply then
+# re-arms aiohttp's heartbeat timer on that closed server socket, which nothing
+# cancels (as in test_backup_auth_refusal.py).
+_REFUSED_SOCKET_TIMER = pytest.mark.parametrize("expected_lingering_timers", [True])
 
 
-class TestConnectCapturesReason:
-    """``connect()`` records the failure reason on ``last_connect_error``."""
+@pytest.fixture
+def refused(socket_enabled: None) -> str:
+    """A loopback base URL whose connection is refused."""
+    return refused_url()
 
-    def test_last_connect_error_is_none_before_any_connect(self):
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
+@pytest.fixture
+async def manager() -> AsyncIterator[None]:
+    """Leave no pooled connection behind for the next test."""
+    yield
+    await websocket_manager.disconnect()
+
+
+async def test_a_refused_connection_is_captured_verbatim(refused: str) -> None:
+    """A transport-level failure is captured with its type and message."""
+    client = HomeAssistantWebSocketClient(refused, "t", verify_ssl=False)
+
+    assert await client.connect() is False
+
+    assert client.last_connect_error is not None
+    assert client.last_connect_error.startswith("ConnectionRefusedError: ")
+
+
+@_REFUSED_SOCKET_TIMER
+async def test_a_rejected_token_is_captured_without_leaking_it(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Core's refusal during the handshake reaches the caller, not the token.
+
+    The reason is built only from the exception text; the token travels in
+    the Authorization header / auth payload and is never echoed into a connect
+    exception. This pins that invariant against a future change that
+    captures more (repr(e), e.args, the URL, or request headers).
+    """
+    client = HomeAssistantWebSocketClient(
+        core_client.base_url, REJECTED_TOKEN, verify_ssl=False
+    )
+
+    assert await client.connect() is False
+
+    assert client.last_connect_error is not None
+    assert "Invalid token" in client.last_connect_error
+    assert REJECTED_TOKEN not in client.last_connect_error
+
+
+async def test_a_handshake_without_auth_required_is_captured(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A handshake that never asks for auth is reported as such.
+
+    Core always sends ``auth_required``; a second reader, started as the
+    client's own reader is created and before it reads, takes the socket's
+    first message, so the client never sees it. The client waits out its
+    auth timeout (5 s), then must name the missing message as the reason.
+    """
+    client = HomeAssistantWebSocketClient(
+        core_client.base_url, core_client.token, verify_ssl=False
+    )
+    readers: list[asyncio.Task[Any]] = []
+
+    def take_the_first_message() -> None:
+        assert client.websocket is not None
+        readers.append(asyncio.create_task(client.websocket.recv(), eager_start=True))
+
+    with spawned_by(client, on_spawn=take_the_first_message):
+        assert await client.connect() is False
+    await asyncio.gather(*readers, return_exceptions=True)
+
+    assert client.last_connect_error is not None
+    assert "Did not receive auth_required" in client.last_connect_error
+
+
+@_REFUSED_SOCKET_TIMER
+async def test_a_later_successful_attempt_clears_the_reason(
+    core_client: HomeAssistantClient, hass_access_token: str
+) -> None:
+    """A new connect() attempt drops the previous reason before running."""
+    client = HomeAssistantWebSocketClient(
+        core_client.base_url, REJECTED_TOKEN, verify_ssl=False
+    )
+    assert await client.connect() is False
+    assert client.last_connect_error is not None
+
+    client.token = hass_access_token
+    try:
+        assert await client.connect() is True
         assert client.last_connect_error is None
+    finally:
+        await client.disconnect()
 
-    @pytest.mark.asyncio
-    async def test_connect_failure_captures_exception_text(self):
-        """A transport-level failure is captured verbatim (type + message)."""
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
+@pytest.mark.usefixtures("manager")
+async def test_pooled_client_names_the_reason(refused: str) -> None:
+    """``WebSocketManager.get_client`` appends the reason to its error."""
+    with pytest.raises(HomeAssistantConnectionError) as excinfo:
+        await websocket_manager.get_client(url=refused, token="t", verify_ssl=False)
 
-        async def fake_connect(*_args, **_kwargs):
-            raise OSError("Connection refused")
+    message = str(excinfo.value)
+    assert message.startswith("Failed to connect to Home Assistant WebSocket: ")
+    assert "ConnectionRefusedError" in message
 
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
 
-        assert client.last_connect_error is not None
-        assert "OSError" in client.last_connect_error
-        assert "Connection refused" in client.last_connect_error
+async def test_connect_helper_puts_the_reason_in_the_details(refused: str) -> None:
+    """``get_connected_ws_client`` reports the refusal with its reason."""
+    ws_client, error = await get_connected_ws_client(refused, "t", verify_ssl=False)
 
-    @pytest.mark.asyncio
-    async def test_missing_auth_required_is_captured(self):
-        """The 'Did not receive auth_required' handshake failure is captured.
+    assert ws_client is None
+    assert error is not None
+    assert error["error"]["code"] == "CONNECTION_FAILED"
+    assert "ConnectionRefusedError" in json.dumps(error)
 
-        This is the failure mode the issue bot hypothesised for Supervisor
-        proxy mode — the reason must reach the caller, not just the log.
-        """
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
+@_REFUSED_SOCKET_TIMER
+async def test_connect_helper_reports_a_rejected_token_as_auth(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A connect that failed on a rejected token is an auth error, not a
+    connection error, and still carries the reason."""
+    ws_client, error = await get_connected_ws_client(
+        core_client.base_url, REJECTED_TOKEN, verify_ssl=False
+    )
 
-        async def fake_connect(*_args, **_kwargs):
-            return _FakeWS()
+    assert ws_client is None
+    assert error is not None
+    assert error["error"]["code"] == "AUTH_INVALID_TOKEN"
+    assert "Invalid token" in json.dumps(error)
 
-        # No auth message ever arrives -> the auth_required wait returns None.
-        client._wait_for_auth_message = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
+@_REFUSED_SOCKET_TIMER
+@pytest.mark.parametrize("auth", [True, False], ids=["rejected_token", "refused"])
+async def test_backup_capture_raises_a_failed_connect_by_its_code(
+    auth: bool, core_client: HomeAssistantClient
+) -> None:
+    """The backup capture keeps a rejected token an auth error.
 
-        assert client.last_connect_error is not None
-        assert "Did not receive auth_required" in client.last_connect_error
-
-    @pytest.mark.asyncio
-    async def test_reason_is_cleared_on_a_fresh_attempt(self):
-        """A new connect() attempt resets the previous reason before running."""
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
-        client._last_connect_error = "stale: from a previous attempt"
-
-        async def fake_connect(*_args, **_kwargs):
-            raise OSError("brand new failure")
-
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
-
-        assert "stale" not in (client.last_connect_error or "")
-        assert "brand new failure" in (client.last_connect_error or "")
-
-    @pytest.mark.asyncio
-    async def test_ssl_error_is_captured(self):
-        """A TLS verification failure is captured like any other reason.
-
-        Self-signed / hostname-mismatch certs are a common real-world cause,
-        so the surfaced reason must name the SSL error, not the opaque string.
-        """
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-
-        client = HomeAssistantWebSocketClient(
-            url="https://ha.example.com:8123", token="t"
+    A capture reads Core over its own one-shot WebSocket; a refusal must stay
+    a connection error, which the best-effort capture tolerates, while a
+    rejected token must not be mistaken for one.
+    """
+    if auth:
+        client = HomeAssistantClient(
+            base_url=core_client.base_url, token=REJECTED_TOKEN, verify_ssl=False
         )
-
-        async def fake_connect(*_args, **_kwargs):
-            raise ssl.SSLCertVerificationError("self-signed certificate")
-
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
-
-        assert client.last_connect_error is not None
-        assert "SSLCertVerificationError" in client.last_connect_error
-        assert "self-signed" in client.last_connect_error
-
-    @pytest.mark.asyncio
-    async def test_token_is_not_leaked_into_reason(self):
-        """The captured reason must never contain the access token.
-
-        The reason is built only from the exception text; the token travels
-        in the Authorization header / auth payload and is never echoed into a
-        connect exception. This pins that invariant against a future change
-        that captures more (repr(e), e.args, the URL, or request headers).
-        """
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-
-        token = "super-secret-token-DO-NOT-LEAK"
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token=token)
-
-        async def fake_connect(*_args, **_kwargs):
-            raise OSError("[Errno 111] Connection refused")
-
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
-
-        assert client.last_connect_error is not None
-        assert token not in client.last_connect_error
-
-
-class TestManagerSurfacesReason:
-    """``WebSocketManager.get_client`` appends the reason to its raised error."""
-
-    @pytest.mark.asyncio
-    async def test_get_client_includes_reason_in_message(self):
-        from ha_mcp.client.websocket_client import (
-            HomeAssistantWebSocketClient,
-            WebSocketManager,
+    else:
+        client = HomeAssistantClient(
+            base_url=refused_url(), token="t", verify_ssl=False
         )
-
-        mock_client = MagicMock()
-        mock_client.is_connected = False
-        mock_client.connect = AsyncMock(return_value=False)
-        mock_client.disconnect = AsyncMock()
-        mock_client.last_connect_error = "OSError: [Errno 111] Connection refused"
-
-        manager = WebSocketManager()
-        # Isolate from any pooled state left by other tests.
-        manager._clients.clear()
-        manager._last_used.clear()
-        manager._current_loop = None
-        manager.configure(client_factory=lambda url, token: mock_client)
-        try:
-            with pytest.raises(Exception) as exc_info:
-                await manager.get_client(url="http://supervisor/core", token="t")
-            msg = str(exc_info.value)
-            assert "Failed to connect to Home Assistant WebSocket" in msg
-            assert "Connection refused" in msg
-        finally:
-            manager.configure(client_factory=HomeAssistantWebSocketClient)
-            manager._clients.clear()
-            manager._last_used.clear()
-            manager._current_loop = None
-
-    @pytest.mark.asyncio
-    async def test_get_client_omits_suffix_when_reason_absent(self):
-        """A client whose connect() captured no reason yields the bare message.
-
-        No trailing colon, no repr — the ``isinstance`` guard turns a ``None``
-        reason into an empty suffix.
-        """
-        from ha_mcp.client.websocket_client import (
-            HomeAssistantWebSocketClient,
-            WebSocketManager,
-        )
-
-        mock_client = MagicMock()
-        mock_client.is_connected = False
-        mock_client.connect = AsyncMock(return_value=False)
-        mock_client.disconnect = AsyncMock()
-        mock_client.last_connect_error = None
-
-        manager = WebSocketManager()
-        manager._clients.clear()
-        manager._last_used.clear()
-        manager._current_loop = None
-        manager.configure(client_factory=lambda url, token: mock_client)
-        try:
-            with pytest.raises(Exception) as exc_info:
-                await manager.get_client(url="http://supervisor/core", token="t")
-            assert (
-                str(exc_info.value) == "Failed to connect to Home Assistant WebSocket"
-            )
-        finally:
-            manager.configure(client_factory=HomeAssistantWebSocketClient)
-            manager._clients.clear()
-            manager._last_used.clear()
-            manager._current_loop = None
-
-
-class TestHelperSurfacesReason:
-    """``get_connected_ws_client`` puts the reason in the error ``details``."""
-
-    @pytest.mark.asyncio
-    async def test_helper_uses_reason_as_details(self):
-        from ha_mcp.tools import helpers
-
-        fake = MagicMock()
-        fake.connect = AsyncMock(return_value=False)
-        fake.last_connect_error = (
-            "HomeAssistantConnectionError: Did not receive auth_required message"
-        )
-
-        with patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake):
-            ws_client, error = await helpers.get_connected_ws_client(
-                "http://supervisor/core", "t"
-            )
-
-        assert ws_client is None
-        assert error is not None
-        assert error["error"]["code"] == "CONNECTION_FAILED"
-        # Robust to the exact key the reason lands under in the error dict.
-        assert "Did not receive auth_required" in json.dumps(error)
-
-    @pytest.mark.asyncio
-    async def test_helper_falls_back_when_reason_absent(self):
-        """No captured reason -> the generic default lands in details, no mock repr."""
-        from ha_mcp.tools import helpers
-
-        fake = MagicMock()  # last_connect_error left as an auto-mock
-        fake.connect = AsyncMock(return_value=False)
-
-        with patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake):
-            ws_client, error = await helpers.get_connected_ws_client(
-                "http://supervisor/core", "t"
-            )
-
-        assert ws_client is None
-        assert error is not None
-        blob = json.dumps(error)
-        assert "WebSocket connection could not be established" in blob
-        assert "MagicMock" not in blob
-
-    @pytest.mark.asyncio
-    async def test_helper_reports_a_rejected_token_as_auth(self) -> None:
-        """A connect that failed on a rejected token is an auth error, not
-        a connection error, and still carries the reason."""
-        from ha_mcp.client.rest_client import HomeAssistantAuthError
-        from ha_mcp.tools import helpers
-
-        fake = MagicMock()
-        fake.connect = AsyncMock(return_value=False)
-        fake.last_connect_error = "HomeAssistantAuthError: Invalid token"
-        fake.last_connect_exception = HomeAssistantAuthError("Invalid token")
-
-        with patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake):
-            ws_client, error = await helpers.get_connected_ws_client(
-                "http://supervisor/core", "t"
-            )
-
-        assert ws_client is None
-        assert error is not None
-        assert error["error"]["code"] == "AUTH_INVALID_TOKEN"
-        assert "Invalid token" in json.dumps(error)
-
-
-class TestBackupCaptureConnect:
-    """The backup capture's ``_ws_send`` keeps a rejected token an auth error."""
-
-    @pytest.mark.parametrize("auth", [True, False], ids=["rejected_token", "refused"])
-    @pytest.mark.asyncio
-    async def test_failed_connect_raises_by_its_code(self, auth: bool) -> None:
-        from ha_mcp import backup_manager
-        from ha_mcp.client.rest_client import (
-            HomeAssistantAuthError,
-            HomeAssistantConnectionError,
-        )
-        from ha_mcp.tools import helpers
-
-        fake = MagicMock()
-        fake.connect = AsyncMock(return_value=False)
-        fake.last_connect_error = "Invalid token" if auth else "Connection refused"
-        fake.last_connect_exception = (
-            HomeAssistantAuthError("Invalid token") if auth else None
-        )
-        client = MagicMock(base_url="http://supervisor/core", token="t")
-        expected = HomeAssistantAuthError if auth else HomeAssistantConnectionError
-
-        with (
-            patch.object(helpers, "HomeAssistantWebSocketClient", return_value=fake),
-            pytest.raises(expected),
-        ):
-            await backup_manager._ws_send(
-                client, {"type": "config/entity_registry/list"}
-            )
+    expected = HomeAssistantAuthError if auth else HomeAssistantConnectionError
+    try:
+        with pytest.raises(expected):
+            await fetch_zone(client, "zone.office")
+    finally:
+        await client.close()

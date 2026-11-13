@@ -19,7 +19,6 @@ Covers two REST-client paths and their log-source wrappers
 """
 
 import asyncio
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +44,7 @@ from ha_mcp.tools.log_common import (
 from ha_mcp.tools.tools_logs import register_logs_tools
 
 from ._logbook_fallback import disable_logbook_websocket
+from ._tool_errors import error_body
 
 
 @pytest.fixture
@@ -96,12 +96,6 @@ def _register_and_collect(client: Any) -> dict[str, Any]:
     mcp = SimpleNamespace(tool=_tool)
     register_logs_tools(mcp, client)
     return collected
-
-
-def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    """Parse the JSON payload from a ToolError raised by a tool."""
-    payload: dict[str, Any] = json.loads(str(exc_info.value))
-    return payload
 
 
 class TestGetAddonLogs:
@@ -1017,7 +1011,7 @@ class TestGetSupervisorLogWrapper:
         with pytest.raises(ToolError) as exc_info:
             await tools["ha_get_logs"](source="supervisor", slug="nonexistent")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suggestions = payload["error"]["suggestions"]
         assert any("not found or not installed" in s for s in suggestions)
         assert any("ha_get_app" in s for s in suggestions)
@@ -1045,7 +1039,7 @@ class TestGetSupervisorLogWrapper:
         with pytest.raises(ToolError) as exc_info:
             await tools["ha_get_logs"](source="supervisor", slug="weird_slug")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suggestions = payload["error"]["suggestions"]
         # 400 must NOT say "not found or not installed" — different root cause.
         assert not any("not found or not installed" in s for s in suggestions)
@@ -1064,7 +1058,7 @@ class TestGetSupervisorLogWrapper:
         with pytest.raises(ToolError) as exc_info:
             await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suggestions = payload["error"]["suggestions"]
         assert any("Check Home Assistant connection" in s for s in suggestions)
         assert any(
@@ -1115,7 +1109,7 @@ class TestGetSupervisorLogWrapper:
         ):
             await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("SUPERVISOR_TOKEN" in s for s in suggestions)
 
@@ -1141,7 +1135,7 @@ class TestGetSupervisorLogWrapper:
         ):
             await tools["ha_get_logs"](source="supervisor", slug="core_mosquitto")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("Long-Lived Access Token" in s for s in suggestions)
         assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
@@ -1248,7 +1242,7 @@ class TestGetSystemServiceLogWrapper:
         with pytest.raises(ToolError) as exc_info:
             await tools["ha_get_logs"](source="system_service")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "slug" in body["error"]["message"]
         client_with_system_logs._get_system_service_logs.assert_not_called()
@@ -1266,7 +1260,7 @@ class TestGetSystemServiceLogWrapper:
                 source="system_service", slug="not_a_real_service"
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         # Allowed values appear in either the message or the suggestions
         # so callers can see what's acceptable.
@@ -1327,7 +1321,7 @@ class TestGetSystemServiceLogWrapper:
         ):
             await tools["ha_get_logs"](source="system_service", slug="core")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("hassio_role" in s and "manager" in s for s in suggestions)
 
@@ -1358,7 +1352,7 @@ class TestGetSystemServiceLogWrapper:
         ):
             await tools["ha_get_logs"](source="system_service", slug="core")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("admin" in s.lower() for s in suggestions)
         # Crucially: the role-bump suggestion that's appropriate inside the
@@ -1386,7 +1380,7 @@ class TestGetSystemServiceLogWrapper:
         ):
             await tools["ha_get_logs"](source="system_service", slug="core")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("SUPERVISOR_TOKEN" in s for s in suggestions)
 
@@ -1412,7 +1406,7 @@ class TestGetSystemServiceLogWrapper:
         ):
             await tools["ha_get_logs"](source="system_service", slug="core")
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         suggestions = body["error"]["suggestions"]
         assert any("Long-Lived Access Token" in s for s in suggestions)
         assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)

@@ -201,7 +201,7 @@ def should_emit_llm_api_metadata() -> bool:
     return enabled if isinstance(enabled, bool) else True
 
 
-def _reset_embedded_connection() -> None:
+def reset_embedded_connection() -> None:
     """Drop the registered embedded connection (test seam).
 
     Sibling to :func:`reset_global_settings`; lets suites that exercise the

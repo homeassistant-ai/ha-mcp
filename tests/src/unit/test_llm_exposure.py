@@ -6,27 +6,45 @@ into every ``tools/list`` entry as ``_meta.ha_mcp``. These tests cover the
 deny-by-default policy (beta tag / dev prefix / restart-reload-backup), the
 override semantics, and the stamping middleware — including its must-never-
 break-tools/list containment.
+
+The settings the middleware reads are real ``tool_config.json`` and policy
+files in the per-test data directory, and the stamp is read off ``tools/list``
+the way the component reads it: over an MCP client session.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from datetime import timedelta
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 
 from ha_mcp import llm_exposure
+from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp.llm_exposure import (
     LLM_API_CONFIG_KEY,
     META_EXPOSED_KEY,
     META_NAMESPACE,
+    META_PARAMS_KEY,
     META_PINNED_KEY,
+    META_POLICY_KEY,
     LlmExposureMiddleware,
     default_llm_api_exposed,
     effective_llm_api_exposed,
     load_llm_api_overrides,
 )
+from ha_mcp.policy.model import Policy, Rule
+from ha_mcp.policy.persistence import save_policy
+from ha_mcp.settings_ui import save_tool_config
+from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
+from ha_mcp.utils.data_paths import get_data_dir
+
+# Longer than any coalescing window the middleware may use for its settings
+# reads, so the next listing must read the files again.
+_PAST_THE_CACHE = timedelta(minutes=5)
 
 
 class TestDefaults:
@@ -44,10 +62,10 @@ class TestDefaults:
             ("ha_manage_security_policy", {"System"}, False),
         ],
     )
-    def test_default_policy(self, name, tags, expected):
+    def test_default_policy(self, name: str, tags: set[str], expected: bool) -> None:
         assert default_llm_api_exposed(name, tags) is expected
 
-    def test_override_wins_both_ways(self):
+    def test_override_wins_both_ways(self) -> None:
         # A user can expose a default-hidden tool and hide a default-exposed
         # one; non-bool garbage in the store is ignored, not honored.
         assert effective_llm_api_exposed("ha_restart", set(), {"ha_restart": True})
@@ -58,181 +76,194 @@ class TestDefaults:
 
 
 class TestOverridesLoading:
-    def test_loads_only_bool_values(self, monkeypatch):
-        # load_llm_api_overrides imports load_tool_config lazily from
-        # settings_ui — patch it there.
-        from ha_mcp import settings_ui
-
-        monkeypatch.setattr(
-            settings_ui,
-            "load_tool_config",
-            lambda: {
+    def test_loads_only_bool_values(self) -> None:
+        assert save_tool_config(
+            {
                 LLM_API_CONFIG_KEY: {
                     "ha_restart": True,
                     "ha_get_state": False,
                     "ha_bad": "nope",
                 }
-            },
+            }
         )
         assert load_llm_api_overrides() == {
             "ha_restart": True,
             "ha_get_state": False,
         }
 
-    def test_missing_or_malformed_key_is_empty(self, monkeypatch):
-        from ha_mcp import settings_ui
-
-        monkeypatch.setattr(settings_ui, "load_tool_config", dict)
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            pytest.param(None, id="no-config-file"),
+            pytest.param({}, id="no-llm-api-key"),
+            pytest.param({LLM_API_CONFIG_KEY: ["x"]}, id="llm-api-not-a-mapping"),
+        ],
+    )
+    def test_missing_or_malformed_key_is_empty(
+        self, stored: dict[str, Any] | None
+    ) -> None:
+        if stored is not None:
+            assert save_tool_config(stored)
         assert load_llm_api_overrides() == {}
-        monkeypatch.setattr(
-            settings_ui, "load_tool_config", lambda: {LLM_API_CONFIG_KEY: ["x"]}
-        )
-        assert load_llm_api_overrides() == {}
 
 
-class TestPinnedNames:
-    def test_mirrors_server_tool_search_semantics(self, monkeypatch):
-        from ha_mcp import settings_ui
-        from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
-
-        default_pinned = next(iter(DEFAULT_PINNED_TOOLS))
-        monkeypatch.setattr(
-            settings_ui,
-            "effective_tool_config",
-            lambda: {
-                "tools": {
-                    "ha_custom_pin": "pinned",
-                    default_pinned: "enabled",  # explicit unpin of a default
-                }
-            },
-        )
-        pinned = llm_exposure._pinned_tool_names()
-        assert "ha_custom_pin" in pinned
-        assert default_pinned not in pinned
-        # Untouched defaults stay pinned.
-        assert (set(DEFAULT_PINNED_TOOLS) - {default_pinned}) <= pinned
-
-
-def _tool(name: str, tags: set[str] | None = None) -> Tool:
+def _tool(name: str, tags: set[str] | None = None, **kwargs: Any) -> Tool:
     def _noop() -> None:
         return None
 
-    return Tool.from_function(_noop, name=name, tags=tags or set())
+    return Tool.from_function(_noop, name=name, tags=tags or set(), **kwargs)
 
 
-def _context() -> SimpleNamespace:
-    return SimpleNamespace(message=SimpleNamespace())
+def _server(middleware: LlmExposureMiddleware, *tools: Tool) -> FastMCP:
+    """A FastMCP server listing ``tools`` through ``middleware``."""
+    mcp = FastMCP("llm-exposure")
+    for tool in tools:
+        mcp.add_tool(tool)
+    mcp.add_middleware(middleware)
+    return mcp
+
+
+async def _listed_meta(mcp: FastMCP) -> dict[str, dict[str, Any]]:
+    """Each listed tool's ``_meta`` as an MCP client receives it."""
+    async with Client(mcp) as client:
+        tools = await client.list_tools()
+    return {tool.name: dict(tool.meta or {}) for tool in tools}
+
+
+async def _stamps(mcp: FastMCP) -> dict[str, dict[str, Any]]:
+    return {
+        name: meta[META_NAMESPACE] for name, meta in (await _listed_meta(mcp)).items()
+    }
+
+
+class TestPinnedStamp:
+    async def test_mirrors_server_tool_search_semantics(self) -> None:
+        """A user pin and a user unpin of a default both reach the stamp."""
+        unpinned, still_pinned = DEFAULT_PINNED_TOOLS[:2]
+        assert save_tool_config(
+            {
+                "tools": {
+                    "ha_custom_pin": "pinned",
+                    unpinned: "enabled",  # explicit unpin of a default
+                }
+            }
+        )
+        mcp = _server(
+            LlmExposureMiddleware(),
+            _tool("ha_custom_pin"),
+            _tool(unpinned),
+            _tool(still_pinned),
+            _tool("ha_plain"),
+        )
+
+        stamps = await _stamps(mcp)
+
+        assert stamps["ha_custom_pin"][META_PINNED_KEY] is True
+        assert stamps[unpinned][META_PINNED_KEY] is False
+        # Untouched defaults stay pinned.
+        assert stamps[still_pinned][META_PINNED_KEY] is True
+        assert stamps["ha_plain"][META_PINNED_KEY] is False
 
 
 class TestMiddleware:
-    async def test_stamps_exposure_and_pinned(self, monkeypatch):
-        mw = LlmExposureMiddleware()
-        monkeypatch.setattr(
-            llm_exposure, "load_llm_api_overrides", lambda: {"ha_restart": True}
-        )
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", lambda: {"ha_search"})
-        tools = [
+    async def test_stamps_exposure_and_pinned(self) -> None:
+        assert save_tool_config({LLM_API_CONFIG_KEY: {"ha_restart": True}})
+        mcp = _server(
+            LlmExposureMiddleware(),
             _tool("ha_search"),
             _tool("ha_restart"),
             _tool("ha_write_file", tags={"beta"}),
-        ]
-        result = await mw.on_list_tools(_context(), AsyncMock(return_value=tools))
+        )
 
-        by_name = {t.name: t.meta[META_NAMESPACE] for t in result}
+        by_name = await _stamps(mcp)
+
         assert by_name["ha_search"][META_EXPOSED_KEY] is True
         assert by_name["ha_search"][META_PINNED_KEY] is True
         # The component's compact search hits show this line (#2633).
-        assert by_name["ha_search"][llm_exposure.META_PARAMS_KEY] == "none"
+        assert by_name["ha_search"][META_PARAMS_KEY] == "none"
         # The serving-server policy block rides the same namespace (#1990).
-        assert llm_exposure.META_POLICY_KEY in by_name["ha_search"]
+        assert META_POLICY_KEY in by_name["ha_search"]
         # Override exposes the default-hidden restart tool.
         assert by_name["ha_restart"][META_EXPOSED_KEY] is True
         assert by_name["ha_restart"][META_PINNED_KEY] is False
         # Beta tag stays hidden without an override.
         assert by_name["ha_write_file"][META_EXPOSED_KEY] is False
 
-    async def test_preserves_existing_meta(self, monkeypatch):
-        mw = LlmExposureMiddleware()
-        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", dict)
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
-        tool = _tool("ha_get_state").model_copy(update={"meta": {"other": {"k": 1}}})
-        result = await mw.on_list_tools(_context(), AsyncMock(return_value=[tool]))
-        assert result[0].meta["other"] == {"k": 1}
-        assert result[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is True
+    async def test_preserves_existing_meta(self) -> None:
+        mcp = _server(
+            LlmExposureMiddleware(),
+            _tool("ha_get_state", meta={"other": {"k": 1}}),
+        )
 
-    async def test_settings_read_failure_stamps_defaults(self, monkeypatch, caplog):
+        meta = (await _listed_meta(mcp))["ha_get_state"]
+
+        assert meta["other"] == {"k": 1}
+        assert meta[META_NAMESPACE][META_EXPOSED_KEY] is True
+
+    async def test_settings_read_failure_stamps_defaults(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         # Stamping must never break tools/list — a failed settings read
         # falls back to pure defaults with a visible warning.
-        mw = LlmExposureMiddleware()
-
-        def _boom():
+        def _boom() -> dict[str, bool]:
             raise OSError("disk gone")
 
         monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _boom)
-        tools = [_tool("ha_get_state"), _tool("ha_restart")]
-        result = await mw.on_list_tools(_context(), AsyncMock(return_value=tools))
+        mcp = _server(
+            LlmExposureMiddleware(), _tool("ha_get_state"), _tool("ha_restart")
+        )
 
-        by_name = {t.name: t.meta[META_NAMESPACE] for t in result}
+        by_name = await _stamps(mcp)
+
         assert by_name["ha_get_state"][META_EXPOSED_KEY] is True
         assert by_name["ha_restart"][META_EXPOSED_KEY] is False
         assert "Could not read LLM-API exposure settings" in caplog.text
 
-    async def test_ttl_cache_reuses_settings_reads(self, monkeypatch):
-        mw = LlmExposureMiddleware()
-        calls = {"n": 0}
+    async def test_settings_change_applies_once_the_cached_read_expires(
+        self, freezer: FrozenDateTimeFactory
+    ) -> None:
+        """Listings in one moment share a read; a later one sees the edit."""
+        assert save_tool_config({LLM_API_CONFIG_KEY: {"ha_get_state": False}})
+        mcp = _server(LlmExposureMiddleware(), _tool("ha_get_state"))
 
-        def _counting_overrides():
-            calls["n"] += 1
-            return {}
+        with patch.object(
+            llm_exposure,
+            "load_llm_api_overrides",
+            wraps=llm_exposure.load_llm_api_overrides,
+        ) as reads:
+            first = await _stamps(mcp)
+            assert save_tool_config({LLM_API_CONFIG_KEY: {"ha_get_state": True}})
+            coalesced = await _stamps(mcp)
+            assert reads.call_count == 1
 
-        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _counting_overrides)
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
-        ctx = _context()
-        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_a")]))
-        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_b")]))
-        assert calls["n"] == 1
+            freezer.tick(_PAST_THE_CACHE)
+            later = await _stamps(mcp)
+            assert reads.call_count == 2
 
-    async def test_ttl_expiry_rereads_settings(self, monkeypatch):
-        mw = LlmExposureMiddleware()
-        calls = {"n": 0}
+        assert first["ha_get_state"][META_EXPOSED_KEY] is False
+        assert coalesced["ha_get_state"][META_EXPOSED_KEY] is False
+        assert later["ha_get_state"][META_EXPOSED_KEY] is True
 
-        def _counting_overrides():
-            calls["n"] += 1
-            return {}
-
-        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _counting_overrides)
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
-        monkeypatch.setattr(llm_exposure, "_OVERRIDES_TTL_SECONDS", 0.0)
-        ctx = _context()
-        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_a")]))
-        await mw.on_list_tools(ctx, AsyncMock(return_value=[_tool("ha_b")]))
-        assert calls["n"] == 2
-
-    async def test_settings_read_failure_serves_last_known_good(self, monkeypatch):
+    async def test_settings_read_failure_serves_last_known_good(
+        self, monkeypatch: pytest.MonkeyPatch, freezer: FrozenDateTimeFactory
+    ) -> None:
         # Fail-direction guard (review finding): a failed settings read must
         # NOT re-expose tools the user explicitly hid — the middleware keeps
         # serving the last successful read instead of pure defaults.
-        mw = LlmExposureMiddleware()
-        monkeypatch.setattr(
-            llm_exposure, "load_llm_api_overrides", lambda: {"ha_get_state": False}
-        )
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
-        ctx = _context()
-        first = await mw.on_list_tools(
-            ctx, AsyncMock(return_value=[_tool("ha_get_state")])
-        )
-        assert first[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is False
+        assert save_tool_config({LLM_API_CONFIG_KEY: {"ha_get_state": False}})
+        mcp = _server(LlmExposureMiddleware(), _tool("ha_get_state"))
+        first = await _stamps(mcp)
+        assert first["ha_get_state"][META_EXPOSED_KEY] is False
 
-        def _boom():
+        def _boom() -> dict[str, bool]:
             raise OSError("disk gone")
 
         monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", _boom)
-        monkeypatch.setattr(llm_exposure, "_OVERRIDES_TTL_SECONDS", 0.0)
-        second = await mw.on_list_tools(
-            ctx, AsyncMock(return_value=[_tool("ha_get_state")])
-        )
+        freezer.tick(_PAST_THE_CACHE)
+        second = await _stamps(mcp)
+
         # The user-hidden tool STAYS hidden on the stale data.
-        assert second[0].meta[META_NAMESPACE][META_EXPOSED_KEY] is False
+        assert second["ha_get_state"][META_EXPOSED_KEY] is False
 
 
 class TestPolicyStamp:
@@ -244,44 +275,22 @@ class TestPolicyStamp:
     serving server's actual gating state visible on every tools/list.
     """
 
-    async def test_policy_block_reflects_rules_and_live_state(
-        self, monkeypatch, tmp_path
-    ):
-        from ha_mcp.policy.model import Policy, Rule
-        from ha_mcp.policy.persistence import save_policy
-        from ha_mcp.utils.data_paths import get_data_dir
-
-        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        get_data_dir.cache_clear()
-        save_policy(tmp_path, Policy(rules=[Rule(tool_name="ha_call_service")]))
-        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", dict)
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
-
-        mw = LlmExposureMiddleware(policy_live=lambda: True)
-        result = await mw.on_list_tools(
-            _context(), AsyncMock(return_value=[_tool("ha_get_state")])
+    async def test_policy_block_reflects_rules_and_live_state(self) -> None:
+        save_policy(get_data_dir(), Policy(rules=[Rule(tool_name="ha_call_service")]))
+        mcp = _server(
+            LlmExposureMiddleware(policy_live=lambda: True), _tool("ha_get_state")
         )
-        block = result[0].meta[META_NAMESPACE][llm_exposure.META_POLICY_KEY]
+
+        block = (await _stamps(mcp))["ha_get_state"][META_POLICY_KEY]
+
         assert block["rules"] == 1
         assert block["live"] is True
-        assert block["deployment"] in ("embedded", "addon", "standalone")
-        get_data_dir.cache_clear()
+        assert block["deployment"] == "standalone"
 
-    async def test_policy_block_defaults_without_queue_or_file(
-        self, monkeypatch, tmp_path
-    ):
-        from ha_mcp.utils.data_paths import get_data_dir
+    async def test_policy_block_defaults_without_queue_or_file(self) -> None:
+        mcp = _server(LlmExposureMiddleware(), _tool("ha_get_state"))  # no policy_live
 
-        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        get_data_dir.cache_clear()
-        monkeypatch.setattr(llm_exposure, "load_llm_api_overrides", dict)
-        monkeypatch.setattr(llm_exposure, "_pinned_tool_names", set)
+        block = (await _stamps(mcp))["ha_get_state"][META_POLICY_KEY]
 
-        mw = LlmExposureMiddleware()  # no policy_live callable
-        result = await mw.on_list_tools(
-            _context(), AsyncMock(return_value=[_tool("ha_get_state")])
-        )
-        block = result[0].meta[META_NAMESPACE][llm_exposure.META_POLICY_KEY]
         assert block["live"] is False
         assert block["rules"] == 0
-        get_data_dir.cache_clear()

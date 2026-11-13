@@ -33,7 +33,7 @@ _known_identifiers: ContextVar[KnownIdentifiers] = ContextVar(
 
 @contextmanager
 def known_identifiers_scope(identifiers: KnownIdentifiers) -> Iterator[None]:
-    """Make ``_sanitize_log_text`` redact ``identifiers`` within the block."""
+    """Make ``sanitize_log_text`` redact ``identifiers`` within the block."""
     token = _known_identifiers.set(identifiers)
     try:
         yield
@@ -149,7 +149,7 @@ _GRAPH_CALENDAR_ID_RE = re.compile(r"(/me/calendars/)[^/?#\s'\"]+", re.IGNORECAS
 _URL_USERINFO_RE = re.compile(r"(://)([^:/?#\s@]+):([^@/\s]+)@")
 
 
-def _sanitize_log_text(text: str) -> str:
+def sanitize_log_text(text: str) -> str:
     """Best-effort secret scrubber for log text.
 
     Defense-in-depth, not exhaustive — bug reports still pass through human

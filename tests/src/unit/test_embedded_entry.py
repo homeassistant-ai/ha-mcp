@@ -167,8 +167,21 @@ async def register_view(
     return spy
 
 
+def _own_views(register_view: MagicMock) -> int:
+    """How many views this component registered; Core's own (the webhook
+    integration setup pulls in) are not counted."""
+    owners = (
+        view if isinstance(view, type) else type(view)
+        for view in (call.args[0] for call in register_view.call_args_list)
+    )
+    return sum(
+        owner.__module__.startswith(f"custom_components.{DOMAIN}.") for owner in owners
+    )
+
+
 class TestPrebindOAuthViews:
-    """Prebind every applicable OAuth route before slow background bring-up."""
+    """Setup binds every applicable OAuth route before the slow background
+    bring-up, which would otherwise race Home Assistant freezing its routes."""
 
     def _legacy_entry(self, hass: HomeAssistant, **options: object) -> MockConfigEntry:
         return add_server_entry(
@@ -186,22 +199,29 @@ class TestPrebindOAuthViews:
         )
 
     async def test_legacy_mode_binds_root_views_at_setup(
-        self, hass: HomeAssistant, register_view: MagicMock
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         hass.set_state(CoreState.not_running)
 
-        eentry._prebind_oauth_views(hass, self._legacy_entry(hass))
+        assert await set_up(hass, self._legacy_entry(hass))
 
         # 6 discovery + 3 scoped authorize/token/revoke + 2 root legacy aliases.
-        assert register_view.call_count == 11
-        assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
+        assert _own_views(register_view) == 11
+        assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == DOMAIN
 
     @pytest.mark.parametrize(
         "auth_mode",
         [const.WEBHOOK_AUTH_NONE, const.WEBHOOK_AUTH_HA],
     )
     async def test_none_and_ha_auth_modes_prebind_full_scoped_surface(
-        self, hass: HomeAssistant, register_view: MagicMock, auth_mode: str
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
+        auth_mode: str,
     ) -> None:
         entry = add_server_entry(
             hass,
@@ -211,55 +231,42 @@ class TestPrebindOAuthViews:
             },
         )
 
-        eentry._prebind_oauth_views(hass, entry)
+        assert await set_up(hass, entry)
 
         # 6 discovery + 3 scoped authorize/token/revoke + 1 DCR registration
         # route.
-        assert register_view.call_count == 10
+        assert _own_views(register_view) == 10
 
     async def test_unsaved_options_prebind_the_secret_url_surface(
-        self, hass: HomeAssistant, register_view: MagicMock
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         # An entry that never saved its options runs in the secret-URL mode
         # bring-up defaults to (embedded_setup), so its OAuth routes must be
         # bound at boot too, or they never go live until a restart.
-        eentry._prebind_oauth_views(hass, add_server_entry(hass))
+        assert await set_up(hass, add_server_entry(hass))
 
-        assert register_view.call_count == 10
+        assert _own_views(register_view) == 10
 
     async def test_webhook_disabled_binds_nothing(
-        self, hass: HomeAssistant, register_view: MagicMock
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         entry = self._legacy_entry(hass, **{const.OPT_ENABLE_WEBHOOK: False})
 
-        eentry._prebind_oauth_views(hass, entry)
+        assert await set_up(hass, entry)
 
-        register_view.assert_not_called()
-
-    async def test_partial_legacy_credentials_still_prebind_scoped_routes(
-        self, hass: HomeAssistant, register_view: MagicMock
-    ) -> None:
-        # _ensure_secrets mints all three whenever legacy is configured; a gap
-        # means a partial config, deferred to the bring-up path to surface.
-        entry = self._legacy_entry(hass)
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                k: v
-                for k, v in entry.data.items()
-                if k != const.DATA_OAUTH_CLIENT_SECRET
-            },
-        )
-
-        eentry._prebind_oauth_views(hass, entry)
-
-        # Root aliases wait for credentials, but advertised scoped routes must
-        # still beat Home Assistant's HTTP freeze: 6 discovery + 3 scoped
-        # authorize/token/revoke.
-        assert register_view.call_count == 9
+        assert _own_views(register_view) == 0
 
     async def test_route_conflict_is_swallowed_at_setup(
-        self, hass: HomeAssistant, register_view: MagicMock
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         # The webhook-proxy add-on owning the root routes makes
         # bind_legacy_views raise; setup must survive (the bring-up
@@ -267,22 +274,25 @@ class TestPrebindOAuthViews:
         hass.set_state(CoreState.not_running)
         hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
 
-        eentry._prebind_oauth_views(hass, self._legacy_entry(hass))
+        assert await set_up(hass, self._legacy_entry(hass))
 
         assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy_addon"
         # The foreign owner blocks only the root aliases; scoped routes remain
         # (6 discovery + 3 scoped authorize/token/revoke).
-        assert register_view.call_count == 9
+        assert _own_views(register_view) == 9
 
 
 class TestEnsureSecretsLegacyWiring:
-    """`_ensure_secrets` is the persistence path for the legacy credential
-    lifecycle: it must fold `_ensure_legacy_oauth_secrets` mutations into the
-    same entry update — including OPTIONS (the one-shot regenerate flag lives
-    there), which pre-legacy code never persisted."""
+    """Setup persists the legacy credential lifecycle: the legacy OAuth
+    credentials it mints go into the same entry update — including OPTIONS (the
+    one-shot regenerate flag lives there), which pre-legacy code never
+    persisted."""
 
-    def test_legacy_regenerate_persists_new_creds_and_clears_flag(
-        self, hass: HomeAssistant
+    async def test_legacy_regenerate_persists_new_creds_and_clears_flag(
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         entry = add_server_entry(
             hass,
@@ -292,22 +302,25 @@ class TestEnsureSecretsLegacyWiring:
             },
         )
 
-        eentry._ensure_secrets(hass, entry)
+        assert await set_up(hass, entry)
 
         assert entry.data[const.DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
         assert entry.data[const.DATA_OAUTH_CLIENT_SECRET]
         assert entry.data[const.DATA_OAUTH_SIGNING_KEY]
         assert entry.options[const.OPT_OAUTH_REGENERATE] is False
 
-    def test_non_legacy_mode_mints_no_oauth_credentials(
-        self, hass: HomeAssistant
+    async def test_non_legacy_mode_mints_no_oauth_credentials(
+        self,
+        hass: HomeAssistant,
+        register_view: MagicMock,
+        server: SimpleNamespace,
     ) -> None:
         entry = add_server_entry(
             hass, options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
         )
         before = dict(entry.data)
 
-        eentry._ensure_secrets(hass, entry)
+        assert await set_up(hass, entry)
 
         # Webhook id + secret path already present -> nothing changed (and in
         # particular no OAuth minting).

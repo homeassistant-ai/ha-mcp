@@ -31,6 +31,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.tools_traces import TraceTools
 from ha_mcp.visibility.model import VisibilityConfig
 
+from .._tool_errors import error_of
 from .._trace_fixtures import automation_run, script_run, store_runs
 from ._chained_enforcement import _ChainedEnforcement, _returns, make_context
 
@@ -88,10 +89,6 @@ def _tool_result(payload: dict[str, Any]) -> SimpleNamespace:
 
 async def _unreached_call_next(_context: Any) -> Any:
     raise AssertionError("enforcement must refuse the call before the tool runs")
-
-
-def _error_body(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(exc.value.args[0])
 
 
 def _registry_reads(send: Any) -> int:
@@ -178,7 +175,7 @@ class TestHiddenTraceTargets:
                 make_context("ha_get_automation_traces", args), _unreached_call_next
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
 class TestRawTraceCommandTargets:
@@ -210,7 +207,7 @@ class TestRawTraceCommandTargets:
         with pytest.raises(ToolError) as exc_info:
             await mw.on_call_tool(context, _unreached_call_next)
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
     async def test_a_raw_trace_command_naming_a_visible_item_id_passes(
         self,
@@ -290,7 +287,7 @@ class TestHiddenTraceResults:
                 _tool_calls(core_client, context_id="own-hidden"),
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_a_domain_list_naming_a_hidden_run_is_refused(
         self,
@@ -316,7 +313,7 @@ class TestHiddenTraceResults:
                 _tool_calls(core_client, domain="automation"),
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_a_raw_trace_command_result_naming_a_hidden_run_is_refused(
         self,
@@ -352,7 +349,7 @@ class TestHiddenTraceResults:
                 _raw_list,
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_a_nested_context_match_naming_a_hidden_run_is_refused(
         self,
@@ -393,7 +390,7 @@ class TestHiddenTraceResults:
                 _tool_calls(component_core_client, context_id="parent-1"),
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 class TestVisibleTraceKeys:
@@ -569,7 +566,7 @@ class TestLookalikeObjectId:
                 _unreached_call_next,
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
     async def test_an_unregistered_entity_id_falls_back_to_the_object_id(
         self,
@@ -592,7 +589,7 @@ class TestLookalikeObjectId:
                 _unreached_call_next,
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
 class TestTraceQueryRefreshesTheHiddenSet:
@@ -662,7 +659,7 @@ class TestTraceQueryRefreshesTheHiddenSet:
 
             assert _registry_reads(send) == 2
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_a_trace_query_with_a_failed_refresh_fails_closed(
         self,
@@ -693,4 +690,4 @@ class TestTraceQueryRefreshesTheHiddenSet:
                 _unreached_call_next,
             )
 
-        assert _error_body(exc_info)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc_info)["code"] == "ENTITY_VISIBILITY_ENFORCED"
