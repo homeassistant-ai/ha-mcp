@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.marketplace.exceptions import (
@@ -22,9 +22,12 @@ from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-from ha_mcp.tools.hacs_backend import StoreApi, detect_store_api
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandTimeout
+from ha_mcp.client.websocket_client import (
+    DEFAULT_COMMAND_WAIT_TIMEOUT,
+    HomeAssistantWebSocketClient,
+)
+from ha_mcp.tools.hacs_backend import StoreApi, detect_store_api, fetch_releases
 from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 from ha_mcp.tools.tools_hacs import HacsTools
 
@@ -42,6 +45,7 @@ from ._hacs_marketplace import (
     stored,
 )
 
+MARKETPLACE = StoreApi("marketplace")
 YOUTUBE_ID = "555000111"
 REPOSITORIES = {
     CARD_ID: stored("piitaya/lovelace-mushroom", "plugin", installed="v4.0.0"),
@@ -355,7 +359,31 @@ class TestNativeFieldsReachTheCaller:
         assert out["data"]["full_name"] == "piitaya/lovelace-mushroom"
         assert "warnings" not in out["data"]
         assert any(w.startswith("Releases unavailable: ") for w in out["warnings"])
-        assert "marketplace/repository/releases" in command_types(spy)
+        # GitHub is slower than a local command: the read waits longer.
+        [sent] = sent_with(spy, "marketplace/repository/releases")
+        assert sent["_wait_timeout"] > DEFAULT_COMMAND_WAIT_TIMEOUT
+
+    async def test_a_releases_fetch_with_no_answer_warns(
+        self, marketplace: MockConfigEntry, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        """A releases read that gets no answer at all is a warning too; the
+        repository info, already read from Core, is not touched."""
+        reply = await socket.send_command(
+            "marketplace/repository/info", repository_id=CARD_ID
+        )
+        info = dict(reply["result"])
+        with patch.object(
+            socket,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
+        ) as no_answer:
+            out = await fetch_releases(socket, MARKETPLACE, CARD_ID, info)
+        assert "github_releases" not in out
+        assert "Releases unavailable: Command timeout" in out["warnings"]
+        assert info == reply["result"]
+        first = no_answer.await_args_list[0]
+        assert first.args == ("marketplace/repository/releases",)
+        assert first.kwargs["repository_id"] == CARD_ID
 
     async def test_release_notes_come_from_the_update_entity(
         self,
@@ -388,7 +416,7 @@ async def test_marketplace_registration_is_one_list_lookup(
         ) as subscribe,
     ):
         repo = await wait_for_repo_registration(
-            socket, MAIN.upper(), timeout=10.0, api=StoreApi("marketplace")
+            socket, MAIN.upper(), timeout=10.0, api=MARKETPLACE
         )
     assert repo is not None
     assert repo["id"] == MAIN_ID

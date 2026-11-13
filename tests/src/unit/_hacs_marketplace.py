@@ -36,7 +36,8 @@ MAIN_ID = "1056618941"
 MIRROR_ID = "1289599380"
 CARD_ID = "441028036"
 
-# Stored before the test, so the catalog fetch at startup is not needed.
+# Core still starts the catalog fetch at startup (it fails offline); a stored
+# fetch time keeps a later catalog answer from taking the stored record over.
 _FETCHED = 1_700_000_000
 
 
