@@ -1416,7 +1416,7 @@ def _fake_dashboard_capture(
 ) -> Any:
     from ha_mcp.dashboard_screenshot.capture import (
         DashboardImageCapture,
-        _CaptureOptions,
+        CaptureOptions,
     )
 
     return DashboardImageCapture(
@@ -1428,7 +1428,7 @@ def _fake_dashboard_capture(
         image_format=image_format,
         mime_type=mime_type,
         size_bytes=len(data),
-        options=_CaptureOptions(
+        options=CaptureOptions(
             width=width,
             height=height,
             viewport_presets=None,
@@ -1546,14 +1546,14 @@ def test_non_png_native_content_preserves_mime(
 
 class TestMaybeAttachScreenshot:
     async def test_skips_when_not_requested(self) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         result = {"success": True}
-        out = await _maybe_attach_screenshot(result, "default", requested=False)
+        out = await maybe_attach_screenshot(result, "default", requested=False)
         assert out is result
 
     async def test_feature_off_warns(self, monkeypatch: Any) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1561,13 +1561,13 @@ class TestMaybeAttachScreenshot:
             lambda: SimpleNamespace(enable_dashboard_screenshot=False),
         )
         result: dict[str, Any] = {"success": True}
-        out = await _maybe_attach_screenshot(result, "default", requested=True)
+        out = await maybe_attach_screenshot(result, "default", requested=True)
         assert out is result
         assert any("disabled" in w.lower() for w in result.get("warnings", []))
 
     async def test_capture_failure_warns(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1581,14 +1581,14 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", boom)
 
         result: dict[str, Any] = {"success": True}
-        out = await _maybe_attach_screenshot(result, "my-dash", requested=True)
+        out = await maybe_attach_screenshot(result, "my-dash", requested=True)
         assert out is result
         assert any("unavailable" in w.lower() for w in result.get("warnings", []))
 
     async def test_full_page_passed_through(self, monkeypatch: Any) -> None:
-        """_maybe_attach_screenshot forwards full_page to the capture call."""
+        """maybe_attach_screenshot forwards full_page to the capture call."""
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1605,7 +1605,7 @@ class TestMaybeAttachScreenshot:
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
 
-        await _maybe_attach_screenshot(
+        await maybe_attach_screenshot(
             {"success": True}, "my-dash", requested=True, full_page=True
         )
         assert seen["full_page"] is True
@@ -1617,7 +1617,7 @@ class TestMaybeAttachScreenshot:
     ) -> None:
         from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1631,7 +1631,7 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", ok)
 
         result: dict[str, Any] = {"success": True}
-        out = await _maybe_attach_screenshot(result, "my-dash", requested=True)
+        out = await maybe_attach_screenshot(result, "my-dash", requested=True)
         # Success returns a ToolResult so structured_content (the dict) is
         # present on both the screenshot and no-screenshot paths, plus the PNG
         # as an image content block.
@@ -1651,7 +1651,7 @@ class TestMaybeAttachScreenshot:
         self, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1666,7 +1666,7 @@ class TestMaybeAttachScreenshot:
 
         monkeypatch.setattr(capture, "capture_dashboard_images", ok)
 
-        out = await _maybe_attach_screenshot(
+        out = await maybe_attach_screenshot(
             {"success": True}, "my-dash", requested=True, full_page=True
         )
 
@@ -1683,8 +1683,8 @@ class TestMaybeAttachScreenshot:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import (
-            _DashboardScreenshotOptions,
-            _maybe_attach_screenshot,
+            DashboardScreenshotOptions,
+            maybe_attach_screenshot,
         )
 
         monkeypatch.setattr(
@@ -1704,12 +1704,12 @@ class TestMaybeAttachScreenshot:
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
         result: dict[str, Any] = {"success": True}
-        out = await _maybe_attach_screenshot(
+        out = await maybe_attach_screenshot(
             result,
             "wall-panel",
             requested=True,
             config={"views": [{"title": "Home", "path": "home"}]},
-            options=_DashboardScreenshotOptions(
+            options=DashboardScreenshotOptions(
                 view_path="home",
                 viewport_presets=["mobile", "desktop"],
                 theme="Gerry Dark",
@@ -1728,7 +1728,7 @@ class TestMaybeAttachScreenshot:
         self, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1749,7 +1749,7 @@ class TestMaybeAttachScreenshot:
 
         monkeypatch.setattr(capture, "capture_dashboard_images", partial)
 
-        out = await _maybe_attach_screenshot(
+        out = await maybe_attach_screenshot(
             {"success": True}, "wall-panel", requested=True
         )
 
@@ -1762,7 +1762,7 @@ class TestMaybeAttachScreenshot:
         self, monkeypatch: Any, raw_error: str
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1776,7 +1776,7 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", fail)
         result: dict[str, Any] = {"success": True, "write_committed": True}
 
-        out = await _maybe_attach_screenshot(result, "wall-panel", requested=True)
+        out = await maybe_attach_screenshot(result, "wall-panel", requested=True)
 
         assert out is result
         assert out["success"] is True
@@ -1816,7 +1816,7 @@ class TestMaybeAttachScreenshot:
         )
         result: dict[str, Any] = {"success": True, "write_committed": True}
 
-        out = await dashboard_tools._maybe_attach_screenshot(
+        out = await dashboard_tools.maybe_attach_screenshot(
             result, "wall-panel", requested=True
         )
 
@@ -1829,7 +1829,7 @@ class TestMaybeAttachScreenshot:
         self, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1843,7 +1843,7 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", ok)
         result: dict[str, Any] = {"success": True}
 
-        await _maybe_attach_screenshot(
+        await maybe_attach_screenshot(
             result,
             "wall-panel",
             requested=True,
@@ -1856,7 +1856,7 @@ class TestMaybeAttachScreenshot:
         """raise_on_failure (the get path) propagates the engine error instead
         of demoting it to a warning the caller may never read."""
         from ha_mcp.dashboard_screenshot import capture
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         monkeypatch.setattr(
             config,
@@ -1870,17 +1870,17 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", boom)
 
         with pytest.raises(ToolError):
-            await _maybe_attach_screenshot(
+            await maybe_attach_screenshot(
                 {"success": True}, "my-dash", requested=True, raise_on_failure=True
             )
 
     async def test_full_page_without_request_warns(self) -> None:
         """full_page is meaningless without a screenshot flag — make the
         dropped request observable rather than a silent no-op."""
-        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+        from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         result: dict[str, Any] = {"success": True}
-        out = await _maybe_attach_screenshot(
+        out = await maybe_attach_screenshot(
             result, "my-dash", requested=False, full_page=True
         )
         assert out is result
@@ -1900,7 +1900,7 @@ async def test_post_write_render_path_fetch_failure_is_only_a_warning(
     monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
     result: dict[str, Any] = {"success": True, "action": "update"}
 
-    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+    config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
         object(), result, "wall-panel"
     )
 
@@ -1924,7 +1924,7 @@ async def test_post_write_render_paths_use_authoritative_readback(
     monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", readback)
     result: dict[str, Any] = {"success": True, "action": "update"}
 
-    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+    config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
         object(), result, "wall-panel", submitted
     )
 
@@ -1945,7 +1945,7 @@ async def test_post_write_readback_failure_keeps_only_screenshot_fallback(
     monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
     result: dict[str, Any] = {"success": True, "action": "update"}
 
-    config_result = await dashboard_tools._attach_dashboard_render_paths_after_write(
+    config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
         object(), result, "wall-panel", fallback
     )
 
@@ -1995,18 +1995,16 @@ async def test_python_transform_can_return_screenshot_from_post_save_config(
     monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)
     monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
     monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
-    monkeypatch.setattr(dashboard_tools, "_maybe_attach_screenshot", attach)
+    monkeypatch.setattr(dashboard_tools, "maybe_attach_screenshot", attach)
 
-    result = await tools._run_dashboard_python_transform(
+    result = await tools.run_dashboard_python_transform(
         "wall-panel",
         "old-hash",
         "config['views'][0]['title'] = 'New'",
         None,
         False,
         return_screenshot=True,
-        screenshot_options=dashboard_tools._DashboardScreenshotOptions(
-            view_path="home"
-        ),
+        screenshot_options=dashboard_tools.DashboardScreenshotOptions(view_path="home"),
     )
 
     assert result["config_hash"] == "new-hash"
@@ -2045,14 +2043,14 @@ async def test_python_transform_post_save_read_failure_reports_committed_write(
     monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
     monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
 
-    result = await tools._run_dashboard_python_transform(
+    result = await tools.run_dashboard_python_transform(
         "wall-panel",
         "old-hash",
         "config['views'][0]['title'] = 'New'",
         None,
         False,
         return_screenshot=False,
-        screenshot_options=dashboard_tools._DashboardScreenshotOptions(),
+        screenshot_options=dashboard_tools.DashboardScreenshotOptions(),
     )
 
     assert result["success"] is True
@@ -2080,43 +2078,43 @@ class TestDashboardFrontendPath:
 
 class TestNoteScreenshotIgnored:
     def test_warns_when_screenshot_requested(self) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+        from ha_mcp.tools.tools_config_dashboards import note_screenshot_ignored
 
         result: dict[str, Any] = {"success": True}
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             result, include_screenshot=True, full_page=False, mode="list"
         )
         assert any("ignored in list mode" in w for w in result["warnings"])
 
     def test_warns_when_only_full_page_set(self) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+        from ha_mcp.tools.tools_config_dashboards import note_screenshot_ignored
 
         result: dict[str, Any] = {"success": True}
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             result, include_screenshot=False, full_page=True, mode="search"
         )
         assert any("ignored in search mode" in w for w in result["warnings"])
 
     def test_silent_when_neither_set(self) -> None:
-        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+        from ha_mcp.tools.tools_config_dashboards import note_screenshot_ignored
 
         result: dict[str, Any] = {"success": True}
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             result, include_screenshot=False, full_page=False, mode="list"
         )
         assert "warnings" not in result
 
     def test_warns_when_non_default_render_option_is_set(self) -> None:
         from ha_mcp.tools.tools_config_dashboards import (
-            _DashboardScreenshotOptions,
-            _note_screenshot_ignored,
+            DashboardScreenshotOptions,
+            note_screenshot_ignored,
         )
 
         result: dict[str, Any] = {"success": True}
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             result,
             include_screenshot=False,
-            options=_DashboardScreenshotOptions(language="de"),
+            options=DashboardScreenshotOptions(language="de"),
             mode="search",
         )
         assert any("ignored in search mode" in w for w in result["warnings"])
@@ -2125,7 +2123,7 @@ class TestNoteScreenshotIgnored:
 class TestAttachScreenshotToolError:
     def test_error_payload_warnings_merge_into_result_warnings(self) -> None:
         """Theme-guard warnings on a failed capture survive the degraded path."""
-        from ha_mcp.tools.tools_config_dashboards import _attach_screenshot_tool_error
+        from ha_mcp.tools.tools_config_dashboards import attach_screenshot_tool_error
 
         error = ToolError(
             json.dumps(
@@ -2136,7 +2134,7 @@ class TestAttachScreenshotToolError:
                 }
             )
         )
-        result = _attach_screenshot_tool_error({"success": True}, error)
+        result = attach_screenshot_tool_error({"success": True}, error)
 
         assert "theme restore failed (unit)" in result["warnings"]
         # Kept out of screenshot_error so the warning isn't duplicated.
@@ -2156,10 +2154,10 @@ class TestPublicScreenshotOptionForwarding:
     def _assert_capture_call(capture_call: dict[str, Any]) -> None:
         from dataclasses import asdict
 
-        from ha_mcp.tools.tools_config_dashboards import _DashboardScreenshotOptions
+        from ha_mcp.tools.tools_config_dashboards import DashboardScreenshotOptions
 
         assert capture_call["path"] == "wall-panel/home"
-        defaults = asdict(_DashboardScreenshotOptions())
+        defaults = asdict(DashboardScreenshotOptions())
         del defaults["view_path"]
         assert {
             key: value
