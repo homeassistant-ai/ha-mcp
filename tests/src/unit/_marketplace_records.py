@@ -8,16 +8,19 @@ cannot be installed here: it is a config entry of a ``mock_integration``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from homeassistant.components.marketplace.base import MarketplaceManager
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
+    mock_config_flow,
     mock_integration,
     mock_platform,
 )
@@ -80,6 +83,13 @@ async def unload_marketplace(hass: HomeAssistant) -> None:
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+class HacsConfigFlow(ConfigFlow):
+    """The flow handler Core reads a HACS entry's version from before setup."""
+
+    VERSION = 1
+    MINOR_VERSION = 1
+
+
 class Hacs:
     """A HACS config entry whose setup publishes ``manager`` in ``hass.data``,
     as HACS does, and is not ready while there is none."""
@@ -96,18 +106,22 @@ class Hacs:
         )
         # Core imports an integration's config flow before setting up its entry.
         mock_platform(hass, "hacs.config_flow")
-        self.entry = MockConfigEntry(domain="hacs")
+        # The flow's version: an entry of another version would be migrated.
+        self.entry = MockConfigEntry(
+            domain="hacs",
+            version=HacsConfigFlow.VERSION,
+            minor_version=HacsConfigFlow.MINOR_VERSION,
+        )
         self.entry.add_to_hass(hass)
 
-    async def setup_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Core refuses a boolean from a built-in integration's entry methods.
+    async def setup_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         if self.manager is None:
             raise ConfigEntryNotReady("HACS has not started yet")
         hass.data["hacs"] = self.manager
-        return True
 
-    async def unload_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    async def unload_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         hass.data.pop("hacs", None)
-        return True
 
     async def restore(
         self,
@@ -129,6 +143,13 @@ class Hacs:
         assert await manager.data.restore()
         self.manager = manager
         return manager
+
+
+@contextmanager
+def hacs_store(hass: HomeAssistant) -> Iterator[Hacs]:
+    """HACS, with its flow handler registered until the context ends."""
+    with mock_config_flow("hacs", HacsConfigFlow):
+        yield Hacs(hass)
 
 
 def stored_record(hass_storage: dict[str, Any], full_name: str) -> dict[str, Any]:

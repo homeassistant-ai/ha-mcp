@@ -13,7 +13,7 @@ manager, which Core took over from it, plays it here.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,6 +33,7 @@ from custom_components.ha_mcp_tools.const import DOMAIN, ISSUE_STORE_RECORDS_CON
 from ._hacs_marketplace import REPOSITORIES_KEY, add_marketplace
 from ._marketplace_records import (
     Hacs,
+    hacs_store,
     loaded_marketplace,
     own_records,
     stored_record,
@@ -62,6 +63,13 @@ async def marketplace(
 
     yield load
     await unload_marketplace(hass)
+
+
+@pytest.fixture
+def hacs(hass: HomeAssistant) -> Iterator[Hacs]:
+    """HACS, whose flow handler stays registered for the whole test."""
+    with hacs_store(hass) as store:
+        yield store
 
 
 def _installed(built: MarketplaceManager, full_name: str) -> bool:
@@ -248,11 +256,11 @@ async def test_a_disabled_hacs_is_unknown_not_clean(
     hass: HomeAssistant,
     issue_registry: ir.IssueRegistry,
     hass_storage: dict[str, Any],
+    hacs: Hacs,
 ) -> None:
     """HACS that failed its restore has an empty repository list until it
     retries; the issue must not be cleared on that."""
     _file_issue(hass)
-    hacs = Hacs(hass)
     manager = await hacs.restore(hass, hass_storage)
     assert await hass.config_entries.async_setup(hacs.entry.entry_id)
     # HACS is not part of Core, so its failed restore cannot happen here. Real
@@ -288,6 +296,7 @@ async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
     checks: MagicMock,
     aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
+    request: pytest.FixtureRequest,
     store_domain: str,
 ) -> None:
     """The store entry failing its setup, then set up again: the check runs
@@ -296,8 +305,8 @@ async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
     hacs: Hacs | None = None
     entry: MockConfigEntry
     if store_domain == "hacs":
-        hacs = Hacs(hass)
-        entry = hacs.entry
+        fixture: Hacs = request.getfixturevalue("hacs")
+        hacs, entry = fixture, fixture.entry
     else:
         records = own_records(main=True, mirror=True)
         entry = add_marketplace(hass, aioclient_mock, hass_storage, records)
@@ -327,11 +336,11 @@ async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
 
 
 async def test_a_registration_while_waiting_adds_no_second_listener(
-    hass: HomeAssistant, checks: MagicMock
+    hass: HomeAssistant, checks: MagicMock, hacs: Hacs
 ) -> None:
     """Two entries setting up while the store is not loaded share the one
     pending check instead of each subscribing to the store."""
-    entry = Hacs(hass).entry
+    entry = hacs.entry
     changes: list[ConfigEntryState] = []
     entry.async_on_state_change(lambda: changes.append(entry.state))
 
