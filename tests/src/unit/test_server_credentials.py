@@ -9,6 +9,7 @@ administrator any more.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.auth.models import (
@@ -138,6 +139,9 @@ class TestCredentialFromInput:
 
         assert token
         assert rt_id is not None
+        validated = hass.auth.async_validate_access_token(token)
+        assert validated is not None
+        assert validated.id == rt_id
         rt = hass.auth.async_get_refresh_token(rt_id)
         assert rt is not None
         assert rt.user.id == user.id
@@ -157,7 +161,11 @@ class TestCredentialFromInput:
         ids=["not_an_administrator", "not_local_only"],
     )
     async def test_only_a_local_only_administrator_login_is_tried(
-        self, hass: HomeAssistant, admin: bool, local_only: bool
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        admin: bool,
+        local_only: bool,
     ) -> None:
         # The forms are for an account made for HA-MCP; any other account,
         # the user's own included, is refused before its password is checked,
@@ -165,9 +173,17 @@ class TestCredentialFromInput:
         user = await _create_login_user(
             hass, "x", "pw", admin=admin, local_only=local_only
         )
+        provider = cast(
+            HassAuthProvider,
+            next(p for p in hass.auth.auth_providers if p.type == "homeassistant"),
+        )
+        spy_login = AsyncMock(wraps=provider.async_validate_login)
+        monkeypatch.setattr(provider, "async_validate_login", spy_login)
+
         with pytest.raises(sc.CredentialRefused) as err:
             await sc.async_credential_from_input(hass, username="x", password="pw")
         assert err.value.reason == "invalid_login"
+        spy_login.assert_not_called()
         assert len(user.refresh_tokens) == 0
 
     async def test_a_second_issued_token_does_not_collide_with_the_first(
@@ -285,7 +301,7 @@ class TestServerAccessToken:
         ["user_deleted", "token_revoked", "user_disabled", "token_of_another"],
     )
     async def test_lost_provisioned_credentials_are_not_recreated(
-        self, hass: HomeAssistant, case: str
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, case: str
     ) -> None:
         user = await _create_admin_user(hass, f"user-{case}")
         rt, _ = await _create_llat(hass, user)
@@ -302,6 +318,11 @@ class TestServerAccessToken:
             other = await _create_admin_user(hass, f"other-{case}")
             entry_user_id = other.id
 
+        spy_user = AsyncMock(wraps=hass.auth.async_create_user)
+        spy_rt = AsyncMock(wraps=hass.auth.async_create_refresh_token)
+        monkeypatch.setattr(hass.auth, "async_create_user", spy_user)
+        monkeypatch.setattr(hass.auth, "async_create_refresh_token", spy_rt)
+
         entry = MockConfigEntry(
             data={
                 DATA_SERVER_USER_ID: entry_user_id,
@@ -311,6 +332,8 @@ class TestServerAccessToken:
         with pytest.raises(sc.CredentialNeeded) as err:
             await sc.async_server_access_token(hass, entry)
         assert err.value.reason == "missing_token"
+        spy_user.assert_not_called()
+        spy_rt.assert_not_called()
 
     async def test_an_entry_with_no_credential_asks_for_one(
         self, hass: HomeAssistant
