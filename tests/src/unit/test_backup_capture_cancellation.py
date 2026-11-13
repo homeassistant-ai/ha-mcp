@@ -9,6 +9,7 @@ has chosen its file name and not yet written the file.
 from __future__ import annotations
 
 import asyncio
+import gc
 import tempfile
 import threading
 from collections.abc import AsyncIterator
@@ -74,22 +75,7 @@ async def loop_errors() -> AsyncIterator[list[dict[str, Any]]]:
     loop.set_exception_handler(previous)
 
 
-@pytest.mark.parametrize(
-    "worker_fails",
-    [
-        False,
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "BUG: a writer that fails after its capture was cancelled "
-                    "reaches the event loop as an unhandled shielded-future error"
-                ),
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("worker_fails", [False, True])
 async def test_cancelled_capture_waits_for_writer_before_next_safety_capture(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
@@ -150,4 +136,6 @@ async def test_cancelled_capture_waits_for_writer_before_next_safety_capture(
         manager.maybe_snapshot(DOMAIN, entry.entry_id, force=True), 5
     )
     assert later is not None
+    # An unretrieved worker failure is reported when its future is collected.
+    gc.collect()
     assert loop_errors == []
