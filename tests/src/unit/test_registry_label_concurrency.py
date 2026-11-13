@@ -348,9 +348,10 @@ async def test_label_add_to_another_area_is_not_blocked_by_a_held_write(
     finally:
         held.release.set()
         async with asyncio.timeout(_WAIT_S):
-            await first
+            held_result = await first
 
     assert result["success"]
+    assert held_result["success"]
     assert _area_labels(area_registry, other) == {"blue"}
 
 
