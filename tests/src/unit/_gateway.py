@@ -32,10 +32,15 @@ class Gateway:
         self.drops: set[str] = set()
         # "METHOD /path" of every REST request that reached the gateway.
         self.requests: list[str] = []
+        # Routes the gateway answers itself, ahead of forwarding to Core. A
+        # test adds them before it takes ``gateway_client``, which serves
+        # the app once.
+        self.routes: list[web.AbstractRouteDef] = []
 
     def app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/api/websocket", self._websocket)
+        app.add_routes(self.routes)
         app.router.add_route("*", "/{path:.*}", self._rest)
         return app
 
