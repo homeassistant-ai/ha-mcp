@@ -11,7 +11,7 @@ import socket
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import ifaddr
 import pytest
@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.system_info import async_get_system_info
 from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
@@ -238,7 +238,11 @@ class TestCollectKnownIdentifiers:
             with patch.object(
                 client,
                 "send_websocket_message",
-                side_effect=ConnectionError("cannot reach ha.example.net"),
+                AsyncMock(
+                    side_effect=HomeAssistantConnectionError(
+                        "cannot reach ha.example.net"
+                    )
+                ),
             ):
                 identifiers, warning = await collect_known_identifiers(client)
         finally:
@@ -246,7 +250,10 @@ class TestCollectKnownIdentifiers:
 
         assert identifiers == KnownIdentifiers(hosts=frozenset({"ha.example.net"}))
         assert warning is not None
-        assert "network/url: ConnectionError; network: ConnectionError" in warning
+        assert (
+            "network/url: HomeAssistantConnectionError; "
+            "network: HomeAssistantConnectionError" in warning
+        )
         assert "ha.example.net" not in warning
 
     async def test_malformed_configured_url_is_skipped(self) -> None:

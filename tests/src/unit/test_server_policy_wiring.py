@@ -218,19 +218,31 @@ async def test_an_old_policy_file_is_migrated_even_with_policies_off(
 
 
 async def test_a_migration_that_cannot_save_does_not_stop_the_server(
-    monkeypatch: pytest.MonkeyPatch, policy_client: HomeAssistantClient
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A one-time data fixup must never take down every server boot."""
+    """A one-time data fixup must never take down every server boot, and the
+    user is told the file still needs fixing."""
     _write_unmigrated_policy()
 
-    with patch(
-        "ha_mcp.policy.persistence.save_policy",
-        side_effect=OSError(30, "Read-only file system"),
+    with (
+        patch(
+            "ha_mcp.policy.persistence.save_policy",
+            side_effect=OSError(30, "Read-only file system"),
+        ),
+        caplog.at_level(logging.ERROR, logger="ha_mcp.server"),
     ):
         server = _build_server(monkeypatch, policy_client, policies=False)
 
     assert server.mcp is not None
     assert "schema_version" not in _stored_policy()
+    errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "ha_mcp.server" and r.levelno == logging.ERROR
+    ]
+    assert any(POLICY_FILENAME in m and "Fix the file" in m for m in errors), errors
 
 
 async def test_a_decision_from_the_event_bus_releases_the_held_call(

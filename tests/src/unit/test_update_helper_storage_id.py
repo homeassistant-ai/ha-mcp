@@ -285,3 +285,31 @@ async def test_an_updated_helper_without_an_entity_names_none(
         (warning,) = [w for w in result["warnings"] if "no entity in the registry" in w]
         assert "the input_boolean has no entity in the registry" in warning
         assert "not waited on" in warning
+
+
+async def test_a_failed_update_of_a_helper_without_an_entity_names_no_guessed_one(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    mine: str,
+) -> None:
+    """The component read no entity for mine: ``input_number.<mine>`` can be
+    another helper's, so the error of a write Core refuses must not name it."""
+    for domain in ("config", "input_number"):
+        assert await async_setup_component(hass, domain, {})
+    created = await component_core_client.send_websocket_message(
+        {"type": "input_number/create", "name": mine, "min": 0, "max": 10}
+    )
+    assert created["success"], created
+    await hass.async_block_till_done()
+    entity_registry.async_remove(f"input_number.{mine}")
+    await hass.async_block_till_done()
+
+    # Core refuses a minimum above the stored maximum.
+    with pytest.raises(ToolError) as exc_info:
+        await HelperConfigTools(component_core_client).ha_config_set_helper(
+            helper_type="input_number", helper_id=mine, config={"min": 50}
+        )
+
+    assert _error(exc_info)["message"].startswith("Failed to update input_number")
+    assert f"input_number.{mine}" not in str(exc_info.value)

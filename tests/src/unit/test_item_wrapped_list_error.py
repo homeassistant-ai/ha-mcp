@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -17,6 +18,7 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import tools_config_dashboards
 from ha_mcp.tools.config_entry_flow_form import form_submission
 from ha_mcp.tools.dashboard_list_checks import (
     patch_writes_inside_card,
@@ -24,6 +26,7 @@ from ha_mcp.tools.dashboard_list_checks import (
     reject_malformed_dashboard_lists,
     reject_malformed_dashboard_patch,
 )
+from ha_mcp.tools.dashboard_read_errors import DASHBOARD_FETCH_FAILED_PREFIX
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
@@ -375,6 +378,30 @@ async def test_dashboard_patch_inside_custom_card_is_written(
         {"type": "lovelace/config", "url_path": SEARCH_URL_PATH}
     )
     assert stored["result"]["views"][0]["cards"][0]["cards"] == {"item": [{}]}
+
+
+async def test_dashboard_patch_check_fails_closed_when_read_fails(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A check that cannot read the dashboard must not let the edit through."""
+    assert await async_setup_component(hass, "lovelace", {})
+    # Spies on the edit; it calls through to Core.
+    edit = AsyncMock(wraps=tools_config_dashboards.edit_dashboard_via_component)
+    monkeypatch.setattr(tools_config_dashboards, "edit_dashboard_via_component", edit)
+
+    # Core refuses to read a dashboard it does not have.
+    with pytest.raises(ToolError) as exc_info:
+        await DashboardConfigTools(core_client).ha_config_set_dashboard(
+            url_path="no-such-dash",
+            patch=[_DEEP_OP],
+            config_hash="unread",
+            MandatoryBPS=False,
+        )
+
+    assert error_of(exc_info)["message"].startswith(DASHBOARD_FETCH_FAILED_PREFIX)
+    edit.assert_not_awaited()
 
 
 async def test_dashboard_python_transform_result_is_named(

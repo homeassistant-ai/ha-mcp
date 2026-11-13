@@ -16,7 +16,9 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from ha_mcp import backup_manager as bm
@@ -115,6 +117,25 @@ class TestCoreErrorCodes:
         data = _parse_tool_error(exc_info)
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert data["resource_id"] == "gone"
+
+    async def test_not_found_wording_without_the_code_is_not_reclassified(
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only Core's ``not_found`` code means a missing resource, not its words."""
+
+        async def refuse(_collection: ResourceStorageCollection, item_id: str) -> None:
+            raise HomeAssistantError(f"Unable to find resource_id {item_id}")
+
+        monkeypatch.setattr(ResourceStorageCollection, "async_delete_item", refuse)
+
+        with pytest.raises(ToolError) as exc_info:
+            await ResourceTools(core_client).ha_config_delete_dashboard_resource(
+                resource_id="abc"
+            )
+
+        data = _parse_tool_error(exc_info)
+        assert data["ha_error_code"] == "home_assistant_error"
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
 
     async def test_a_url_already_registered_is_created_again(
         self, core_client: HomeAssistantClient
