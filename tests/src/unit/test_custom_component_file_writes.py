@@ -13,14 +13,19 @@ import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceNotFound
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import async_mock_service
+from pytest_homeassistant.common import MockConfigEntry, async_mock_service
 
-import custom_components.ha_mcp_tools as component
-from custom_components.ha_mcp_tools import file_ops, file_post_action
-from custom_components.ha_mcp_tools.const import DOMAIN
+from custom_components.ha_mcp_tools import (
+    CALLER_TOKEN_FIELD,
+    SERVICE_GET_CALLER_TOKEN,
+    SERVICE_READ_FILE,
+    SERVICE_WRITE_FILE,
+    file_ops,
+    file_post_action,
+)
+from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
+from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 from custom_components.ha_mcp_tools.file_ops import (
-    _REFUSALS,
-    _replace_file_sync,
     edit_file_sync,
     refusal_text,
     write_text_atomic,
@@ -33,6 +38,33 @@ needs_symlinks = pytest.mark.skipif(
 
 def _edit(old: str, new: str) -> dict[str, str]:
     return {"old": old, "new": new}
+
+
+async def _file_service(hass: HomeAssistant) -> Any:
+    """Set up the component and return a caller that presents its token."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=TOOLS_ENTRY_TITLE,
+        version=HaMcpToolsConfigFlow.VERSION,
+        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
+        data={},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    async def call(service: str, data: dict[str, Any]) -> dict[str, Any]:
+        response = await hass.services.async_call(
+            DOMAIN, service, data, blocking=True, return_response=True
+        )
+        assert response is not None
+        return dict(response)
+
+    bootstrap = await call(SERVICE_GET_CALLER_TOKEN, {})
+
+    async def call_with_token(service: str, data: dict[str, Any]) -> dict[str, Any]:
+        return await call(service, {**data, CALLER_TOKEN_FIELD: bootstrap["token"]})
+
+    return call_with_token
 
 
 @pytest.fixture
@@ -49,17 +81,24 @@ class TestWholeFileReplace:
         sibling = tmp_path / "foo.tmp"
         sibling.write_text("keep me")
 
-        _replace_file_sync(target, "a: 2\n")
+        write_text_atomic(target, "a: 2\n")
 
         assert target.read_text() == "a: 2\n"
         assert sibling.read_text() == "keep me"
         assert sorted(p.name for p in tmp_path.iterdir()) == ["foo.tmp", "foo.yaml"]
 
-    def test_a_missing_file_is_created_with_its_folder(self, tmp_path: Path) -> None:
-        target = tmp_path / "themes" / "new.yaml"
+    async def test_a_missing_file_is_created_with_its_folder(
+        self, hass: HomeAssistant
+    ) -> None:
+        call = await _file_service(hass)
+        target = Path(hass.config.config_dir) / "themes" / "new.yaml"
 
-        result = _replace_file_sync(target, "a: 1\r\n")
+        result = await call(
+            SERVICE_WRITE_FILE, {"path": "themes/new.yaml", "content": "a: 1\r\n"}
+        )
 
+        assert result["success"] is True
+        assert result["created"] is True
         assert target.read_bytes() == b"a: 1\r\n"
         assert result["size"] == 6
 
@@ -69,7 +108,7 @@ class TestWholeFileReplace:
         target.write_text("a: 1\n")
         os.chmod(target, 0o640)
 
-        _replace_file_sync(target, "a: 2\n")
+        write_text_atomic(target, "a: 2\n")
 
         assert target.stat().st_mode & 0o777 == 0o640
 
@@ -80,7 +119,7 @@ class TestWholeFileReplace:
         link = tmp_path / "link.yaml"
         link.symlink_to(real)
 
-        _replace_file_sync(link, "a: 2\n")
+        write_text_atomic(link, "a: 2\n")
 
         assert link.is_symlink()
         assert real.read_text() == "a: 2\n"
@@ -121,22 +160,33 @@ class TestWholeFileReplace:
 
 
 class TestLineEndingsAsStored:
-    def test_read_can_keep_crlf(self, tmp_path: Path) -> None:
-        target = tmp_path / "card.js"
+    async def test_read_can_keep_crlf(self, hass: HomeAssistant) -> None:
+        call = await _file_service(hass)
+        target = Path(hass.config.config_dir) / "www" / "card.js"
+        target.parent.mkdir()
         target.write_bytes(b"one\r\ntwo\r\n")
 
-        kept = component._read_file_sync(target, keep_line_endings=True)
-        shown = component._read_file_sync(target)
+        kept = await call(
+            SERVICE_READ_FILE, {"path": "www/card.js", "keep_line_endings": True}
+        )
+        shown = await call(SERVICE_READ_FILE, {"path": "www/card.js"})
 
+        assert kept["success"] is True
+        assert shown["success"] is True
         assert kept["content"] == "one\r\ntwo\r\n"
         assert shown["content"] == "one\ntwo\n"
 
-    def test_write_stores_line_endings_as_sent(self, tmp_path: Path) -> None:
+    async def test_write_stores_line_endings_as_sent(self, hass: HomeAssistant) -> None:
         """A restore of a CRLF snapshot must write CRLF back, on any OS."""
-        target = tmp_path / "card.js"
+        call = await _file_service(hass)
+        target = Path(hass.config.config_dir) / "www" / "card.js"
 
-        component._write_file_sync(target, "one\r\ntwo\n", True, True, tmp_path)
+        result = await call(
+            SERVICE_WRITE_FILE,
+            {"path": "www/card.js", "content": "one\r\ntwo\n", "overwrite": True},
+        )
 
+        assert result["success"] is True
         assert target.read_bytes() == b"one\r\ntwo\n"
 
 
@@ -198,7 +248,20 @@ _REFUSAL_FIELDS = {
 }
 
 
-@pytest.mark.parametrize("reason", sorted(_REFUSALS))
+_REFUSAL_REASONS = (
+    "invalid_edit",
+    "line_endings_only",
+    "not_a_file",
+    "not_found",
+    "not_mounted",
+    "not_text",
+    "old_not_found",
+    "old_not_unique",
+    "too_large",
+)
+
+
+@pytest.mark.parametrize("reason", _REFUSAL_REASONS)
 def test_every_refusal_renders(reason: str) -> None:
     """A missing field or template would raise KeyError inside the service."""
     text = refusal_text(reason, "www/a.css", dict(_REFUSAL_FIELDS))
@@ -214,7 +277,7 @@ def test_every_refusal_reason_has_a_template() -> None:
         if '"_error": "' in line
     }
 
-    assert reasons <= set(_REFUSALS)
+    assert reasons <= set(_REFUSAL_REASONS)
 
 
 class TestAfterFileWrite:
@@ -403,5 +466,6 @@ async def test_an_edit_reports_the_theme_reload(
         )
     )
 
+    assert response is not None
     assert response["success"] is True
     assert response["post_action"] == "reload_performed"
