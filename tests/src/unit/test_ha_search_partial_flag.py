@@ -11,6 +11,7 @@ read as a complete result by agents (PR #1529).
 
 from __future__ import annotations
 
+import itertools
 import re
 from pathlib import Path
 from typing import Any
@@ -41,10 +42,12 @@ def hass_config_dir(hass_tmp_config_dir: str) -> str:
 
 
 @pytest.fixture
-async def search(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> SmartSearchTools:
+async def config_views(hass: HomeAssistant) -> None:
     assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+def search(config_views: None, core_client: HomeAssistantClient) -> SmartSearchTools:
     return SmartSearchTools(client=core_client)
 
 
@@ -104,22 +107,29 @@ def _assert_states_incompleteness(fragment: str) -> None:
         ("script", "HAMCP_SCRIPT_CONFIG_TIME_BUDGET"),
     ],
 )
+@pytest.mark.usefixtures("config_views")
 async def test_exhausted_budget_names_the_unscanned_configs_and_their_setting(
-    hass: HomeAssistant, search: SmartSearchTools, noun: str, budget_setting: str
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    noun: str,
+    budget_setting: str,
 ) -> None:
     """Configs left when the time budget runs out are counted and point at the type's own budget setting."""
     total = INDIVIDUAL_FETCH_BATCH_SIZE + 1
     await _yaml_entities(hass, noun, total)
+    # Each clock reading is one second after the last: 0 when the fetch
+    # starts, 1 before the first batch, 2 before the second. A 1.5 s budget
+    # runs out between the two, so exactly the second batch is left.
+    ticks = itertools.count()
+    search = SmartSearchTools(client=core_client, clock=lambda: float(next(ticks)))
 
-    # The budget is spent before the second batch (and, on a stalled worker,
-    # possibly before the first), so at least the last config is left.
-    reason = await _reason(search, noun, config_time_budget=0.001)
+    reason = await _reason(search, noun, config_time_budget=1.5)
 
     counted = re.search(
         rf"\b(\d+) {noun}\(s\) not scanned \(time budget exhausted\)", reason
     )
     assert counted, reason
-    assert 1 <= int(counted.group(1)) <= total
+    assert int(counted.group(1)) == total - INDIVIDUAL_FETCH_BATCH_SIZE
     _assert_states_incompleteness(reason)
     assert budget_setting in reason
 

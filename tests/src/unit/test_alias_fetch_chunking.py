@@ -11,15 +11,18 @@ best-effort when Core gives no answer or refuses the command.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
+from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -165,6 +168,52 @@ async def test_no_answer_to_the_alias_requests_degrades_to_a_warning(
     assert result["matches"][0]["entity_id"] == entity_ids[1]
     assert any("Alias enrichment incomplete" in w for w in result["warnings"])
     assert "alias_enrichment_failed" in caplog.text
+
+
+async def test_one_unanswered_chunk_keeps_the_other_chunks_aliases(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias request that gets no answer loses only its own chunk's aliases.
+
+    Core holds one request whose chunk lacks the searched entity until the
+    client's wait for it has run out; every other request is answered at once.
+    """
+    assert await async_setup_component(hass, "config", {})
+    entity_ids = _add_lights(hass, entity_registry, 1201)
+    target = entity_ids[0]
+    held = asyncio.Event()
+    release = asyncio.Event()
+    core_handler, schema = hass.data[websocket_api.DOMAIN][GET_ENTRIES]
+
+    async def hold_one_other_chunk(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+    ) -> None:
+        if target not in msg["entity_ids"] and not held.is_set():
+            held.set()
+            await release.wait()
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(
+        hass, GET_ENTRIES, websocket_api.async_response(hold_one_other_chunk), schema
+    )
+    # One real command opens the client's socket under the normal wait; the
+    # wait is then cut so only the held request runs out of it.
+    await core_client.send_websocket_message({"type": "config/entity_registry/list"})
+    monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1.0)
+    try:
+        result = await _search(core_client, "nickname0000")
+    finally:
+        release.set()
+
+    assert held.is_set()
+    top = result["matches"][0]
+    assert (top["entity_id"], top["match_type"]) == (target, "alias_match")
+    assert any("Alias enrichment incomplete" in w for w in result["warnings"])
 
 
 async def test_core_refusing_the_alias_request_degrades_to_a_warning(

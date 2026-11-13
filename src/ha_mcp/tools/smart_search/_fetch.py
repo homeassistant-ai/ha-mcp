@@ -217,7 +217,8 @@ class ConfigFetchMixin(ScoringMixin):
                 i for i in ids if i in deprioritize
             ]
         configs: dict[str, dict[str, Any]] = {}
-        budget_start = time.perf_counter()
+        clock = self.clock or time.perf_counter
+        budget_start = clock()
         total_to_fetch = len(ids)
         fetched_count = 0
         failed_count = 0
@@ -225,7 +226,7 @@ class ConfigFetchMixin(ScoringMixin):
         yaml_skipped_count = 0
         timeout_count = 0
         for i in range(0, len(ids), INDIVIDUAL_FETCH_BATCH_SIZE):
-            if time.perf_counter() - budget_start > budget:
+            if clock() - budget_start > budget:
                 skipped_count = (
                     total_to_fetch
                     - fetched_count
