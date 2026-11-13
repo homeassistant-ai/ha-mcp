@@ -104,6 +104,10 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
+from .backup_label_category import fetch_category as _fetch_category
+from .backup_label_category import fetch_label as _fetch_label
+from .backup_label_category import restore_category as _restore_category
+from .backup_label_category import restore_label as _restore_label
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -2210,10 +2214,11 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
     return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
-# Labels — config/label_registry/{list,update}
+# Registry read-only fields
 #
-# Registry ``/update`` commands refuse the ``created_at``/``modified_at`` their
-# lists return, which snapshots keep; every registry restore strips them.
+# Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
+# ``modified_at`` their lists return, which snapshots keep; every registry
+# restore strips them.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
@@ -2221,77 +2226,10 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """Return ``config`` with read-only registry fields removed.
 
     ``extra`` names per-registry id keys (``label_id``, ...) the update command
-    takes separately and refuses inside the payload body.
+    takes separately (``/create`` has no id) and both refuse inside the payload body.
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}
-
-
-async def _fetch_label(client: Any, entity_id: str) -> Any:
-    # Route the capture through the component's ``registries`` capability when
-    # available (one in-process read of the label registry) instead of dumping
-    # the whole registry via WS. Lazy import to avoid the backup_manager →
-    # tools → backup_manager cycle (same pattern as ``_fetch_device``). ``None``
-    # from the helper means "component unavailable"; fall back to the full list.
-    from .tools.component_registries import fetch_registries_via_component
-
-    component_result = await fetch_registries_via_component(client, ["label"])
-    if component_result is not None:
-        items = component_result.get("labels") or []
-    else:
-        items = _require_list(
-            await _ws_send(client, {"type": "config/label_registry/list"}),
-            "config/label_registry/list",
-        )
-    for item in items:
-        if item.get("label_id") == entity_id:
-            return item
-    return None
-
-
-async def _restore_label(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "label_id")
-    payload["type"] = "config/label_registry/update"
-    payload["label_id"] = entity_id
-    return await _ws_send(client, payload)
-
-
-# Categories — config/category_registry/{list,update}
-
-
-async def _fetch_category(client: Any, entity_id: str) -> Any:
-    scope, _, cat_id = entity_id.partition(":")
-    if not cat_id:
-        return None
-    # Same component-first routing as ``_fetch_label``; categories are scoped,
-    # so the requested scope rides ``category_scopes``.
-    from .tools.component_registries import fetch_registries_via_component
-
-    component_result = await fetch_registries_via_component(
-        client, ["category"], category_scopes=[scope]
-    )
-    if component_result is not None:
-        items = (component_result.get("categories") or {}).get(scope, [])
-    else:
-        items = _require_list(
-            await _ws_send(
-                client, {"type": "config/category_registry/list", "scope": scope}
-            ),
-            "config/category_registry/list",
-        )
-    for item in items:
-        if item.get("category_id") == cat_id:
-            return {"scope": scope, **item}
-    return None
-
-
-async def _restore_category(client: Any, entity_id: str, config: Any) -> Any:
-    scope, _, cat_id = entity_id.partition(":")
-    payload = _strip_readonly(config, "category_id", "scope")
-    payload["type"] = "config/category_registry/update"
-    payload["scope"] = scope or config.get("scope")
-    payload["category_id"] = cat_id
-    return await _ws_send(client, payload)
 
 
 # Groups — group.set service. Fetch via state API.

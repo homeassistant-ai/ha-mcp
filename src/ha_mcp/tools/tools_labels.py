@@ -24,10 +24,12 @@ from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .helpers import (
     clearable_value,
+    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_core_refusal,
     raise_tool_error,
+    refuse_blank_name,
     register_tool_methods,
     validate_identifier_not_empty,
 )
@@ -482,6 +484,7 @@ class LabelTools:
         areas: str | list[str] | None,
     ) -> list[str] | None:
         """Validate create/update discriminator and optional area targets."""
+        refuse_blank_name(name, {"action": "set", "label_id": label_id})
         # ``None`` stays the documented "create-new" sentinel; explicit
         # empty/whitespace is rejected so the create/update discriminator
         # cannot silently route an intended update to create.
@@ -515,21 +518,21 @@ class LabelTools:
         icon: str | None,
         description: str | None,
     ) -> tuple[str, dict[str, Any]]:
-        """Core's create/update message: None leaves a field out, blank clears it."""
+        """Core's create/update message: None leaves a field out; a blank color, icon
+        or description clears it."""
         action = "update" if label_id else "create"
         message: dict[str, Any] = {"type": f"config/label_registry/{action}"}
         if action == "update":
             message["label_id"] = label_id
         if name is not None:
             message["name"] = name
-        for key, value in (("color", color), ("icon", icon)):
+        for key, value in (
+            ("color", color),
+            ("icon", icon),
+            ("description", description),
+        ):
             if value is not None:
                 message[key] = clearable_value(value, key)
-        if description is not None:
-            # Blank clears it, quote-only is refused, other text goes to Core as given.
-            message["description"] = (
-                clearable_value(description, "description") and description
-            )
         return action, message
 
     async def _label_set_success_response(
@@ -579,8 +582,9 @@ class LabelTools:
         automation, script, scene, group or person that carries it is also listed
         under its own key), the automations and scripts that target it, and the
         areas, floors, devices, config entries and integrations of the carrying
-        items. `related` is None, with a warning, when Home Assistant cannot
-        answer; that does not mean the label is unused.
+        items. A template that uses the label (for example `label_entities('x')`)
+        is not listed. `related` is None, with a warning, when Home Assistant
+        cannot answer; that does not mean the label is unused.
 
         EXAMPLES:
         - List all labels: ha_config_get_label()
@@ -752,13 +756,18 @@ class LabelTools:
                 return await self._label_set_success_response(
                     result, action, label_id, parsed_areas
                 )
+            suggestions = [
+                "Use ha_config_get_label() to see the existing labels and their IDs"
+            ]
+            if action == "create" and name is None:
+                suggestions.insert(
+                    0, "Pass name to create a label, or label_id to update one"
+                )
             raise_core_refusal(
                 f"Failed to {action} label",
                 result,
                 context={"name": name, "label_id": label_id},
-                suggestions=[
-                    "Use ha_config_get_label() to see the existing labels and their IDs",
-                ],
+                suggestions=suggestions,
             )
 
         except ToolError:
@@ -798,10 +807,15 @@ class LabelTools:
 
         Removes the label from the label registry. Home Assistant also takes it off
         every entity, device and area that carries it. Automations and scripts that
-        target the label keep the reference, which then matches nothing. To see
-        them, call ha_config_get_label(label_id) first: its `related` lists them,
-        together with the automations and scripts that only carry the label.
-        This cannot be undone.
+        target the label keep the reference, which then matches nothing.
+
+        To take a label off one item and keep it, use ha_set_entity,
+        ha_set_device or ha_set_area_or_floor instead. Before deleting, call
+        ha_config_get_label(label_id): its `related` lists what carries or
+        targets the label, but not a template that uses it, so an empty `related`
+        does not prove the label unused. The auto-backup of this call restores
+        the label itself, under the id its current name gives it (a new one if
+        it was renamed since it was created), not what carried it.
 
         EXAMPLES:
         - Delete label: ha_config_remove_label("my_label_id")
@@ -831,26 +845,21 @@ class LabelTools:
                     "label_id": label_id,
                     "message": f"Successfully deleted label: {label_id}",
                 }
-            else:
-                error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str or "doesn't exist" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Label not found: {label_id}",
-                            context={"label_id": label_id},
-                            suggestions=[
-                                "Use ha_config_get_label() without label_id to see all labels",
-                            ],
-                        )
-                    )
+            context = {"label_id": label_id}
+            # Core answers an unknown id with the generic ``invalid_info`` code, so
+            # its exact message is what tells it from any other refusal.
+            if core_error_message(result.get("error", "")) == "Label ID doesn't exist":
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to delete label: {result.get('error', 'Unknown error')}",
-                        context={"label_id": label_id},
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Label not found: {label_id}",
+                        context={**context, "ha_error_code": result.get("error_code")},
+                        suggestions=[
+                            "Use ha_config_get_label() without label_id to see all labels",
+                        ],
                     )
                 )
+            raise_core_refusal("Failed to delete label", result, context=context)
 
         except ToolError:
             raise

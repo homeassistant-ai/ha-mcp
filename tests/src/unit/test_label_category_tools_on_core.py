@@ -22,19 +22,19 @@ from ha_mcp.tools.tools_labels import LabelTools
 from ._tool_errors import rejected_call_body
 
 
-@pytest.fixture
-async def labels(hass: HomeAssistant, core_client: HomeAssistantClient) -> LabelTools:
-    """The label tools on Core with its ``config`` commands set up."""
+@pytest.fixture(autouse=True)
+async def _config_commands(hass: HomeAssistant) -> None:
+    """Core's ``config`` commands, which the registries' WebSocket API is part of."""
     assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+def labels(core_client: HomeAssistantClient) -> LabelTools:
     return LabelTools(core_client)
 
 
 @pytest.fixture
-async def categories(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> CategoryTools:
-    """The category tools on Core with its ``config`` commands set up."""
-    assert await async_setup_component(hass, "config", {})
+def categories(core_client: HomeAssistantClient) -> CategoryTools:
     return CategoryTools(core_client)
 
 
@@ -60,17 +60,18 @@ async def test_label_update_without_a_name_keeps_the_name(
     assert result["message"] == "Successfully updated label: Security"
 
 
-async def test_label_update_with_empty_values_clears_them(
-    hass: HomeAssistant, labels: LabelTools
+@pytest.mark.parametrize("blank", ["", " "])
+async def test_label_update_with_blank_values_clears_them(
+    hass: HomeAssistant, labels: LabelTools, blank: str
 ) -> None:
-    """An empty color, icon or description removes it from the label; before,
-    the tool sent the empty value on, which Core refuses for a color or icon."""
+    """A blank color, icon or description removes it from the label; before, the
+    tool sent the blank value on, which Core refuses for a color or icon."""
     label = lr.async_get(hass).async_create(
         "Security", color="red", icon="mdi:shield", description="Locks and alarms"
     )
 
     await labels.ha_config_set_label(
-        name="Security", label_id=label.label_id, color="", icon="", description=""
+        label_id=label.label_id, color=blank, icon=blank, description=blank
     )
 
     stored = lr.async_get(hass).async_get_label(label.label_id)
@@ -78,11 +79,11 @@ async def test_label_update_with_empty_values_clears_them(
     assert (stored.color, stored.icon, stored.description) == (None, None, None)
 
 
-async def test_label_description_is_stored_as_written(
+async def test_label_description_is_trimmed_as_the_frontend_does(
     hass: HomeAssistant, labels: LabelTools
 ) -> None:
-    """Only a blank description clears it; any other one reaches Core with its
-    indentation and line breaks."""
+    """The frontend's label dialog sends the description trimmed; the line breaks
+    inside it stay."""
     label = lr.async_get(hass).async_create("Security")
 
     await labels.ha_config_set_label(
@@ -91,7 +92,52 @@ async def test_label_description_is_stored_as_written(
 
     stored = lr.async_get(hass).async_get_label(label.label_id)
     assert stored is not None
-    assert stored.description == "  Locks\n  Alarms\n"
+    assert stored.description == "Locks\n  Alarms"
+
+
+async def test_label_description_of_only_quotes_is_refused(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    """A model whose client cannot send an empty string sends two quotes; they are
+    refused instead of stored as the description."""
+    label = lr.async_get(hass).async_create("Security", description="Locks")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(label_id=label.label_id, description='""')
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    stored = lr.async_get(hass).async_get_label(label.label_id)
+    assert stored is not None
+    assert stored.description == "Locks"
+
+
+@pytest.mark.parametrize("blank", ["", " "])
+async def test_label_update_with_a_blank_name_is_refused(
+    hass: HomeAssistant, labels: LabelTools, blank: str
+) -> None:
+    """Core stores a blank name; the frontend dialog does not save one, and the
+    other fields' "blank clears it" must not blank the name."""
+    label = lr.async_get(hass).async_create("Security")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(label_id=label.label_id, name=blank)
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "safeguard" in error["error"]["message"]
+    stored = lr.async_get(hass).async_get_label(label.label_id)
+    assert stored is not None
+    assert stored.name == "Security"
+
+
+async def test_label_create_with_a_blank_name_is_refused(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    error = await rejected_call_body(labels.ha_config_set_label(name=" "))
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert not lr.async_get(hass).labels
 
 
 async def test_label_create_without_a_name_reports_cores_refusal(
@@ -104,7 +150,64 @@ async def test_label_create_without_a_name_reports_cores_refusal(
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "name" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_format"
+    suggestions = error["error"]["suggestions"]
+    assert any("name to create" in s and "label_id" in s for s in suggestions)
+    assert any("ha_config_get_label" in s for s in suggestions)
+
+
+async def test_label_create_and_rename_send_the_name_to_core(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    created = await labels.ha_config_set_label(name="Security", color="red")
+    label_id = created["label_id"]
+
+    await labels.ha_config_set_label(label_id=label_id, name="Alarm")
+
+    stored = lr.async_get(hass).async_get_label(label_id)
+    assert stored is not None
+    assert (stored.name, stored.color) == ("Alarm", "red")
+
+
+async def test_label_update_refused_by_core_does_not_suggest_creating(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    """A rename onto a taken name is an update refusal: the create hint
+    ("pass name to create") belongs to a create without a name only."""
+    registry = lr.async_get(hass)
+    registry.async_create("Alarm")
+    label = registry.async_create("Security")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(label_id=label.label_id, name="Alarm")
+    )
+
+    assert "already in use" in error["error"]["message"]
     assert "ha_config_get_label" in error["error"]["suggestion"]
+    assert "name to create" not in error["error"]["suggestion"]
+
+
+async def test_label_create_refused_for_a_taken_name_does_not_suggest_a_name(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    """The hint "pass name to create" is for a create that has no name."""
+    lr.async_get(hass).async_create("Security")
+
+    error = await rejected_call_body(labels.ha_config_set_label(name="Security"))
+
+    assert "already in use" in error["error"]["message"]
+    assert "name to create" not in error["error"]["suggestion"]
+
+
+async def test_label_update_without_a_name_refused_by_core_does_not_suggest_one(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    label = lr.async_get(hass).async_create("Security")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(label_id=label.label_id, color="notacolor")
+    )
+
+    assert "name to create" not in error["error"]["suggestion"]
 
 
 async def test_label_get_lists_what_carries_and_targets_the_label(
@@ -175,17 +278,18 @@ async def test_category_update_without_a_name_keeps_the_name(
     assert result["message"] == "Successfully updated category: Lighting"
 
 
-async def test_category_update_with_an_empty_icon_clears_it(
-    hass: HomeAssistant, categories: CategoryTools
+@pytest.mark.parametrize("blank", ["", " "])
+async def test_category_update_with_a_blank_icon_clears_it(
+    hass: HomeAssistant, categories: CategoryTools, blank: str
 ) -> None:
-    """An empty icon removes it from the category; before, the tool sent the
-    empty value on, which Core refuses for an icon."""
+    """A blank icon removes it from the category; before, the tool sent the
+    blank value on, which Core refuses for an icon."""
     category = cr.async_get(hass).async_create(
         scope="automation", name="Lighting", icon="mdi:lamp"
     )
 
     await categories.ha_config_set_category(
-        name="Lighting", scope="automation", category_id=category.category_id, icon=""
+        scope="automation", category_id=category.category_id, icon=blank
     )
 
     stored = cr.async_get(hass).async_get_category(
@@ -193,6 +297,40 @@ async def test_category_update_with_an_empty_icon_clears_it(
     )
     assert stored is not None
     assert stored.icon is None
+
+
+@pytest.mark.parametrize("blank", ["", " "])
+async def test_category_update_with_a_blank_name_is_refused(
+    hass: HomeAssistant, categories: CategoryTools, blank: str
+) -> None:
+    """Core stores a blank name; the frontend dialog does not save one, and the
+    icon's "blank clears it" must not blank the name."""
+    category = cr.async_get(hass).async_create(scope="automation", name="Lighting")
+
+    error = await rejected_call_body(
+        categories.ha_config_set_category(
+            scope="automation", category_id=category.category_id, name=blank
+        )
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "safeguard" in error["error"]["message"]
+    stored = cr.async_get(hass).async_get_category(
+        scope="automation", category_id=category.category_id
+    )
+    assert stored is not None
+    assert stored.name == "Lighting"
+
+
+async def test_category_create_with_a_blank_name_is_refused(
+    hass: HomeAssistant, categories: CategoryTools
+) -> None:
+    error = await rejected_call_body(
+        categories.ha_config_set_category(scope="automation", name=" ")
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert not cr.async_get(hass).categories.get("automation")
 
 
 async def test_category_update_of_an_unknown_id_is_not_found(
@@ -234,13 +372,54 @@ async def test_category_name_conflict_is_not_reported_as_not_found(
     assert "ha_config_get_category" in error["error"]["suggestion"]
 
 
+async def test_category_create_refused_for_a_taken_name_does_not_suggest_a_name(
+    hass: HomeAssistant, categories: CategoryTools
+) -> None:
+    cr.async_get(hass).async_create(scope="automation", name="Lighting")
+
+    error = await rejected_call_body(
+        categories.ha_config_set_category(name="Lighting", scope="automation")
+    )
+
+    assert "already in use" in error["error"]["message"]
+    assert "name to create" not in error["error"]["suggestion"]
+
+
 async def test_category_create_without_a_name_reports_cores_refusal(
     categories: CategoryTools,
 ) -> None:
     """A create without a name is refused with Core's own reason, as an input
     error the caller can fix."""
-    error = await rejected_call_body(categories.ha_config_set_category(scope="automation"))
+    error = await rejected_call_body(
+        categories.ha_config_set_category(scope="automation")
+    )
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "name" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_format"
+    suggestions = error["error"]["suggestions"]
+    assert any("name to create" in s and "category_id" in s for s in suggestions)
+
+
+async def test_label_remove_of_an_unknown_id_is_not_found(labels: LabelTools) -> None:
+    """Core answers an unknown id with the generic ``invalid_info`` code, so its
+    exact text is what makes the refusal a not-found."""
+    error = await rejected_call_body(labels.ha_config_remove_label(label_id="missing"))
+
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error["error"]["message"] == "Label not found: missing"
+    assert error["ha_error_code"] == "invalid_info"
+    assert "ha_config_get_label" in error["error"]["suggestion"]
+
+
+async def test_category_remove_of_an_unknown_id_is_not_found(
+    categories: CategoryTools,
+) -> None:
+    error = await rejected_call_body(
+        categories.ha_config_remove_category(scope="automation", category_id="missing")
+    )
+
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error["error"]["message"] == "Category not found: missing"
+    assert error["ha_error_code"] == "invalid_info"
+    assert "ha_config_get_category" in error["error"]["suggestion"]

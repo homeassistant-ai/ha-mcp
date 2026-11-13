@@ -25,6 +25,7 @@ from .helpers import (
     log_tool_usage,
     raise_core_refusal,
     raise_tool_error,
+    refuse_blank_name,
     register_tool_methods,
     validate_identifier_not_empty,
 )
@@ -243,6 +244,9 @@ class CategoryTools:
                     ],
                     context={"action": "set", "scope": scope, "name": name},
                 )
+            refuse_blank_name(
+                name, {"action": "set", "scope": scope, "category_id": category_id}
+            )
             action = "update" if category_id else "create"
 
             message: dict[str, Any] = {
@@ -285,13 +289,18 @@ class CategoryTools:
                         ],
                     )
                 )
+            suggestions = [
+                f"Use ha_config_get_category('{scope}') to see the existing categories and their IDs"
+            ]
+            if action == "create" and name is None:
+                suggestions.insert(
+                    0, "Pass name to create a category, or category_id to update one"
+                )
             raise_core_refusal(
                 f"Failed to {action} category",
                 result,
                 context=context,
-                suggestions=[
-                    f"Use ha_config_get_category('{scope}') to see the existing categories and their IDs",
-                ],
+                suggestions=suggestions,
             )
 
         except ToolError:
@@ -348,13 +357,17 @@ class CategoryTools:
         Removes the category from the category registry for the given scope.
         This will also remove the category assignment from all entities in that scope.
 
+        To move one entity to another category or out of its category and keep the
+        category, use ha_set_entity(categories=...) instead.
+
         EXAMPLES:
         - Delete category: ha_config_remove_category("automation", "my_category_id")
 
         Use ha_config_get_category() to find category IDs.
 
         **WARNING:** Deleting a category will remove it from all assigned entities.
-        This action cannot be undone.
+        The auto-backup of this call restores the category itself, under a new id,
+        not the entities that had it.
         """
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.
@@ -381,26 +394,23 @@ class CategoryTools:
                     "scope": scope,
                     "message": f"Successfully deleted category: {category_id}",
                 }
-            else:
-                error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str or "doesn't exist" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Category not found: {category_id}",
-                            context={"category_id": category_id, "scope": scope},
-                            suggestions=[
-                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
-                            ],
-                        )
-                    )
+            context = {"category_id": category_id, "scope": scope}
+            # Same exact-text test as the set tool: ``invalid_info`` is generic.
+            if (
+                core_error_message(result.get("error", ""))
+                == "Category ID doesn't exist"
+            ):
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to delete category: {result.get('error', 'Unknown error')}",
-                        context={"category_id": category_id, "scope": scope},
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Category not found: {category_id}",
+                        context={**context, "ha_error_code": result.get("error_code")},
+                        suggestions=[
+                            f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                        ],
                     )
                 )
+            raise_core_refusal("Failed to delete category", result, context=context)
 
         except ToolError:
             raise
