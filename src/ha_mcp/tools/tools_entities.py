@@ -15,8 +15,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
     HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -29,7 +29,6 @@ from ..utils.registry_update_lock import registry_update_locks
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
-    COMPONENT_INSTALL_HINT,
     COMPONENT_VIA_HACS,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_ENRICH_FULL_NAME,
@@ -84,7 +83,6 @@ from .entity_update_fields import (
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
-    core_error_message,
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
@@ -126,8 +124,8 @@ async def fetch_entity_enrichment_via_component(
     ``area_id`` / label *ids*) and, with ``entity_enrich_full_name``, the name
     Home Assistant shows. ``None`` when the component does not advertise the
     command or no longer knows it (``unknown_command`` → invalidate the cached
-    caps): the rows then stay as Core serves them. Any other failure of the
-    advertised command raises.
+    caps), or when the command fails, gets no answer or loses its connection
+    (logged): the rows then stay as Core serves them.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
@@ -139,21 +137,22 @@ async def fetch_entity_enrichment_via_component(
         and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
     ):
         return None
-    ws = await get_websocket_client(
-        url=client.base_url,
-        token=client.token,
-        verify_ssl=getattr(client, "verify_ssl", None),
-    )
     merged: dict[str, dict[str, Any]] = {}
     try:
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE):
             chunk = entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
             merged.update(raw["result"]["entities"])
-    except HomeAssistantCommandError as exc:
-        if not is_unknown_command(exc):
-            raise
-        invalidate_caps(client)
+    except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
     return merged
 
@@ -1839,8 +1838,8 @@ class EntityTools:
 
         Returns a warning whenever the entries come without some of them: no
         component answered (install it), the component is too old for the
-        command or ``full_name`` (update it), it could not be asked, or the
-        advertised command answers with an error or times out.
+        command, its command failed, or it predates ``full_name`` (update it),
+        or it could not be asked.
         """
         found_ids = [e["entity_id"] for e in entity_entries]
         if not found_ids:
@@ -1851,15 +1850,7 @@ class EntityTools:
             caps = await get_component_caps(self._client, strict=True)
         except ComponentDiscoveryError as exc:
             return component_unasked_warning(exc, _WITHOUT_ENRICHMENT)
-        try:
-            enriched = await fetch_entity_enrichment_via_component(
-                self._client, found_ids
-            )
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            return (
-                f"{WS_ENTITY_ENRICH} failed: {core_error_message(exc)}; "
-                f"{_WITHOUT_ENRICHMENT}. {COMPONENT_INSTALL_HINT}"
-            )
+        enriched = await fetch_entity_enrichment_via_component(self._client, found_ids)
         if enriched is None:
             return component_unusable_warning(caps, _WITHOUT_ENRICHMENT)
         with_full_name = await component_serves(self._client, ENTITY_ENRICH_FULL_NAME)

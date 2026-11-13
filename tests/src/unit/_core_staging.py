@@ -2,9 +2,7 @@
 
 ``served_by`` registers a command again with another handler, so Core serves
 it in place of the component's. ``never_answers`` takes the command and sends
-nothing back, so the client's command timeout ends the wait;
-``revokes_the_token`` revokes the caller's token, so Core closes the
-connection mid-command.
+nothing back, so the client's command timeout ends the wait.
 """
 
 from __future__ import annotations
@@ -23,19 +21,6 @@ def never_answers(
     msg: dict[str, Any],
 ) -> None:
     """Takes the command and sends nothing back."""
-
-
-@callback
-def revokes_the_token(
-    hass: HomeAssistant,
-    connection: core_websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """Revokes the caller's token, so Core closes the connection mid-command."""
-    assert connection.refresh_token_id is not None
-    token = hass.auth.async_get_refresh_token(connection.refresh_token_id)
-    assert token is not None
-    hass.auth.async_remove_refresh_token(token)
 
 
 def served_by(

@@ -8,18 +8,17 @@ Writes go through ``ha_set_entity`` (``expose_to``).
 """
 
 import asyncio
+import logging
 from collections import Counter
 from typing import Any
 
 from ..client.rest_client import (
+    _NO_ANSWER_ERRORS,
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
     HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
-from ..errors import ErrorCode, create_error_response
 from .component_api import (
-    COMPONENT_INSTALL_HINT,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ComponentDiscoveryError,
     component_supports,
@@ -34,8 +33,9 @@ from .helpers import (
     core_error_message,
     get_entity_state_or_none,
     raise_core_refusal,
-    raise_tool_error,
 )
+
+logger = logging.getLogger(__name__)
 
 # The ha_mcp_tools/exposure WS command: Core's expose_entity/list map PLUS a
 # sibling entity_info enrichment (names/areas). Named once so the routing helper
@@ -54,10 +54,9 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     True}}, entity_info: {id: {...}}}`` — where ``exposed_entities`` holds the
     same entries as Core's ``homeassistant/expose_entity/list`` map. ``None``
     when the component does not advertise the command, or no longer knows it
-    (``unknown_command`` → invalidate the cached caps). Any other failure of
-    the advertised command is the tool's error, naming the component, except
-    a dropped connection, which ends the call as ``CONNECTION_FAILED`` and
-    names none.
+    (``unknown_command`` → invalidate the cached caps), or when the command
+    fails, gets no answer or loses its connection (logged): the caller reads
+    Core's list in each case.
     """
     caps = await get_component_caps(client)
     if not (
@@ -65,23 +64,18 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
         and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
     ):
         return None
-    ws = await get_websocket_client(
-        url=client.base_url,
-        token=client.token,
-        verify_ssl=getattr(client, "verify_ssl", None),
-    )
     try:
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_EXPOSURE)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if not is_unknown_command(exc):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"{WS_EXPOSURE} failed: {core_error_message(exc)}",
-                    suggestions=[COMPONENT_INSTALL_HINT],
-                )
-            )
-        invalidate_caps(client)
+    except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("%s failed; read Core's list: %r", WS_EXPOSURE, exc)
         return None
     result: dict[str, Any] = raw["result"]
     return result
