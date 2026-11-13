@@ -197,7 +197,6 @@ module = [
     "tests.src.unit.test_backup_diff",
     "tests.src.unit.test_backup_integrations",
     "tests.src.unit.test_backup_manager",
-    "tests.src.unit.test_backup_manager_review",
     "tests.src.unit.test_backup_restore_consumers",
     "tests.src.unit.test_backup_snapshot",
     "tests.src.unit.test_backup_snapshot_restore",

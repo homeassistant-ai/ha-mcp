@@ -1,11 +1,9 @@
 """Regressions for Template capture trust, write coordination and identity."""
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -18,41 +16,18 @@ from ha_mcp.tools import auto_backup, backup
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._held_command import held_command
+from ._template_backup_core import (
+    degrade_secret_scrub,
+    legacy_snapshot,
+    real_snapshot,
+)
+from ._template_backup_core import manager as manager
+from ._template_backup_core import settings as settings
+from ._template_backup_core import template_entry as template_entry
 from ._template_helper_core import (
-    create_template_sensor,
     set_template_state,
     state_template,
 )
-
-
-@pytest.fixture
-def settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> config.Settings:
-    """The server's real settings, with auto-backup on and its own directory."""
-    configured = config.get_global_settings()
-    for name, value in {
-        "enable_auto_backup": True,
-        "enable_snapshot_actions": True,
-        "backup_read_only": False,
-        "read_only_mode": False,
-        "enable_snapshot_delete": False,
-        "auto_backup_throttle_minutes": 30,
-        "auto_backup_retain_per_entity": 5,
-        "auto_backup_dir": str(tmp_path / "backups"),
-    }.items():
-        monkeypatch.setattr(configured, name, value)
-    return configured
-
-
-@pytest.fixture
-async def template_entry(hass: HomeAssistant) -> ConfigEntry:
-    return await create_template_sensor(hass, "saved")
-
-
-@pytest.fixture
-def manager(
-    component_core_client: HomeAssistantClient, settings: config.Settings
-) -> bm.BackupManager:
-    return bm.get_backup_manager(component_core_client, settings)
 
 
 async def _until(predicate: Any) -> None:
@@ -70,36 +45,6 @@ def _rename(
     entity_registry.async_update_entity(row.entity_id, new_entity_id=new_entity_id)
 
 
-def _degrade_secret_scrub(hass: HomeAssistant) -> None:
-    """A secrets.yaml that is present but cannot be parsed."""
-    Path(hass.config.path("secrets.yaml")).write_text("key: [unclosed\n")
-
-
-async def _real_snapshot(manager: bm.BackupManager, entry: ConfigEntry) -> Path:
-    path = await manager.maybe_snapshot("helper_template", entry.entry_id, force=True)
-    assert path is not None
-    return path
-
-
-def _legacy(
-    manager: bm.BackupManager,
-    path: Path,
-    entity_id: str | None,
-    *,
-    entry_id: str | None = None,
-    emptied: bool = False,
-) -> Path:
-    """Rewrite a real snapshot's identity the way an older release stored it."""
-    data = manager.read_snapshot(path.name)
-    data["entity_id"] = entity_id
-    if entry_id is not None:
-        data["config"]["entry_id"] = entry_id
-    if emptied:
-        data["config"] = {}
-    path.write_text(yaml.safe_dump(data))
-    return path
-
-
 @pytest.mark.parametrize("mandatory", [False, True])
 async def test_degraded_scrub_never_writes_snapshot(
     hass: HomeAssistant,
@@ -107,7 +52,7 @@ async def test_degraded_scrub_never_writes_snapshot(
     template_entry: ConfigEntry,
     mandatory: bool,
 ) -> None:
-    _degrade_secret_scrub(hass)
+    degrade_secret_scrub(hass)
     if mandatory:
         with pytest.raises(bm.MandatoryBackupError, match="secret scrub"):
             await manager.maybe_snapshot(
@@ -126,9 +71,9 @@ async def test_degraded_safety_capture_blocks_restore(
     manager: bm.BackupManager,
     template_entry: ConfigEntry,
 ) -> None:
-    source = await _real_snapshot(manager, template_entry)
+    source = await real_snapshot(manager, template_entry)
     await set_template_state(hass, template_entry, "changed")
-    _degrade_secret_scrub(hass)
+    degrade_secret_scrub(hass)
 
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(source.name)
@@ -236,9 +181,9 @@ async def test_invalid_legacy_identity_is_not_deleted(
     identity: str | None,
     emptied: bool,
 ) -> None:
-    path = _legacy(
+    path = legacy_snapshot(
         manager,
-        await _real_snapshot(manager, template_entry),
+        await real_snapshot(manager, template_entry),
         identity,
         emptied=emptied,
     )
@@ -254,13 +199,13 @@ async def test_legacy_alias_history_lists_and_deletes_by_stable_identity(
     manager: bm.BackupManager,
     template_entry: ConfigEntry,
 ) -> None:
-    old = _legacy(
-        manager, await _real_snapshot(manager, template_entry), "sensor.reused"
+    old = legacy_snapshot(
+        manager, await real_snapshot(manager, template_entry), "sensor.reused"
     )
-    new = await _real_snapshot(manager, template_entry)
-    other = _legacy(
+    new = await real_snapshot(manager, template_entry)
+    other = legacy_snapshot(
         manager,
-        await _real_snapshot(manager, template_entry),
+        await real_snapshot(manager, template_entry),
         "sensor.reused",
         entry_id="other-entry",
     )
@@ -285,12 +230,12 @@ async def test_legacy_alias_history_rotates_with_canonical_captures(
     settings: config.Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    old = _legacy(
-        manager, await _real_snapshot(manager, template_entry), "sensor.reused"
+    old = legacy_snapshot(
+        manager, await real_snapshot(manager, template_entry), "sensor.reused"
     )
-    other = _legacy(
+    other = legacy_snapshot(
         manager,
-        await _real_snapshot(manager, template_entry),
+        await real_snapshot(manager, template_entry),
         "sensor.reused",
         entry_id="other-entry",
     )
@@ -353,7 +298,7 @@ async def test_helper_edit_and_restore_serialize_capture_through_mutation(
     monkeypatch.setattr(settings, "enable_auto_backup", enabled)
     manager = bm.get_backup_manager(component_core_client, settings)
     monkeypatch.setattr(auto_backup, "get_backup_manager", lambda *_: manager)
-    source = await _real_snapshot(manager, template_entry)
+    source = await real_snapshot(manager, template_entry)
     await set_template_state(hass, template_entry, "initial")
     entered, release = asyncio.Event(), asyncio.Event()
 

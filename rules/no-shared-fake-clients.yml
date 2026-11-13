@@ -36,7 +36,6 @@ ignores:
   - "tests/src/unit/test_action_discriminator.py"
   - "tests/src/unit/test_automation_write_target.py"
   - "tests/src/unit/test_backup_dashboards.py"
-  - "tests/src/unit/test_backup_manager_review.py"
   - "tests/src/unit/test_backup_restore_consumers.py"
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"
