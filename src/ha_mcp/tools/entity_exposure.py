@@ -101,6 +101,7 @@ async def read_exposure(
     it could not be asked (``_fetch_exposure_via_component``).
     """
     # Strict, so a refused or failed probe is not taken for no component.
+    warning: str | None
     try:
         caps = await get_component_caps(client, strict=True)
     except ComponentDiscoveryError as exc:
