@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -218,3 +220,284 @@ class TestWpeSupervisorDiscovery:
         assert target.addon_credential == EngineCredential(
             url="http://homeassistant:8123", token="secret"
         )
+
+
+class TestResolveEngine:
+    async def test_explicit_url_strips_trailing_slash(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://engine:10000/"
+            ),
+        )
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        assert target.engine_kind is None
+        assert target.engine_version is None
+        # An explicitly configured engine has no discoverable credential.
+        assert target.addon_credential is None
+
+    async def test_stdio_no_token_raises(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(dashboard_screenshot_engine_url=""),
+        )
+        with pytest.raises(ToolError):
+            await provision.resolve_engine()
+
+    async def test_explicit_url_picks_up_addon_credential_in_addon_mode(
+        self, monkeypatch: Any
+    ) -> None:
+        # An explicit engine URL on HA OS must not disable the Puppet theme
+        # guard: the add-on credential is still discovered best-effort.
+        from ha_mcp.dashboard_screenshot import provision
+        from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://engine:10000"
+            ),
+        )
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="def-puppet")
+                },
+            },
+        )
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        assert target.addon_credential == EngineCredential(
+            url="http://homeassistant:8123", token="secret"
+        )
+
+    async def test_explicit_url_credential_discovery_failure_is_silent(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import provision
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "sup")
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(
+                dashboard_screenshot_engine_url="http://engine:10000"
+            ),
+        )
+        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        target = await provision.resolve_engine()
+        assert target.url == "http://engine:10000"
+        assert target.addon_credential is None
+
+
+class _FakeSupResponse:
+    def __init__(self, payload: Any) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return self._payload
+
+
+class _FakeSupClient:
+    """Async-context Supervisor httpx stand-in driven by a path->payload map."""
+
+    def __init__(self, routes: dict[str, Any]) -> None:
+        self._routes = routes
+
+    async def __aenter__(self) -> _FakeSupClient:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+    async def get(self, path: str) -> _FakeSupResponse:
+        val = self._routes[path]
+        if isinstance(val, Exception):
+            raise val
+        return _FakeSupResponse(val)
+
+
+def _patch_supervisor(monkeypatch: Any, routes: dict[str, Any]) -> None:
+    import ha_mcp.client.supervisor_client as sup_mod
+
+    monkeypatch.setattr(
+        sup_mod,
+        "make_supervisor_httpx_client",
+        lambda *_a, **_kw: _FakeSupClient(routes),
+    )
+
+
+class TestDiscoverEngineViaSupervisor:
+    async def test_not_installed_raises_resource_not_found(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {"/addons": {"data": {"addons": [{"slug": "core_ssh"}, {"slug": "a_db"}]}}},
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_via_supervisor()
+        assert "not installed" in str(exc.value).lower()
+
+    async def test_prefers_started_match(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {
+                    "data": {
+                        "addons": [
+                            {"slug": "abc_puppet"},  # stopped
+                            {"slug": "def_puppet"},  # started
+                        ]
+                    }
+                },
+                "/addons/abc_puppet/info": {"data": _puppet_info(state="stopped")},
+                "/addons/def_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="def-puppet")
+                },
+            },
+        )
+        target = await provision._discover_engine_via_supervisor()
+        assert target.url == "http://def-puppet:10000"
+        assert target.engine_kind == "puppet"
+        assert target.engine_version == "2.4.9"
+        # The engine user's credential rides along so the theme guard can
+        # authenticate without a second discovery round-trip.
+        from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
+
+        assert target.addon_credential == EngineCredential(
+            url="http://homeassistant:8123", token="secret"
+        )
+
+    async def test_multiple_verified_started_matches_fail_closed(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {
+                    "data": {
+                        "addons": [
+                            {"slug": "abc_puppet"},
+                            {"slug": "def_puppet"},
+                        ]
+                    }
+                },
+                "/addons/abc_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="abc-puppet")
+                },
+                "/addons/def_puppet/info": {
+                    "data": _puppet_info(state="started", hostname="def-puppet")
+                },
+            },
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_via_supervisor()
+
+        assert "ambiguous" in str(exc_info.value)
+
+    async def test_started_without_hostname_raises(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": _puppet_info(state="started")},
+            },
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_via_supervisor()
+        assert "hostname" in str(exc.value).lower()
+
+    async def test_installed_but_not_started_raises(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": _puppet_info(state="stopped")},
+            },
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_via_supervisor()
+        assert "not started" in str(exc.value).lower()
+
+    async def test_supervisor_http_error_raises_connection_failed(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_via_supervisor()
+        assert "supervisor" in str(exc.value).lower()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            {"data": None},
+            {"data": {"addons": None}},
+            {"data": {"addons": [None]}},
+        ],
+    )
+    async def test_malformed_addon_listing_raises_structured_error(
+        self, monkeypatch: Any, payload: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(monkeypatch, {"/addons": payload})
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_via_supervisor()
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert "Supervisor" in error["error"]["message"]
+
+    async def test_malformed_addon_info_raises_structured_error(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": None},
+            },
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await provision._discover_engine_via_supervisor()
+
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "CONNECTION_FAILED"
+        assert "Supervisor" in error["error"]["message"]
