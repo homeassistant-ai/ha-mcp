@@ -45,12 +45,6 @@ def _server_helper_flows() -> None:
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """A config directory of the test's own, for its ``secrets.yaml``."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 def custom_helper_integration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
 ) -> None:

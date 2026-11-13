@@ -562,10 +562,17 @@ jobs:
       # The runner's home starts without ~/.ha-mcp. A unit test that writes
       # there or leaves a settings sidecar running bypassed the isolation in
       # tests/src/unit/conftest.py and would do the same on a developer machine.
+      # tests/testing_config is Core's shared config directory, which the
+      # conftest's hass_config_dir replaces with a temporary one.
       run: |
         if [ -e ~/.ha-mcp ]; then
           find ~/.ha-mcp
           echo "::error::Unit tests wrote to ~/.ha-mcp"
+          exit 1
+        fi
+        if [ -e tests/testing_config ]; then
+          find tests/testing_config
+          echo "::error::Unit tests wrote to Core's shared tests/testing_config"
           exit 1
         fi
         # procps (pgrep) is not in the slim image; read /proc directly.
@@ -582,6 +589,14 @@ jobs:
       run: >-
         uv run pytest tests/addon/ -n logical --tb=short -v
         --ignore=tests/addon/test_addon_startup.py
+
+    - name: Check app tests left no local state
+      run: |
+        if [ -e tests/testing_config ]; then
+          find tests/testing_config
+          echo "::error::App tests wrote to Core's shared tests/testing_config"
+          exit 1
+        fi
 
   # The unit and app (add-on) suites against the current beta Core, the same
   # beta e2e-beta-tests.yml resolves, but on every pull request: these suites

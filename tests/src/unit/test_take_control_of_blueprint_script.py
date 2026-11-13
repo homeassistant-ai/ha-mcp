@@ -51,12 +51,6 @@ _BLUEPRINT_SCRIPT: dict[str, Any] = {
 }
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core reads scripts and blueprints from here."""
-    return hass_tmp_config_dir
-
-
 async def _scripts(hass: HomeAssistant, script: dict[str, Any]) -> None:
     await write_config_files(
         hass,

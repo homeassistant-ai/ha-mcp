@@ -31,12 +31,6 @@ from ._tool_errors import error_of
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """The template flow copies Core's template blueprints into it."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def tools(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> HelperConfigTools:

@@ -44,12 +44,6 @@ _DESCRIPTION_WARNING = "Some Core validators cannot be described"
 _SWITCH = {"entity": {"name": "Hall"}, "knx": {"ga_switch": {"write": "1/2/3"}}}
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """KNX keeps its telegram database in the config directory; this one is the test's."""
-    return hass_tmp_config_dir
-
-
 async def _add_entry(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, domain: str = "knx"
 ) -> MockConfigEntry:

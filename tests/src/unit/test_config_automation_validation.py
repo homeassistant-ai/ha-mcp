@@ -26,11 +26,6 @@ _TRIGGER = {"trigger": "state", "entity_id": "input_boolean.guest_mode", "to": "
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def tools(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,

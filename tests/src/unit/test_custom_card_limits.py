@@ -35,12 +35,6 @@ globalThis.__linkedom = {
 """
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """The linkedom cache lives in the config dir; each test brings its own."""
-    return hass_tmp_config_dir
-
-
 @pytest.mark.parametrize("module", [False, True])
 def test_all_quickjs_context_operations_use_the_creating_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: bool

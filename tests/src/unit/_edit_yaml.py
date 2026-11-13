@@ -1,7 +1,7 @@
 """Call the component's ``edit_yaml_config`` service on a real ``hass``.
 
-The YAML-editing tests point Core's config directory at ``tmp_path`` (each
-overrides ``hass_config_dir``) and call the service the way ha-mcp does.
+The YAML-editing tests run with Core's config directory at ``tmp_path`` (the
+conftest's ``hass_config_dir``) and call the service the way ha-mcp does.
 """
 
 from __future__ import annotations

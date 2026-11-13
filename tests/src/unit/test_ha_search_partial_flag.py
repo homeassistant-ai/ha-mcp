@@ -45,12 +45,6 @@ REGISTRY_GET = "config/entity_registry/get"
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """The config views read automations.yaml and scripts.yaml from here."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def config_views(hass: HomeAssistant) -> None:
     assert await async_setup_component(hass, "config", {})
 

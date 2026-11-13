@@ -34,12 +34,6 @@ from ._tool_errors import error_of
 _WRITE_MODES = ("config", "python_transform")
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's scene config API writes ``scenes.yaml`` here."""
-    return hass_tmp_config_dir
-
-
 async def _scene(hass: HomeAssistant, entities: dict[str, Any]) -> None:
     """``movie_night`` (named "Film Night", so ``scene.film_night``) in scenes.yaml."""
     assert await async_setup_component(

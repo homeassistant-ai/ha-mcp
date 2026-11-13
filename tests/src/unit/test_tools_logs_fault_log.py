@@ -54,12 +54,6 @@ _TWO_CRASHES = "\n".join(_SEGV_BLOCK + _ABORT_BLOCK) + "\n"
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory, where the fault log lives, is this test's own."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def tools_entry(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> MockConfigEntry:

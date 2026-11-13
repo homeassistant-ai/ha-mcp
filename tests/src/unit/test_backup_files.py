@@ -28,12 +28,6 @@ CRLF = "a: 1\r\nb: 2\r\n"
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 def crlf_files(hass_config_dir: str) -> None:
     """A stylesheet and ``configuration.yaml`` saved with CRLF line endings."""
     for path in ("www/a.css", "configuration.yaml"):

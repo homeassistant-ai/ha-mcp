@@ -33,13 +33,6 @@ from ._template_helper_core import (
 DOMAIN = "helper_template"
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``: Template writes
-    its blueprints there."""
-    return hass_tmp_config_dir
-
-
 def _hold_first_write(
     monkeypatch: pytest.MonkeyPatch, directory: Path, *, fails: bool
 ) -> tuple[asyncio.Event, asyncio.Event, threading.Event]:

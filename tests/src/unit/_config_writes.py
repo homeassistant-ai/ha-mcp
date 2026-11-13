@@ -1,8 +1,8 @@
 """Automation and script writes through the tools, on a real ``hass``.
 
 The tools write to Core's own config views, which keep automations.yaml and
-scripts.yaml in Core's config directory: a test file that uses these overrides
-``hass_config_dir`` so the files land in its own temporary directory.
+scripts.yaml in Core's config directory, which the conftest's
+``hass_config_dir`` makes a temporary directory of each test's own.
 """
 
 from __future__ import annotations

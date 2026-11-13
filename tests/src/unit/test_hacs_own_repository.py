@@ -86,12 +86,6 @@ def _owned(directory: str, owner: str) -> MarketplaceError:
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """The Marketplace installs into the configuration directory."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def socket(core_client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
     return await pooled_socket(core_client)
 

@@ -68,12 +68,6 @@ def _catalog(catalog_path: str) -> dict[str, Any]:
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory, whose configuration a restart checks first."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def flows(hass: HomeAssistant) -> RepairsFlowManager:
     """Core's repairs flow manager, which starts and answers a fix flow.
 
