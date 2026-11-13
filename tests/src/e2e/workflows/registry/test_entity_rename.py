@@ -537,7 +537,7 @@ class TestRenameEntityWithDevice:
 
         assert rename_data.get("success"), f"Failed to rename: {rename_data}"
 
-        logger.info(f"Rename result: {rename_data.get('message')}")
+        logger.info(f"Rename result: {rename_data.get('updates')}")
 
         # 3. CLEANUP
         delete_data = await safe_call_tool(

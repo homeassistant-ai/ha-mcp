@@ -568,6 +568,7 @@ class TestEntityManagement:
         assert data.get("entity_entries") == [], (
             f"Expected empty entity_entries: {data}"
         )
+        assert "message" not in data, f"Unexpected message next to count: {data}"
 
         logger.info("Empty list handling verified")
 

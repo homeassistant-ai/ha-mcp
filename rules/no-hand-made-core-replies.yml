@@ -218,7 +218,6 @@ ignores:
   - "tests/src/unit/test_tools_utility_log_order.py"
   - "tests/src/unit/test_tools_utility_logbook_transports.py"
   - "tests/src/unit/test_tools_utility_supervisor_logs.py"
-  - "tests/src/unit/test_tools_voice_assistant.py"
   - "tests/src/unit/test_updates_repairs.py"
   - "tests/src/unit/test_util_helpers.py"
   - "tests/src/unit/test_wait_helpers.py"

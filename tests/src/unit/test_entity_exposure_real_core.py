@@ -1,7 +1,8 @@
-"""ha_set_entity's exposure writes and the reads of Core's exposure map on a real ``hass``.
+"""ha_set_entity's exposure writes and the reads of Core's exposure map on a
+real ``hass``.
 
-Core judges every assistant name and entity id; the tests check what the tools
-send it and what they return from its answers.
+Core judges every assistant name; the tests check what the tools send it and
+what they return from its answers.
 """
 
 from __future__ import annotations
@@ -29,12 +30,24 @@ from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 from ._entity_registry_core import assert_cores_refusal as assert_cores_refusal
 from ._entity_registry_core import core_client as core_client
-from ._entity_registry_core import desk as desk
 from ._entity_registry_core import device_entity as device_entity
-from ._entity_registry_core import expose_writes as expose_writes
 from ._entity_registry_core import lamp as lamp
 from ._entity_registry_core import sent_types as sent_types
 from ._tool_errors import error_of
+
+
+@pytest.fixture
+def desk(hass: HomeAssistant) -> str:
+    """A second light entry, for the bulk writes."""
+    return er.async_get(hass).async_get_or_create("light", "demo", "desk").entity_id
+
+
+def expose_writes(sent: AsyncMock) -> list[dict[str, Any]]:
+    return [
+        call.args[0]
+        for call in sent.call_args_list
+        if call.args[0]["type"] == "homeassistant/expose_entity"
+    ]
 
 
 async def test_an_unknown_assistant_is_refused_before_any_write(
@@ -117,17 +130,6 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
     assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
-async def test_a_mixed_case_list_read_finds_the_entry(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    lamp: str,
-) -> None:
-    result = await EntityTools(core_client).ha_get_entity(entity_id=["Light.My_Lamp"])
-
-    [entry] = result["entity_entries"]
-    assert entry["entity_id"] == lamp
-
-
 async def test_expose_new_entities_writes_cores_flag(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
@@ -143,29 +145,6 @@ async def test_expose_new_entities_writes_cores_flag(
     assert store.async_get_expose_new_entities("conversation") is (not before)
     assert result["expose_new_entities"] == {"conversation": not before}
     assert result["previous_expose_new_entities"] == {"conversation": before}
-
-
-async def test_entity_id_parts_are_cores_settings(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    lamp: str,
-) -> None:
-    tools = EntityTools(core_client)
-    registry = er.async_get(hass)
-
-    written = await tools.ha_set_entity(entity_id_parts=["device", "entity"])
-    assert registry.settings.entity_id_parts == ("device", "entity")
-    assert written["settings"] == {"entity_id_parts": ["device", "entity"]}
-    assert written["previous_settings"] == {"entity_id_parts": None}
-
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_set_entity(entity_id_parts=["entity"])
-    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert_cores_refusal(exc_info, "invalid_format")
-    assert registry.settings.entity_id_parts == ("device", "entity")
-
-    await tools.ha_set_entity(entity_id_parts=[])
-    assert registry.settings.entity_id_parts is None
 
 
 async def test_expose_to_on_an_entity_without_registry_entry(
@@ -451,22 +430,6 @@ async def test_bulk_labels_and_expose_to_write_each_entry_then_expose_once(
         assert options["conversation"]["should_expose"] is True
 
 
-async def test_a_bulk_read_reports_an_unknown_id_as_not_found(
-    core_client: HomeAssistantClient, lamp: str
-) -> None:
-    result = await EntityTools(core_client).ha_get_entity(
-        entity_id=[lamp, "light.missing"]
-    )
-
-    assert result["success"] is True
-    assert result["count"] == 1
-    assert [e["entity_id"] for e in result["entity_entries"]] == [lamp]
-    assert result["errors"] == [
-        {"entity_id": "light.missing", "error": "Entity not found"}
-    ]
-    assert "suggestions" in result
-
-
 @pytest.mark.parametrize(
     ("expose_to", "already_set"),
     [
@@ -554,3 +517,19 @@ async def test_every_write_of_a_set_holds_the_entity_lock(
 
     assert {name for name, _ in held} == {name for _, name in writes}
     assert all(locked for _, locked in held), held
+
+
+async def test_a_rename_with_expose_to_exposes_the_new_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    lamp: str,
+) -> None:
+    """The old ID has no entry after the rename; an exposure written to it
+    would land in Core's store for entities without one."""
+    await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, new_entity_id="light.porch", expose_to={"cloud.alexa": True}
+    )
+
+    assert core_exposed.async_get_assistant_settings(hass, "cloud.alexa") == {
+        "light.porch": {"should_expose": True}
+    }

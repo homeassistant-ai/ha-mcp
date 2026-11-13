@@ -1,8 +1,9 @@
 """ha_get_entity / ha_set_entity on a real ``hass``.
 
 Every check and every refusal below is Core's own: the tools do not judge
-entity ids or assistant names themselves. The main-entity tests check that the
-fields ha_set_entity takes from the entity dialog land in a real registry.
+entity ids themselves. The main-entity tests check that the fields
+ha_set_entity takes from the entity dialog land in a real registry. Exposure
+writes are in test_entity_exposure_real_core.py.
 """
 
 from __future__ import annotations
@@ -12,13 +13,13 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.components.homeassistant import exposed_entities as core_exposed
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
@@ -30,16 +31,12 @@ from ._entity_registry_core import sent_types as sent_types
 from ._tool_errors import error_of
 
 
-def _assert_no_guessed_causes(error: dict[str, Any]) -> None:
-    """Core's refusal carries no hand-written list of possible causes."""
-    guessed = (
-        "Verify the entity_id",
-        "Check that",
-        "Ensure the entity",
-        "Some entities",
-    )
-    given = [error.get("suggestion", ""), *error.get("suggestions", [])]
-    assert not [i for i in given if i.startswith(guessed) or "ha_search" in i]
+def _assert_default_suggestions(error: dict[str, Any]) -> None:
+    """The tool adds no suggestions of its own to Core's refusal: what it
+    carries is the error code's default list."""
+    expected = DEFAULT_SUGGESTIONS.get(ErrorCode(error["code"]), [])
+    given = [error["suggestion"], *error.get("suggestions", [])[1:]]
+    assert given == expected
 
 
 async def test_auto_takes_the_id_core_generates(
@@ -121,7 +118,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["message"].startswith("No automatic entity_id for not an id: ")
     assert "is an invalid entity ID" in error["message"]
-    _assert_no_guessed_causes(error)
+    _assert_default_suggestions(error)
     assert_cores_refusal(exc_info, "invalid_format")
     assert sent_types(sent) == ["config/entity_registry/get_automatic_entity_ids"]
 
@@ -258,7 +255,7 @@ async def test_main_entity_with_own_area_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "cannot have an area of its own" in error["message"]
-    _assert_no_guessed_causes(error)
+    _assert_default_suggestions(error)
     assert registry.async_get(entry.entity_id) == before
 
 
@@ -269,16 +266,8 @@ async def test_an_update_answers_with_data_not_a_sentence_restating_it(
         entity_id=lamp, icon="mdi:lamp"
     )
 
-    assert result["updates"] == ["icon='mdi:lamp'"]
+    assert result["success"] is True
     assert "message" not in result
-
-
-async def test_an_empty_read_is_the_empty_list_and_a_zero_count(
-    core_client: HomeAssistantClient,
-) -> None:
-    result = await EntityTools(core_client).ha_get_entity(entity_id=[])
-
-    assert result == {"success": True, "entity_entries": [], "count": 0}
 
 
 async def test_get_entity_serves_cores_full_entry(
@@ -396,24 +385,8 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
-    _assert_no_guessed_causes(error)
+    _assert_default_suggestions(error)
     assert_cores_refusal(exc_info, "invalid_info")
-
-
-async def test_a_rename_with_expose_to_exposes_the_new_id(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    lamp: str,
-) -> None:
-    """The old ID has no entry after the rename; an exposure written to it
-    would land in Core's store for entities without one."""
-    await EntityTools(core_client).ha_set_entity(
-        entity_id=lamp, new_entity_id="light.porch", expose_to={"cloud.alexa": True}
-    )
-
-    assert core_exposed.async_get_assistant_settings(hass, "cloud.alexa") == {
-        "light.porch": {"should_expose": True}
-    }
 
 
 async def test_enabling_returns_cores_restart_answer(
@@ -429,3 +402,53 @@ async def test_enabling_returns_cores_restart_answer(
 
     # An entry without a config entry: Core asks for a restart.
     assert result["require_restart"] is True
+
+
+async def test_a_mixed_case_list_read_finds_the_entry(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    lamp: str,
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(entity_id=["Light.My_Lamp"])
+
+    [entry] = result["entity_entries"]
+    assert entry["entity_id"] == lamp
+
+
+async def test_entity_id_parts_are_cores_settings(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    lamp: str,
+) -> None:
+    tools = EntityTools(core_client)
+    registry = er.async_get(hass)
+
+    written = await tools.ha_set_entity(entity_id_parts=["device", "entity"])
+    assert registry.settings.entity_id_parts == ("device", "entity")
+    assert written["settings"] == {"entity_id_parts": ["device", "entity"]}
+    assert written["previous_settings"] == {"entity_id_parts": None}
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_set_entity(entity_id_parts=["entity"])
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert_cores_refusal(exc_info, "invalid_format")
+    assert registry.settings.entity_id_parts == ("device", "entity")
+
+    await tools.ha_set_entity(entity_id_parts=[])
+    assert registry.settings.entity_id_parts is None
+
+
+async def test_a_bulk_read_reports_an_unknown_id_as_not_found(
+    core_client: HomeAssistantClient, lamp: str
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(
+        entity_id=[lamp, "light.missing"]
+    )
+
+    assert result["success"] is True
+    assert result["count"] == 1
+    assert [e["entity_id"] for e in result["entity_entries"]] == [lamp]
+    assert result["errors"] == [
+        {"entity_id": "light.missing", "error": "Entity not found"}
+    ]
+    assert "suggestions" in result

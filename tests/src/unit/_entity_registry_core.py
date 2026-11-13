@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -43,22 +42,8 @@ async def lamp(hass: HomeAssistant, core_client: HomeAssistantClient) -> str:
     return "light.my_lamp"
 
 
-@pytest.fixture
-def desk(hass: HomeAssistant) -> str:
-    """A second light entry, for the bulk writes."""
-    return er.async_get(hass).async_get_or_create("light", "demo", "desk").entity_id
-
-
 def sent_types(sent: AsyncMock) -> list[str]:
     return [call.args[0]["type"] for call in sent.call_args_list]
-
-
-def expose_writes(sent: AsyncMock) -> list[dict[str, Any]]:
-    return [
-        call.args[0]
-        for call in sent.call_args_list
-        if call.args[0]["type"] == "homeassistant/expose_entity"
-    ]
 
 
 def assert_cores_refusal(

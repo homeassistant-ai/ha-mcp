@@ -2,7 +2,7 @@
 without a registry entry, and failed entity writes, on a real ``hass``.
 
 Core's own answers for these commands are pinned in
-test_entity_registry_real_core.py; these tests pin what the tools send, the
+test_entity_registry_real_core.py and test_entity_exposure_real_core.py; these tests pin what the tools send, the
 order they send it in, how they shape the registry-wide replies, and how they
 report a failure. A failure Core cannot be made to give is one Core function
 raising Core's own exception, or the client getting no answer at all.

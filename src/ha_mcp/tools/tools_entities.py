@@ -266,9 +266,8 @@ def _validate_enabled_constraint(
 ) -> None:
     """Block registry-disable on automation and script entities.
 
-    For automations, use
-    ha_config_set_automation(entity_id=..., enabled=...) to control their
-    runtime enabled state.  For scripts,
+    For automations, use ha_config_set_automation(entity_id=..., enabled=...)
+    to control their runtime enabled state.  For scripts,
     ha_config_set_script(script_id=..., run="stop") only stops a currently
     running execution; it does not disable the script, and Home Assistant
     has no script runtime enable/disable service.
@@ -297,11 +296,11 @@ def _validate_enabled_constraint(
                     f"Cannot registry-disable {_domain} entities with "
                     "ha_set_entity(enabled=False). Use "
                     f"ha_config_set_automation(entity_id='{blocked[0]}', "
-                    "enabled=False) instead to disable it without removing it."
+                    "enabled=False) instead."
                 )
                 suggestions = [
                     "Use ha_config_set_automation(entity_id=..., enabled=...) to "
-                    + "disable the automation (keeps it visible and manageable)",
+                    + "disable the automation",
                     "Use ha_config_set_automation(entity_id=..., enabled=True) to "
                     + "re-enable it later",
                 ]
@@ -1204,8 +1203,7 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "The entity's own name part, not the full name (rows carry "
-                    "Home Assistant's full_name). Use empty string '' to remove "
+                    "The entity's own name part, not the full name. Use empty string '' to remove "
                     "the custom name and revert to default. " + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
