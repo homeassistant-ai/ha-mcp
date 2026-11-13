@@ -8,7 +8,6 @@ administrator any more.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -21,7 +20,7 @@ from homeassistant.auth.models import (
 )
 from homeassistant.auth.providers.homeassistant import HassAuthProvider
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import register_auth_provider
+from pytest_homeassistant.common import MockConfigEntry, register_auth_provider
 
 from custom_components.ha_mcp_tools import server_credentials as sc
 from custom_components.ha_mcp_tools.const import (
@@ -244,13 +243,13 @@ class TestServerAccessToken:
     async def test_the_supplied_token_is_used_as_is(self, hass: HomeAssistant) -> None:
         user = await _create_admin_user(hass)
         _, tok = await _create_llat(hass, user)
-        entry = SimpleNamespace(data={DATA_ADMIN_TOKEN: tok})
+        entry = MockConfigEntry(data={DATA_ADMIN_TOKEN: tok})
         assert await sc.async_server_access_token(hass, entry) == tok
 
     async def test_a_revoked_supplied_token_asks_for_a_new_one(
         self, hass: HomeAssistant
     ) -> None:
-        entry = SimpleNamespace(data={DATA_ADMIN_TOKEN: "revoked-user-token"})
+        entry = MockConfigEntry(data={DATA_ADMIN_TOKEN: "revoked-user-token"})
         with pytest.raises(sc.CredentialNeeded) as err:
             await sc.async_server_access_token(hass, entry)
         assert err.value.reason == "invalid_token"
@@ -260,7 +259,7 @@ class TestServerAccessToken:
     ) -> None:
         user = await _create_admin_user(hass)
         rt, _ = await _create_llat(hass, user)
-        entry = SimpleNamespace(
+        entry = MockConfigEntry(
             data={DATA_SERVER_USER_ID: user.id, DATA_REFRESH_TOKEN_ID: rt.id}
         )
         token = await sc.async_server_access_token(hass, entry)
@@ -274,7 +273,7 @@ class TestServerAccessToken:
         # An administrator can demote the account an older release created.
         user = await _create_regular_user(hass)
         rt, _ = await _create_llat(hass, user)
-        entry = SimpleNamespace(
+        entry = MockConfigEntry(
             data={DATA_SERVER_USER_ID: user.id, DATA_REFRESH_TOKEN_ID: rt.id}
         )
         with pytest.raises(sc.CredentialNeeded) as err:
@@ -303,7 +302,7 @@ class TestServerAccessToken:
             other = await _create_admin_user(hass, f"other-{case}")
             entry_user_id = other.id
 
-        entry = SimpleNamespace(
+        entry = MockConfigEntry(
             data={
                 DATA_SERVER_USER_ID: entry_user_id,
                 DATA_REFRESH_TOKEN_ID: entry_rt_id,
@@ -317,7 +316,7 @@ class TestServerAccessToken:
         self, hass: HomeAssistant
     ) -> None:
         with pytest.raises(sc.CredentialNeeded) as err:
-            await sc.async_server_access_token(hass, SimpleNamespace(data={}))
+            await sc.async_server_access_token(hass, MockConfigEntry(data={}))
         assert err.value.reason == "missing_token"
 
 
