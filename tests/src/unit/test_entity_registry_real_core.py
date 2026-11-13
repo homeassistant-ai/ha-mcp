@@ -31,7 +31,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 
 @pytest.fixture(params=["component", "core"])
@@ -164,7 +164,7 @@ async def test_auto_on_an_unknown_entity_is_not_found(
             entity_id="light.nope", new_entity_id="auto"
         )
 
-    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
 async def test_auto_on_an_invalid_id_is_cores_refusal(
@@ -175,7 +175,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
             entity_id="not an id", new_entity_id="auto"
         )
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["message"].startswith("No automatic entity_id for not an id: ")
     assert "is an invalid entity ID" in error["message"]
@@ -266,7 +266,7 @@ async def test_main_entity_on_an_unknown_entity_is_not_found(
             entity_id="sensor.nope", use_device_name=True
         )
 
-    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
     assert _types(sent) == ["config/entity_registry/get"]
 
 
@@ -312,7 +312,7 @@ async def test_main_entity_with_own_area_is_cores_refusal(
             entity_id=entry.entity_id, use_device_name=True, area_id=kitchen.id
         )
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "cannot have an area of its own" in error["message"]
     assert registry.async_get(entry.entity_id) == before
@@ -416,7 +416,7 @@ async def test_an_unknown_unique_id_is_not_found(
     with pytest.raises(ToolError) as exc_info:
         await EntityTools(core_client).ha_get_entity(unique_id="nope")
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "ENTITY_NOT_FOUND"
     assert "nope" in error["message"]
 
@@ -430,7 +430,7 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
             entity_id=lamp, new_entity_id="switch.my_lamp"
         )
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
     _assert_cores_refusal(exc_info, "invalid_info")
@@ -477,7 +477,7 @@ async def test_an_unknown_assistant_is_refused_before_any_write(
             entity_id=lamp, name="Renamed", expose_to={"bogus": True}
         )
 
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
     _assert_cores_refusal(exc_info, "invalid_format")
     entry = er.async_get(hass).async_get(lamp)
     assert entry is not None
@@ -504,7 +504,7 @@ async def test_exposure_is_cores_map(
     assert listed["expose_new_entities"] is store.async_get_expose_new_entities(
         "conversation"
     )
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 async def test_an_entity_without_registry_entry_reads_cores_store(
@@ -544,7 +544,7 @@ async def test_an_entity_without_registry_entry_reads_cores_store(
         }
     ]
     assert "errors" not in bulk
-    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
 async def test_a_mixed_case_list_read_finds_the_entry(
@@ -590,7 +590,7 @@ async def test_entity_id_parts_are_cores_settings(
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_set_entity(entity_id_parts=["entity"])
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
     _assert_cores_refusal(exc_info, "invalid_format")
     assert registry.settings.entity_id_parts == ("device", "entity")
 
@@ -688,7 +688,7 @@ async def test_expose_to_on_an_unknown_entity_writes_nothing(
             entity_id="light.typo", expose_to={"conversation": True}
         )
 
-    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
     assert "light.typo" not in hass.data[DATA_EXPOSED_ENTITIES].entities
 
 

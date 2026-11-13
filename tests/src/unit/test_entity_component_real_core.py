@@ -34,7 +34,7 @@ from ha_mcp.tools.entity_exposure import WS_EXPOSURE
 from ha_mcp.tools.tools_entities import WS_ENTITY_ENRICH, EntityTools
 
 from ._core_staging import never_answers, revokes_the_token, served_by
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _WITHOUT_ENRICHMENT = "the entries come without area, floor, label_names and full_name"
 _WITHOUT_ENTITY_INFO = "the listing comes without entity_info (names and areas)"
@@ -327,7 +327,7 @@ async def test_a_failing_exposure_command_is_the_tools_error(
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_get_entity()
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert error["message"] == "ha_mcp_tools/exposure failed: Store unreadable"
     assert error["suggestion"] == COMPONENT_INSTALL_HINT
@@ -359,7 +359,7 @@ async def test_an_exposure_command_timeout_is_the_tools_error(
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_get_entity()
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert error["message"] == "ha_mcp_tools/exposure failed: Command timeout"
 
@@ -383,4 +383,4 @@ async def test_a_lost_connection_during_a_component_read_ends_the_call(
         else:
             await tools.ha_get_entity()
 
-    assert _error(exc_info)["code"] == "CONNECTION_FAILED"
+    assert error_of(exc_info)["code"] == "CONNECTION_FAILED"

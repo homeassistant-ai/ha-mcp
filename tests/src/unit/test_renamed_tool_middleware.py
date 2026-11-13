@@ -33,7 +33,7 @@ from ha_mcp.tools.tools_entities import register_entity_tools
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 
 @pytest.fixture
@@ -431,7 +431,7 @@ async def test_core_judges_the_retired_assistant_sent_with_an_entity_id(
             )
         )
 
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 @pytest.mark.asyncio

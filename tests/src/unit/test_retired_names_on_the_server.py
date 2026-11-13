@@ -22,7 +22,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import reset_global_settings
 
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 
 @asynccontextmanager
@@ -77,4 +77,4 @@ async def test_the_server_has_core_judge_a_retired_assistant(
         with pytest.raises(ToolError) as exc_info:
             await client.call_tool(tool, arguments)
 
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"

@@ -29,7 +29,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import entity_registry_reads
 from ha_mcp.tools.tools_entities import EntityTools
 
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _LIST = "homeassistant/expose_entity/list"
 _FLAG_GET = "homeassistant/expose_new_entities/get"
@@ -243,7 +243,7 @@ class TestRegistryWideRead:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(**kwargs)
 
-        assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         sent.assert_not_called()
 
     @pytest.mark.parametrize("resolver_filter", ["domain", "platform"])
@@ -253,7 +253,7 @@ class TestRegistryWideRead:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(**{resolver_filter: "light"})
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "only apply when unique_id is provided" in error["message"]
         sent.assert_not_called()
@@ -264,7 +264,7 @@ class TestRegistryWideRead:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(exposed_to="")
 
-        assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         assert _types(sent) == [_FLAG_GET]
 
 
@@ -293,7 +293,7 @@ class TestEntityWithoutRegistryEntry:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(entity_id="light.porch")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "boom" in error["message"]
         assert error["message"].count("Command failed:") == 1
@@ -311,7 +311,7 @@ class TestEntityWithoutRegistryEntry:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(entity_id="light.porch")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] != "ENTITY_NOT_FOUND"
         assert "500" in error["message"]
 
@@ -322,7 +322,7 @@ class TestEntityWithoutRegistryEntry:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity(entity_id="light.porch")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"].startswith("CONNECTION")
         assert "server down" in error["message"]
 
@@ -351,7 +351,7 @@ class TestExposeToWithoutRegistryEntry:
                 entity_id="light.porch", expose_to={"conversation": True}
             )
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"].startswith("CONNECTION")
         assert "server down" in error["message"]
         assert _EXPOSE not in _types(sent)
@@ -435,7 +435,7 @@ class TestExposeToWithoutRegistryEntry:
                 entity_id="light.does_not_exist", new_device_name="X"
             )
 
-        assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
 
 
 class TestBulkRead:
@@ -631,7 +631,7 @@ class TestRegistryWideWrite:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(expose_new_entities=value)
 
-        assert "expose_new_entities" in _error(exc_info)["message"]
+        assert "expose_new_entities" in error_of(exc_info)["message"]
 
     async def test_an_empty_flag_map_is_refused(
         self, tools: EntityTools, sent: AsyncMock
@@ -639,7 +639,7 @@ class TestRegistryWideWrite:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(expose_new_entities={})
 
-        assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         sent.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -659,7 +659,7 @@ class TestRegistryWideWrite:
                 expose_new_entities={"cloud.alexa": True}, **entity_param
             )
 
-        assert _error(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert error_of(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
         sent.assert_not_called()
 
     async def test_registry_wide_params_with_an_entity_are_refused(
@@ -672,7 +672,7 @@ class TestRegistryWideWrite:
                 expose_new_entities={"cloud.alexa": True},
             )
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "registry-wide" in error["message"]
         sent.assert_not_called()
@@ -683,7 +683,7 @@ class TestRegistryWideWrite:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity()
 
-        assert _error(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert error_of(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
         sent.assert_not_called()
 
 
