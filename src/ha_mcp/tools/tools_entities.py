@@ -124,8 +124,8 @@ async def fetch_entity_enrichment_via_component(
     ``area_id`` / label *ids*) and, with ``entity_enrich_full_name``, the name
     Home Assistant shows. ``None`` when the component does not advertise the
     command or no longer knows it (``unknown_command`` → invalidate the cached
-    caps), or when the command fails, gets no answer or loses its connection
-    (logged): the rows then stay as Core serves them.
+    caps), or when the command fails, gets no answer, loses its connection or
+    answers with a malformed result: the rows then stay as Core serves them.
 
     The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
@@ -147,7 +147,11 @@ async def fetch_entity_enrichment_via_component(
         for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE):
             chunk = entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
-            merged.update(raw["result"]["entities"])
+            result = raw.get("result")
+            entities = result.get("entities") if isinstance(result, dict) else None
+            if not isinstance(entities, dict):
+                return None
+            merged.update(entities)
     except (HomeAssistantCommandError, *_NO_ANSWER_ERRORS) as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)

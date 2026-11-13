@@ -55,8 +55,8 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
     same entries as Core's ``homeassistant/expose_entity/list`` map. ``None``
     when the component does not advertise the command, or no longer knows it
     (``unknown_command`` → invalidate the cached caps), or when the command
-    fails, gets no answer or loses its connection (logged): the caller reads
-    Core's list in each case.
+    fails, gets no answer, loses its connection or answers with a malformed
+    result: the caller reads Core's list in each case.
     """
     caps = await get_component_caps(client)
     if not (
@@ -77,7 +77,13 @@ async def _fetch_exposure_via_component(client: Any) -> dict[str, Any] | None:
         else:
             logger.warning("%s failed; read Core's list: %r", WS_EXPOSURE, exc)
         return None
-    result: dict[str, Any] = raw["result"]
+    result = raw.get("result")
+    if not (
+        isinstance(result, dict)
+        and isinstance(result.get("exposed_entities"), dict)
+        and isinstance(result.get("entity_info"), dict)
+    ):
+        return None
     return result
 
 

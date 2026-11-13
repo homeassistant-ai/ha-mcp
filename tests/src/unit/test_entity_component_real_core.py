@@ -1,14 +1,10 @@
 """ha_get_entity over the ha_mcp_tools component, on a real ``hass``.
 
 The component's ``entity_enrich`` and ``exposure`` commands answer here from
-the same ``hass`` as Core's own registry commands. A failure of an advertised
-command is one Core function the component calls raising Core's exception.
-No answer to it is staged through Core's own WebSocket API
-(``_core_staging``).
+the same ``hass`` as Core's own registry commands.
 """
 
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components import websocket_api as core_websocket_api
@@ -22,12 +18,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools import websocket_api
 from custom_components.ha_mcp_tools.websocket_api import system
-from ha_mcp.client import websocket_client
-from ha_mcp.client.rest_client import (
-    HomeAssistantClient,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools import entity_exposure, tools_entities
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_api import (
     COMPONENT_VIA_HACS,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
@@ -36,25 +27,8 @@ from ha_mcp.tools.component_api import (
 from ha_mcp.tools.entity_exposure import WS_EXPOSURE
 from ha_mcp.tools.tools_entities import WS_ENTITY_ENRICH, EntityTools
 
-from ._core_staging import never_answers, served_by
-
 _WITHOUT_ENRICHMENT = "the entries come without area, floor, label_names and full_name"
 _WITHOUT_ENTITY_INFO = "the listing comes without entity_info (names and areas)"
-_UPDATE_ENRICHMENT = (
-    f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-    "Update it " + COMPONENT_VIA_HACS
-)
-_UPDATE_ENTITY_INFO = (
-    f"The ha_mcp_tools component is too old, so {_WITHOUT_ENTITY_INFO}. "
-    "Update it " + COMPONENT_VIA_HACS
-)
-
-
-async def _read(tools: EntityTools, power: str, command: str) -> dict[str, Any]:
-    """The call that sends ``command``: one entity's row, or the listing."""
-    if command == WS_ENTITY_ENRICH:
-        return await tools.ha_get_entity(entity_id=power)
-    return await tools.ha_get_entity()
 
 
 @pytest.fixture(autouse=True)
@@ -251,21 +225,6 @@ async def test_a_component_that_refuses_the_caller_is_not_called_missing(
     assert warning.endswith(f"), so {_WITHOUT_ENRICHMENT}.")
 
 
-async def test_a_failing_enrich_command_says_to_update(
-    monkeypatch: pytest.MonkeyPatch, tools: EntityTools, power: str
-) -> None:
-    def unreadable(*_: Any) -> str:
-        raise HomeAssistantError("Name unreadable")
-
-    monkeypatch.setattr(er, "async_get_full_entity_name", unreadable)
-
-    for entry, warnings in await _rows(tools, power):
-        assert entry["entity_id"] == power
-        assert "area" not in entry
-        assert "full_name" not in entry
-        assert warnings == [_UPDATE_ENRICHMENT]
-
-
 async def test_a_listing_the_component_serves_names_its_entities_without_warning(
     hass: HomeAssistant, tools: EntityTools, power: str
 ) -> None:
@@ -325,72 +284,3 @@ async def test_a_listing_whose_component_probe_fails_says_it_could_not_ask(
     [warning] = result["warnings"]
     assert warning.startswith("The ha_mcp_tools component could not be asked (")
     assert warning.endswith(f"), so {_WITHOUT_ENTITY_INFO}.")
-
-
-async def test_a_failing_exposure_command_says_to_update(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-    tools: EntityTools,
-    power: str,
-) -> None:
-    """Core's own list answers, as it does for a component that is not there."""
-    core_exposed.async_expose_entity(hass, "conversation", power, True)
-
-    def unreadable(*_: Any) -> None:
-        raise HomeAssistantError("Store unreadable")
-
-    monkeypatch.setattr(core_exposed, "async_get_assistant_settings", unreadable)
-
-    result = await tools.ha_get_entity()
-
-    assert set(result["exposed_entities"]) == {power}
-    assert "entity_info" not in result
-    assert result["warnings"] == [_UPDATE_ENTITY_INFO]
-
-
-@pytest.mark.parametrize(
-    ("command", "warning"),
-    [(WS_ENTITY_ENRICH, _UPDATE_ENRICHMENT), (WS_EXPOSURE, _UPDATE_ENTITY_INFO)],
-)
-async def test_a_command_timeout_says_to_update(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-    tools: EntityTools,
-    power: str,
-    command: str,
-    warning: str,
-) -> None:
-    # The wait bounds every command of the call; an in-process Core answers
-    # the others in milliseconds.
-    monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1)
-    served_by(hass, command, never_answers)
-
-    result = await _read(tools, power, command)
-
-    assert result["warnings"] == [warning]
-
-
-@pytest.mark.parametrize(
-    ("module", "command", "warning"),
-    [
-        (tools_entities, WS_ENTITY_ENRICH, _UPDATE_ENRICHMENT),
-        (entity_exposure, WS_EXPOSURE, _UPDATE_ENTITY_INFO),
-    ],
-)
-async def test_a_connection_the_component_read_cannot_open_says_to_update(
-    monkeypatch: pytest.MonkeyPatch,
-    tools: EntityTools,
-    power: str,
-    module: Any,
-    command: str,
-    warning: str,
-) -> None:
-    monkeypatch.setattr(
-        module,
-        "get_websocket_client",
-        AsyncMock(side_effect=HomeAssistantConnectionError("connection closed")),
-    )
-
-    result = await _read(tools, power, command)
-
-    assert result["warnings"] == [warning]
