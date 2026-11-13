@@ -20,43 +20,28 @@ registered tool fn is exactly what the transport enforces.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
-from collections.abc import Callable
 from typing import Annotated, Any
-from unittest.mock import MagicMock
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
-from .test_config_param_no_string_schema import (
-    _BULK_TOOLS,
-    _CONFIG_TOOLS,
-    _SERVICE_AND_ENTITY_TOOLS,
-)
+from ._registered_tools import all_registered_tools
 
 
-def _get_param_annotation(
-    register_fn: Callable[..., Any], tool_name: str, param_name: str
+@pytest.fixture(scope="module")
+def registered_tools() -> dict[str, Any]:
+    """Every tool the real registry registers, keyed by tool name."""
+    return all_registered_tools()
+
+
+def _param_annotation(
+    registered: dict[str, Any], tool_name: str, param_name: str
 ) -> Any:
-    from ha_mcp._vendor.fastmcp import FastMCP
-
-    async def _inner() -> Any:
-        mcp = FastMCP("test")
-        register_fn(mcp, MagicMock(), device_tools=MagicMock())
-        tool = await mcp.get_tool(tool_name)
-        return inspect.signature(tool.fn).parameters[param_name].annotation
-
-    return asyncio.run(_inner())
-
-
-def _resolve(module: str, register_fn: str) -> Callable[..., Any]:
-    import importlib
-
-    return getattr(importlib.import_module(module), register_fn)
+    return inspect.signature(registered[tool_name].fn).parameters[param_name].annotation
 
 
 # Param-appropriate sample values: each must satisfy the param's value type
@@ -78,52 +63,51 @@ _LIST_SAMPLE: list[dict[str, Any]] = [
     {"entity_id": "light.kitchen", "action": "turn_on"}
 ]
 
-_DICT_PARAMS = _CONFIG_TOOLS + _SERVICE_AND_ENTITY_TOOLS
+# (tool_name, param_name) for every dict-typed param of a config or service tool.
+_DICT_PARAMS: list[tuple[str, str]] = [
+    ("ha_config_set_automation", "config"),
+    ("ha_config_set_script", "config"),
+    ("ha_config_set_scene", "config"),
+    ("ha_config_set_helper", "config"),
+    ("ha_config_set_dashboard", "config"),
+    ("ha_call_service", "data"),
+    ("ha_call_event", "data"),
+    ("ha_set_entity", "options"),
+    ("ha_set_entity", "categories"),
+    ("ha_set_entity", "expose_to"),
+]
+
+# (tool_name, param_name) for the list-typed param of ha_bulk_control.
+_BULK_TOOLS: list[tuple[str, str]] = [("ha_bulk_control", "operations")]
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _DICT_PARAMS,
-)
-def test_dict_param_coerces_json_string(module, register_fn, tool_name, param_name):
+@pytest.mark.parametrize(("tool_name", "param_name"), _DICT_PARAMS)
+def test_dict_param_coerces_json_string(registered_tools, tool_name, param_name):
     """A JSON-encoded object string is coerced to a dict before validation."""
     sample = _DICT_SAMPLES.get((tool_name, param_name), _DEFAULT_DICT_SAMPLE)
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     assert TypeAdapter(ann).validate_python(json.dumps(sample)) == sample
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _DICT_PARAMS,
-)
-def test_dict_param_passes_native_dict_through(
-    module, register_fn, tool_name, param_name
-):
+@pytest.mark.parametrize(("tool_name", "param_name"), _DICT_PARAMS)
+def test_dict_param_passes_native_dict_through(registered_tools, tool_name, param_name):
     """A native dict continues to validate unchanged."""
     sample = _DICT_SAMPLES.get((tool_name, param_name), _DEFAULT_DICT_SAMPLE)
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     assert TypeAdapter(ann).validate_python(sample) == sample
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _BULK_TOOLS,
-)
-def test_list_param_coerces_json_string(module, register_fn, tool_name, param_name):
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
+def test_list_param_coerces_json_string(registered_tools, tool_name, param_name):
     """A JSON-encoded array string is coerced to a list before validation."""
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     assert TypeAdapter(ann).validate_python(json.dumps(_LIST_SAMPLE)) == _LIST_SAMPLE
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _DICT_PARAMS,
-)
-def test_dict_param_rejects_unparseable_string(
-    module, register_fn, tool_name, param_name
-):
+@pytest.mark.parametrize(("tool_name", "param_name"), _DICT_PARAMS)
+def test_dict_param_rejects_unparseable_string(registered_tools, tool_name, param_name):
     """A non-JSON string still fails validation (keeps #1491's actionable error)."""
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python("definitely not json {")
 
@@ -135,10 +119,12 @@ def test_dict_param_rejects_unparseable_string(
         ("  [1, 2,]", "line 1 column 8"),
     ],
 )
-def test_json_like_malformed_string_preserves_decode_location(malformed, detail):
+def test_json_like_malformed_string_preserves_decode_location(
+    registered_tools, malformed, detail
+):
     """Malformed container JSON reports its parse location instead of dict_type."""
-    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    tool_name, param_name = _DICT_PARAMS[0]
+    ann = _param_annotation(registered_tools, tool_name, param_name)
 
     with pytest.raises(ValidationError) as exc_info:
         TypeAdapter(ann).validate_python(malformed)
@@ -177,64 +163,55 @@ def test_malformed_json_containing_jinja_preserves_decode_location():
     assert "line 1 column 13" in error["msg"]
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _DICT_PARAMS,
-)
+@pytest.mark.parametrize(("tool_name", "param_name"), _DICT_PARAMS)
 def test_dict_param_rejects_json_string_of_array(
-    module, register_fn, tool_name, param_name
+    registered_tools, tool_name, param_name
 ):
     """A JSON-encoded array for a dict param still fails dict validation."""
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python("[1, 2, 3]")
 
 
 @pytest.mark.parametrize("scalar_string", ['"hello"', "123", "null"])
-def test_dict_param_passes_json_scalar_string_through_unchanged(scalar_string):
+def test_dict_param_passes_json_scalar_string_through_unchanged(
+    registered_tools, scalar_string
+):
     """A well-formed JSON scalar string is not coerced: it fails dict_type
     with the original string as the offending input."""
-    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    tool_name, param_name = _DICT_PARAMS[0]
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     with pytest.raises(ValidationError) as exc_info:
         TypeAdapter(ann).validate_python(scalar_string)
     assert exc_info.value.errors()[0]["input"] == scalar_string
 
 
-def test_deeply_nested_string_fails_validation_not_recursion():
+def test_deeply_nested_string_fails_validation_not_recursion(registered_tools):
     """Regression: json.loads raises RecursionError on deeply-nested input.
 
     Pydantic only converts ValueError/AssertionError raised in a validator
     into a ValidationError, so an uncaught RecursionError would surface as an
     opaque internal error instead of the actionable dict_type message.
     """
-    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    tool_name, param_name = _DICT_PARAMS[0]
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python("[" * 100_000)
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _BULK_TOOLS,
-)
-def test_list_param_passes_native_list_through(
-    module, register_fn, tool_name, param_name
-):
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
+def test_list_param_passes_native_list_through(registered_tools, tool_name, param_name):
     """A native list continues to validate unchanged."""
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     assert TypeAdapter(ann).validate_python(_LIST_SAMPLE) == _LIST_SAMPLE
 
 
-@pytest.mark.parametrize(
-    ("module", "register_fn", "tool_name", "param_name"),
-    _BULK_TOOLS,
-)
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
 def test_list_param_rejects_json_string_of_object(
-    module, register_fn, tool_name, param_name
+    registered_tools, tool_name, param_name
 ):
     """A JSON-encoded object for a list param still fails list validation."""
-    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    ann = _param_annotation(registered_tools, tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python('{"entity_id": "light.kitchen"}')
 
@@ -242,11 +219,10 @@ def test_list_param_rejects_json_string_of_object(
 # ---------------------------------------------------------------------------
 # Dev-tool dict params (ha_dev_manage_settings policy / backup)
 #
-# These carry the same JSON_STRING_COERCION as the config-tool params, but
+# These carry the same JSON_STRING_COERCION as the config-tool dict params, but
 # register_dev_tools no-ops unless developer mode is on, so the shared
-# parametrization above can never reach them. Enable the flag, reset the
-# cached settings singleton so registration sees it, and register in a
-# dedicated class.
+# registry above never reaches them. Enable the flag, reset the cached
+# settings singleton, and register the tools again under it.
 # ---------------------------------------------------------------------------
 
 
@@ -264,19 +240,15 @@ def dev_mode_enabled(monkeypatch):
         reset_global_settings()
 
 
-_DEV_DICT_PARAMS = [
-    (
-        "ha_mcp.tools.tools_dev",
-        "register_dev_tools",
-        "ha_dev_manage_settings",
-        "policy",
-    ),
-    (
-        "ha_mcp.tools.tools_dev",
-        "register_dev_tools",
-        "ha_dev_manage_settings",
-        "backup",
-    ),
+@pytest.fixture
+def dev_registered_tools(dev_mode_enabled) -> dict[str, Any]:
+    """Every tool the registry registers with developer mode on."""
+    return all_registered_tools()
+
+
+_DEV_DICT_PARAMS: list[tuple[str, str]] = [
+    ("ha_dev_manage_settings", "policy"),
+    ("ha_dev_manage_settings", "backup"),
 ]
 
 _DEV_DICT_SAMPLES: dict[tuple[str, str], dict[str, Any]] = {
@@ -295,38 +267,26 @@ class TestDevToolDictParamCoercion:
     just like the config-tool dict params — a stringified object is coerced,
     a native dict passes through, and genuinely-malformed input still fails."""
 
-    @pytest.mark.parametrize(
-        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
-    )
+    @pytest.mark.parametrize(("tool_name", "param_name"), _DEV_DICT_PARAMS)
     def test_dev_dict_param_coerces_json_string(
-        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+        self, dev_registered_tools, tool_name, param_name
     ):
         sample = _DEV_DICT_SAMPLES[(tool_name, param_name)]
-        ann = _get_param_annotation(
-            _resolve(module, register_fn), tool_name, param_name
-        )
+        ann = _param_annotation(dev_registered_tools, tool_name, param_name)
         assert TypeAdapter(ann).validate_python(json.dumps(sample)) == sample
 
-    @pytest.mark.parametrize(
-        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
-    )
+    @pytest.mark.parametrize(("tool_name", "param_name"), _DEV_DICT_PARAMS)
     def test_dev_dict_param_passes_native_dict_through(
-        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+        self, dev_registered_tools, tool_name, param_name
     ):
         sample = _DEV_DICT_SAMPLES[(tool_name, param_name)]
-        ann = _get_param_annotation(
-            _resolve(module, register_fn), tool_name, param_name
-        )
+        ann = _param_annotation(dev_registered_tools, tool_name, param_name)
         assert TypeAdapter(ann).validate_python(sample) == sample
 
-    @pytest.mark.parametrize(
-        ("module", "register_fn", "tool_name", "param_name"), _DEV_DICT_PARAMS
-    )
+    @pytest.mark.parametrize(("tool_name", "param_name"), _DEV_DICT_PARAMS)
     def test_dev_dict_param_rejects_unparseable_string(
-        self, dev_mode_enabled, module, register_fn, tool_name, param_name
+        self, dev_registered_tools, tool_name, param_name
     ):
-        ann = _get_param_annotation(
-            _resolve(module, register_fn), tool_name, param_name
-        )
+        ann = _param_annotation(dev_registered_tools, tool_name, param_name)
         with pytest.raises(ValidationError):
             TypeAdapter(ann).validate_python("definitely not json {")
