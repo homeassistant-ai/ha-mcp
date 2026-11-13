@@ -1007,6 +1007,8 @@ class TestHaSetEntityRegistryDisableGuardrail:
             in error_text
         )
         assert "ha_call_service('automation', 'turn_off'" not in error_text
+        assert "re-enabled" not in error_text
+        assert "reloaded" not in error_text
         error_data = json.loads(error_text)
         suggestions = error_data["error"].get("suggestions", [])
         assert any(
@@ -1030,6 +1032,8 @@ class TestHaSetEntityRegistryDisableGuardrail:
             in error_text
         )
         assert "ha_call_service" not in error_text
+        assert "re-enabled" not in error_text
+        assert "reloaded" not in error_text
         assert "only to stop a currently running execution" in error_text
         assert "does not disable the script" in error_text
         assert "no script runtime enable/disable service" in error_text.lower()

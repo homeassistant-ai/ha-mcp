@@ -248,7 +248,6 @@ def _parse_get_entity_ids(
                 "success": True,
                 "entity_entries": [],
                 "count": 0,
-                "message": "No entities requested",
             },
         )
     if not all(isinstance(e, str) for e in entity_id):
@@ -267,10 +266,7 @@ def _validate_enabled_constraint(
 ) -> None:
     """Block registry-disable on automation and script entities.
 
-    Registry-disabling (enabled=False) removes the entity from the HA
-    state machine entirely, making it invisible in the UI and
-    unqueryable via state APIs until re-enabled AND the integration is
-    reloaded.  For automations, use
+    For automations, use
     ha_config_set_automation(entity_id=..., enabled=...) to control their
     runtime enabled state.  For scripts,
     ha_config_set_script(script_id=..., run="stop") only stops a currently
@@ -286,9 +282,7 @@ def _validate_enabled_constraint(
             if _domain == "script":
                 message = (
                     "Cannot registry-disable script entities with "
-                    "ha_set_entity(enabled=False). This removes the entity from the "
-                    "state machine and hides it from the UI until it is re-enabled "
-                    "and scripts are reloaded. Use ha_config_set_script("
+                    "ha_set_entity(enabled=False). Use ha_config_set_script("
                     f"script_id='{blocked[0]}', run='stop') only to stop a "
                     "currently running execution; it does not disable the script. "
                     "Home Assistant has no script runtime enable/disable service."
@@ -301,9 +295,7 @@ def _validate_enabled_constraint(
             else:
                 message = (
                     f"Cannot registry-disable {_domain} entities with "
-                    "ha_set_entity(enabled=False). This removes the entity from the "
-                    "state machine and hides it from the UI until it is re-enabled "
-                    f"AND the {_domain}s are reloaded. Use "
+                    "ha_set_entity(enabled=False). Use "
                     f"ha_config_set_automation(entity_id='{blocked[0]}', "
                     "enabled=False) instead to disable it without removing it."
                 )
@@ -312,7 +304,6 @@ def _validate_enabled_constraint(
                     + "disable the automation (keeps it visible and manageable)",
                     "Use ha_config_set_automation(entity_id=..., enabled=True) to "
                     + "re-enable it later",
-                    "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
                 ]
             raise_tool_error(
                 create_error_response(
@@ -423,9 +414,8 @@ class EntityTools:
         )
         what = f"No automatic entity_id for {entity_id}"
         context = {"entity_id": entity_id}
-        suggestions = ["Use ha_search() to find valid entity IDs"]
         if not result.get("success"):
-            raise_core_refusal(what, result, context, suggestions=suggestions)
+            raise_core_refusal(what, result, context)
         # Core lowercases the ids it is sent and keys its reply so.
         automatic = (result.get("result") or {}).get(entity_id.lower())
         if not automatic:
@@ -434,7 +424,7 @@ class EntityTools:
                     ErrorCode.ENTITY_NOT_FOUND,
                     f"{what}: not in the entity registry",
                     context=context,
-                    suggestions=suggestions,
+                    suggestions=["Use ha_search() to find valid entity IDs"],
                 )
             )
         return str(automatic)
@@ -461,26 +451,8 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                suggestions = ["Verify the entity_id exists using ha_search()"]
-                if new_entity_id is not None:
-                    suggestions.extend(
-                        [
-                            "Check that the new entity_id doesn't already exist",
-                            "Ensure the entity has a unique_id (some legacy entities cannot be renamed)",
-                        ]
-                    )
-                else:
-                    suggestions.extend(
-                        [
-                            "Check that area_id exists if specified",
-                            "Some entities may not support all update options",
-                        ]
-                    )
                 raise_core_refusal(
-                    "Failed to update entity",
-                    result,
-                    {"entity_id": entity_id},
-                    suggestions=suggestions,
+                    "Failed to update entity", result, {"entity_id": entity_id}
                 )
 
             core_result = dict(result.get("result") or {})
@@ -769,7 +741,6 @@ class EntityTools:
             "entity_id": entity_id,
             "updates": updates_made,
             "entity_entry": entity_entry,
-            "message": f"Entity updated: {', '.join(updates_made)}",
         }
 
         # Include old_entity_id and rename warning when a rename was performed;
@@ -1233,13 +1204,9 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "The entity's own name part, not the full name: the UI puts "
-                    "the device name (and, where linked, a parent device's) in "
-                    "front of it while the entry's next_name_part is 'device', "
-                    "that is while the entity has a device and no area of its "
-                    "own; the state's friendly_name puts the device name in front "
-                    "regardless. Use empty string '' to remove the custom name and "
-                    "revert to default. " + WHITESPACE_CLEARS_NOTE
+                    "The entity's own name part, not the full name (rows carry "
+                    "Home Assistant's full_name). Use empty string '' to remove "
+                    "the custom name and revert to default. " + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
@@ -1251,15 +1218,10 @@ class EntityTools:
                     "The entity dialog's 'Main entity of the device' switch. True "
                     "names the entity after its device, following device renames, "
                     "and like the dialog moves it from its own area to the "
-                    "device's; Home Assistant refuses an area_id of its own on a "
-                    "main entity, so set the area on the device with "
-                    "ha_set_device. An entity without a name of its own already "
-                    "is the main entity and is "
-                    "left as is. False restores the integration's default name; an "
-                    "entity the integration gives no name then is the main entity, "
-                    "which Home Assistant refuses while it has an area of its own, "
-                    "so pass name instead. Omit to leave it as is; not combinable with "
-                    "name."
+                    "device's. An entity without a name of its own already is the "
+                    "main entity and is left as is. False restores the "
+                    "integration's default name. Omit to leave it as is; not "
+                    "combinable with name."
                 ),
                 default=None,
             ),
@@ -1309,8 +1271,7 @@ class EntityTools:
                     "True to enable the entity, False to disable it. WARNING: "
                     "enabled=False is a registry-level disable, not 'turning off': "
                     "the entity leaves the state machine, the UI, dashboards and "
-                    "automations until it is re-enabled and its integration has "
-                    "reloaded. Re-enabling returns Home Assistant's own answer: "
+                    "automations. Re-enabling returns Home Assistant's own answer: "
                     "require_restart, or reload_delay (seconds until it reloads "
                     "the integration itself)."
                 ),

@@ -88,6 +88,13 @@ def _assert_cores_refusal(
     assert payload["ha_error_code"] == ha_error_code
 
 
+def _assert_no_guessed_causes(error: dict[str, Any]) -> None:
+    """Core's refusal carries no hand-written list of possible causes."""
+    guessed = ("Verify the entity_id", "Check that", "Ensure the entity", "Some entities")
+    given = [error.get("suggestion", ""), *error.get("suggestions", [])]
+    assert not [i for i in given if i.startswith(guessed) or "ha_search" in i]
+
+
 def _device_entity(hass: HomeAssistant, original_name: str | None) -> er.RegistryEntry:
     """A sensor on a device, the shape the main-entity switch applies to."""
     config_entry = MockConfigEntry(domain="demo")
@@ -179,6 +186,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["message"].startswith("No automatic entity_id for not an id: ")
     assert "is an invalid entity ID" in error["message"]
+    _assert_no_guessed_causes(error)
     _assert_cores_refusal(exc_info, "invalid_format")
     assert _types(sent) == ["config/entity_registry/get_automatic_entity_ids"]
 
@@ -315,7 +323,27 @@ async def test_main_entity_with_own_area_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "cannot have an area of its own" in error["message"]
+    _assert_no_guessed_causes(error)
     assert registry.async_get(entry.entity_id) == before
+
+
+async def test_an_update_answers_with_data_not_a_sentence_restating_it(
+    core_client: HomeAssistantClient, lamp: str
+) -> None:
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, icon="mdi:lamp"
+    )
+
+    assert result["updates"] == ["icon='mdi:lamp'"]
+    assert "message" not in result
+
+
+async def test_an_empty_read_is_the_empty_list_and_a_zero_count(
+    core_client: HomeAssistantClient,
+) -> None:
+    result = await EntityTools(core_client).ha_get_entity(entity_id=[])
+
+    assert result == {"success": True, "entity_entries": [], "count": 0}
 
 
 async def test_get_entity_serves_cores_full_entry(
@@ -433,6 +461,7 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
+    _assert_no_guessed_causes(error)
     _assert_cores_refusal(exc_info, "invalid_info")
 
 
