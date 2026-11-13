@@ -30,6 +30,7 @@ from pydantic import TypeAdapter, ValidationError
 from ha_mcp.tools.coercion import JSON_STRING_COERCION
 
 from ._registered_tools import all_registered_tools
+from ._tool_param_tables import BULK_TOOLS, DICT_TOOLS
 
 
 @pytest.fixture(scope="module")
@@ -63,22 +64,8 @@ _LIST_SAMPLE: list[dict[str, Any]] = [
     {"entity_id": "light.kitchen", "action": "turn_on"}
 ]
 
-# (tool_name, param_name) for every dict-typed param of a config or service tool.
-_DICT_PARAMS: list[tuple[str, str]] = [
-    ("ha_config_set_automation", "config"),
-    ("ha_config_set_script", "config"),
-    ("ha_config_set_scene", "config"),
-    ("ha_config_set_helper", "config"),
-    ("ha_config_set_dashboard", "config"),
-    ("ha_call_service", "data"),
-    ("ha_call_event", "data"),
-    ("ha_set_entity", "options"),
-    ("ha_set_entity", "categories"),
-    ("ha_set_entity", "expose_to"),
-]
-
-# (tool_name, param_name) for the list-typed param of ha_bulk_control.
-_BULK_TOOLS: list[tuple[str, str]] = [("ha_bulk_control", "operations")]
+_DICT_PARAMS = [(tool, param) for _, _, tool, param in DICT_TOOLS]
+_BULK_PARAMS = [(tool, param) for _, _, tool, param in BULK_TOOLS]
 
 
 @pytest.mark.parametrize(("tool_name", "param_name"), _DICT_PARAMS)
@@ -97,7 +84,7 @@ def test_dict_param_passes_native_dict_through(registered_tools, tool_name, para
     assert TypeAdapter(ann).validate_python(sample) == sample
 
 
-@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_PARAMS)
 def test_list_param_coerces_json_string(registered_tools, tool_name, param_name):
     """A JSON-encoded array string is coerced to a list before validation."""
     ann = _param_annotation(registered_tools, tool_name, param_name)
@@ -199,14 +186,14 @@ def test_deeply_nested_string_fails_validation_not_recursion(registered_tools):
         TypeAdapter(ann).validate_python("[" * 100_000)
 
 
-@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_PARAMS)
 def test_list_param_passes_native_list_through(registered_tools, tool_name, param_name):
     """A native list continues to validate unchanged."""
     ann = _param_annotation(registered_tools, tool_name, param_name)
     assert TypeAdapter(ann).validate_python(_LIST_SAMPLE) == _LIST_SAMPLE
 
 
-@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_TOOLS)
+@pytest.mark.parametrize(("tool_name", "param_name"), _BULK_PARAMS)
 def test_list_param_rejects_json_string_of_object(
     registered_tools, tool_name, param_name
 ):
