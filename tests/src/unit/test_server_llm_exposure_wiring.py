@@ -7,6 +7,8 @@ its ``tools/list`` is read over an MCP client session.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from ha_mcp import config
@@ -18,14 +20,16 @@ from ._real_server import build_server
 
 
 @pytest.fixture(autouse=True)
-def standalone(monkeypatch: pytest.MonkeyPatch) -> None:
+def standalone() -> Iterator[None]:
     """Start each case as a standalone server, and leave no registration behind.
 
     The embedded registration is process-global and only the component's
-    in-process entry sets it (``set_embedded_connection``), so the registry is
-    swapped for an empty one that ``monkeypatch`` puts back afterwards.
+    in-process entry sets it (``set_embedded_connection``), so it is cleared
+    before and after each case.
     """
-    monkeypatch.setattr(config, "_EMBEDDED_CONNECTION", {})
+    config.reset_embedded_connection()
+    yield
+    config.reset_embedded_connection()
 
 
 async def _stamped_tools(
