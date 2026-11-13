@@ -1,129 +1,135 @@
-"""Routing tests for ``_resolve_ieee`` over the ``ha_mcp_tools`` component gate.
+"""The ZHA device lookup behind ``ha_manage_radio`` over the ``ha_mcp_tools`` gate.
 
-``ha_manage_radio``'s ZHA actions resolve a ``device_id`` to its IEEE address, and
-every one of those 7 call sites went through ``_resolve_ieee``, which dumped the
-ENTIRE device registry to read one device's identifiers. When the component
-advertises ``device_get`` that becomes a single in-process read. These tests pin
-the shared ``_resolve_ieee`` seam: component-hit (no whole-registry dump), legacy
-fallback on no-caps, and ``unknown_command`` → invalidate caps + legacy list.
+Every ZHA action of ``ha_manage_radio`` resolves its ``device_id`` to the
+device's IEEE address first. When the component advertises ``device_get`` that
+is one in-process read; otherwise the whole device registry is listed. Core's
+real ``zha`` integration answers the diagnostics read that follows, on a zigpy
+radio whose serial I/O does nothing (``_zha_core.py``).
 """
 
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api, component_devices
-from ha_mcp.tools.radio.zigbee import _resolve_ieee
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
+from ha_mcp.tools import component_devices
+from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
+from ha_mcp.tools.tools_radio import RadioTools
 
-from ._component_routing_helpers import make_ws, patch_ws
-
-_IEEE = "00:11:22:33:44:55:66:77"
-
-_CAPS_DEVICES = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": [
-        "device_get",
-        "device_list",
-        "device_registry_child_semantics",
-    ],
-    "limits": {},
-}
+from ._client_spies import routing_spies
+from ._zha_core import IEEE, set_up_zha, zigbee_network
 
 
-def _zha_device(device_id: str = "dev-1") -> dict[str, Any]:
-    return {
-        "id": device_id,
-        "name": "Zigbee Sensor",
-        "identifiers": [["zha", _IEEE]],
-        "connections": [],
-    }
+@pytest.fixture
+async def device_id(hass: HomeAssistant, device_registry: dr.DeviceRegistry) -> str:
+    """The end device of a ZHA network that Core's ``zha`` integration runs."""
+    assert await async_setup_component(hass, "config", {})
+    entry = await set_up_zha(hass, zigbee_network())
+    device = device_registry.async_get_device_by_identifier(
+        ("zha", IEEE), entry.entry_id
+    )
+    assert device is not None
+    return device.id
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy device-registry-list dumps."""
-
-    def __init__(self, devices: list[dict[str, Any]] | None = None) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._devices = list(devices or [])
-        self.device_list_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/device_registry/list":
-            self.device_list_calls += 1
-            return {"success": True, "result": list(self._devices)}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+async def _component_socket(
+    client: HomeAssistantClient,
+) -> HomeAssistantWebSocketClient:
+    """The pooled socket the component route sends on."""
+    return await websocket_manager.get_client(
+        url=client.base_url, token=client.token, verify_ssl=False
+    )
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _device_get_calls(ws: Any) -> list[Any]:
+def _sent(legacy: AsyncMock, msg_type: str) -> list[dict[str, Any]]:
     return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/device_get"
+        c.args[0] for c in legacy.call_args_list if c.args[0].get("type") == msg_type
     ]
 
 
-@pytest.mark.asyncio
-async def test_resolve_ieee_served_by_component() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": _zha_device()},
+def _device_get_calls(component: AsyncMock) -> list[Any]:
+    return [
+        c
+        for c in component.call_args_list
+        if c.args[0] == component_devices.WS_DEVICE_GET
+    ]
+
+
+async def _diagnostics(client: HomeAssistantClient, device_id: str) -> dict[str, Any]:
+    result: dict[str, Any] = await RadioTools(client).ha_manage_radio(
+        radio="zigbee", action="diagnostics", device_id=device_id
     )
-    client = RoutingClient()
-
-    with patch_ws(ws, component_devices):
-        ieee = await _resolve_ieee(client, "dev-1")
-
-    assert ieee == _IEEE
-    assert client.device_list_calls == 0
-    assert len(_device_get_calls(ws)) == 1
-    assert _device_get_calls(ws)[0].kwargs["device_id"] == "dev-1"
+    return result
 
 
-@pytest.mark.asyncio
-async def test_resolve_ieee_capsless_uses_legacy_list() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+async def test_ieee_served_by_component(
+    component_core_client: HomeAssistantClient, device_id: str
+) -> None:
+    """The device comes from one device_get read; the whole registry is never
+    dumped, and ZHA answers for the resolved device."""
+    socket = await _component_socket(component_core_client)
+    with routing_spies(component_core_client, socket) as (legacy, component):
+        result = await _diagnostics(component_core_client, device_id)
+
+    assert not _sent(legacy, "config/device_registry/list")
+    assert len(_device_get_calls(component)) == 1
+    assert _device_get_calls(component)[0].kwargs["device_id"] == device_id
+    assert _sent(legacy, "zha/device")[0]["ieee"] == IEEE
+    assert result["ieee"] == IEEE
+    assert result["diagnostics"]["ieee"] == IEEE
+    assert result["diagnostics"]["lqi"] == 200
+
+
+async def test_ieee_without_component_uses_device_list(
+    core_client: HomeAssistantClient, device_id: str
+) -> None:
+    """Without the component Core answers the capability probe unknown_command,
+    so the IEEE comes from the whole device registry list."""
+    socket = await _component_socket(core_client)
+    with routing_spies(core_client, socket) as (legacy, component):
+        result = await _diagnostics(core_client, device_id)
+
+    assert len(_sent(legacy, "config/device_registry/list")) == 1
+    assert not _device_get_calls(component)
+    assert _sent(legacy, "zha/device")[0]["ieee"] == IEEE
+    assert result["diagnostics"]["ieee"] == IEEE
+
+
+async def test_ieee_unknown_command_invalidates_and_falls_back(
+    core_client: HomeAssistantClient,
+    device_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cached capabilities say device_get, but Core, without the component,
+    answers it unknown_command: the caps are dropped and the lookup falls back."""
+    invalidated = MagicMock(wraps=component_devices.invalidate_caps)
+    monkeypatch.setattr(component_devices, "invalidate_caps", invalidated)
+    served = ComponentCaps(
+        1,
+        "1.1.0",
+        frozenset({"device_get", "device_list", DEVICE_REGISTRY_CHILD_SEMANTICS}),
+        {},
     )
-    client = RoutingClient(devices=[_zha_device()])
-
-    with patch_ws(ws, component_devices):
-        ieee = await _resolve_ieee(client, "dev-1")
-
-    assert ieee == _IEEE
-    assert client.device_list_calls == 1
-    assert not _device_get_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_resolve_ieee_unknown_command_invalidates_and_falls_back() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+    monkeypatch.setattr(
+        component_devices, "get_component_caps", AsyncMock(return_value=served)
     )
-    client = RoutingClient(devices=[_zha_device()])
+    with routing_spies(core_client, await _component_socket(core_client)) as (
+        legacy,
+        _component,
+    ):
+        result = await _diagnostics(core_client, device_id)
 
-    with patch_ws(ws, component_devices):
-        ieee = await _resolve_ieee(client, "dev-1")
-
-    assert ieee == _IEEE
-    assert client.device_list_calls == 1
-    assert client not in component_api._CAPS_CACHE
+    assert len(_sent(legacy, "config/device_registry/list")) == 1
+    assert _sent(legacy, "zha/device")[0]["ieee"] == IEEE
+    assert result["diagnostics"]["ieee"] == IEEE
+    invalidated.assert_called_once_with(core_client)
