@@ -4,7 +4,8 @@
 # command and its reply come from the integration that owns it, set up in the
 # test (async_setup_component, a config entry, Core's own test kit for the
 # hardware below it). A test may re-register a command's own handler with its
-# own schema to observe it or to drop the connection, but never answers for it.
+# own schema to observe it, to hold it until the test releases it, or to drop
+# the connection, but never answers for it.
 id: no-test-websocket-replies
 language: python
 rule:

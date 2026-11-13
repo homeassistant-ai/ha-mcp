@@ -143,8 +143,9 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   registers: where the integration talks to a device or a service, only what
   is below its library is replaced, as Core's own tests replace it (Core's test
   kit for the integration, `aioclient_mock` for the HTTP API it calls). A test
-  may re-register a command's own handler with its own schema to observe it or
-  to drop the connection; it never answers for it.
+  may re-register a command's own handler with its own schema to observe it,
+  to hold it until the test releases it (the handler then runs and answers),
+  or to drop the connection; it never answers for it.
   `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
   handed straight to a pure helper follows the same rule: get it from Core.
 - What may be replaced: this repository's own collaborators that do not speak
