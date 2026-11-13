@@ -32,6 +32,7 @@ _SHARED = "no-shared-fake-clients"
 _HASS = "no-hand-made-hass"
 _SUPPRESSIONS = "no-stand-in-suppressions"
 _TYPED = "no-untyped-core-fixtures"
+_WS_REPLIES = "no-test-websocket-replies"
 
 
 def _ast_grep() -> str:
@@ -478,6 +479,61 @@ def test_every_client_method_is_covered_by_the_rule() -> None:
         # A test class may name a test ``test_connection``.
         missing = public - covered - {"test_connection"}
         assert not missing, sorted(missing)
+
+
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param(
+            "@websocket_api.websocket_command({'type': 'knx/get_base_data'})\n"
+            "@callback\ndef handler(hass, connection, msg):\n    pass\n",
+            True,
+            id="test-authored-command",
+        ),
+        pytest.param(
+            "@websocket_command({'type': 'x/y'})\ndef handler(hass, connection, msg):\n"
+            "    pass\n",
+            True,
+            id="imported-decorator",
+        ),
+        pytest.param(
+            "def handler(hass, connection, msg):\n"
+            "    connection.send_result(msg['id'], {'backups': []})\n",
+            True,
+            id="typed-in-result",
+        ),
+        pytest.param(
+            "def handler(hass, connection, msg):\n"
+            "    connection.send_error(msg['id'], 'not_found', 'gone')\n",
+            True,
+            id="typed-in-error",
+        ),
+        pytest.param(
+            "_, schema = hass.data[websocket_api.DOMAIN]['config/entity_registry/list']\n"
+            "websocket_api.async_register_command(hass, 'x/y', handler, schema)\n",
+            False,
+            id="own-handler-re-registered",
+        ),
+        pytest.param(
+            "await websocket_client.send_json({'id': 1, 'type': 'x/y'})\n",
+            False,
+            id="client-request",
+        ),
+    ],
+)
+def test_only_a_test_written_websocket_command_or_reply_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """A test neither registers its own command nor answers on a connection;
+    re-registering a command's own handler, or sending a request, is allowed."""
+    assert _flagged(_WS_REPLIES, source, tmp_path) is refused
+
+
+def test_no_test_writes_a_websocket_command_or_reply() -> None:
+    """The rule has no grandfather list: every unit test complies."""
+    rule = yaml.safe_load((_RULES / f"{_WS_REPLIES}.yml").read_text(encoding="utf-8"))
+    assert "ignores" not in rule
+    assert _scan(_RULES / f"{_WS_REPLIES}.yml", _REPO, "tests") == []
 
 
 @pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS, _TYPED])

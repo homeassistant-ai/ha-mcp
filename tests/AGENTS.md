@@ -138,7 +138,13 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   client class. A tool test takes `core_client` (`src/unit/_core_client.py`): the
   server's own client connected to the real `hass`. The test sets Core up
   (`hass.states.async_set`, `async_setup_component`, a registry fixture, a
-  WebSocket command) and asserts on the tool's result.
+  config entry) and asserts on the tool's result. A WebSocket command and its
+  reply come from the integration that owns it, never from a command the test
+  registers: where the integration talks to a device or a service, only what
+  is below its library is replaced, as Core's own tests replace it (Core's test
+  kit for the integration, `aioclient_mock` for the HTTP API it calls). A test
+  may re-register a command's own handler with its own schema to observe it or
+  to drop the connection; it never answers for it.
   `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
   handed straight to a pure helper follows the same rule: get it from Core.
 - What may be replaced: this repository's own collaborators that do not speak
@@ -156,11 +162,13 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   call was made, counted or not made, spy on the real method
   (`AsyncMock(wraps=client.get_states)`): it calls through, so the reply is
   still Core's.
-- An integration whose requirements are not installed with Core (`cloud`,
+- An integration a test runs gets its requirements in the dev group at the
+  pins of Core's manifest (`src/unit/test_dev_integration_pins.py` keeps them
+  equal). One whose requirements are not installed with Core (`cloud`,
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Eight ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
@@ -178,6 +186,10 @@ bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
 `assignment`, `attr-defined` or `misc`). The eighth
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
+The ninth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
+a test registers (`@websocket_api.websocket_command`) and a reply it writes on
+a connection (`connection.send_result`, `send_error`, `send_message`,
+`send_event`); it has no list, so every unit test complies.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
