@@ -80,14 +80,20 @@ the server tells the user to update the component (or to install it when none
 answered) and returns what it has without it. Do not rebuild the missing
 behaviour on the server side to keep an older component working.
 
-A component that advertises a command and then fails it (an error reply, a
-timeout or a malformed result) is treated as a missing component. The tool
+A component that advertises a read command and then fails it (an error reply,
+a timeout or a malformed result) is treated as a missing component. The tool
 takes the route it takes without the component, and gives the same warning to
 install or update it where that route returns less. Do not add a separate
-error, code path or test for a failing command. A fallback that already exists
+error, code path or test for a failing read. A fallback that already exists
 stays; do not remove it. The logbook read is the one exception: its bridge
 timeout surfaces, because the fallback would run the recorder query a second
-time ([native contracts](native-core-contracts.md#choose-the-authoritative-path)).
+time.
+
+A write is different. Only a command that provably was not sent, or that the
+component does not know, takes the other route. Any other failure may have run
+the write, so the tool reports the outcome as unknown and does not send it
+again, as `ha_call_event` and `ha_call_service` do
+([native contracts](native-core-contracts.md#choose-the-authoritative-path)).
 
 A component newer than the external server that calls it is unlikely and does
 not shape a design. Do not keep a server-side fallback, a second code path or a
