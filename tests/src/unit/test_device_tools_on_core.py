@@ -13,13 +13,11 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
 
 import attr
 import pytest
 from homeassistant.components import websocket_api
 from homeassistant.components.config import config_entries as config_entries_ws
-from homeassistant.config_entries import ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
@@ -27,16 +25,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
     MockConfigEntry,
-    MockModule,
-    mock_config_flow,
-    mock_integration,
-    mock_platform,
 )
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_registry import RegistryTools
 
 from ._client_spies import sent_messages
+from ._removable_device import removable_device
 from ._tool_errors import rejected_call_body
 
 
@@ -296,29 +291,12 @@ async def test_core_without_remove_passes_the_fallbacks_refusal_on(
     assert dr.async_get(hass).async_get(dev.id) is not None
 
 
-async def _removable_device(hass: HomeAssistant) -> dr.DeviceEntry:
-    """A device of a set-up integration that lets Core remove its devices."""
-    mock_integration(
-        hass,
-        MockModule(
-            "removable",
-            async_setup_entry=AsyncMock(return_value=None),
-            async_remove_config_entry_device=AsyncMock(return_value=True),
-        ),
-    )
-    mock_platform(hass, "removable.config_flow", None)
-    dev = _device(hass, "removable", identifiers={("removable", "1")})
-    with mock_config_flow("removable", ConfigFlow):
-        assert await hass.config_entries.async_setup(dev.config_entry_id)
-    return dev
-
-
 async def test_remove_removes_the_device_with_cores_remove(
     hass: HomeAssistant, tools: RegistryTools, core_client: HomeAssistantClient
 ) -> None:
     """On Core with ``config/device_registry/remove``, that command removes the
     device and the deprecated ``remove_config_entry`` is never sent."""
-    dev = await _removable_device(hass)
+    dev = await removable_device(hass)
 
     with sent_messages(core_client) as spy:
         result = await tools.ha_remove_device(device_id=dev.id)
@@ -337,7 +315,7 @@ async def test_core_without_remove_detaches_the_devices_entry(
     detaches the device's config entry with ``remove_config_entry`` instead,
     which removes the device. This Core is given no ``remove`` command, and
     the expected unknown-command answer logs no error."""
-    dev = await _removable_device(hass)
+    dev = await removable_device(hass)
     hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
 
     result = await tools.ha_remove_device(device_id=dev.id)

@@ -1,267 +1,252 @@
-"""Routing tests for ``ha_remove_device`` over the ``ha_mcp_tools`` component gate.
+"""Routing tests for ``ha_remove_device`` over the ``ha_mcp_tools`` component gate, on real Core.
 
-``ha_remove_device`` fetched the ENTIRE device registry twice for one delete — once
-in its body to look the device up, and again in the
-``@with_auto_backup`` capture (``backup_manager._fetch_device``, the same pre-write
-snapshot ``ha_set_device`` also uses). Both single-device reads route through the
-component's ``device_get`` when available. These tests pin the body routing
-(component-hit, no whole-registry dump; legacy fallback on no-caps /
-``unknown_command`` → invalidate; not-found falls back to the full list for the
-error's valid ids) AND the capture read routing at the ``_fetch_device`` seam.
+``ha_remove_device`` reads one device, then removes it, and its auto-backup
+capture reads the same device before a write. Both reads route through the
+component's ``device_get`` when it answers and fall back to Core's device list
+otherwise. The devices, the registries, the removal and every refusal are
+Core's: the tests only watch which read was sent, and where a route needs an
+answer Core does not give (no component, an unknown command), they remove that
+command from Core and let Core answer the rest.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+)
 
 from ha_mcp import backup_manager
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api, component_devices
-from ha_mcp.tools.tools_registry import register_registry_tools
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
+from ha_mcp.config import get_global_settings
+from ha_mcp.tools.tools_registry import RegistryTools
 
-from ._component_routing_helpers import make_ws, patch_ws
+from ._client_spies import sent_commands, sent_messages
+from ._removable_device import removable_device
+from ._tool_errors import rejected_call_body
 
-_CAPS_DEVICES = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": [
-        "device_get",
-        "device_list",
-        "device_registry_child_semantics",
-    ],
-    "limits": {},
-}
-
-
-def _raw_device(device_id: str) -> dict[str, Any]:
-    return {
-        "id": device_id,
-        "name": f"Device {device_id}",
-        "name_by_user": "Orphan",
-        "area_id": None,
-        "labels": [],
-        "config_entries": ["cfg-1"],
-        "config_entry_id": "cfg-1",
-        "connections": [],
-        "identifiers": [["hue", "0xAABB"]],
-        "disabled_by": None,
-    }
+DEVICE_LIST = "config/device_registry/list"
+DEVICE_GET = "ha_mcp_tools/device_get"
+COMPONENT_INFO = "ha_mcp_tools/info"
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy device-registry-list dumps."""
-
-    def __init__(self, devices: list[dict[str, Any]] | None = None) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._devices = list(devices or [])
-        self.device_list_calls = 0
-        self.remove_calls: list[str] = []
-
-    async def send_websocket_message(
-        self, msg: dict[str, Any], **_kwargs: Any
-    ) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/device_registry/list":
-            self.device_list_calls += 1
-            return {"success": True, "result": list(self._devices)}
-        if msg_type == "config/device_registry/remove":
-            self.remove_calls.append(msg["device_id"])
-            return {"success": True, "result": None}
-        if msg_type == "config/device_registry/list_composite_splits":
-            return {"success": True, "result": {}}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+@pytest.fixture
+async def config_commands(hass: HomeAssistant) -> None:
+    """Core's ``config`` commands: the device list, ``remove`` and the rest."""
+    assert await async_setup_component(hass, "config", {})
 
 
-def _build_remove_device(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_registry_tools(mcp, client)
-    return registered["ha_remove_device"]
+@pytest.fixture
+async def tools(
+    config_commands: None, component_core_client: HomeAssistantClient
+) -> RegistryTools:
+    """The registry tools on Core, with its ``config`` commands set up."""
+    return RegistryTools(component_core_client)
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _auto_backup_off(monkeypatch) -> None:
-    """Keep the ``@with_auto_backup`` gate off so the body tests exercise only the
-    body's device read (the capture read is tested separately via _fetch_device)."""
-    settings = MagicMock()
-    settings.enable_auto_backup = False
-    monkeypatch.setattr(
-        "ha_mcp.tools.auto_backup.get_global_settings", lambda: settings
+@pytest.fixture
+async def socket(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantWebSocketClient:
+    """The pooled WebSocket client the component's reads go through."""
+    return await websocket_manager.get_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
     )
 
 
-def _device_get_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/device_get"
-    ]
+def _device(hass: HomeAssistant, domain: str, identifier: str) -> dr.DeviceEntry:
+    """A device in Core's registry, owned by a new config entry of ``domain``,
+    identified by ``identifier`` within that domain."""
+    entry = MockConfigEntry(domain=domain)
+    entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    return registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(domain, identifier)}
+    )
+
+
+async def _set_up_orphan(hass: HomeAssistant) -> dr.DeviceEntry:
+    return await removable_device(hass, name_by_user="Orphan")
+
+
+async def _capture(client: HomeAssistantClient, device_id: str) -> Any:
+    """The auto-backup capture read for a device, through the backup manager."""
+    mgr = backup_manager.BackupManager(get_global_settings(), client)
+    backup_manager.register_default_handlers(mgr, client)
+    handler = mgr.handler_for("device")
+    assert handler is not None
+    return await handler.fetch(client, device_id)
+
+
+def _bridge_types(spy: AsyncMock) -> list[str]:
+    """The message types sent over the client's legacy WebSocket bridge."""
+    return [call.args[0]["type"] for call in spy.call_args_list]
+
+
+def _command_types(spy: AsyncMock) -> list[str]:
+    """The commands sent over the component's pooled WebSocket client."""
+    return [call.args[0] for call in spy.call_args_list]
 
 
 # --- body routing ---------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_body_served_by_component() -> None:
+async def test_body_served_by_component(
+    hass: HomeAssistant,
+    tools: RegistryTools,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """The body reads the device via device_get and removes it with Core's
     ``remove``; the whole device registry is never dumped."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": _raw_device("dev-1")},
-    )
-    client = RoutingClient()
-    remove_device = _build_remove_device(client)
+    dev = await _set_up_orphan(hass)
 
-    with patch_ws(ws, component_devices):
-        resp = await remove_device(device_id="dev-1")
+    with (
+        sent_messages(component_core_client) as legacy,
+        sent_commands(socket) as component,
+    ):
+        resp = await tools.ha_remove_device(device_id=dev.id)
 
     assert resp["success"] is True
     assert resp["device_name"] == "Orphan"
-    assert client.remove_calls == ["dev-1"]
-    assert client.device_list_calls == 0
-    assert len(_device_get_calls(ws)) == 1
+    assert dr.async_get(hass).async_get(dev.id) is None
+    assert _command_types(component).count(DEVICE_GET) == 1
+    assert DEVICE_LIST not in _bridge_types(legacy)
 
 
-@pytest.mark.asyncio
-async def test_body_capsless_uses_legacy_list() -> None:
+async def test_body_capsless_uses_legacy_list(
+    hass: HomeAssistant,
+    tools: RegistryTools,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """Old component → legacy config/device_registry/list for the body."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(devices=[_raw_device("dev-1")])
-    remove_device = _build_remove_device(client)
+    dev = await _set_up_orphan(hass)
+    hass.data[websocket_api.DOMAIN].pop(COMPONENT_INFO)
 
-    with patch_ws(ws, component_devices):
-        resp = await remove_device(device_id="dev-1")
+    with (
+        sent_messages(component_core_client) as legacy,
+        sent_commands(socket) as component,
+    ):
+        resp = await tools.ha_remove_device(device_id=dev.id)
 
     assert resp["success"] is True
-    assert client.device_list_calls == 1
-    assert not _device_get_calls(ws)
+    assert _bridge_types(legacy).count(DEVICE_LIST) == 1
+    assert DEVICE_GET not in _command_types(component)
 
 
-@pytest.mark.asyncio
-async def test_body_unknown_command_invalidates_and_falls_back() -> None:
+async def test_body_unknown_command_invalidates_and_falls_back(
+    hass: HomeAssistant,
+    tools: RegistryTools,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """unknown_command on device_get → invalidate caps + legacy list."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(devices=[_raw_device("dev-1")])
-    remove_device = _build_remove_device(client)
+    dev = await _set_up_orphan(hass)
+    hass.data[websocket_api.DOMAIN].pop(DEVICE_GET)
 
-    with patch_ws(ws, component_devices):
-        resp = await remove_device(device_id="dev-1")
+    with sent_messages(component_core_client) as legacy:
+        resp = await tools.ha_remove_device(device_id=dev.id)
 
     assert resp["success"] is True
-    assert client.device_list_calls == 1
-    assert client not in component_api._CAPS_CACHE
+    assert _bridge_types(legacy).count(DEVICE_LIST) == 1
+    # The dropped caps are probed again by the next call.
+    with sent_commands(socket) as component, pytest.raises(ToolError):
+        await tools.ha_remove_device(device_id="ghost")
+    assert COMPONENT_INFO in _command_types(component)
 
 
-@pytest.mark.asyncio
-async def test_body_not_found_falls_back_to_list_for_valid_ids() -> None:
+async def test_body_not_found_falls_back_to_list_for_valid_ids(
+    hass: HomeAssistant,
+    tools: RegistryTools,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """A component-reported missing device falls back to the LEGACY list so the
     not-found error can list valid ids (device_get authoritatively said None)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": None},
-    )
-    client = RoutingClient(devices=[_raw_device("other")])
-    remove_device = _build_remove_device(client)
+    other = _device(hass, "hue", "other")
 
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await remove_device(device_id="ghost")
+    with (
+        sent_messages(component_core_client) as legacy,
+        sent_commands(socket) as component,
+    ):
+        error = await rejected_call_body(tools.ha_remove_device(device_id="ghost"))
 
-    assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
-        excinfo.value
-    )
+    assert DEVICE_GET in _command_types(component)
+    assert error["error"]["message"] == "Device not found: ghost"
     # The legacy device list served the not-found error's valid ids.
-    assert client.device_list_calls == 1
+    assert _bridge_types(legacy).count(DEVICE_LIST) == 1
+    assert error["available_device_ids"] == [other.id]
 
 
-# --- auto-backup capture read routing (_fetch_device) ---------------------------
-@pytest.mark.asyncio
-async def test_capture_read_served_by_component(monkeypatch) -> None:
-    """The pre-write snapshot capture (``_fetch_device``, shared by ha_set_device /
+# --- auto-backup capture read routing ----------------------------
+async def test_capture_read_served_by_component(
+    hass: HomeAssistant,
+    config_commands: None,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    """The pre-write snapshot capture (the device handler, shared by ha_set_device /
     ha_remove_device) reads the device via device_get and never dumps the whole
-    registry through the legacy ``_ws_send``."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": _raw_device("dev-1")},
-    )
-    legacy = AsyncMock()
-    monkeypatch.setattr(backup_manager, "_ws_send", legacy)
-    client = RoutingClient()
+    registry through the legacy bridge."""
+    dev = _device(hass, "hue", "0xAABB")
 
-    with patch_ws(ws, component_devices):
-        result = await backup_manager._fetch_device(client, "dev-1")
+    with (
+        sent_messages(component_core_client) as legacy,
+        sent_commands(socket) as component,
+    ):
+        result = await _capture(component_core_client, dev.id)
 
-    assert result["id"] == "dev-1"
-    assert len(_device_get_calls(ws)) == 1
-    legacy.assert_not_awaited()
+    assert result["id"] == dev.id
+    assert _command_types(component).count(DEVICE_GET) == 1
+    assert DEVICE_LIST not in _bridge_types(legacy)
 
 
-@pytest.mark.asyncio
-async def test_capture_read_capsless_uses_legacy_ws_send(monkeypatch) -> None:
+async def test_capture_read_capsless_uses_legacy_ws_send(
+    hass: HomeAssistant,
+    config_commands: None,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """No device_get capability → the capture falls back to the legacy list read."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    legacy = AsyncMock(return_value=[_raw_device("dev-1")])
-    monkeypatch.setattr(backup_manager, "_ws_send", legacy)
-    client = RoutingClient()
+    dev = _device(hass, "hue", "0xAABB")
+    hass.data[websocket_api.DOMAIN].pop(COMPONENT_INFO)
 
-    with patch_ws(ws, component_devices):
-        result = await backup_manager._fetch_device(client, "dev-1")
+    with sent_commands(socket) as component:
+        result = await _capture(component_core_client, dev.id)
 
-    assert result["id"] == "dev-1"
-    legacy.assert_awaited_once()
-    assert not _device_get_calls(ws)
+    assert result["id"] == dev.id
+    assert DEVICE_GET not in _command_types(component)
 
 
-@pytest.mark.asyncio
-async def test_capture_read_unknown_command_invalidates(monkeypatch) -> None:
+async def test_capture_read_unknown_command_invalidates(
+    hass: HomeAssistant,
+    config_commands: None,
+    component_core_client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """unknown_command on the capture's device_get → invalidate caps + legacy read."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    legacy = AsyncMock(return_value=[_raw_device("dev-1")])
-    monkeypatch.setattr(backup_manager, "_ws_send", legacy)
-    client = RoutingClient()
+    dev = _device(hass, "hue", "0xAABB")
+    hass.data[websocket_api.DOMAIN].pop(DEVICE_GET)
 
-    with patch_ws(ws, component_devices):
-        result = await backup_manager._fetch_device(client, "dev-1")
+    with sent_commands(socket) as component:
+        result = await _capture(component_core_client, dev.id)
 
-    assert result["id"] == "dev-1"
-    legacy.assert_awaited_once()
-    assert client not in component_api._CAPS_CACHE
+    assert result["id"] == dev.id
+    assert DEVICE_GET in _command_types(component)
+    # The dropped caps are probed again by the next capture.
+    with sent_commands(socket) as component:
+        await _capture(component_core_client, dev.id)
+    assert COMPONENT_INFO in _command_types(component)
