@@ -90,7 +90,12 @@ def _assert_cores_refusal(
 
 def _assert_no_guessed_causes(error: dict[str, Any]) -> None:
     """Core's refusal carries no hand-written list of possible causes."""
-    guessed = ("Verify the entity_id", "Check that", "Ensure the entity", "Some entities")
+    guessed = (
+        "Verify the entity_id",
+        "Check that",
+        "Ensure the entity",
+        "Some entities",
+    )
     given = [error.get("suggestion", ""), *error.get("suggestions", [])]
     assert not [i for i in given if i.startswith(guessed) or "ha_search" in i]
 
