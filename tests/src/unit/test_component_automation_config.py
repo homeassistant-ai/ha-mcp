@@ -442,11 +442,29 @@ async def test_references_are_absent_while_the_automation_is_not_loaded(
     assert got["references"] is None
 
 
-async def test_lookup_without_a_key_is_refused_not_answered_not_found(
-    hass: HomeAssistant,
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"action": "validate"},
+        {"action": "describe"},
+        {"action": "lookup"},
+        {"action": "lookup", "entity_id": ""},
+    ],
+    ids=[
+        "validate-without-config",
+        "describe-without-kind",
+        "lookup-without-a-key",
+        "lookup-empty-id",
+    ],
+)
+async def test_request_without_its_input_is_refused_not_answered(
+    hass: HomeAssistant, msg: dict[str, Any]
 ) -> None:
+    """Answered, a validate without a config or a describe without a kind
+    would read as Core's verdict on nothing, and a lookup without a key or of
+    ``""`` as an automation that does not exist."""
     with pytest.raises(HomeAssistantError):
-        await automation_config.async_automation_config(hass, {"action": "lookup"})
+        await automation_config.async_automation_config(hass, msg)
 
 
 async def test_core_missing_a_lookup_part_is_unavailable(

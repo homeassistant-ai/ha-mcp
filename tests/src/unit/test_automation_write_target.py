@@ -12,7 +12,6 @@ import json
 from typing import Any
 
 import pytest
-from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
@@ -20,10 +19,6 @@ from ha_mcp.tools import component_automation
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 from ._component_routing_helpers import make_ws, patch_ws
-from .test_component_automation_config import (
-    _run,
-    core,  # noqa: F401 - pytest fixture
-)
 from .test_ha_call_service_component_routing import (
     _clear_caps_cache,  # noqa: F401 - autouse fixture shared across routing tests
 )
@@ -199,23 +194,3 @@ async def test_load_failure_is_read_from_the_automations_own_issue(
         )
 
     assert got["validation"] == validation
-
-
-# --- component refusals -------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("action", "fields"),
-    [("validate", {}), ("describe", {}), ("lookup", {"entity_id": ""})],
-    ids=["validate-without-config", "describe-without-kind", "lookup-empty-id"],
-)
-async def test_request_without_its_input_is_refused_not_answered(
-    core: Any,  # noqa: F811
-    action: str,
-    fields: dict[str, Any],
-) -> None:
-    """Answered, a validate without a config or a describe without a kind
-    would read as Core's verdict on nothing, and a lookup of ``""`` as an
-    automation that does not exist."""
-    with pytest.raises(HomeAssistantError):
-        await _run(core, action, **fields)
