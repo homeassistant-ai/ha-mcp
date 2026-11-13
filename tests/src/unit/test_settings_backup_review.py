@@ -8,22 +8,19 @@ directory the way an older release or a corrupted disk left them.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
-from homeassistant.components.calendar import CalendarEntity, CalendarEvent
+from homeassistant.components.local_calendar.calendar import LocalCalendarEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import setup_test_component_platform
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -36,6 +33,7 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import build_settings_handlers
 
+from ._calendars import calendar_config_dir, local_calendar
 from ._core_client import refused_url
 from ._template_helper_core import create_template_sensor
 
@@ -43,10 +41,7 @@ NAME = "calendar_event.calendar.fam_evt-1.20260909_000000.yaml"
 Route = Callable[[Request], Awaitable[Response]]
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``."""
-    return hass_tmp_config_dir
+hass_config_dir = calendar_config_dir
 
 
 def _use_backup_dir(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
@@ -155,35 +150,24 @@ async def test_settings_diff_without_an_answer_from_home_assistant(
     assert str(refused.value) not in json.dumps(payload)
 
 
-class UnreadableCalendar(CalendarEntity):
-    """``calendar.fam``: its backend fails every read with a private detail."""
-
-    _attr_name = "Fam"
-
-    @property
-    def event(self) -> CalendarEvent | None:
-        return None
-
-    async def async_get_events(
-        self, hass: HomeAssistant, start_date: dt.datetime, end_date: dt.datetime
-    ) -> list[CalendarEvent]:
-        raise HomeAssistantError("option-value-secret upstream body")
-
-
 async def test_settings_diff_logs_safe_failure_diagnostics(
     hass: HomeAssistant,
     backup_dir: Path,
     core_client: HomeAssistantClient,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    setup_test_component_platform(hass, "calendar", [UnreadableCalendar()])
-    assert await async_setup_component(
-        hass, "calendar", {"calendar": {"platform": "test"}}
-    )
-    await hass.async_block_till_done()
+    await local_calendar(hass, "Fam")
     _place_calendar_event(backup_dir)
 
-    with caplog.at_level(logging.WARNING):
+    # calendar.fam's backend fails every read with a private detail.
+    with (
+        patch.object(
+            LocalCalendarEntity,
+            "async_get_events",
+            side_effect=HomeAssistantError("option-value-secret upstream body"),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
         status, _payload = await _call(core_client, "diff_backup")
 
     assert status == 502

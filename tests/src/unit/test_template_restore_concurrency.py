@@ -34,6 +34,13 @@ DOMAIN = "helper_template"
 
 
 @pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core's config directory is this test's ``tmp_path``: Template writes
+    its blueprints there."""
+    return hass_tmp_config_dir
+
+
+@pytest.fixture
 async def entry(hass: HomeAssistant) -> ConfigEntry:
     """A Template sensor helper made by Core's config flow, in state ``saved``."""
     return await create_template_sensor(hass, "saved")
