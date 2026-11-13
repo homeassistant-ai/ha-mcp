@@ -393,6 +393,32 @@ async def test_a_diff_after_a_restore_finds_the_item_under_its_new_id(
         assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
 
 
+async def test_a_second_restore_does_not_take_an_area_that_lost_a_label_core_still_has(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Only the label ids Core no longer holds are left out of the match, so a
+    row that lacks a label that still exists is not the restored area."""
+    labels = lr.async_get(hass)
+    kept = labels.async_create("Kept")
+    other = labels.async_create("Other")
+    registry = ar.async_get(hass)
+    area = registry.async_create("Hall", labels={kept.label_id, other.label_id})
+    registry.async_update(area.id, name="Corridor")
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    registry.async_delete(area.id)
+
+    await backup_manager.restore_snapshot(snapshot)
+    (restored,) = registry.areas.values()
+    registry.async_update(restored.id, labels={kept.label_id})
+
+    with pytest.raises(HomeAssistantCommandError, match="already in use"):
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert [(a.name, a.labels) for a in registry.areas.values()] == [
+        ("Corridor", {kept.label_id})
+    ]
+
+
 async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
