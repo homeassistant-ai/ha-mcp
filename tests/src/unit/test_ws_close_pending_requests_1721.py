@@ -39,6 +39,7 @@ from ._ws_transport import (
     close_gate,
     connected_ws,
     open_gate,
+    until,
 )
 
 WS_LOGGER = "ha_mcp.client.websocket_client"
@@ -154,6 +155,79 @@ async def test_a_dropped_connection_fails_the_waiting_command_and_warns(
         and "dropped without a close frame" in record.getMessage()
         for record in caplog.records
     )
+
+
+async def test_a_normal_close_cut_short_is_logged_at_info_not_warning(
+    core_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A normal close code raises no alarm, even when Core never answers it.
+
+    A close completed on both sides ends the reader with no error, so nothing
+    is logged (the revoked-token test above). One whose normal close frame
+    went out but was cut off before Core's answer still carries code 1000,
+    and is logged at INFO, not WARNING.
+    """
+    caplog.set_level(logging.INFO, logger=WS_LOGGER)
+    async with connected_ws(core_client) as client:
+        assert client.websocket is not None
+        # Eager: the close frame is sent before the drop, and the loop does
+        # not run in between, so Core's answer is never read.
+        closing = asyncio.create_task(client.websocket.close(), eager_start=True)
+        abort_transport(client)
+        async with asyncio.timeout(5):
+            await closing
+        await until(lambda: not client.is_connected)
+
+    close_records = [
+        record
+        for record in caplog.records
+        if record.name == WS_LOGGER and "close code 1000" in record.getMessage()
+    ]
+    assert close_records, f"normal close not logged; got: {caplog.records}"
+    assert all(record.levelno == logging.INFO for record in close_records)
+
+
+async def test_a_reader_error_fails_the_waiting_command_with_its_text(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """An error other than a close, ending the client's reader, is named.
+
+    The waiting command must fail with that error's text, not a bare
+    "connection closed". Core never breaks the reader; a second reader on the
+    same socket does, as the client's next read then raises the library's
+    concurrency error. An event handler starts it, so it is reading before
+    the client reads again.
+    """
+    event_type = "b11_second_reader"
+    close_gate(hass)
+    readers: list[asyncio.Task[Any]] = []
+    try:
+        async with connected_ws(core_client) as client:
+            websocket = client.websocket
+            assert websocket is not None
+
+            async def start_a_second_reader(_event: dict[str, Any]) -> None:
+                readers.append(asyncio.create_task(websocket.recv(), eager_start=True))
+
+            client.add_event_handler(event_type, start_a_second_reader)
+            await client.subscribe_events(event_type)
+            command = asyncio.create_task(
+                client.send_command("execute_script", sequence=HELD_SCRIPT)
+            )
+            assert await client.ping() is True
+            hass.bus.async_fire(event_type)
+
+            async with asyncio.timeout(5):
+                with pytest.raises(
+                    HomeAssistantConnectionError, match="already running recv"
+                ):
+                    _ = await command
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+    finally:
+        await open_gate(hass)
 
 
 async def test_command_with_event_drop_retrieves_event_future_exception(

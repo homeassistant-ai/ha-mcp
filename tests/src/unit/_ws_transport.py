@@ -73,9 +73,9 @@ def answers_unread(client: HomeAssistantWebSocketClient) -> Iterator[None]:
 
 
 async def until(predicate: Callable[[], bool], timeout: float = 5) -> None:
-    """Yield to the loop until ``predicate()`` holds."""
+    """Yield to the loop until ``predicate()`` holds; ``TimeoutError`` if never."""
     async with asyncio.timeout(timeout):
-        for _ in range(100_000):
+        while True:
             if predicate():
                 return
             await asyncio.sleep(0.001)

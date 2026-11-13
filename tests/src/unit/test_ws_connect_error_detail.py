@@ -7,14 +7,17 @@ reason being captured on the client and surfaced at every call site (the
 pooled ``WebSocketManager.get_client`` path, the ``get_connected_ws_client``
 helper and the backup capture built on it).
 
-The two failures are real: a loopback port nothing listens on refuses the
-connection, and Core's own ``websocket_api`` rejects a token it never issued.
+The failures are real: a loopback port nothing listens on refuses the
+connection, Core's own ``websocket_api`` rejects a token it never issued, and
+a second reader on a new socket takes Core's ``auth_required`` from the client.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -31,6 +34,7 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.helpers import get_connected_ws_client
 
 from ._tls_core import refused_url
+from ._ws_transport import spawned_by
 
 REJECTED_TOKEN = "super-secret-token-DO-NOT-LEAK"
 
@@ -83,6 +87,33 @@ async def test_a_rejected_token_is_captured_without_leaking_it(
     assert client.last_connect_error is not None
     assert "Invalid token" in client.last_connect_error
     assert REJECTED_TOKEN not in client.last_connect_error
+
+
+async def test_a_handshake_without_auth_required_is_captured(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A handshake that never asks for auth is reported as such.
+
+    Core always sends ``auth_required``; a second reader, started as the
+    client's own reader is created and before it reads, takes the socket's
+    first message, so the client never sees it. The client waits out its
+    auth timeout (5 s), then must name the missing message as the reason.
+    """
+    client = HomeAssistantWebSocketClient(
+        core_client.base_url, core_client.token, verify_ssl=False
+    )
+    readers: list[asyncio.Task[Any]] = []
+
+    def take_the_first_message() -> None:
+        assert client.websocket is not None
+        readers.append(asyncio.create_task(client.websocket.recv(), eager_start=True))
+
+    with spawned_by(client, on_spawn=take_the_first_message):
+        assert await client.connect() is False
+    await asyncio.gather(*readers, return_exceptions=True)
+
+    assert client.last_connect_error is not None
+    assert "Did not receive auth_required" in client.last_connect_error
 
 
 @_REFUSED_SOCKET_TIMER
