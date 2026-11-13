@@ -1,151 +1,223 @@
 """Regressions for Template capture trust, write coordination and identity."""
 
 import asyncio
-from copy import deepcopy
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from ha_mcp import backup_manager as bm
-from ha_mcp.tools import auto_backup
+from ha_mcp import config
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import auto_backup, backup
+from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from .test_template_helper_backup import _record, _response
+from ._held_command import held_command
+from ._template_helper_core import (
+    create_template_sensor,
+    set_template_state,
+    state_template,
+)
 
 
 @pytest.fixture
-def manager(tmp_path):
-    return bm.get_backup_manager(
-        SimpleNamespace(),
-        SimpleNamespace(
-            enable_auto_backup=True,
-            auto_backup_throttle_minutes=30,
-            auto_backup_retain_per_entity=5,
-            auto_backup_dir=str(tmp_path),
-        ),
-    )
+def settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> config.Settings:
+    """The server's real settings, with auto-backup on and its own directory."""
+    configured = config.get_global_settings()
+    for name, value in {
+        "enable_auto_backup": True,
+        "enable_snapshot_actions": True,
+        "backup_read_only": False,
+        "read_only_mode": False,
+        "enable_snapshot_delete": False,
+        "auto_backup_throttle_minutes": 30,
+        "auto_backup_retain_per_entity": 5,
+        "auto_backup_dir": str(tmp_path / "backups"),
+    }.items():
+        monkeypatch.setattr(configured, name, value)
+    return configured
 
 
-def _config(state="saved", entry_id="template-entry"):
-    return {
-        "entry_id": entry_id,
-        "options": {**_record()["options"], "state": state},
-    }
+@pytest.fixture
+async def template_entry(hass: HomeAssistant) -> ConfigEntry:
+    return await create_template_sensor(hass, "saved")
 
 
-def _registry():
-    return [
-        {
-            "entity_id": "sensor.renamed_example",
-            "unique_id": "template-entry",
-            "config_entry_id": "template-entry",
-            "name": None,
-            "original_name": "Example",
-        }
-    ]
+@pytest.fixture
+def manager(
+    component_core_client: HomeAssistantClient, settings: config.Settings
+) -> bm.BackupManager:
+    return bm.get_backup_manager(component_core_client, settings)
 
 
-async def _capture_response(_client, message):
-    if message["type"] == "config/entity_registry/list":
-        return _registry()
-    assert message["type"] == "ha_mcp_tools/helpers_list"
-    return _response()
+async def _until(predicate: Any) -> None:
+    for _ in range(1000):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition never held")
+
+
+def _rename(
+    entity_registry: er.EntityRegistry, entry: ConfigEntry, new_entity_id: str
+) -> None:
+    (row,) = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    entity_registry.async_update_entity(row.entity_id, new_entity_id=new_entity_id)
+
+
+def _degrade_secret_scrub(hass: HomeAssistant) -> None:
+    """A secrets.yaml that is present but cannot be parsed."""
+    Path(hass.config.path("secrets.yaml")).write_text("key: [unclosed\n")
+
+
+async def _real_snapshot(manager: bm.BackupManager, entry: ConfigEntry) -> Path:
+    path = await manager.maybe_snapshot("helper_template", entry.entry_id, force=True)
+    assert path is not None
+    return path
+
+
+def _legacy(
+    manager: bm.BackupManager,
+    path: Path,
+    entity_id: str | None,
+    *,
+    entry_id: str | None = None,
+    emptied: bool = False,
+) -> Path:
+    """Rewrite a real snapshot's identity the way an older release stored it."""
+    data = manager.read_snapshot(path.name)
+    data["entity_id"] = entity_id
+    if entry_id is not None:
+        data["config"]["entry_id"] = entry_id
+    if emptied:
+        data["config"] = {}
+    path.write_text(yaml.safe_dump(data))
+    return path
 
 
 @pytest.mark.parametrize("mandatory", [False, True])
-async def test_degraded_scrub_never_writes_snapshot(manager, monkeypatch, mandatory):
-    response = {**_response(), "secret_scrub_degraded": True}
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=response))
+async def test_degraded_scrub_never_writes_snapshot(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    mandatory: bool,
+) -> None:
+    _degrade_secret_scrub(hass)
     if mandatory:
         with pytest.raises(bm.MandatoryBackupError, match="secret scrub"):
             await manager.maybe_snapshot(
-                "helper_template", "template-entry", mandatory=True
+                "helper_template", template_entry.entry_id, mandatory=True
             )
     else:
-        assert await manager.maybe_snapshot("helper_template", "template-entry") is None
+        assert (
+            await manager.maybe_snapshot("helper_template", template_entry.entry_id)
+            is None
+        )
     assert not list(manager.backup_dir.glob("*.yaml"))
 
 
-async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
-    source = manager._write_snapshot(
-        "helper_template", "template-entry", _config(), "test"
-    )
-    send = AsyncMock(
-        side_effect=[
-            _response(),
-            _registry(),
-            {**_response(), "secret_scrub_degraded": True},
-        ]
-    )
-    monkeypatch.setattr(bm, "_ws_send", send)
-    restore = AsyncMock(return_value={"success": True})
-    manager.register(
-        bm.DomainHandler(
-            "helper_template", bm._make_flow_helper_handler("template").fetch, restore
-        )
-    )
+async def test_degraded_safety_capture_blocks_restore(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+) -> None:
+    source = await _real_snapshot(manager, template_entry)
+    await set_template_state(hass, template_entry, "changed")
+    _degrade_secret_scrub(hass)
+
     with pytest.raises(bm.BackupRestoreError) as caught:
         await manager.restore_snapshot(source.name)
+
     assert caught.value.outcome["apply_status"] == "not_applied"
     assert caught.value.outcome["safety_backup"] is None
-    assert send.await_count == 3
-    restore.assert_not_awaited()
+    assert template_entry.options["state"] == state_template("changed")
     assert list(manager.backup_dir.glob("*.yaml")) == [source]
 
 
 @pytest.mark.parametrize(
     "first_target,second_target",
-    [
-        ("sensor.renamed_example", "template-entry"),
-        ("template-entry", "sensor.renamed_example"),
-    ],
+    [("alias", "canonical"), ("canonical", "alias")],
 )
 async def test_alias_capture_uses_stable_header_and_shared_throttle(
-    manager, monkeypatch, first_target, second_target
-):
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
-    first = await manager.maybe_snapshot("helper_template", first_target)
+    entity_registry: er.EntityRegistry,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    first_target: str,
+    second_target: str,
+) -> None:
+    _rename(entity_registry, template_entry, "sensor.renamed_example")
+    targets = {"alias": "sensor.renamed_example", "canonical": template_entry.entry_id}
+
+    first = await manager.maybe_snapshot("helper_template", targets[first_target])
+
     assert first is not None
-    assert manager.read_snapshot(first.name)["entity_id"] == "template-entry"
-    assert await manager.maybe_snapshot("helper_template", second_target) is None
-    assert set(manager._last_snapshot) == {"helper_template:template-entry"}
-    assert set(manager._locks) == {"helper_template:template-entry"}
+    assert manager.read_snapshot(first.name)["entity_id"] == template_entry.entry_id
+    assert (
+        await manager.maybe_snapshot("helper_template", targets[second_target]) is None
+    )
+    assert [
+        row["name"] for row in manager.list_snapshots(domain="helper_template")
+    ] == [first.name]
 
 
-async def test_alias_capture_refetches_after_canonical_lock(manager, monkeypatch):
-    manager._settings.auto_backup_throttle_minutes = 0
-    resolved = asyncio.Event()
-    current = _record()
-
-    async def send(_client, message):
-        if message["type"] == "config/entity_registry/list":
-            return _registry()
-        assert message["type"] == "ha_mcp_tools/helpers_list"
-        result = deepcopy(_response(current))
-        resolved.set()
-        return result
-
-    monkeypatch.setattr(bm, "_ws_send", send)
-    lock = manager._locks.setdefault("helper_template:template-entry", asyncio.Lock())
-    async with lock:
-        capture = asyncio.create_task(
+async def test_alias_capture_refetches_after_canonical_lock(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias capture that waited on the canonical lock reads the entry again."""
+    _rename(entity_registry, template_entry, "sensor.renamed_example")
+    monkeypatch.setattr(settings, "auto_backup_throttle_minutes", 0)
+    async with held_command(hass, "ha_mcp_tools/helpers_list", first_only=True) as held:
+        # The canonical capture's read is held while it owns the lock.
+        canonical = asyncio.create_task(
+            manager.maybe_snapshot("helper_template", template_entry.entry_id)
+        )
+        await asyncio.wait_for(held.arrived.wait(), 2)
+        alias = asyncio.create_task(
             manager.maybe_snapshot("helper_template", "sensor.renamed_example")
         )
-        await asyncio.wait_for(resolved.wait(), 2)
-        current["options"]["state"] = "after-lock"
-    path = await asyncio.wait_for(capture, 2)
-    assert (
-        manager.read_snapshot(path.name)["config"]["options"]["state"] == "after-lock"
+        # The alias capture's own read is answered; it then waits for the lock.
+        await _until(lambda: held.calls >= 2)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        await set_template_state(hass, template_entry, "after-lock")
+        held.release.set()
+        await asyncio.wait_for(canonical, 2)
+        path = await asyncio.wait_for(alias, 2)
+
+    assert path is not None
+    assert manager.read_snapshot(path.name)["config"]["options"][
+        "state"
+    ] == state_template("after-lock")
+
+
+async def test_capture_response_identity_round_trips_to_history(
+    entity_registry: er.EntityRegistry,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+) -> None:
+    _rename(entity_registry, template_entry, "sensor.renamed_example")
+    mcp = FastMCP("template-backup-review")
+    backup.register_backup_tools(mcp, component_core_client)
+    tool = await mcp.get_tool("ha_manage_backup")
+
+    result = await tool.fn(
+        scope="edits",
+        action="create",
+        domain="helper_template",
+        entity_id="sensor.renamed_example",
     )
 
-
-async def test_capture_response_identity_round_trips_to_history(manager, monkeypatch):
-    from ha_mcp.tools.backup import _edits_create
-
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
-    result = await _edits_create(
-        manager, "edits", "create", "helper_template", "sensor.renamed_example"
-    )
     rows = manager.list_snapshots(
         domain="helper_template", entity_id=result["data"]["entity_id"]
     )
@@ -153,53 +225,81 @@ async def test_capture_response_identity_round_trips_to_history(manager, monkeyp
 
 
 @pytest.mark.parametrize(
-    "target,config", [(None, _config()), ("wrong-entry", _config()), ("sensor.old", {})]
+    ("identity", "emptied"),
+    [(None, False), ("wrong-entry", False), ("sensor.old", True)],
 )
-def test_invalid_legacy_identity_is_not_deleted(manager, target, config):
-    import yaml
+async def test_invalid_legacy_identity_is_not_deleted(
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str | None,
+    emptied: bool,
+) -> None:
+    path = _legacy(
+        manager,
+        await _real_snapshot(manager, template_entry),
+        identity,
+        emptied=emptied,
+    )
+    monkeypatch.setattr(settings, "auto_backup_retain_per_entity", 1)
+    await manager.maybe_snapshot("helper_template", template_entry.entry_id, force=True)
 
-    path = manager._write_snapshot("helper_template", "sensor.old", config, "test")
-    data = manager.read_snapshot(path.name)
-    data["entity_id"] = target
-    path.write_text(yaml.safe_dump(data))
-    manager._settings.auto_backup_retain_per_entity = 1
-    manager._write_snapshot("helper_template", "template-entry", _config(), "test")
-    manager._rotate("helper_template", "template-entry")
-    manager.delete_bulk(domain="helper_template", entity_id="template-entry")
+    manager.delete_bulk(domain="helper_template", entity_id=template_entry.entry_id)
+
     assert path.exists()
 
 
-def test_legacy_alias_history_lists_and_deletes_by_stable_identity(manager):
-    old = manager._write_snapshot("helper_template", "sensor.reused", _config(), "test")
-    new = manager._write_snapshot(
-        "helper_template", "template-entry", _config(), "test"
+async def test_legacy_alias_history_lists_and_deletes_by_stable_identity(
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+) -> None:
+    old = _legacy(
+        manager, await _real_snapshot(manager, template_entry), "sensor.reused"
     )
-    other = manager._write_snapshot(
-        "helper_template", "sensor.reused", _config(entry_id="other-entry"), "test"
+    new = await _real_snapshot(manager, template_entry)
+    other = _legacy(
+        manager,
+        await _real_snapshot(manager, template_entry),
+        "sensor.reused",
+        entry_id="other-entry",
     )
-    rows = manager.list_snapshots(domain="helper_template", entity_id="template-entry")
+
+    rows = manager.list_snapshots(
+        domain="helper_template", entity_id=template_entry.entry_id
+    )
+
     assert {row["name"] for row in rows} == {old.name, new.name}
-    assert {row["entity_id"] for row in rows} == {"template-entry"}
+    assert {row["entity_id"] for row in rows} == {template_entry.entry_id}
     assert set(
-        manager.delete_bulk(domain="helper_template", entity_id="template-entry")[
-            "deleted"
-        ]
+        manager.delete_bulk(
+            domain="helper_template", entity_id=template_entry.entry_id
+        )["deleted"]
     ) == {old.name, new.name}
     assert other.exists()
 
 
 async def test_legacy_alias_history_rotates_with_canonical_captures(
-    manager, monkeypatch
-):
-    manager._settings.auto_backup_retain_per_entity = 1
-    old = manager._write_snapshot("helper_template", "sensor.reused", _config(), "test")
-    other = manager._write_snapshot(
-        "helper_template", "sensor.reused", _config(entry_id="other-entry"), "test"
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = _legacy(
+        manager, await _real_snapshot(manager, template_entry), "sensor.reused"
     )
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
+    other = _legacy(
+        manager,
+        await _real_snapshot(manager, template_entry),
+        "sensor.reused",
+        entry_id="other-entry",
+    )
+    monkeypatch.setattr(settings, "auto_backup_retain_per_entity", 1)
+
     latest = await manager.maybe_snapshot(
-        "helper_template", "template-entry", force=True
+        "helper_template", template_entry.entry_id, force=True
     )
+
     assert latest is not None and latest.exists()
     assert not old.exists()
     assert other.exists()
@@ -207,52 +307,33 @@ async def test_legacy_alias_history_rotates_with_canonical_captures(
 
 @pytest.mark.parametrize("enabled", [False, True])
 async def test_alias_removal_uses_core_identity_and_waits_for_restore(
-    manager, monkeypatch, enabled
-):
-    from ha_mcp.tools.tools_integrations import IntegrationTools
-
-    manager._settings.enable_auto_backup = enabled
-    resolved = asyncio.Event()
-
-    async def send(message):
-        if message["type"] == "config/entity_registry/get":
-            assert message["entity_id"] == "sensor.secondary"
-            resolved.set()
-            return {
-                "success": True,
-                "result": {"platform": "template", "config_entry_id": "template-entry"},
-            }
-        assert message["type"] == "config/entity_registry/list"
-        return {"success": True, "result": []}
-
-    manager._client.send_websocket_message = AsyncMock(side_effect=send)
-    manager._client.delete_config_entry = AsyncMock(return_value={})
-    # The native removal path works without a component or a readable scrub source.
-    monkeypatch.setattr(
-        bm,
-        "_ws_send",
-        AsyncMock(side_effect=bm.HomeAssistantError("component unavailable")),
-    )
-    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: manager._settings)
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    template_entry: ConfigEntry,
+    settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    monkeypatch.setattr(settings, "enable_auto_backup", enabled)
+    _rename(entity_registry, template_entry, "sensor.secondary")
+    manager = bm.get_backup_manager(core_client, settings)
     monkeypatch.setattr(auto_backup, "get_backup_manager", lambda *_: manager)
-    task = None
-    try:
-        async with manager.config_entry_write_guard("template-entry"):
-            task = asyncio.create_task(
-                IntegrationTools(manager._client).ha_remove_helpers_integrations(
-                    target="sensor.secondary",
-                    helper_type="template",
-                    confirm=True,
-                    wait=False,
-                )
+    async with manager.config_entry_write_guard(template_entry.entry_id):
+        task = asyncio.create_task(
+            IntegrationTools(core_client).ha_remove_helpers_integrations(
+                target="sensor.secondary",
+                helper_type="template",
+                confirm=True,
+                wait=False,
             )
-            await asyncio.wait_for(resolved.wait(), 2)
-            await asyncio.sleep(0.02)
-            manager._client.delete_config_entry.assert_not_awaited()
-    finally:
-        if task is not None:
-            await asyncio.gather(task)
-    manager._client.delete_config_entry.assert_awaited_once_with("template-entry")
+        )
+        done, _ = await asyncio.wait({task}, timeout=0.2)
+        assert not done
+        assert hass.config_entries.async_get_entry(template_entry.entry_id)
+    await task
+
+    assert hass.config_entries.async_get_entry(template_entry.entry_id) is None
     assert not list(manager.backup_dir.glob("*.yaml"))
 
 
@@ -260,61 +341,61 @@ async def test_alias_removal_uses_core_identity_and_waits_for_restore(
 @pytest.mark.parametrize("first_operation", ["edit", "restore"])
 @pytest.mark.parametrize("edit_domain", ["helper_template", "integration"])
 async def test_helper_edit_and_restore_serialize_capture_through_mutation(
-    manager, monkeypatch, enabled, first_operation, edit_domain
-):
-    manager._settings.enable_auto_backup = enabled
-    source = manager._write_snapshot(
-        "helper_template", "template-entry", _config(), "test"
-    )
-    current = _config("initial")
-    entered, release = asyncio.Event(), asyncio.Event()
-    mutations = []
-
-    async def mutate(operation, desired):
-        mutations.append(operation)
-        if operation == first_operation:
-            entered.set()
-            await release.wait()
-        current.update(deepcopy(desired))
-
-    async def fetch(*_):
-        return deepcopy(current)
-
-    async def restore(_client, _target, desired):
-        await mutate("restore", desired)
-        return {"success": True}
-
-    manager.register(bm.DomainHandler("helper_template", fetch, restore))
-    manager.register(bm.DomainHandler("integration", fetch, restore))
-    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: manager._settings)
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    template_entry: ConfigEntry,
+    settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    first_operation: str,
+    edit_domain: str,
+) -> None:
+    monkeypatch.setattr(settings, "enable_auto_backup", enabled)
+    manager = bm.get_backup_manager(component_core_client, settings)
     monkeypatch.setattr(auto_backup, "get_backup_manager", lambda *_: manager)
+    source = await _real_snapshot(manager, template_entry)
+    await set_template_state(hass, template_entry, "initial")
+    entered, release = asyncio.Event(), asyncio.Event()
 
     @auto_backup.with_auto_backup(
-        domain=edit_domain, id_param="helper_id", client=manager._client
+        domain=edit_domain, id_param="helper_id", client=component_core_client
     )
-    async def edit(*, helper_id):
-        await mutate("edit", _config("edited"))
+    async def edit(*, helper_id: str) -> dict[str, Any]:
+        if first_operation == "edit":
+            entered.set()
+            await release.wait()
+        await set_template_state(hass, template_entry, "edited")
+        return {"success": True}
 
-    async def run(operation):
+    async def run(operation: str) -> dict[str, Any]:
         if operation == "edit":
-            return await edit(helper_id="template-entry")
+            return await edit(helper_id=template_entry.entry_id)
         return await manager.restore_snapshot(source.name)
 
-    first = asyncio.create_task(run(first_operation))
-    await asyncio.wait_for(entered.wait(), 2)
-    second = asyncio.create_task(
-        run("restore" if first_operation == "edit" else "edit")
-    )
-    try:
-        # Let both the async file read and the decorator run to the held lock.
-        await asyncio.sleep(0.05)
-        assert mutations == [first_operation]
-    finally:
-        release.set()
-        results = await asyncio.gather(first, second)
+    # A restore that runs first has its safety capture's read held in Core,
+    # with the write guard taken; the edit never gets that far.
+    async with held_command(hass, "ha_mcp_tools/helpers_list", first_only=True) as held:
+        if first_operation == "edit":
+            held.release.set()
+        first = asyncio.create_task(run(first_operation))
+        await asyncio.wait_for(
+            (entered if first_operation == "edit" else held.arrived).wait(), 2
+        )
+        second = asyncio.create_task(
+            run("restore" if first_operation == "edit" else "edit")
+        )
+        try:
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert template_entry.options["state"] == state_template("initial")
+        finally:
+            release.set()
+            held.release.set()
+            results = await asyncio.gather(first, second)
+
     if first_operation == "edit":
         safety = manager.read_snapshot(results[1]["safety_backup"])
-        assert safety["config"]["options"]["state"] == "edited"
-        assert current["options"]["state"] == "saved"
+        assert safety["config"]["options"]["state"] == state_template("edited")
+        assert template_entry.options["state"] == state_template("saved")
     else:
-        assert current["options"]["state"] == "edited"
+        assert template_entry.options["state"] == state_template("edited")
