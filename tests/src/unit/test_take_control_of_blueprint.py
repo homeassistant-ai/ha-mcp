@@ -25,7 +25,7 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 from ._config_dir_yaml import setup_from_configuration, write_config_files
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _ID = "automation.motion_light_kitchen"
 _PATH = "b3/motion_light.yaml"
@@ -167,7 +167,7 @@ async def test_refuses_an_automation_that_uses_no_blueprint(
             entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
     upsert.assert_not_awaited()
 
 
@@ -178,7 +178,7 @@ async def test_requires_an_entity_id(
     with _spy_upsert(core_client) as upsert, pytest.raises(ToolError) as exc:
         await tools.ha_config_set_automation(take_control_of_blueprint=True)
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
     upsert.assert_not_awaited()
 
 
@@ -201,7 +201,7 @@ async def test_refuses_to_combine_with_another_write_mode(
             entity_id=_ID, take_control_of_blueprint=True, **extra
         )
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
     upsert.assert_not_awaited()
 
 
@@ -223,7 +223,7 @@ async def test_a_missing_input_is_reported_as_a_validation_failure(
             entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
-    assert _error(exc)["code"] == "VALIDATION_FAILED"
+    assert error_of(exc)["code"] == "VALIDATION_FAILED"
     upsert.assert_not_awaited()
 
 
@@ -311,7 +311,7 @@ async def test_a_concurrent_edit_between_read_and_write_is_caught(
             entity_id=_ID, take_control_of_blueprint=True, wait=False
         )
 
-    assert "conflict" in _error(exc)["message"]
+    assert "conflict" in error_of(exc)["message"]
     upsert.assert_not_awaited()
     assert (await _stored(core_client))["alias"] == "renamed by someone else"
 
@@ -328,5 +328,5 @@ async def test_an_explicit_caller_hash_still_wins(
             wait=False,
         )
 
-    assert "conflict" in _error(exc)["message"]
+    assert "conflict" in error_of(exc)["message"]
     upsert.assert_not_awaited()

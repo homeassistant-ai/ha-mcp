@@ -11,7 +11,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import socket
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +36,7 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import build_settings_handlers
 
+from ._core_client import refused_url
 from ._template_helper_core import create_template_sensor
 
 NAME = "calendar_event.calendar.fam_evt-1.20260909_000000.yaml"
@@ -140,11 +140,8 @@ async def test_settings_diff_without_an_answer_from_home_assistant(
 ) -> None:
     """Home Assistant does not answer: the reply says so without the error text."""
     _place_calendar_event(backup_dir)
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
     unreachable = HomeAssistantClient(
-        base_url=f"http://127.0.0.1:{port}", token="token", verify_ssl=False
+        base_url=refused_url(), token="token", verify_ssl=False
     )
     try:
         with pytest.raises(HomeAssistantConnectionError) as refused:

@@ -27,7 +27,7 @@ from ha_mcp.tools import component_helper_collections as chc
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 from ._client_spies import sent_messages
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 
 @pytest.fixture
@@ -170,7 +170,7 @@ async def test_a_bare_id_the_component_misses_is_refused_unread(
         spy = _spy_entity_reads(mp)
         await _update(component_core_client, helper_id=mine, name="Renamed")
 
-    assert _error(exc_info)["code"] == "ENTITY_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "ENTITY_NOT_FOUND"
     assert spy.await_args_list == []
     assert await _stored_name(component_core_client, other) == other
 
@@ -184,7 +184,7 @@ async def test_a_bare_id_the_component_misses_hints_at_create(
     with pytest.raises(ToolError) as exc_info:
         await _update(component_core_client, helper_id=mine, name="Brand New Helper")
 
-    error = _error(exc_info)
+    error = error_of(exc_info)
     assert error["code"] == "ENTITY_NOT_FOUND"
     assert any("Brand New Helper" in s for s in error["suggestions"])
 
@@ -311,5 +311,5 @@ async def test_a_failed_update_of_a_helper_without_an_entity_names_no_guessed_on
             helper_type="input_number", helper_id=mine, config={"min": 50}
         )
 
-    assert _error(exc_info)["message"].startswith("Failed to update input_number")
+    assert error_of(exc_info)["message"].startswith("Failed to update input_number")
     assert f"input_number.{mine}" not in str(exc_info.value)

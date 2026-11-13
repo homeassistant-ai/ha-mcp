@@ -27,8 +27,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.tools_resources import ResourceTools
 
-from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
 from ._client_spies import sent_messages
+from ._tool_errors import error_body, error_of
 
 
 async def _ws(client: HomeAssistantClient, message: dict[str, Any]) -> Any:
@@ -75,7 +75,7 @@ class TestYamlResourceMode:
                 url="/local/other.js"
             )
 
-        data = _parse_tool_error(exc_info)
+        data = error_body(exc_info)
         assert "YAML-managed" in data["error"]["message"]
         assert data["resource_mode"] == "yaml"
 
@@ -98,7 +98,7 @@ async def test_unknown_command_without_yaml_mode_passes_core_error_through(
             resource_id="abc"
         )
 
-    data = _parse_tool_error(exc_info)
+    data = error_body(exc_info)
     assert data["ha_error_code"] == "unknown_command"
     assert "YAML-managed" not in data["error"]["message"]
     assert "resource_mode" not in data
@@ -114,7 +114,7 @@ class TestCoreErrorCodes:
                 url="/local/card.js", resource_id="gone"
             )
 
-        data = _parse_tool_error(exc_info)
+        data = error_body(exc_info)
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert data["resource_id"] == "gone"
 
@@ -133,7 +133,7 @@ class TestCoreErrorCodes:
                 resource_id="abc"
             )
 
-        data = _parse_tool_error(exc_info)
+        data = error_body(exc_info)
         assert data["ha_error_code"] == "home_assistant_error"
         assert data["error"]["code"] == "SERVICE_CALL_FAILED"
 
@@ -194,7 +194,7 @@ class TestCoreResourceTypes:
                 url="/local/card.wasm", resource_type="wasm"
             )
 
-        error = _parse_tool_error(exc_info)["error"]
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert error["message"] == refusal["error"]
         assert await _rows(core_client) == []
@@ -207,7 +207,7 @@ class TestCoreResourceTypes:
                 content="<p>x</p>", resource_type="html"
             )
 
-        assert "html" in _parse_tool_error(exc_info)["error"]["message"]
+        assert "html" in error_of(exc_info)["message"]
         sent.assert_not_awaited()
 
     async def test_inline_error_does_not_suggest_a_type_core_rejects(
@@ -218,7 +218,7 @@ class TestCoreResourceTypes:
                 content="var x = 1;", resource_type="modul"
             )
 
-        suggestions = _parse_tool_error(exc_info)["error"]["suggestions"]
+        suggestions = error_of(exc_info)["suggestions"]
         assert not any("modul'" in s for s in suggestions)
         sent.assert_not_awaited()
 

@@ -33,7 +33,7 @@ from ha_mcp.client.websocket_client import (
 )
 from ha_mcp.tools.helpers import get_connected_ws_client
 
-from ._tls_core import refused_url
+from ._core_client import refused_url
 from ._ws_transport import spawned_by
 
 REJECTED_TOKEN = "super-secret-token-DO-NOT-LEAK"

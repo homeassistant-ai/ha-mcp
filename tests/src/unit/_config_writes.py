@@ -8,26 +8,15 @@ scripts.yaml in Core's config directory: a test file that uses these overrides
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-from ._tool_errors import error_body
-
-
-def error_of(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    """The ``error`` object of a tool's rejection."""
-    error: dict[str, Any] = error_body(exc)["error"]
-    return error
-
 
 # configuration.yaml includes the two files Core's config views write and reload.
 _CONFIGURATION = {

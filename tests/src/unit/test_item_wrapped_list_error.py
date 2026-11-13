@@ -31,17 +31,12 @@ from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-from ._config_writes import automation_tools, error_of, script_tools
+from ._config_writes import automation_tools, script_tools
 from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
-from ._tool_errors import error_body
+from ._tool_errors import error_body, error_of
 
 _ACTION = {"action": "light.turn_on", "target": {"entity_id": "light.x"}}
 _TRIGGER = {"trigger": "state", "entity_id": "input_boolean.x"}
-
-
-def _error(exc: ToolError) -> dict[str, Any]:
-    error: dict[str, Any] = json.loads(str(exc))["error"]
-    return error
 
 
 @pytest.fixture
@@ -200,7 +195,7 @@ def test_flow_action_selector_malformed_is_named(
     config = {"name": "b", "press": press}
     with pytest.raises(ToolError) as exc_info:
         form_submission(button_form_schema, config, keep_shown=False)
-    error = _error(exc_info.value)
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "'press'" in error["message"]
 
@@ -256,7 +251,7 @@ async def test_script_empty_string_sequence_is_named(
 def test_dashboard_malformed_list_is_named(config: dict, path: str) -> None:
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_lists(config, "test-dash")
-    assert path in _error(exc_info.value)["message"]
+    assert path in error_of(exc_info)["message"]
 
 
 @pytest.mark.parametrize(
@@ -279,7 +274,7 @@ def test_dashboard_nested_stack_card_list_is_named() -> None:
     config = {"views": [{"cards": [{"type": "grid", "cards": [_STACK]}]}]}
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_lists(config, "test-dash")
-    assert "'views[0].cards[0].cards[0].cards'" in _error(exc_info.value)["message"]
+    assert "'views[0].cards[0].cards[0].cards'" in error_of(exc_info)["message"]
 
 
 def test_dashboard_custom_card_cards_option_passes() -> None:
@@ -298,7 +293,7 @@ def test_dashboard_custom_card_cards_option_passes() -> None:
 def test_dashboard_patch_malformed_list_is_named(op: dict) -> None:
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_patch([op], "test-dash")
-    assert f"({op['path']})" in _error(exc_info.value)["message"]
+    assert f"({op['path']})" in error_of(exc_info)["message"]
 
 
 @pytest.mark.parametrize(
@@ -319,7 +314,7 @@ def test_dashboard_stack_inside_wrapper_card_is_named(wrapper: str) -> None:
     config = {"views": [{"cards": [{"type": wrapper, "card": _STACK}]}]}
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_lists(config, "test-dash")
-    assert "'views[0].cards[0].card.cards'" in _error(exc_info.value)["message"]
+    assert "'views[0].cards[0].card.cards'" in error_of(exc_info)["message"]
 
 
 def test_dashboard_custom_card_nested_card_passes() -> None:
@@ -491,14 +486,14 @@ async def test_automation_multiple_malformed_fields_are_all_named(
 def test_dashboard_patch_branches_name_the_field(op: dict, label: str) -> None:
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_patch([op], "test-dash")
-    assert label in _error(exc_info.value)["message"]
+    assert label in error_of(exc_info)["message"]
 
 
 def test_dashboard_patch_error_points_at_patch_not_config() -> None:
     op = {"op": "replace", "path": "/views/0/cards", "value": {"item": []}}
     with pytest.raises(ToolError) as exc_info:
         reject_malformed_dashboard_patch([op], "test-dash")
-    error = _error(exc_info.value)
+    error = error_of(exc_info)
     assert error["message"].startswith("Received patch value")
     assert "whole patch as one JSON-encoded string" in json.dumps(error)
 

@@ -29,7 +29,6 @@ HA client is a spy that tallies every legacy fetch. Mirrors the scene precedent.
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -44,6 +43,7 @@ from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 from ._component_routing_helpers import make_ws
+from ._tool_errors import error_of
 
 # --- Fixtures / bodies -------------------------------------------------------
 
@@ -136,10 +136,6 @@ class RoutingClient:
             + self.resolve_scene_id.await_count
             + sum(self.ws_types.values())
         )
-
-
-def _error_payload(exc: ToolError) -> dict[str, Any]:
-    return json.loads(str(exc))["error"]
 
 
 # --- Component config_get result builders (component wire vocabulary) --------
@@ -269,7 +265,7 @@ class TestAutomationConfigGetAlwaysLegacy:
             await AutomationConfigTools(client).ha_config_get_automation(
                 entity_id="ghost"
             )
-        err = _error_payload(exc_info.value)
+        err = error_of(exc_info)
         assert err["code"] == "RESOURCE_NOT_FOUND"
         assert err["message"] == "Automation not found: ghost"
         sent = [c.args[0] for c in ws.send_command.call_args_list]
@@ -339,7 +335,7 @@ class TestScriptConfigGetAlwaysLegacy:
             pytest.raises(ToolError) as exc_info,
         ):
             await ConfigScriptTools(client).ha_config_get_script(script_id="ghost")
-        err = _error_payload(exc_info.value)
+        err = error_of(exc_info)
         assert err["code"] == "RESOURCE_NOT_FOUND"
         assert err["message"] == "Script not found: ghost"
         assert ws.send_command.await_count == 0
@@ -405,7 +401,7 @@ class TestSceneConfigGetAlwaysLegacy:
             pytest.raises(ToolError) as exc_info,
         ):
             await ConfigSceneTools(client).ha_config_get_scene(scene_id="ghost")
-        err = _error_payload(exc_info.value)
+        err = error_of(exc_info)
         # The legacy REST 404 is classified via the tool's ``except Exception``
         # (entity_id in context) into the ENTITY_NOT_FOUND taxonomy.
         assert err["code"] == "ENTITY_NOT_FOUND"

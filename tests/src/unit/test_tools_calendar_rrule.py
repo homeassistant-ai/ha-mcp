@@ -34,7 +34,7 @@ from ._calendars import (
     local_calendar,
     remote_calendar,
 )
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _RRULE_HINT = "Check RRULE syntax"
 _EXCLUSIVE_END_HINT = "For an all-day event the end date is exclusive"
@@ -209,7 +209,7 @@ async def test_mixed_date_and_datetime_values_are_rejected_before_any_call(
             end="2026-07-04T12:00:00",
         )
 
-    assert _error(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
     rest.assert_not_awaited()
     assert _created(writable) == []
 
@@ -227,7 +227,7 @@ async def test_rejected_rrule_leads_with_rrule_syntax_hint(
             rrule="FREQ=FORTNIGHTLY",
         )
 
-    assert _error(exc_info)["suggestions"][0].startswith(_RRULE_HINT)
+    assert error_of(exc_info)["suggestions"][0].startswith(_RRULE_HINT)
     assert _created(writable) == []
 
 
@@ -247,7 +247,7 @@ async def test_failed_create_without_rrule_gives_no_rrule_hint(
             end="2026-06-15T11:00:00",
         )
 
-    suggestions = _error(exc_info)["suggestions"]
+    suggestions = error_of(exc_info)["suggestions"]
     assert not any(s.startswith(_RRULE_HINT) for s in suggestions)
     ws.assert_not_awaited()
 
@@ -268,7 +268,7 @@ async def test_single_day_all_day_event_leads_with_exclusive_end_hint(
             end="2026-07-04",
         )
 
-    assert _error(exc_info)["suggestions"][0].startswith(_EXCLUSIVE_END_HINT)
+    assert error_of(exc_info)["suggestions"][0].startswith(_EXCLUSIVE_END_HINT)
     assert _created(writable) == []
 
 
@@ -297,7 +297,7 @@ async def test_exclusive_end_hint_only_for_empty_all_day_range(
             end=end,
         )
 
-    suggestions = _error(exc_info)["suggestions"]
+    suggestions = error_of(exc_info)["suggestions"]
     assert not any(s.startswith(_EXCLUSIVE_END_HINT) for s in suggestions)
     assert _created(writable) == []
 
@@ -322,6 +322,6 @@ async def test_rrule_create_with_no_answer_reports_connection_failure(
             rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10",
         )
 
-    err = _error(exc_info)
+    err = error_of(exc_info)
     assert err["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
     assert not any("RRULE" in s for s in err.get("suggestions", []))

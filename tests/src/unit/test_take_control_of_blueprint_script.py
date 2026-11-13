@@ -22,7 +22,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 from ._config_dir_yaml import setup_from_configuration, write_config_files
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _SID = "notify_on_door"
 _PATH = "b3/notification.yaml"
@@ -150,7 +150,7 @@ async def test_refuses_a_script_that_uses_no_blueprint(
             script_id=_SID, take_control_of_blueprint=True, wait=False
         )
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
     upsert.assert_not_awaited()
 
 
@@ -172,7 +172,7 @@ async def test_refuses_to_combine_with_another_write_mode(
             script_id=_SID, take_control_of_blueprint=True, **extra
         )
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
     upsert.assert_not_awaited()
 
 
@@ -205,6 +205,6 @@ async def test_a_concurrent_edit_between_read_and_write_is_caught(
             script_id=_SID, take_control_of_blueprint=True, wait=False
         )
 
-    assert "conflict" in _error(exc)["message"]
+    assert "conflict" in error_of(exc)["message"]
     upsert.assert_not_awaited()
     assert (await _stored(core_client))["alias"] == "renamed by someone else"

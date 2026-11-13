@@ -4,7 +4,7 @@ The server's client talks to a real ``hass`` running Core's real ``zwave_js``
 integration, so ``zwave_js/get_config_parameters`` and
 ``zwave_js/get_raw_config_parameter`` are answered by Core's own handlers. Only
 the Z-Wave JS server connection below zwave-js-server-python is a mock
-(``_zwave_js``): node 5's configuration values are the node state the server
+(``_zwave_js``): the node's configuration values are the node state the server
 sends, and a raw read is the server's answer to the library's
 ``endpoint.get_raw_config_parameter_value`` command.
 """
@@ -12,7 +12,6 @@ sends, and a raw read is the server's answer to the library's
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,6 +36,7 @@ from ha_mcp.tools.tools_radio import RadioTools
 
 from ._client_spies import sent_messages
 from ._component_core import ws_result
+from ._tool_errors import rejected_call_body
 from ._zwave_js import (
     HOME_ID,
     NODE_ID,
@@ -80,13 +80,13 @@ def config_value(
 
 @pytest.fixture
 def node_values() -> list[dict[str, Any]]:
-    """Node 5's configuration values; a test overrides it by parametrizing."""
+    """The node's configuration values; a test overrides it by parametrizing."""
     return [config_value(8)]
 
 
 @pytest.fixture
 def server(node_values: list[dict[str, Any]]) -> Iterator[MagicMock]:
-    """The Z-Wave JS server connection, holding node 5 with ``node_values``."""
+    """The Z-Wave JS server connection, holding the node with ``node_values``."""
     with zwave_js_server_connection(node_state(node_values)) as client:
         yield client
 
@@ -98,7 +98,7 @@ async def device_id(
     device_registry: dr.DeviceRegistry,
     server: MagicMock,
 ) -> str:
-    """The device Core's ``zwave_js`` registers for node 5."""
+    """The device Core's ``zwave_js`` registers for the node."""
     assert await async_setup_component(hass, "config", {})
     entry = await set_up_zwave_js(hass)
     device = device_registry.async_get_device_by_identifier(
@@ -121,15 +121,6 @@ async def read_param(
         device_id=device_id,
         params={"property": 3, **params},
     )
-
-
-async def failed_read(
-    client: HomeAssistantClient, device_id: str, **params: Any
-) -> dict[str, Any]:
-    with pytest.raises(ToolError) as exc:
-        await read_param(client, device_id, **params)
-    body: dict[str, Any] = json.loads(str(exc.value))
-    return body
 
 
 @pytest.mark.parametrize(
@@ -313,12 +304,12 @@ async def test_missing_cached_parameter_does_not_implicitly_poll(
 async def test_ha_failure_never_substitutes_a_cached_value(
     core_client: HomeAssistantClient, server: MagicMock, device_id: str
 ) -> None:
-    """Core turns the server's failed Get into its own error reply."""
+    """A failed refresh reports Core's error, never the cached value."""
     server.async_send_command.side_effect = FailedZWaveCommand(
         "raw-read", 201, "Timeout while waiting for a response from the node"
     )
 
-    body = await failed_read(core_client, device_id, refresh=True)
+    body = await rejected_call_body(read_param(core_client, device_id, refresh=True))
 
     assert body["ha_error_code"] == "zwave_error"
     assert "parameter" not in body
@@ -333,7 +324,9 @@ async def test_unknown_raw_failure_keeps_details_without_claiming_a_cause(
     server.async_send_command.return_value = {}
 
     with sent_messages(core_client) as spy:
-        body = await failed_read(core_client, device_id, refresh=True)
+        body = await rejected_call_body(
+            read_param(core_client, device_id, refresh=True)
+        )
 
     assert body["ha_error_code"] == "unknown_error"
     assert body["device_id"] == device_id
@@ -432,7 +425,9 @@ async def test_refresh_timeout_explains_the_possible_wakeup_queue(
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 0.2)
 
     with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
-        body = await failed_read(core_client, device_id, refresh=True)
+        body = await rejected_call_body(
+            read_param(core_client, device_id, refresh=True)
+        )
 
     assert body["error"]["code"] == "TIMEOUT_WEBSOCKET"
     assert "no cached fallback" in body["error"]["message"]
@@ -462,7 +457,7 @@ async def test_refresh_connection_loss_does_not_claim_a_sleeping_node(
 
     server.async_send_command.side_effect = connection_drops
 
-    body = await failed_read(core_client, device_id, refresh=True)
+    body = await rejected_call_body(read_param(core_client, device_id, refresh=True))
 
     assert body["error"]["code"] == "CONNECTION_FAILED"
     assert "queued" not in body["error"]["message"]

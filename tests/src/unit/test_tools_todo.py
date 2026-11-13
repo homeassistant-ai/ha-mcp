@@ -3,7 +3,6 @@ comes back, through a fake WebSocket that holds one list."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -17,6 +16,8 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.tools_todo import TodoTools
+
+from ._tool_errors import error_body, error_of
 
 LIST = "todo.tasks"
 
@@ -154,10 +155,6 @@ def tools(client: _FakeClient) -> TodoTools:
     return TodoTools(client)
 
 
-def _error(excinfo: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(excinfo.value))
-
-
 class TestGetTodo:
     async def test_several_statuses_go_to_core_as_given(
         self, tools: TodoTools, client: _FakeClient
@@ -180,7 +177,7 @@ class TestGetTodo:
         client.refuse["get_items"] = ("invalid_format", "value must be one of ...")
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST, status="done")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "value must be one of" in error["message"]
 
@@ -189,7 +186,7 @@ class TestGetTodo:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo("todo.gone")
-        assert _error(excinfo)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(excinfo)["code"] == "ENTITY_NOT_FOUND"
         assert client.calls == []
 
     async def test_unavailable_list_returns_the_items_core_last_held(
@@ -212,7 +209,7 @@ class TestGetTodo:
         client.state = "unavailable"
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST, status="completed")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "ENTITY_UNAVAILABLE"
         assert "status" in error["message"]
         assert client.calls == []
@@ -226,7 +223,7 @@ class TestGetTodo:
         client.attributes = {"restored": True}
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST)
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "ENTITY_UNAVAILABLE"
         assert "placeholder" in error["message"]
         assert client.calls == []
@@ -256,7 +253,7 @@ class TestSetTodoItem:
         assert client.services() == [
             ("add_item", {"item": "Eggs", "status": "completed"})
         ]
-        assert "extra keys not allowed" in _error(excinfo)["error"]["message"]
+        assert "extra keys not allowed" in error_of(excinfo)["message"]
 
     async def test_empty_string_clears_a_field(
         self, tools: TodoTools, client: _FakeClient
@@ -285,7 +282,7 @@ class TestSetTodoItem:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay")
         assert client.services() == [("update_item", {"item": "2"})]
-        assert "at least one of" in _error(excinfo)["error"]["message"]
+        assert "at least one of" in error_of(excinfo)["message"]
 
     async def test_field_the_list_lacks_reports_core_text(
         self, tools: TodoTools, client: _FakeClient
@@ -296,7 +293,7 @@ class TestSetTodoItem:
         )
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", description="x")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "does not support setting field" in error["message"]
 
@@ -339,7 +336,7 @@ class TestSetTodoItem:
         )
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", move_after="")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "does not support To-do item reordering" in error["message"]
 
@@ -348,7 +345,7 @@ class TestSetTodoItem:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", move_after="Nope")
-        assert _error(excinfo)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_of(excinfo)["code"] == "RESOURCE_NOT_FOUND"
         assert not [c for c in client.calls if c["type"] == "todo/item/move"]
 
 
@@ -387,7 +384,7 @@ class TestRemoveTodoItem:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_remove_todo_item(LIST, item=["Pay", "Nope"])
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "RESOURCE_NOT_FOUND"
         assert "'Nope'" in error["message"]
         assert client.services() == []
@@ -401,7 +398,7 @@ class TestRemoveTodoItem:
         )
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_remove_todo_item(LIST, item="Pay")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "does not support removing items" in error["message"]
 
@@ -421,7 +418,7 @@ class TestOutcomes:
             await tools.ha_remove_todo_item(LIST, item="Pay")
         assert client.calls == []
         for refusal in (set_refusal, remove_refusal):
-            assert _error(refusal)["error"]["code"] == "ENTITY_UNAVAILABLE"
+            assert error_of(refusal)["code"] == "ENTITY_UNAVAILABLE"
 
     async def test_failed_read_back_keeps_the_applied_add(
         self, tools: TodoTools, client: _FakeClient
@@ -497,7 +494,7 @@ class TestOutcomes:
         client.refuse["update_item"] = ("service_validation_error", "nope")
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid", move_after="")
-        assert "the move was applied" in _error(excinfo)["error"]["message"]
+        assert "the move was applied" in error_of(excinfo)["message"]
 
     async def test_move_without_answer_is_an_unknown_outcome(
         self, tools: TodoTools, client: _FakeClient
@@ -505,7 +502,7 @@ class TestOutcomes:
         client.drop = "todo/item/move"
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", move_after="")
-        assert _error(excinfo)["write_outcome_unknown"] is True
+        assert error_body(excinfo)["write_outcome_unknown"] is True
 
     async def test_list_reply_without_items_is_an_error(
         self, tools: TodoTools, client: _FakeClient
@@ -514,7 +511,7 @@ class TestOutcomes:
         client._list = lambda _message: {"success": True, "result": {}}  # type: ignore[method-assign]
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_remove_todo_item(LIST, item="Pay")
-        assert "without an item list" in _error(excinfo)["error"]["message"]
+        assert "without an item list" in error_of(excinfo)["message"]
         assert client.services() == []
 
     async def test_string_naming_an_item_is_that_item(
@@ -548,14 +545,14 @@ class TestOutcomes:
         assert [i["uid"] for i in got["removed"]] == ["6"]
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_remove_todo_item(LIST, item="[]")
-        assert "as a list it names no item" in _error(excinfo)["error"]["message"]
+        assert "as a list it names no item" in error_of(excinfo)["message"]
 
     async def test_unknown_name_that_is_no_list_is_not_found(
         self, tools: TodoTools, client: _FakeClient
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_remove_todo_item(LIST, item="[Work] Call Bob")
-        assert _error(excinfo)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_of(excinfo)["code"] == "RESOURCE_NOT_FOUND"
         assert client.services() == []
 
 
@@ -598,7 +595,7 @@ class TestReviewGaps:
         client.raise_on = ("add_item", HomeAssistantConnectionError("lost"))
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, summary="Eggs")
-        assert _error(excinfo)["write_outcome_unknown"] is True
+        assert error_body(excinfo)["write_outcome_unknown"] is True
 
     async def test_write_never_sent_is_not_an_unknown_outcome(
         self, tools: TodoTools, client: _FakeClient
@@ -606,7 +603,7 @@ class TestReviewGaps:
         client.raise_on = ("add_item", HomeAssistantCommandNotSent("not sent"))
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, summary="Eggs")
-        assert "write_outcome_unknown" not in _error(excinfo)
+        assert "write_outcome_unknown" not in error_body(excinfo)
 
     async def test_dropped_read_is_not_called_a_write(
         self, tools: TodoTools, client: _FakeClient
@@ -614,7 +611,7 @@ class TestReviewGaps:
         client.raise_on = ("get_items", HomeAssistantConnectionError("lost"))
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_get_todo(LIST)
-        assert "applied" not in _error(excinfo)["error"]["message"]
+        assert "applied" not in error_of(excinfo)["message"]
 
     async def test_two_new_rows_leave_the_created_item_open(
         self, tools: TodoTools, client: _FakeClient
@@ -629,7 +626,7 @@ class TestReviewGaps:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, summary="Eggs", move_after="")
-        assert _error(excinfo)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_of(excinfo)["code"] == "VALIDATION_INVALID_PARAMETER"
         assert client.services() == []
 
     async def test_create_needs_a_summary(
@@ -637,7 +634,7 @@ class TestReviewGaps:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST)
-        assert _error(excinfo)["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert error_of(excinfo)["code"] == "VALIDATION_MISSING_PARAMETER"
         assert client.services() == []
 
     @pytest.mark.parametrize("field", ["description", "due_date", "due_datetime"])
@@ -652,7 +649,7 @@ class TestReviewGaps:
     ) -> None:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Nope", move_after="")
-        assert _error(excinfo)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_of(excinfo)["code"] == "RESOURCE_NOT_FOUND"
         assert not [c for c in client.calls if c["type"] == "todo/item/move"]
 
 
@@ -689,7 +686,7 @@ class TestTargetsAndReplies:
             await tools.ha_remove_todo_item(
                 LIST, item=[], remove_completed=remove_completed
             )
-        assert "empty list" in _error(excinfo)["error"]["message"]
+        assert "empty list" in error_of(excinfo)["message"]
         assert client.calls == []
 
     async def test_removed_lists_only_what_was_asked_for(
@@ -734,7 +731,7 @@ class TestTargetsAndReplies:
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Nope", status="completed")
         assert client.services()[0][1]["item"] == "Nope"
-        assert "Unable to find" in _error(excinfo)["error"]["message"]
+        assert "Unable to find" in error_of(excinfo)["message"]
 
     async def test_item_named_like_the_uid_blocks_the_update(
         self, tools: TodoTools, client: _FakeClient
@@ -743,7 +740,7 @@ class TestTargetsAndReplies:
         client.items.insert(0, {"uid": "x", "summary": "2", "status": "needs_action"})
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", status="needs_action")
-        error = _error(excinfo)["error"]
+        error = error_of(excinfo)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "nothing was changed" in error["message"]
         assert client.services() == []
@@ -787,7 +784,7 @@ class TestTargetsAndReplies:
         client.raise_on = ("update_item", HomeAssistantCommandNotSent("not sent"))
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_set_todo_item(LIST, item="Pay", rename="Paid", move_after="")
-        payload = _error(excinfo)
+        payload = error_body(excinfo)
         assert payload["error"]["code"] == "CONNECTION_FAILED"
         assert "the move was applied" in payload["error"]["message"]
         # Never sent, so not an unknown outcome.

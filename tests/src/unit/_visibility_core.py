@@ -7,7 +7,6 @@ registry and state machine read over the server's own client.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +16,8 @@ from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.visibility.model import VisibilityConfig
+
+from ._tool_errors import error_body
 
 
 def register_entity(
@@ -45,11 +46,6 @@ def error_code(exc: pytest.ExceptionInfo[ToolError]) -> str:
     """The structured error code a refused or concealed call carries."""
     code: str = error_body(exc)["error"]["code"]
     return code
-
-
-def error_body(exc: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    body: dict[str, Any] = json.loads(exc.value.args[0])
-    return body
 
 
 async def unreached_call_next(_context: Any) -> Any:

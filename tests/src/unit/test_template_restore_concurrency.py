@@ -8,7 +8,6 @@ restore goes through Core's options flow.
 from __future__ import annotations
 
 import asyncio
-import socket
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -24,6 +23,7 @@ from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import config_entry_flow
 
+from ._core_client import refused_url
 from ._template_helper_core import (
     create_template_sensor,
     set_template_state,
@@ -149,9 +149,7 @@ async def test_failure_before_options_flow_keeps_not_applied_knowledge(
     await set_template_state(hass, entry, "current")
     handler = manager.handler_for(DOMAIN)
     assert handler is not None
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        unreachable = f"http://127.0.0.1:{probe.getsockname()[1]}"
+    unreachable = refused_url()
 
     async def restore_offline(client: Any, entity_id: str, config: Any) -> Any:
         # Preflight and the mandatory safety capture are done; Home Assistant

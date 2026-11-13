@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 from typing import Any
 
@@ -15,6 +14,8 @@ from ha_mcp.dashboard_screenshot.paths import (
     resolve_dashboard_render_target,
     resolve_dashboard_view,
 )
+
+from ._tool_errors import error_body, error_of
 
 
 class _FakeAsyncClient:
@@ -45,10 +46,6 @@ class _NonJsonToolErrorClient:
 
 def _config_response(config: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "result": config}
-
-
-def _tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))
 
 
 def test_non_stable_target_without_warnings_is_rejected() -> None:
@@ -295,7 +292,7 @@ async def test_structured_resolution_maps_transport_failure_to_tool_error() -> N
             view_path="home",
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "CONNECTION_FAILED"
     assert "disconnected" in error["error"]["details"]
 
@@ -323,7 +320,7 @@ async def test_dashboard_fetch_maps_only_exact_missing_signals_to_not_found(
             view_path="home",
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
@@ -355,7 +352,7 @@ async def test_dashboard_fetch_preserves_non_missing_failures(
             view_path="home",
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "SERVICE_CALL_FAILED"
 
 
@@ -376,7 +373,7 @@ def test_named_view_resolution_reports_missing_and_ambiguous_paths(
     with pytest.raises(ToolError) as exc_info:
         resolve_dashboard_view("wall-panel", config, "lights")
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert reason in error["error"]["message"]
     assert error["url_path"] == "wall-panel"
@@ -393,7 +390,7 @@ def test_named_view_resolution_rejects_strategy_dashboard() -> None:
             "wall-panel", {"strategy": {"type": "original-states"}}, "some-view"
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "do not expose static named view paths" in error["error"]["message"]
 
@@ -455,7 +452,7 @@ async def test_raw_and_structured_addressing_are_mutually_exclusive(
             view_path=view_path,
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == expected_code
     assert client.requests == []
 
@@ -602,7 +599,7 @@ async def test_raw_default_path_does_not_hide_permission_failure() -> None:
             view_path=None,
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error_of(exc_info)["code"] == "SERVICE_CALL_FAILED"
 
 
 @pytest.mark.parametrize("invalid_result", [None, [], "invalid"])
@@ -619,7 +616,7 @@ async def test_raw_default_path_does_not_hide_malformed_success(
             view_path=None,
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "SERVICE_CALL_FAILED"
     assert error["payload_type"] == type(invalid_result).__name__
 
@@ -638,7 +635,7 @@ async def test_structured_empty_dashboard_path_is_rejected_without_ws(
             view_path="home",
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
     assert client.requests == []
 
 
@@ -654,7 +651,7 @@ async def test_raw_custom_suffix_must_resolve_to_a_real_view(raw_view: str) -> N
             view_path=None,
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
 
 
 async def test_raw_duplicate_named_suffix_selects_first_but_is_unstable() -> None:
@@ -703,7 +700,7 @@ async def test_raw_multi_segment_cannot_select_slash_configured_path() -> None:
             view_path=None,
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
 
 
 async def test_raw_multi_segment_uses_only_frontend_view_suffix() -> None:
@@ -893,7 +890,7 @@ async def test_raw_reserved_view_suffix_is_rejected(
             view_path=None,
         )
 
-    assert _tool_error(exc_info)["error"]["code"] == ("VALIDATION_INVALID_PARAMETER")
+    assert error_of(exc_info)["code"] == ("VALIDATION_INVALID_PARAMETER")
     assert client.requests == []
 
 
@@ -930,7 +927,7 @@ async def test_raw_route_cannot_target_non_dashboard_frontend_panel() -> None:
             view_path=None,
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert client.requests == [
         {
@@ -976,7 +973,7 @@ async def test_raw_addressing_rejects_unsafe_paths(dashboard_path: str) -> None:
             view_path=None,
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert client.requests == []
 
@@ -992,7 +989,7 @@ async def test_structured_addressing_rejects_unsafe_dashboard_before_fetch() -> 
             view_path="home",
         )
 
-    error = _tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert client.requests == []
 

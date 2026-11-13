@@ -33,7 +33,7 @@ from custom_components.ha_mcp_tools.const import (
     OPT_SERVER_PORT,
 )
 
-from ._embedded_server_helpers import _a_free_port as _a_free_port
+from ._core_client import free_port
 from ._embedded_server_helpers import _clear_worker_env as _clear_worker_env
 from ._embedded_server_helpers import _load as _load
 from ._embedded_server_helpers import _no_manifest_pin as _no_manifest_pin
@@ -70,7 +70,7 @@ def helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_loopback_choice_is_unchanged(helpers: None) -> None:
-    listener = embedded_listen.DirectListener(BIND_HOST_LOOPBACK, _a_free_port())
+    listener = embedded_listen.DirectListener(BIND_HOST_LOOPBACK, free_port())
     app = object()
     assert listener.wrap(app) == (app, True)
     assert listener.bind() == {}
@@ -82,7 +82,7 @@ def test_older_bundled_server_keeps_ipv4_bind_and_says_so(
     monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", None)
     monkeypatch.setitem(sys.modules, "ha_mcp.ipv6_lan_guard", None)
     caplog.set_level(logging.INFO, logger=embedded_listen.__name__)
-    listener = embedded_listen.DirectListener(BIND_HOST_ALL, _a_free_port())
+    listener = embedded_listen.DirectListener(BIND_HOST_ALL, free_port())
     app = object()
     assert listener.wrap(app) == (app, True)
     assert listener.bind() == {}
@@ -165,7 +165,7 @@ async def test_worker_serves_guarded_dual_stack_and_releases_it(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _require_ipv6_loopback()
-    options = {OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: _a_free_port()}
+    options = {OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: free_port()}
     manager, uvicorn = _worker(hass, monkeypatch, options)
 
     await manager.async_start()  # raises if the worker failed

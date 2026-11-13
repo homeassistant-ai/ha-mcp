@@ -43,6 +43,7 @@ from ._hacs_marketplace import (
     set_up_marketplace,
     stored,
 )
+from ._tool_errors import error_of, rejected_call_body
 
 MARKETPLACE = StoreApi("marketplace")
 HUE_FORK_ID = "700000001"
@@ -126,14 +127,6 @@ async def doubled(
     return entry
 
 
-async def _download_error(**arguments: Any) -> dict[str, Any]:
-    tools: HacsTools = arguments.pop("tools")
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_manage_hacs(action="download", **arguments)
-    body: dict[str, Any] = json.loads(str(excinfo.value))
-    return body
-
-
 @pytest.mark.parametrize("requested", ["piitaya/x", CARD_ID])
 async def test_other_repositories_pass_through_without_a_store_call(
     marketplace: OpenMarketplace,
@@ -205,7 +198,9 @@ async def test_a_refused_download_on_a_doubled_marketplace_carries_the_way_out(
     cannot be updated either, so the suggestions are the recovery routes, and
     the tool looks up the installed records behind the refusal."""
     with core_install(side_effect=_owned(OWN, MIRROR)):
-        body = await _download_error(tools=HacsTools(core_client), repository_id=MAIN)
+        body = await rejected_call_body(
+            HacsTools(core_client).ha_manage_hacs(action="download", repository_id=MAIN)
+        )
 
     suggestions = " ".join(body["error"]["suggestions"])
     assert "Repairs" in suggestions
@@ -223,8 +218,10 @@ async def test_another_integrations_refusal_names_its_owner_to_update(
     integration, so HA-MCP's repair routes would not help; and Core's
     sentence ends in a period that is not part of the owner's name."""
     with core_install(side_effect=_owned("hue_fork", "someone/hue")):
-        body = await _download_error(
-            tools=HacsTools(core_client), repository_id=HUE_FORK_ID
+        body = await rejected_call_body(
+            HacsTools(core_client).ha_manage_hacs(
+                action="download", repository_id=HUE_FORK_ID
+            )
         )
 
     suggestions = " ".join(body["error"]["suggestions"])
@@ -241,8 +238,10 @@ async def test_a_message_merely_containing_the_words_is_not_an_ownership_refusal
     say a directory belongs to someone."""
     library_error = MarketplaceError("The hue_fork directory belongs to nobody.")
     with core_install(side_effect=library_error):
-        body = await _download_error(
-            tools=HacsTools(core_client), repository_id=HUE_FORK_ID
+        body = await rejected_call_body(
+            HacsTools(core_client).ha_manage_hacs(
+                action="download", repository_id=HUE_FORK_ID
+            )
         )
 
     assert "belongs to nobody" in body["error"]["message"]
@@ -323,6 +322,6 @@ async def test_a_release_the_target_tags_differently_asks_for_its_own_tag(
     await marketplace(_own_records(installed=MIRROR))
     with pytest.raises(ToolError) as excinfo:
         await route_own_repository_download(socket, MARKETPLACE, MAIN, "v8.6.0")
-    error = json.loads(str(excinfo.value))["error"]
+    error = error_of(excinfo)
     assert "v8.6.0" in error["message"]
     assert any("include_releases=True" in s for s in error["suggestions"])

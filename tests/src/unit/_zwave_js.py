@@ -24,7 +24,7 @@ NODE_ID = 5
 
 
 def node_state(values: list[dict[str, Any]]) -> dict[str, Any]:
-    """Node 5 as the server reports it: alive, routing, S2-authenticated."""
+    """The node as the server reports it: alive, routing, S2-authenticated."""
     endpoints = sorted({0, *(value.get("endpoint", 0) for value in values)})
     return {
         "nodeId": NODE_ID,

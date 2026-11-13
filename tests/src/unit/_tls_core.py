@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import ipaddress
-import socket
 import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -104,11 +103,3 @@ async def tls_core(hass: HomeAssistant, directory: Path) -> AsyncIterator[str]:
             await server.close()
         finally:
             loop.set_exception_handler(previous)
-
-
-def refused_url() -> str:
-    """A loopback URL whose port nothing listens on: the connect is refused."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    return f"http://127.0.0.1:{port}"

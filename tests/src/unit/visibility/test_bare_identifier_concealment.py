@@ -30,9 +30,9 @@ from ha_mcp.visibility.identifier_aliases import BARE_IDENTIFIER_ARGS
 from ha_mcp.visibility.model import VisibilityConfig
 
 from .._registered_tools import all_registered_tools
+from .._tool_errors import error_body
 from .._visibility_core import (
     enforce_hiding,
-    error_body,
     error_code,
     register_entity,
     unreached_call_next,

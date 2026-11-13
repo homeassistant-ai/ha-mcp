@@ -85,7 +85,7 @@ class SpawnedTasks:
     """Tasks the client starts on its own, recorded through the task factory.
 
     The client keeps its background work private; the loop's public task
-    factory is where a test can see it start, without reading the client.
+    factory is where a test can see it start.
     """
 
     def __init__(self) -> None:
@@ -105,6 +105,8 @@ def spawned_by(
     on_spawn: Callable[[], object] | None = None,
 ) -> Iterator[SpawnedTasks]:
     """Record every task whose coroutine is a method of ``client``.
+
+    A coroutine is the client's when its frame's ``self`` is ``client``.
 
     ``on_spawn`` runs once, as the first such task is created and before it
     takes its first step.

@@ -7,7 +7,6 @@ test, so a test that needs particular adapters gives Core its own.
 """
 
 import asyncio
-import socket
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,7 @@ from ha_mcp.tools.bug_report_sources import collect_known_identifiers, fetch_ha_
 from ha_mcp.tools.tools_bug_report import BugReportTools
 from ha_mcp.utils.usage_logger import log_tool_call
 
+from ._core_client import refused_url
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
@@ -84,15 +84,6 @@ async def _set_up_network(hass: HomeAssistant, *adapters: ifaddr.Adapter) -> Non
         return_value=list(adapters),
     ):
         await async_reload_adapters(hass)
-
-
-@pytest.fixture
-def unreachable_port() -> int:
-    """A loopback port nothing listens on, as while Core restarts."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-    return port
 
 
 @pytest.fixture
@@ -313,10 +304,10 @@ class TestFetchHaInstall:
         disconnect_spy.assert_awaited_once()
 
     async def test_unreachable_websocket_is_none(
-        self, hass_access_token: str, unreachable_port: int, socket_enabled: None
+        self, hass_access_token: str, socket_enabled: None
     ) -> None:
         client = HomeAssistantClient(
-            base_url=f"http://127.0.0.1:{unreachable_port}",
+            base_url=refused_url(),
             token=hass_access_token,
             verify_ssl=False,
         )

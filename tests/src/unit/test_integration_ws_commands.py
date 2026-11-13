@@ -36,7 +36,7 @@ from ha_mcp.tools import core_contract, integration_ws_commands
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._knx_core import set_up_knx
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 _DESCRIPTION_WARNING = "Some Core validators cannot be described"
 # A KNX switch as the KNX panel creates one: its name and the group address it
@@ -290,8 +290,8 @@ class TestSend:
                 ws_data=ws_data,
             )
 
-        assert _error(exc_info)["code"] == "VALIDATION_FAILED"
-        assert "reserved" in _error(exc_info)["message"]
+        assert error_of(exc_info)["code"] == "VALIDATION_FAILED"
+        assert "reserved" in error_of(exc_info)["message"]
         send.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -333,7 +333,7 @@ class TestSend:
                 entry_id=entry.entry_id, ws_command=ws_command, ws_data=ws_data
             )
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == code
         assert fragment in error["message"]
         listed = "include_ws_commands" in str(error.get("suggestion"))
@@ -434,7 +434,7 @@ class TestSend:
                 **{"entry_id": entry.entry_id, **kwargs}
             )
 
-        assert fragment in _error(exc_info)["message"]
+        assert fragment in error_of(exc_info)["message"]
         # Reading the entry's domain is the only message sent.
         assert set(_sent_types(send)) <= {"config_entries/get_single"}
 
