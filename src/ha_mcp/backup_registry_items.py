@@ -67,17 +67,31 @@ def _same(a: Any, b: Any) -> bool:
     return bool(a == b)
 
 
-def _has_fields(
-    row: dict[str, Any], fields: dict[str, Any], subset_keys: tuple[str, ...] = ()
-) -> bool:
-    # A ``subset_keys`` list may hold fewer entries than the snapshot's: Core
-    # drops a label id it no longer holds from a created area.
-    return all(
-        set(map(str, row.get(key) or [])) <= set(map(str, value or []))
-        if key in subset_keys
-        else _same(row.get(key), value)
-        for key, value in fields.items()
-    )
+def _has_fields(row: dict[str, Any], fields: dict[str, Any]) -> bool:
+    return all(_same(row.get(key), value) for key, value in fields.items())
+
+
+def _like(rows: list[Any], payload: dict[str, Any]) -> Any:
+    """The row whose fields all match the payload, None when there is none.
+
+    A payload without a name matches nothing: every capture holds one, and
+    without it any row would match.
+    """
+    if not payload.get("name"):
+        return None
+    return next((r for r in rows if _has_fields(r, payload)), None)
+
+
+async def _with_existing_labels(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload with the label ids Core no longer holds left out.
+
+    Core drops those from a created or updated area and still answers success,
+    so the row a restore leaves has only the others.
+    """
+    if "labels" not in payload:
+        return payload
+    held = {row.get("label_id") for row in await _rows(client, "label")}
+    return {**payload, "labels": [x for x in payload["labels"] or [] if x in held]}
 
 
 async def _restore_item(
@@ -88,13 +102,11 @@ async def _restore_item(
     item_id: str,
     payload: dict[str, Any],
     extra_ids: dict[str, Any] | None = None,
-    subset_keys: tuple[str, ...] = (),
 ) -> Any:
     """Update the item, or create it again when Core no longer holds its id.
 
     A row whose fields all match the payload stands for the item an earlier
-    restore created, and is returned as it is (a ``subset_keys`` list may have
-    lost entries Core dropped, see ``_has_fields``). A create leaves out a field that
+    restore created, and is returned as it is. A create leaves out a field that
     is None: some create schemas (an area's icon and floor) take a string or
     nothing, and nothing is the default.
     """
@@ -110,7 +122,7 @@ async def _restore_item(
                 **payload,
             },
         )
-    like = next((r for r in rows if _has_fields(r, payload, subset_keys)), None)
+    like = _like(rows, payload)
     if like is not None:
         return like
     fields = {k: v for k, v in payload.items() if v is not None}
@@ -173,7 +185,7 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
     if kind not in _AREA_OR_FLOOR:
         raise ValueError(f"Unknown area/floor kind: {kind!r}")
     # ``floor_id`` is the id of a floor but a field of an area.
-    payload = _manager()._strip_readonly(config, "kind", f"{kind}_id")
+    stored = _manager()._strip_readonly(config, "kind", f"{kind}_id")
     async with _manager().registry_update_lock(kind, real_id):
         rows = await _rows(client, kind)
         row = await _restore_item(
@@ -182,11 +194,10 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
             f"{kind}_registry",
             f"{kind}_id",
             real_id,
-            payload,
-            subset_keys=("labels",),
+            await _with_existing_labels(client, stored),
         )
     # Core drops a label id it no longer holds and still answers success.
-    missing = sorted(set(payload.get("labels") or []) - set(row.get("labels") or []))
+    missing = sorted(set(stored.get("labels") or []) - set(row.get("labels") or []))
     if missing:
         return {
             **row,
@@ -196,3 +207,35 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
             ],
         }
     return row
+
+
+REGISTRY_ITEM_DOMAINS = frozenset({"label", "category", "area_or_floor"})
+
+
+async def restored_item(client: Any, domain: str, entity_id: str, config: Any) -> Any:
+    """The live item a snapshot's restore created under another id, as a diff
+    compares it, None when there is none.
+
+    A restore of a deleted item creates it again under the id Core derives (a
+    renamed label, area or floor) or picks (a category), so a lookup by the
+    stored id finds nothing. The row that matches the snapshot's fields is that
+    item, found as the restore finds it. Its id and its read-only timestamps
+    are the snapshot's, since neither is a difference the snapshot can restore.
+    """
+    bm = _manager()
+    keep = {k: v for k, v in config.items() if k in bm._REGISTRY_READONLY_KEYS}
+    if domain == "label":
+        payload = bm._strip_readonly(config, "label_id")
+        row = _like(await _rows(client, "label"), payload)
+        return row and {**row, "label_id": entity_id, **keep}
+    if domain == "category":
+        scope, _, cat_id = entity_id.partition(":")
+        payload = bm._strip_readonly(config, "category_id", "scope")
+        row = _like(await _category_rows(client, scope), payload)
+        return row and {"scope": scope, **row, "category_id": cat_id, **keep}
+    kind, _, real_id = entity_id.partition(":")
+    if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
+        return None
+    payload = bm._strip_readonly(config, "kind", f"{kind}_id")
+    row = _like(await _rows(client, kind), await _with_existing_labels(client, payload))
+    return row and {"kind": kind, **row, f"{kind}_id": real_id, **keep}

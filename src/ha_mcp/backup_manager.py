@@ -104,12 +104,14 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
+from .backup_registry_items import REGISTRY_ITEM_DOMAINS as _REGISTRY_ITEM_DOMAINS
 from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
 from .backup_registry_items import fetch_category as _fetch_category
 from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
+from .backup_registry_items import restored_item as _restored_item
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -1725,6 +1727,15 @@ class BackupManager:
             live = await _dashboard_resource_like(self._client, data["config"])
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
+        elif (
+            domain in _REGISTRY_ITEM_DOMAINS
+            and current is None
+            and isinstance(data["config"], dict)
+        ):
+            # A restored label, category, area or floor can carry another id.
+            current = await _restored_item(
+                self._client, domain, data["entity_id"], data["config"]
+            )
         if (
             isinstance(current, dict)
             and isinstance(data["config"], dict)
