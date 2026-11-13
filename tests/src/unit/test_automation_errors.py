@@ -131,13 +131,11 @@ async def _core_rejection(
 ) -> str:
     """Core's own text for ``config``, from the write Core refuses with a 400."""
     assert await async_setup_component(hass, "config", {})
-    try:
+    with pytest.raises(HomeAssistantAPIError) as rejected:
         await core_client.upsert_automation_config(config, None, _resolved=True)
-    except HomeAssistantAPIError as exc:
-        text = core_rejection_text(exc)
-        assert text is not None
-        return text
-    pytest.fail("Core accepted a config this test expects it to reject")
+    text = core_rejection_text(rejected.value)
+    assert text is not None
+    return text
 
 
 async def _rejection(

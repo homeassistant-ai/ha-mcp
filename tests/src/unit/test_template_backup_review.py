@@ -276,7 +276,9 @@ async def test_alias_removal_uses_core_identity_and_waits_for_restore(
         done, _ = await asyncio.wait({task}, timeout=0.2)
         assert not done
         assert hass.config_entries.async_get_entry(template_entry.entry_id)
-    await task
+    removed = await task
+
+    assert removed["success"] is True
 
     assert hass.config_entries.async_get_entry(template_entry.entry_id) is None
     assert not list(manager.backup_dir.glob("*.yaml"))

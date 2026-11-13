@@ -8,16 +8,16 @@ import pytest
 
 from ha_mcp import config
 
-_PNG = b"\x89PNG\r\n\x1a\nunit"
+PNG = b"\x89PNG\r\n\x1a\nunit"
 
 
-_JPEG = b"\xff\xd8\xffunit"
+JPEG = b"\xff\xd8\xffunit"
 
 
-_WEBP = b"RIFF\x04\x00\x00\x00WEBPunit"
+WEBP = b"RIFF\x04\x00\x00\x00WEBPunit"
 
 
-_BMP = b"BM12"
+BMP = b"BM12"
 
 
 _PUPPET_SCHEMA = [

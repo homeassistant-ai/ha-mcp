@@ -12,10 +12,10 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
 from ._dashboard_screenshot_common import (
-    _BMP,
-    _JPEG,
-    _PNG,
-    _WEBP,
+    BMP,
+    JPEG,
+    PNG,
+    WEBP,
     clear_screenshot_env,
 )
 
@@ -144,7 +144,7 @@ class TestCapture:
 
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(200, _PNG)
+        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         explicit = await capture.capture_dashboard_images(
@@ -191,7 +191,7 @@ class TestCapture:
             return EngineTarget(url="http://engine:10000")
 
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
-        _FakeAsyncClient.next_response = _FakeResponse(200, _PNG)
+        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         result = await capture.capture_dashboard_images(
@@ -280,7 +280,7 @@ class TestCapture:
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
         _FakeAsyncClient.next_response = _FakeResponse(
-            200, _BMP, content_type="image/bmp", content_length=4
+            200, BMP, content_type="image/bmp", content_length=4
         )
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -288,7 +288,7 @@ class TestCapture:
             "lovelace/0", image_format="bmp"
         )
 
-        assert result[0].data == _BMP
+        assert result[0].data == BMP
 
     async def test_batch_limit_identifies_second_capture(
         self, monkeypatch: Any
@@ -302,7 +302,7 @@ class TestCapture:
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
         _FakeAsyncClient.next_response = _FakeResponse(
-            200, _BMP, content_type="image/bmp", content_length=4
+            200, BMP, content_type="image/bmp", content_length=4
         )
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -332,7 +332,7 @@ class TestCapture:
 
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.next_response = [
-            _FakeResponse(200, _PNG),
+            _FakeResponse(200, PNG),
             httpx.ReadTimeout("desktop timed out"),
         ]
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
@@ -363,7 +363,7 @@ class TestCapture:
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.next_response = [
             httpx.ReadTimeout("mobile timed out"),
-            _FakeResponse(200, _PNG),
+            _FakeResponse(200, PNG),
         ]
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
@@ -428,7 +428,7 @@ class TestCapture:
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
         _FakeAsyncClient.next_response = _FakeResponse(
-            200, _BMP, content_type="image/bmp", content_length=4
+            200, BMP, content_type="image/bmp", content_length=4
         )
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
@@ -456,7 +456,7 @@ class TestCapture:
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
         _FakeAsyncClient.next_response = _FakeResponse(
-            200, _JPEG, content_type="image/jpeg"
+            200, JPEG, content_type="image/jpeg"
         )
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -514,10 +514,10 @@ class TestCapture:
     @pytest.mark.parametrize(
         ("image_format", "mime_type", "body"),
         [
-            ("png", "image/png", _PNG),
-            ("jpeg", "image/jpeg", _JPEG),
-            ("webp", "image/webp", _WEBP),
-            ("bmp", "image/bmp", _BMP),
+            ("png", "image/png", PNG),
+            ("jpeg", "image/jpeg", JPEG),
+            ("webp", "image/webp", WEBP),
+            ("bmp", "image/bmp", BMP),
         ],
     )
     async def test_accepts_matching_image_signatures(
@@ -667,7 +667,7 @@ class TestCapture:
 
         monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
         _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(200, _PNG)
+        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
         monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError):

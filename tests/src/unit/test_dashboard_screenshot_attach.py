@@ -14,7 +14,7 @@ from ha_mcp._vendor.fastmcp.tools import ToolResult
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._dashboard_screenshot_common import (
-    _PNG,
+    PNG,
     clear_screenshot_env,
     fake_dashboard_capture,
     set_settings,
@@ -93,7 +93,7 @@ def test_native_image_conversion_failure_reports_second_image_context(
     assert error["capture_count"] == 2
     assert error["format"] == "png"
     assert error["mime_type"] == "image/png"
-    assert error["size_bytes"] == len(_PNG)
+    assert error["size_bytes"] == len(PNG)
 
 
 @pytest.mark.parametrize(

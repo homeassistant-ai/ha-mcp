@@ -394,6 +394,19 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "for CodeQL's heuristic to have correctly caught. mypy already "
         "confirms this file is clean under that typing.",
     ),
+    # NOTE: same PATH-WIDE caveat as the server.py entry above — re-audit if
+    # provision.py grows genuinely mixed-returns functions.
+    (
+        "py/mixed-returns",
+        "src/ha_mcp/dashboard_screenshot/provision.py",
+        "Mixing implicit and explicit returns",
+        "",
+        "False positive on _discover_engine_via_supervisor's return-in-the-try "
+        "vs raise shape: every other path ends in raise_tool_error, typed "
+        "'-> NoReturn' (see helpers.py), so there is no implicit None return "
+        "for CodeQL's heuristic to have correctly caught. mypy already "
+        "confirms this file is clean under that typing.",
+    ),
     # ---- Security-suite entries (the workflow also gates the default
     # <language>-code-scanning suites; see codeql-quality.yml header). Entries
     # whose message substring is generic ("as clear text", "hashing algorithm")
