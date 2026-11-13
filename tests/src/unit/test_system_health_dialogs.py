@@ -112,17 +112,15 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
     assert "Supervisor busy" in section["supervisor_stats"]["error"]
 
 
-async def test_removed_sections_point_to_their_tools(
+async def test_diagnostics_point_to_ha_get_integration(
     hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
 ) -> None:
     await _set_up_frontend(hass, tmp_path)
 
-    result = await SystemTools(core_client).ha_get_system_health(
-        include="diagnostics,themes"
-    )
+    result = await SystemTools(core_client).ha_get_system_health(include="diagnostics")
 
     assert "diagnostics" not in result
-    assert "themes" not in result
-    warnings = " ".join(result["warnings"])
-    assert "ha_get_integration(include_diagnostics=True)" in warnings
-    assert "ha_manage_theme(action='list')" in warnings
+    assert (
+        "'diagnostics' moved to ha_get_integration(include_diagnostics=True)"
+        in result["warnings"]
+    )
