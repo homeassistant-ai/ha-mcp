@@ -33,6 +33,7 @@ _HASS = "no-hand-made-hass"
 _SUPPRESSIONS = "no-stand-in-suppressions"
 _TYPED = "no-untyped-core-fixtures"
 _WS_REPLIES = "no-test-websocket-replies"
+_STORE_WRITES = "no-test-registry-store-writes"
 
 
 def _ast_grep() -> str:
@@ -534,6 +535,72 @@ def test_no_test_writes_a_websocket_command_or_reply() -> None:
     rule = yaml.safe_load((_RULES / f"{_WS_REPLIES}.yml").read_text(encoding="utf-8"))
     assert "ignores" not in rule
     assert _scan(_RULES / f"{_WS_REPLIES}.yml", _REPO, "tests") == []
+
+
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param(
+            "ir.async_get(hass).issues[('automation', 'x')] = issue\n",
+            True,
+            id="issue-placed-by-hand",
+        ),
+        pytest.param(
+            "registry.entities[entry.entity_id] = entry\n", True, id="entity-placed"
+        ),
+        pytest.param(
+            "registry.deleted_entities[key]: RegistryEntry = deleted\n",
+            True,
+            id="annotated-deleted-entity",
+        ),
+        pytest.param(
+            "del device_registry.devices[device.id]\n", True, id="device-deleted"
+        ),
+        pytest.param("area_registry.areas.pop(area.id)\n", True, id="area-popped"),
+        pytest.param("self.labels.clear()\n", True, id="labels-cleared"),
+        pytest.param(
+            "floor_registry.floors.update({floor.floor_id: floor})\n",
+            True,
+            id="floors-updated",
+        ),
+        pytest.param(
+            "registry.categories.setdefault('automation', {})\n",
+            True,
+            id="category-scope-added",
+        ),
+        pytest.param("entry = registry.entities[entity_id]\n", False, id="entry-read"),
+        pytest.param(
+            "assert issue_registry.issues.get(key) is None\n", False, id="get"
+        ),
+        pytest.param(
+            "assert registry.entities[a] == registry.entities[b]\n",
+            False,
+            id="comparison",
+        ),
+        pytest.param(
+            "result['entities'][0] = row\n", False, id="reply-dict-not-a-registry"
+        ),
+        pytest.param("hass.data['x'] = {}\n", False, id="other-subscript"),
+        pytest.param(
+            "entity_registry.async_remove(entry.entity_id)\n",
+            False,
+            id="core-removes-it",
+        ),
+    ],
+)
+def test_only_a_write_into_a_registry_store_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """A test changes a registry through Core, never by writing its store;
+    reading the store is allowed."""
+    assert _flagged(_STORE_WRITES, source, tmp_path) is refused
+
+
+def test_no_test_writes_into_a_registry_store() -> None:
+    """The rule has no grandfather list: every unit test complies."""
+    path = _RULES / f"{_STORE_WRITES}.yml"
+    assert "ignores" not in yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert _scan(path, _REPO, "tests") == []
 
 
 @pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS, _TYPED])
