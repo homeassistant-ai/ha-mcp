@@ -29,6 +29,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import entity_registry_reads
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._entity_registry_core import assert_default_suggestions
 from ._tool_errors import error_of
 
 _LIST = "homeassistant/expose_entity/list"
@@ -701,6 +702,7 @@ class TestEntityWriteFailure:
 
         body = _body(exc_info)
         assert "boom" in body["error"]["message"]
+        assert_default_suggestions(body["error"])
         assert body["partial"] is True
         assert body["entity_entry"]["name"] == "Updated"
         assert body["exposure_succeeded"] == {}

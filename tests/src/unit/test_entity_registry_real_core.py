@@ -19,24 +19,18 @@ from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 from ._entity_registry_core import assert_cores_refusal as assert_cores_refusal
+from ._entity_registry_core import (
+    assert_default_suggestions as assert_default_suggestions,
+)
 from ._entity_registry_core import core_client as core_client
 from ._entity_registry_core import device_entity as device_entity
 from ._entity_registry_core import lamp as lamp
 from ._entity_registry_core import sent_types as sent_types
 from ._tool_errors import error_of
-
-
-def _assert_default_suggestions(error: dict[str, Any]) -> None:
-    """The tool adds no suggestions of its own to Core's refusal: what it
-    carries is the error code's default list."""
-    expected = DEFAULT_SUGGESTIONS.get(ErrorCode(error["code"]), [])
-    given = [error["suggestion"], *error.get("suggestions", [])[1:]]
-    assert given == expected
 
 
 async def test_auto_takes_the_id_core_generates(
@@ -118,7 +112,7 @@ async def test_auto_on_an_invalid_id_is_cores_refusal(
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["message"].startswith("No automatic entity_id for not an id: ")
     assert "is an invalid entity ID" in error["message"]
-    _assert_default_suggestions(error)
+    assert_default_suggestions(error)
     assert_cores_refusal(exc_info, "invalid_format")
     assert sent_types(sent) == ["config/entity_registry/get_automatic_entity_ids"]
 
@@ -255,7 +249,7 @@ async def test_main_entity_with_own_area_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "cannot have an area of its own" in error["message"]
-    _assert_default_suggestions(error)
+    assert_default_suggestions(error)
     assert registry.async_get(entry.entity_id) == before
 
 
@@ -385,7 +379,7 @@ async def test_a_rename_into_another_domain_is_cores_refusal(
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "same domain" in error["message"]
-    _assert_default_suggestions(error)
+    assert_default_suggestions(error)
     assert_cores_refusal(exc_info, "invalid_info")
 
 

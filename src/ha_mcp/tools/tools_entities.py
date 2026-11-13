@@ -689,9 +689,6 @@ class EntityTools:
                         ErrorCode.SERVICE_CALL_FAILED,
                         f"Exposure failed: {error_msg}",
                         context=context,
-                        suggestions=[
-                            "Check Home Assistant connection and entity availability"
-                        ],
                     )
                 )
 

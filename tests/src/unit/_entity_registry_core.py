@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +15,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 
 
 @pytest.fixture(params=["component", "core"])
@@ -66,3 +68,11 @@ def device_entity(hass: HomeAssistant, original_name: str | None) -> er.Registry
     return er.async_get(hass).async_get_or_create(
         "sensor", "demo", "dawn", device_id=device.id, original_name=original_name
     )
+
+
+def assert_default_suggestions(error: dict[str, Any]) -> None:
+    """The tool adds no suggestions of its own to Core's refusal: what it
+    carries is the error code's default list."""
+    expected = DEFAULT_SUGGESTIONS.get(ErrorCode(error["code"]), [])
+    given = [error["suggestion"], *error.get("suggestions", [])[1:]]
+    assert given == expected
