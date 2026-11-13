@@ -101,5 +101,8 @@ async def listed_events(
     listed = await CalendarTools(client).ha_config_get_calendar_events(
         entity_id, start="1999-01-01T00:00:00Z", end="2100-01-01T00:00:00Z"
     )
+    assert listed["total_available"] == listed["count"], (
+        f"{entity_id} has more events than the tool returns"
+    )
     events: list[dict[str, Any]] = listed["events"]
     return events
