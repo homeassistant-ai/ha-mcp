@@ -1,6 +1,5 @@
 """Unit tests for camera tools module."""
 
-import json
 import re
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,23 +9,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools, _detect_image_format
 
-
-def _png(width: int, height: int) -> bytes:
-    """Minimal structurally-valid PNG header with the given dimensions."""
-    ihdr_payload = (
-        width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
-    )
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + len(ihdr_payload).to_bytes(4, "big")
-        + b"IHDR"
-        + ihdr_payload
-    )
-
-
-def _error_body(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
-    """Parse the structured error payload carried by a raised ToolError."""
-    return json.loads(exc_info.value.args[0])["error"]
+from ._camera_test_helpers import error_body as _error_body
+from ._camera_test_helpers import png_bytes as _png
 
 
 class TestDetectImageFormat:

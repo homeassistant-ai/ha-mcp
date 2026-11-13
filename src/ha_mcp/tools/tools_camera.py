@@ -272,7 +272,7 @@ class CameraTools:
         width: Annotated[
             int | None,
             Field(
-                description="Width for the resized image. Home Assistant "
+                description="Width for the resized image (camera entities only). Home Assistant "
                 "rescales only when both width and height are given and "
                 "the camera serves JPEG."
             ),
@@ -280,7 +280,7 @@ class CameraTools:
         height: Annotated[
             int | None,
             Field(
-                description="Height for the resized image. Home Assistant "
+                description="Height for the resized image (camera entities only). Home Assistant "
                 "rescales only when both width and height are given and "
                 "the camera serves JPEG."
             ),
