@@ -30,7 +30,7 @@ from ha_mcp.dashboard_screenshot import capture
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.utils.config_hash import compute_config_hash
 
-from ._addon_tool_helpers import _parse_tool_error
+from ._tool_errors import error_body
 
 _CONFIG: dict[str, Any] = {
     "title": "Multi",
@@ -123,7 +123,7 @@ async def test_unknown_view_path_errors_and_lists_available(
     with pytest.raises(ToolError) as exc_info:
         await tool(url_path="default", view_path="garage")
 
-    error = _parse_tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert error["available_view_paths"] == ["home", "office"]
 
@@ -136,7 +136,7 @@ async def test_empty_view_path_errors(
     with pytest.raises(ToolError) as exc_info:
         await tool(url_path="default", view_path="   ")
 
-    error = _parse_tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
@@ -149,7 +149,7 @@ async def test_strategy_dashboard_view_path_errors_with_get_suggestion(
     with pytest.raises(ToolError) as exc_info:
         await tool(url_path="default", view_path="home")
 
-    error = _parse_tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "Omit view_path" in error["error"]["suggestion"]
 
@@ -165,7 +165,7 @@ async def test_non_dict_config_with_view_path_errors(
     with pytest.raises(ToolError) as exc_info:
         await tool(url_path="default", view_path="office")
 
-    error = _parse_tool_error(exc_info)
+    error = error_body(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert "view_path cannot be resolved" in error["error"]["message"]
 

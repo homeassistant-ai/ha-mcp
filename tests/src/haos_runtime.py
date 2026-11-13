@@ -953,7 +953,7 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
     return wheels[0]
 
 
-def _set_embedded_server_pip_spec(
+def set_embedded_server_pip_spec(
     config_entries_doc: dict[str, Any], pip_spec: str, admin_token: str
 ) -> bool:
     """Point the baked server entry at ``pip_spec`` and its token (#2427).
@@ -1083,7 +1083,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path, admin_token: str) -> 
             local = workdir / "core.config_entries"
             doc = json.loads(local.read_text(encoding="utf-8"))
             pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
-            if not _set_embedded_server_pip_spec(doc, pip_spec, admin_token):
+            if not set_embedded_server_pip_spec(doc, pip_spec, admin_token):
                 detail = (
                     "no in-process server config entry in the image — the bake may "
                     "not have seeded it (check build_image.bake_test_state)"

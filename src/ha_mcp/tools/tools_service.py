@@ -1054,13 +1054,13 @@ class ServiceTools(EventCallMixin):
 
     @staticmethod
     def _project_service_result(
-        result: Any,
+        result: list[dict[str, Any]],
         *,
         entity_id: str | None,
         verbose: bool,
         fields: list[str] | None,
         attribute_keys: list[str] | None,
-    ) -> tuple[Any, list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         """Apply compact / explicit projection to a service-call ``result``.
 
         Issue #1446. Precedence:
@@ -1085,8 +1085,6 @@ class ServiceTools(EventCallMixin):
             return result, []
         if fields is None and attribute_keys is None:
             return compact_service_result(result, entity_id), []
-        if not isinstance(result, list):
-            return result, []
         warnings: list[str] = []
         # ``result_attribute_keys`` only takes effect when ``attributes`` is in
         # the projected ``result_fields`` (or ``result_fields`` is None). Surface
@@ -1102,7 +1100,7 @@ class ServiceTools(EventCallMixin):
                 "in result_fields. Add 'attributes' to result_fields (or omit "
                 "result_fields) to apply result_attribute_keys."
             )
-        projected: list[Any] = []
+        projected: list[dict[str, Any]] = []
         seen_warnings: set[str] = set()
         for record in result:
             new_record, warn = project_entity_record(record, fields, attribute_keys)

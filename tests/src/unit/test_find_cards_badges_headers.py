@@ -16,7 +16,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_dashboards import MAX_CARD_DEPTH
 
 from ._dashboard_search_helpers import search_cards
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 Search = Callable[..., Awaitable[dict[str, Any]]]
 Find = Callable[..., Awaitable[list[dict[str, Any]]]]
@@ -208,7 +208,7 @@ class TestStrategyDashboard:
         config = {"strategy": {"type": "home"}, "views": []}
         with pytest.raises(ToolError) as exc:
             await search(config, entity_id="light.test")
-        assert _error(exc)["code"] == "VALIDATION_FAILED"
+        assert error_of(exc)["code"] == "VALIDATION_FAILED"
 
 
 class TestNestedCardSearch:

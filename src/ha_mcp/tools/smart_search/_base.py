@@ -7,6 +7,7 @@ entity/area search mixins.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from ...client.rest_client import HomeAssistantClient
@@ -18,6 +19,7 @@ class _SearchBase:
     """Attributes set by ``SmartSearchTools.__init__`` plus shared helpers."""
 
     client: HomeAssistantClient
+    clock: Callable[[], float] | None
     fuzzy_searcher: Any
     settings: Any
 

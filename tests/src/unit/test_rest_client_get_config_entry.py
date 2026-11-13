@@ -12,7 +12,6 @@ Every read goes to a real ``hass`` through the server's own client.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import patch
 
@@ -63,22 +62,6 @@ def _get_single_levels(caplog: pytest.LogCaptureFixture) -> list[str]:
         for r in caplog.records
         if r.name == _REST_LOGGER and "get_single" in r.getMessage()
     ]
-
-
-@pytest.fixture
-async def read_only_client(
-    core_client: HomeAssistantClient, hass_read_only_access_token: str
-) -> AsyncIterator[HomeAssistantClient]:
-    """The server's client for a user who is not an admin."""
-    client = HomeAssistantClient(
-        base_url=core_client.base_url,
-        token=hass_read_only_access_token,
-        verify_ssl=False,
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 @pytest.mark.usefixtures("config")

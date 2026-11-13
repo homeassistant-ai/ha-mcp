@@ -1,187 +1,303 @@
-"""Calendar restore: which failed in-place updates may fall back to re-creating."""
+"""Calendar restore: which failed in-place updates may fall back to re-creating.
+
+``calendar.fam`` is Core's Local Calendar, set up from its config entry with
+its ``.ics`` file in the test's config directory; events are written through
+Core's calendar WebSocket commands. A snapshot is placed in the backup
+directory with the event as Core's calendar view lists it, the way a capture
+stores it; the restore runs through the manager.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime
+import datetime as dt
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+import yaml
+from homeassistant.components.calendar import CalendarEntity
+from homeassistant.components.local_calendar.calendar import LocalCalendarEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError as CoreHomeAssistantError
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantError,
 )
 
-from .test_backup_manager import _CalendarRestClient
+from ._calendars import (
+    calendar_config_dir,
+    listed_events,
+    local_calendar,
+    remote_calendar,
+    write_event,
+)
+from ._component_core import ws_result
 
-_SNAPSHOT = {
-    "calendar_entity_id": "calendar.fam",
-    "uid": "evt-1",
-    "summary": "Standup",
-    "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
-    "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
-}
+STANDUP = dt.datetime(2026, 6, 15, 9)
+# A published calendar Remote Calendar reads; it has no update feature.
+BOARD_ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ha-mcp tests//EN
+BEGIN:VEVENT
+UID:evt-1
+DTSTAMP:20260101T000000Z
+SUMMARY:Standup
+DTSTART:20260615T090000
+DTEND:20260615T091500
+END:VEVENT
+END:VCALENDAR
+"""
 
 
-def _fail_update(
-    err: HomeAssistantCommandError, monkeypatch: pytest.MonkeyPatch
+# Core's config directory is this test's ``tmp_path``.
+hass_config_dir = calendar_config_dir
+
+
+@pytest.fixture(autouse=True)
+async def new_york(hass: HomeAssistant) -> None:
+    await hass.config.async_set_time_zone("America/New_York")
+
+
+@pytest.fixture
+async def manager(core_client: HomeAssistantClient, tmp_path: Path) -> bm.BackupManager:
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+        auto_backup_dir=str(tmp_path / "backups"),
+    )
+    return bm.get_backup_manager(core_client, settings)
+
+
+@pytest.fixture
+async def fam(hass: HomeAssistant, core_client: HomeAssistantClient) -> CalendarEntity:
+    """``calendar.fam``: Core's Local Calendar."""
+    return await local_calendar(hass, "Fam")
+
+
+@pytest.fixture
+async def ws(
+    hass: HomeAssistant, fam: CalendarEntity, hass_ws_client: WebSocketGenerator
+) -> MockHAClientWebSocket:
+    return await hass_ws_client(hass)
+
+
+async def _put(
+    ws: MockHAClientWebSocket,
+    summary: str,
+    start: dt.datetime = STANDUP,
+    uid: str | None = None,
 ) -> None:
-    async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
-        raise err
+    await write_event(ws, "calendar.fam", summary, start, uid)
 
-    async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("restore must not re-create the event")
 
-    monkeypatch.setattr(bm, "_ws_send", failing_ws)
-    monkeypatch.setattr(bm, "_rest_post", fail_post)
+async def _delete(ws: MockHAClientWebSocket, uid: str) -> None:
+    await ws_result(ws, "calendar/event/delete", entity_id="calendar.fam", uid=uid)
+
+
+async def _events(
+    client: HomeAssistantClient, cal: str = "calendar.fam"
+) -> list[dict[str, Any]]:
+    return await listed_events(client, cal)
+
+
+async def _snapshot(
+    manager: bm.BackupManager,
+    client: HomeAssistantClient,
+    cal: str = "calendar.fam",
+    into: str | None = None,
+    **extra: Any,
+) -> tuple[str, str]:
+    """Place a snapshot of the one event on ``cal``; its name and the uid.
+
+    ``into`` names another calendar for the snapshot to belong to.
+    """
+    (event,) = await _events(client, cal)
+    target, uid = into or cal, event["uid"]
+    name = f"calendar_event.{target}_{uid}.20200101_000000.yaml"
+    manager.backup_dir.mkdir(parents=True, exist_ok=True)
+    (manager.backup_dir / name).write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": bm.SCHEMA_VERSION,
+                "domain": "calendar_event",
+                "entity_id": f"{target}::{uid}",
+                "config": {"calendar_entity_id": target, **event, **extra},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return name, uid
 
 
 async def test_a_failure_that_cannot_mean_a_deleted_event_is_raised_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # A missing calendar entity says nothing about the event, so it is neither
     # looked up nor re-created, though the calendar view would not list the uid.
-    err = HomeAssistantCommandError("Command failed: Entity not found", "not_found")
-    _fail_update(err, monkeypatch)
-    client = _CalendarRestClient([])
+    await _put(ws, "Standup")
+    name, uid = await _snapshot(manager, core_client, into="calendar.gone")
+
     with pytest.raises(HomeAssistantCommandError) as exc_info:
-        await bm._restore_calendar_event(client, "calendar.fam::evt-1", _SNAPSHOT)
-    assert exc_info.value is err
-    assert client.calls == []
+        await manager.restore_snapshot(name, take_safety_backup=False)
+
+    assert exc_info.value.code == "not_found"
+    assert [event["uid"] for event in await _events(core_client)] == [uid]
 
 
 async def test_a_failed_lookup_is_raised_instead_of_reading_as_a_deleted_event(
-    monkeypatch: pytest.MonkeyPatch,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # Whether the event still exists is unknown, so re-creating it could leave
     # a duplicate.
-    lookup_error = HomeAssistantAPIError("API error: 500", status_code=500)
+    await _put(ws, "Standup")
+    name, uid = await _snapshot(manager, core_client)
+    await _delete(ws, uid)
 
-    class _BrokenCalendar:
-        async def _request(self, *_args: Any, **_kwargs: Any) -> Any:
-            raise lookup_error
+    with (
+        patch.object(
+            LocalCalendarEntity,
+            "async_get_events",
+            side_effect=CoreHomeAssistantError("backend unavailable"),
+        ) as reads,
+        pytest.raises(HomeAssistantAPIError) as exc_info,
+    ):
+        await manager.restore_snapshot(name, take_safety_backup=False)
 
-    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await bm._restore_calendar_event(
-            _BrokenCalendar(), "calendar.fam::evt-1", _SNAPSHOT
-        )
-    assert exc_info.value is lookup_error
+    assert exc_info.value.status_code == 500
+    # The first failed read ends the restore: no wider lookup, no copy search.
+    assert reads.call_count == 1
+    assert await _events(core_client) == []
 
 
 async def test_an_occurrence_on_a_calendar_without_updates_names_the_real_cause(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
 ) -> None:
     # The occurrence was never looked up, so the error must not claim it is gone.
-    _fail_update(
-        HomeAssistantCommandError(
-            "Command failed: Calendar does not support event update", "not_supported"
-        ),
-        monkeypatch,
+    board = await remote_calendar(hass, "Board", BOARD_ICS)
+    name, _ = await _snapshot(
+        manager, core_client, "calendar.board", recurrence_id="20260615T090000"
     )
-    client = _CalendarRestClient([])
-    with pytest.raises(HomeAssistantError, match="cannot be updated") as exc_info:
-        await bm._restore_calendar_event(
-            client,
-            "calendar.fam::evt-1::20260615T090000",
-            {**_SNAPSHOT, "recurrence_id": "20260615T090000"},
-        )
+
+    with (
+        patch.object(board, "async_get_events", wraps=board.async_get_events) as reads,
+        pytest.raises(HomeAssistantError, match="cannot be updated") as exc_info,
+    ):
+        await manager.restore_snapshot(name, take_safety_backup=False)
+
     assert "no longer exists" not in str(exc_info.value)
-    assert client.calls == []
+    reads.assert_not_called()
+    assert [e["summary"] for e in await _events(core_client, "calendar.board")] == [
+        "Standup"
+    ]
 
 
 async def test_restoring_a_deleted_event_twice_keeps_one_copy(
-    monkeypatch: pytest.MonkeyPatch,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # The first restore re-created the event under a new uid, so the second
     # finds the snapshotted uid gone again; the copy it made is on the calendar.
-    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
-    copy = {
-        "uid": "evt-new",
-        "summary": "Standup",
-        "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
-        "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
-    }
-    result = await bm._restore_calendar_event(
-        _CalendarRestClient([copy]), "calendar.fam::evt-1", _SNAPSHOT
-    )
-    assert result == {"already_restored": True, "event": copy}
+    await _put(ws, "Standup")
+    name, uid = await _snapshot(manager, core_client)
+    await _delete(ws, uid)
+
+    await manager.restore_snapshot(name, take_safety_backup=False)
+    result = await manager.restore_snapshot(name, take_safety_backup=False)
+
+    (copy,) = await _events(core_client)
+    assert copy["summary"] == "Standup"
+    assert copy["uid"] != uid
+    assert result["result"]["already_restored"] is True
+    assert result["result"]["event"]["uid"] == copy["uid"]
 
 
 async def test_a_deleted_event_with_no_copy_is_re_created(
-    monkeypatch: pytest.MonkeyPatch,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # An event at the same times with other text is not the restored copy.
-    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
-    posted: list[dict[str, Any]] = []
+    await _put(ws, "Standup")
+    name, uid = await _snapshot(manager, core_client)
+    await _delete(ws, uid)
+    await _put(ws, "Retro")
 
-    async def record_post(_client: Any, _path: str, data: dict[str, Any]) -> Any:
-        posted.append(data)
-        return []
+    await manager.restore_snapshot(name, take_safety_backup=False)
 
-    monkeypatch.setattr(bm, "_rest_post", record_post)
-    other = {
-        "uid": "evt-2",
-        "summary": "Retro",
-        "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
-        "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
-    }
-    await bm._restore_calendar_event(
-        _CalendarRestClient([other]), "calendar.fam::evt-1", _SNAPSHOT
-    )
-    assert [p["summary"] for p in posted] == ["Standup"]
+    events = await _events(core_client)
+    assert sorted(event["summary"] for event in events) == ["Retro", "Standup"]
+    assert uid not in {event["uid"] for event in events}
 
 
 async def test_the_restored_copy_is_found_after_a_timezone_change(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    fam: CalendarEntity,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # Local Calendar keeps floating times: after a timezone change the copy
     # shows the same wall clock under the new offset.
-    _fail_update(HomeAssistantCommandError("Command failed", "failed"), monkeypatch)
-    copy = {
-        "uid": "evt-new",
-        "summary": "Standup",
-        "start": {"dateTime": "2026-06-15T09:00:00+02:00"},
-        "end": {"dateTime": "2026-06-15T09:15:00+02:00"},
+    await _put(ws, "Standup")
+    name, uid = await _snapshot(manager, core_client)
+    await _delete(ws, uid)
+    await manager.restore_snapshot(name, take_safety_backup=False)
+    await hass.config.async_set_time_zone("Europe/Berlin")
+
+    with patch.object(fam, "async_get_events", wraps=fam.async_get_events) as reads:
+        result = await manager.restore_snapshot(name, take_safety_backup=False)
+
+    assert result["result"]["already_restored"] is True
+    assert result["result"]["event"]["start"] == {
+        "dateTime": "2026-06-15T09:00:00+02:00"
     }
-    client = _CalendarRestClient([copy])
-    result = await bm._restore_calendar_event(client, "calendar.fam::evt-1", _SNAPSHOT)
-    assert result == {"already_restored": True, "event": copy}
-    _path, params = client.calls[-1]
-    assert params["start"] == "2026-06-14T09:00:00-04:00"
-    assert params["end"] == "2026-06-16T09:15:00-04:00"
+    # The copy search asked for a day either side of the snapshot's times.
+    _, start, end = reads.call_args.args
+    assert start == dt.datetime.fromisoformat("2026-06-14T09:00:00-04:00")
+    assert end == dt.datetime.fromisoformat("2026-06-16T09:15:00-04:00")
+    assert [event["summary"] for event in await _events(core_client)] == ["Standup"]
 
 
 async def test_an_existing_event_far_from_today_is_not_duplicated(
-    monkeypatch: pytest.MonkeyPatch,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    ws: MockHAClientWebSocket,
 ) -> None:
     # A calendar can answer ``failed`` for an event that still exists, such as
     # on a backend error. Edited since the snapshot, it is no copy of it, so
     # only a lookup around the snapshot's own date keeps it from being
-    # duplicated. This calendar stub lists the event only in a window holding
-    # its start.
-    snapshot = {
-        **_SNAPSHOT,
-        "start": {"dateTime": "2000-01-10T09:00:00+00:00"},
-        "end": {"dateTime": "2000-01-10T09:15:00+00:00"},
-    }
-    edited = {**snapshot, "summary": "Standup (moved room)"}
-    at = datetime.fromisoformat(snapshot["start"]["dateTime"])
+    # duplicated.
+    far = dt.datetime(2000, 1, 10, 9)
+    await _put(ws, "Standup", far)
+    name, uid = await _snapshot(manager, core_client)
+    await _put(ws, "Standup (moved room)", far, uid)
 
-    class _WindowedCalendar(_CalendarRestClient):
-        async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-            await super()._request(method, path, **kwargs)
-            start, end = (
-                datetime.fromisoformat(kwargs["params"][k]) for k in ("start", "end")
-            )
-            return [edited] if start <= at <= end else []
+    with (
+        patch.object(
+            LocalCalendarEntity,
+            "async_update_event",
+            side_effect=CoreHomeAssistantError("An error occurred"),
+        ),
+        pytest.raises(HomeAssistantCommandError) as exc_info,
+    ):
+        await manager.restore_snapshot(name, take_safety_backup=False)
 
-    err = HomeAssistantCommandError("Command failed: An error occurred", "failed")
-    _fail_update(err, monkeypatch)
-    with pytest.raises(HomeAssistantCommandError) as exc_info:
-        await bm._restore_calendar_event(
-            _WindowedCalendar([]), "calendar.fam::evt-1", snapshot
-        )
-    assert exc_info.value is err
+    assert exc_info.value.code == "failed"
+    assert [event["summary"] for event in await _events(core_client)] == [
+        "Standup (moved room)"
+    ]

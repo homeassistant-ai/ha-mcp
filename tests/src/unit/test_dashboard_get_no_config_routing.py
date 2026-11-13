@@ -25,7 +25,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
 from ._client_spies import sent_messages
-from ._tool_errors import _error as _error
+from ._tool_errors import error_of
 
 # Core requires a hyphen in a dashboard's url_path and derives its internal
 # id by slugifying it.
@@ -110,7 +110,7 @@ async def test_view_path_on_dashboard_without_config_is_refused(
     with pytest.raises(ToolError) as exc:
         await get_dashboard(url_path=_URL_PATH, view_path="kitchen")
 
-    assert _error(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_of(exc)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 async def test_screenshot_request_on_dashboard_without_config_is_answered(
@@ -136,7 +136,7 @@ async def test_card_search_on_dashboard_without_config_says_why(
             url_path=_URL_PATH, card_type="tile"
         )
 
-    error = _error(exc)
+    error = error_of(exc)
     assert error["code"] == "VALIDATION_FAILED"
     assert "no config" in error["message"]
 
@@ -151,4 +151,4 @@ async def test_card_search_on_unknown_dashboard_is_not_found(
             url_path="ghost", card_type="tile"
         )
 
-    assert _error(exc)["code"] == "RESOURCE_NOT_FOUND"
+    assert error_of(exc)["code"] == "RESOURCE_NOT_FOUND"

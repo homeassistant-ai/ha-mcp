@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.14.*"
 resolution-markers = [
     "python_full_version >= '3.14.2'",
@@ -1438,6 +1438,7 @@ dev = [
     { name = "ha-silabs-firmware-client" },
     { name = "hamcp-test-env" },
     { name = "homeassistant" },
+    { name = "ical" },
     { name = "infrared-protocols" },
     { name = "knx-frontend" },
     { name = "knx-telegram-store", extra = ["postgres", "sqlite"] },
@@ -1522,6 +1523,7 @@ dev = [
     { name = "ha-silabs-firmware-client", specifier = "==0.4.0" },
     { name = "hamcp-test-env", editable = "tests/test-env" },
     { name = "homeassistant", specifier = "==2026.11.1" },
+    { name = "ical", specifier = "==14.3.1" },
     { name = "infrared-protocols", specifier = "==10.5.0" },
     { name = "knx-frontend", specifier = "==2026.11.8.11926" },
     { name = "knx-telegram-store", extras = ["sqlite", "postgres"], specifier = "==0.15.2" },
@@ -1801,6 +1803,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cc/3f/2c29224acb2e2df4d2046e4c73ee2662023c58ff5b113c4c1adac0886c43/humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc", size = 360702, upload-time = "2021-09-17T21:40:43.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/0f/310fb31e39e2d734ccaa2c0fb981ee41f7bd5056ce9bc29b2248bd569169/humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477", size = 86794, upload-time = "2021-09-17T21:40:39.897Z" },
+]
+
+[[package]]
+name = "ical"
+version = "14.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "tzdata" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/c8/e5a94d5da640a71958d3033f0ff4a1fd9c39e599e1033b3c5c59c49b259c/ical-14.3.1.tar.gz", hash = "sha256:2a6ea215effa6a1c9cae93570b648f105fcaeba9677d0f7b3b7d63d0a18085b1", size = 163140, upload-time = "2026-10-20T15:13:53.894Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/50/79753d726ea6c28ca728c60be0b426681931be286ad459ca2f31389d0e39/ical-14.3.1-py3-none-any.whl", hash = "sha256:a70435a53d8c1adfaa6a74a3417d79b3cd871b7e090f27fb0bb83f5e089e2009", size = 147233, upload-time = "2026-10-20T15:13:52.148Z" },
 ]
 
 [[package]]

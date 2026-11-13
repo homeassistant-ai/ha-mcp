@@ -28,7 +28,7 @@ from ha_mcp.tools.tools_service import ServiceTools
 
 from ._code_mode import run_custom_tool
 from ._supervisor_core import load_supervisor_api, supervisor_requests
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 SNAPSHOT_SERVICES = [
     ("hassio", "backup_partial"),
@@ -143,7 +143,7 @@ class TestServiceMode:
                 domain=domain, service=service
             )
 
-        assert "enable_snapshot_actions=false" in _error(excinfo)["message"]
+        assert "enable_snapshot_actions=false" in error_of(excinfo)["message"]
         sent.services.assert_not_awaited()
         sent.ws.assert_not_awaited()
 
@@ -161,7 +161,7 @@ class TestServiceMode:
                 domain="hassio", service="restore_full"
             )
 
-        assert "backup_read_only=true" in _error(excinfo)["message"]
+        assert "backup_read_only=true" in error_of(excinfo)["message"]
         sent.services.assert_not_awaited()
 
     async def test_other_hassio_services_are_not_gated(
@@ -206,7 +206,7 @@ class TestWsCommandMode:
                 ws_command=command, data=data
             )
 
-        assert "enable_snapshot_actions=false" in _error(excinfo)["message"]
+        assert "enable_snapshot_actions=false" in error_of(excinfo)["message"]
         sent.ws.assert_not_awaited()
 
     async def test_backup_read_only_refuses_write(
@@ -223,7 +223,7 @@ class TestWsCommandMode:
                 ws_command="backup/generate"
             )
 
-        assert "backup_read_only=true" in _error(excinfo)["message"]
+        assert "backup_read_only=true" in error_of(excinfo)["message"]
         sent.ws.assert_not_awaited()
 
     @pytest.mark.parametrize(("command", "data"), SNAPSHOT_READ_WS)
@@ -260,7 +260,7 @@ class TestWsCommandMode:
                 ws_command=command, data=data
             )
 
-        error = _error(excinfo)
+        error = error_of(excinfo)
         assert "deletion is only available" in error["message"]
         assert "ha_manage_backup(scope='snapshot'" in error["suggestion"]
         sent.ws.assert_not_awaited()

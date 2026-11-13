@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -26,6 +25,7 @@ from ha_mcp.tools.resource_patch import (
 from ha_mcp.tools.tools_resources import ResourceTools, register_resources_tools
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
+from ._tool_errors import error_body, error_of
 from .test_resource_codec import _legacy_url
 
 RESOURCE_ID = "res-0001"
@@ -85,10 +85,6 @@ def _inline(content: str, res_type: str = "module") -> dict[str, Any]:
     }
 
 
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))
-
-
 async def _patch(fake: FakeLovelace, **kwargs: Any) -> dict[str, Any]:
     tool = ResourceTools(fake).ha_config_set_dashboard_resource
     return await tool(resource_id=RESOURCE_ID, **kwargs)
@@ -98,7 +94,7 @@ async def _patch_error(fake: FakeLovelace, **kwargs: Any) -> dict[str, Any]:
     with pytest.raises(ToolError) as exc_info:
         await _patch(fake, **kwargs)
     assert fake.updates == [], "a failed patch must not write anything"
-    return _error(exc_info)
+    return error_body(exc_info)
 
 
 class TestPatchSuccess:
@@ -286,7 +282,7 @@ class TestPatchRefusals:
         with pytest.raises(ToolError) as exc_info:
             await _patch(fake, edits=[{"old": "'red'", "new": "'blue'"}])
 
-        assert _error(exc_info)["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
         assert _decode_data_uri(fake.resources[0]["url"]) == CARD
 
     async def test_unknown_resource_id_is_not_found(self):

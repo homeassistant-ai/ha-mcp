@@ -578,9 +578,9 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
             except asyncio.CancelledError:
                 continue  # Repeated cancellation must not release the lock early.
             except Exception:  # noqa: BLE001
-                break  # Consume the worker failure below; preserve cancellation.
-        if not worker.cancelled():
-            worker.exception()
+                break  # Log the worker failure below; preserve cancellation.
+        if not worker.cancelled() and (err := worker.exception()) is not None:
+            logger.warning("Backup I/O failed after cancellation", exc_info=err)
         raise
 
 
@@ -2201,27 +2201,27 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
     live = await _dashboard_resource_like(client, config)
     if live is not None:  # an earlier restore re-created it
         return live
+    if "type" not in config:  # create requires one; never guess it
+        raise BackupRestoreError(
+            f"Dashboard resource {config['url']!r} was stored without a type, and "
+            "Home Assistant needs one to create it; create it again with a type",
+            reason="invalid_snapshot",
+        )
     return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
 # Labels — config/label_registry/{list,update}
 #
-# Registry list endpoints return read-only metadata fields
-# (``created_at``, ``modified_at``) that the matching ``/update`` endpoint
-# rejects with ``extra keys not allowed``. The capture has to keep them
-# (they're part of the snapshot's informational payload), so the restore
-# strips them at the last moment. Same pattern applies to category /
-# zone / area / floor / integration / helper registries.
+# Registry ``/update`` commands refuse the ``created_at``/``modified_at`` their
+# lists return, which snapshots keep; every registry restore strips them.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
 def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """Return ``config`` with read-only registry fields removed.
 
-    Always strips ``created_at`` / ``modified_at`` (universal across HA's
-    registries). Caller passes additional per-registry id keys (e.g.
-    ``label_id`` / ``category_id``) that the update endpoint re-injects
-    separately and rejects when sent inside the payload body.
+    ``extra`` names per-registry id keys (``label_id``, ...) the update command
+    takes separately and refuses inside the payload body.
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}

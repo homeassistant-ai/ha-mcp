@@ -548,13 +548,13 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
                 return (uid, None, "timeout")
             except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
-                    # The REST client's own httpx timeout (HA_TIMEOUT)
+                    # The client's own timeout (httpx or WebSocket wait)
                     # fired first and arrived wrapped in a
                     # HomeAssistantConnectionError — still a timeout,
                     # not a failure. See is_timeout_error.
                     logger.debug(
                         f"Automation individual config fetch ({uid}) "
-                        f"timed out (client-side HTTP timeout): {e}"
+                        f"timed out (client-side timeout): {e}"
                     )
                     return (uid, None, "timeout")
                 logger.debug(f"Automation individual config fetch ({uid}) failed: {e}")
@@ -688,11 +688,11 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
                 return (sid, None, "timeout")
             except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
-                    # Client-side HTTP timeout arrived wrapped; still a
+                    # Client-side timeout arrived wrapped; still a
                     # timeout. See _fetch_automation_config.
                     logger.debug(
                         f"Script individual config fetch ({sid}) timed "
-                        f"out (client-side HTTP timeout): {e}"
+                        f"out (client-side timeout): {e}"
                     )
                     return (sid, None, "timeout")
                 logger.debug(f"Script individual config fetch ({sid}) failed: {e}")

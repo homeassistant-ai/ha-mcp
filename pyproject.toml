@@ -191,15 +191,10 @@ module = [
     "tests.src.unit.policy.test_allow_list",
     "tests.src.unit.policy.test_evaluator",
     "tests.src.unit.policy.test_handlers",
-    "tests.src.unit.policy.test_model",
     "tests.src.unit.policy.test_mrtr",
-    "tests.src.unit.policy.test_mrtr_transport",
     "tests.src.unit.test_auto_backup_e2e_isolation",
     "tests.src.unit.test_backup_access",
-    "tests.src.unit.test_backup_calendar_restore",
-    "tests.src.unit.test_backup_capture_cancellation",
     "tests.src.unit.test_backup_diff",
-    "tests.src.unit.test_backup_files",
     "tests.src.unit.test_backup_integrations",
     "tests.src.unit.test_backup_manager",
     "tests.src.unit.test_backup_manager_review",
@@ -207,7 +202,6 @@ module = [
     "tests.src.unit.test_backup_snapshot",
     "tests.src.unit.test_backup_snapshot_restore",
     "tests.src.unit.test_backup_todo",
-    "tests.src.unit.test_bug_report_redaction",
     "tests.src.unit.test_build_skill_content",
     "tests.src.unit.test_bulk_device_control",
     "tests.src.unit.test_bulk_selector",
@@ -217,7 +211,6 @@ module = [
     "tests.src.unit.test_card_review_round6",
     "tests.src.unit.test_codeql_workflow_shape",
     "tests.src.unit.test_codex_workflow_contracts",
-    "tests.src.unit.test_compact_service_result",
     "tests.src.unit.test_component_api",
     "tests.src.unit.test_component_bulk_call_service_contract",
     "tests.src.unit.test_component_call_service_contract",
@@ -240,7 +233,6 @@ module = [
     "tests.src.unit.test_dashboard_patch",
     "tests.src.unit.test_dashboard_screenshot",
     "tests.src.unit.test_dashboard_screenshot_theme_guard",
-    "tests.src.unit.test_domain_handlers",
     "tests.src.unit.test_e2e_failure_diagnostics",
     "tests.src.unit.test_e2e_lane_env_shape",
     "tests.src.unit.test_e2e_session_fixture_cleanup",
@@ -254,7 +246,6 @@ module = [
     "tests.src.unit.test_fast_checks_workflow_shape",
     "tests.src.unit.test_filesystem_doc_parity",
     "tests.src.unit.test_generate_locales",
-    "tests.src.unit.test_get_state_fields_projection",
     "tests.src.unit.test_ha_bulk_control_component_routing",
     "tests.src.unit.test_ha_call_event",
     "tests.src.unit.test_ha_call_service_component_routing",
@@ -270,16 +261,13 @@ module = [
     "tests.src.unit.test_ha_search_component_routing",
     "tests.src.unit.test_ha_search_merge",
     "tests.src.unit.test_hacs_actions",
-    "tests.src.unit.test_hacs_own_repository",
     "tests.src.unit.test_hacs_repo_registration",
-    "tests.src.unit.test_hacs_token_injection",
     "tests.src.unit.test_haos_image_workflow_shape",
     "tests.src.unit.test_haos_supervisor_wait",
     "tests.src.unit.test_helper_config_fold",
     "tests.src.unit.test_helper_flows",
     "tests.src.unit.test_helper_input_validation",
     "tests.src.unit.test_helper_response_shape",
-    "tests.src.unit.test_history_helpers",
     "tests.src.unit.test_http_transport_options",
     "tests.src.unit.test_image_info",
     "tests.src.unit.test_individual_fetch_settings",
@@ -313,13 +301,10 @@ module = [
     "tests.src.unit.test_rest_client_get_error_log",
     "tests.src.unit.test_rest_client_scenes",
     "tests.src.unit.test_rest_client_scripts",
-    "tests.src.unit.test_scene_fragment_matcher",
     "tests.src.unit.test_search_fields_projection",
     "tests.src.unit.test_search_related_graph",
     "tests.src.unit.test_search_time_budget_settings",
-    "tests.src.unit.test_server_access_switch",
     "tests.src.unit.test_set_dashboard_metadata",
-    "tests.src.unit.test_settings_backup_review",
     "tests.src.unit.test_settings_ui",
     "tests.src.unit.test_settings_ui_handler_selection",
     "tests.src.unit.test_settings_ui_i18n",
@@ -327,7 +312,6 @@ module = [
     "tests.src.unit.test_standard_mode_logging",
     "tests.src.unit.test_startup_log_collector",
     "tests.src.unit.test_stdio_settings_sidecar",
-    "tests.src.unit.test_storage_helper_backup",
     "tests.src.unit.test_strict_bps",
     "tests.src.unit.test_supply_chain_workflow_shape",
     "tests.src.unit.test_template_deleted_recovery",
@@ -345,9 +329,7 @@ module = [
     "tests.src.unit.test_tools_filesystem",
     "tests.src.unit.test_tools_get_states",
     "tests.src.unit.test_tools_integrations",
-    "tests.src.unit.test_tools_logs_fault_log",
     "tests.src.unit.test_tools_resources_patch",
-    "tests.src.unit.test_tools_services_real_core",
     "tests.src.unit.test_tools_system",
     "tests.src.unit.test_tools_todo",
     "tests.src.unit.test_tools_todo_bridge",
@@ -368,13 +350,11 @@ module = [
     "tests.src.unit.test_webhook_proxy_oauth_unified",
     "tests.src.unit.test_webhook_proxy_sync",
     "tests.src.unit.test_websocket_client",
-    "tests.src.unit.test_ws_close_pending_requests_1721",
     "tests.src.unit.test_ws_degraders_warn",
     "tests.src.unit.test_ws_pool_loop_change_1994",
     "tests.src.unit.test_yaml_config_tool",
     "tests.src.unit.test_zone_tools_core_contract",
     "tests.src.unit.visibility.test_enforcement",
-    "tests.src.unit.visibility.test_hidden_config_file_reads",
 ]
 ignore_errors = true
 
@@ -678,9 +658,10 @@ dev = [
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
     # The requirements of the Core integrations whose own handlers the unit
-    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, ZHA and
-    # KNX, plus usb, hassio, homeassistant_hardware and infrared, which those
-    # load. Only the device or bus below each library is replaced. Each pin
+    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, ZHA,
+    # KNX, Local Calendar and Remote Calendar, plus usb, hassio,
+    # homeassistant_hardware and infrared, which those load. Only the device,
+    # bus or server below each library is replaced. Each pin
     # equals the integration's manifest in the Core above;
     # test_dev_integration_pins.py keeps them equal.
     "python-otbr-api==3.1.0",
@@ -699,6 +680,7 @@ dev = [
     "xknxproject==3.10.0",
     "knx-frontend==2026.11.8.11926",
     "knx-telegram-store[sqlite,postgres]==0.15.2",
+    "ical==14.3.1",
 ]
 
 [tool.uv]

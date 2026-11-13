@@ -30,12 +30,12 @@ config_overrides = pytest.importorskip("ha_mcp.config_overrides")
 def _clean_env(monkeypatch):
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    config._reset_embedded_connection()
+    config.reset_embedded_connection()
     yield
     # Drop the embedded connection AND the settings singleton so a test that
     # exercised get_global_settings() can't leak the in-memory url/token into a
     # later test's Settings.
-    config._reset_embedded_connection()
+    config.reset_embedded_connection()
     config.reset_global_settings()
 
 

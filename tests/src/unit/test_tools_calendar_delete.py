@@ -6,9 +6,9 @@ pooled client (``client.send_websocket_message``) instead of a per-call
 dedicated connection. A failed WS command comes back as ``{"success": False}``
 and is re-raised so the failure reaches the tool's existing error handler.
 
-The tool runs on the server's own client against a real ``hass``, whose
-``calendar`` integration serves a calendar of a test integration that
-supports deleting events.
+The tool runs on the server's own client against a real ``hass`` whose
+``calendar.test`` is Core's Local Calendar; what a delete removed is read back
+from Core's calendar view.
 """
 
 import datetime as dt
@@ -17,57 +17,32 @@ from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.components.calendar import (
-    CalendarEntity,
-    CalendarEntityFeature,
-    CalendarEvent,
-)
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import setup_test_component_platform
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
+from ._calendars import calendar_config_dir, listed_events, local_calendar, write_event
 
-class DeletableCalendar(CalendarEntity):
-    """``calendar.test``: records each delete Core hands it."""
+START = dt.datetime(2026, 1, 1, 10)
 
-    _attr_name = "Test"
-    _attr_supported_features = CalendarEntityFeature.DELETE_EVENT
 
-    def __init__(self) -> None:
-        self.deleted: list[tuple[str, str | None, str | None]] = []
-
-    @property
-    def event(self) -> CalendarEvent | None:
-        return None
-
-    async def async_get_events(
-        self, hass: HomeAssistant, start_date: dt.datetime, end_date: dt.datetime
-    ) -> list[CalendarEvent]:
-        return []
-
-    async def async_delete_event(
-        self,
-        uid: str,
-        recurrence_id: str | None = None,
-        recurrence_range: str | None = None,
-    ) -> None:
-        self.deleted.append((uid, recurrence_id, recurrence_range))
+# Core's config directory is this test's ``tmp_path``.
+hass_config_dir = calendar_config_dir
 
 
 @pytest.fixture
-async def calendar(hass: HomeAssistant) -> DeletableCalendar:
-    entity = DeletableCalendar()
-    setup_test_component_platform(hass, "calendar", [entity])
-    assert await async_setup_component(
-        hass, "calendar", {"calendar": {"platform": "test"}}
-    )
-    await hass.async_block_till_done()
-    return entity
+async def ws(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    hass_ws_client: WebSocketGenerator,
+) -> MockHAClientWebSocket:
+    """A WebSocket client on ``hass``, whose ``calendar.test`` is Local Calendar."""
+    await local_calendar(hass, "Test")
+    return await hass_ws_client(hass)
 
 
 def _spy(
@@ -80,59 +55,68 @@ def _spy(
 
 
 async def test_delete_routes_via_pooled_websocket(
-    calendar: DeletableCalendar, core_client: HomeAssistantClient
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
+    await write_event(ws, "calendar.test", "Dentist", START)
+    [event] = await listed_events(core_client, "calendar.test")
     tools = CalendarTools(core_client)
     with _spy(core_client) as send:
         result = await tools.ha_config_remove_calendar_event(
             entity_id="calendar.test",
-            uid="evt-123",
+            uid=event["uid"],
         )
 
     send.assert_awaited_once()
     message = send.await_args_list[0].args[0]
     assert message["type"] == "calendar/event/delete"
     assert message["entity_id"] == "calendar.test"
-    assert message["uid"] == "evt-123"
+    assert message["uid"] == event["uid"]
     # recurrence params omitted when unset.
     assert "recurrence_id" not in message
     assert "recurrence_range" not in message
     assert result["success"] is True
-    assert result["uid"] == "evt-123"
-    assert calendar.deleted == [("evt-123", None, None)]
+    assert result["uid"] == event["uid"]
+    assert await listed_events(core_client, "calendar.test") == []
     # The dedicated-connection helper is gone from the module namespace.
     assert not hasattr(tools_calendar, "get_connected_ws_client")
 
 
 async def test_delete_forwards_recurrence_params(
-    calendar: DeletableCalendar, core_client: HomeAssistantClient
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
+    # Only the occurrence id together with the range leaves the first day alone
+    # and removes the two after it.
+    await write_event(ws, "calendar.test", "Standup", START, rrule="FREQ=DAILY;COUNT=3")
+    first, second, _ = await listed_events(core_client, "calendar.test")
     tools = CalendarTools(core_client)
     with _spy(core_client) as send:
         await tools.ha_config_remove_calendar_event(
             entity_id="calendar.test",
-            uid="evt-123",
-            recurrence_id="20260101T100000",
+            uid=second["uid"],
+            recurrence_id=second["recurrence_id"],
             recurrence_range="THISANDFUTURE",
         )
 
     message = send.await_args_list[0].args[0]
-    assert message["recurrence_id"] == "20260101T100000"
+    assert message["recurrence_id"] == second["recurrence_id"]
     assert message["recurrence_range"] == "THISANDFUTURE"
-    assert calendar.deleted == [("evt-123", "20260101T100000", "THISANDFUTURE")]
+    left = await listed_events(core_client, "calendar.test")
+    assert [event["recurrence_id"] for event in left] == [first["recurrence_id"]]
 
 
 async def test_delete_failure_surfaces_structured_error(
-    calendar: DeletableCalendar, core_client: HomeAssistantClient
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
     # Core refuses the delete (no such calendar); the pooled client collapses
     # that into {"success": False} and the tool re-raises so the outer handler
     # builds the delete-specific suggestions.
+    await write_event(ws, "calendar.test", "Dentist", START)
+    [event] = await listed_events(core_client, "calendar.test")
     tools = CalendarTools(core_client)
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_remove_calendar_event(
             entity_id="calendar.missing",
-            uid="missing",
+            uid=event["uid"],
         )
 
     err = json.loads(str(exc_info.value))["error"]
@@ -142,7 +126,7 @@ async def test_delete_failure_surfaces_structured_error(
         "not found" in s.lower() or "uid" in s.lower() or "event" in s.lower()
         for s in suggestions
     )
-    assert calendar.deleted == []
+    assert await listed_events(core_client, "calendar.test") == [event]
 
 
 @pytest.mark.parametrize("bad", ["", "   "])

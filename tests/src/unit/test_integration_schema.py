@@ -28,6 +28,8 @@ from ha_mcp.tools.tools_integrations import (
     fetch_entry_options_with_status,
 )
 
+from ._tool_errors import error_body, error_of
+
 pytestmark = pytest.mark.usefixtures("no_flow_outline")
 
 _HOST = {
@@ -515,10 +517,6 @@ async def test_options_abort_reads_the_reason_under_its_translation_domain() -> 
     assert resp["options_schema"]["reason_text"] == "Sign in again."
 
 
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["options", "subentry"])
 async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> None:
@@ -529,10 +527,10 @@ async def test_an_entry_flow_that_finishes_gets_the_no_form_error(kind: str) -> 
         await _describe(kind, client)
 
     # The abort comes after the error; the error does not claim it worked.
-    message = _error(exc_info)["error"]["message"]
+    message = error_of(exc_info)["message"]
     assert "'create_entry' step, which has no form" in message
     assert message.endswith("the flow is being aborted")
-    assert "warnings" not in _error(exc_info)
+    assert "warnings" not in error_body(exc_info)
 
 
 _PROGRESS_STEP = {
@@ -554,8 +552,8 @@ async def test_options_flow_in_progress_is_aborted_and_reported() -> None:
     with pytest.raises(ToolError) as exc_info:
         await fetch_options_schema(client, "e1", resp)
 
-    assert _error(exc_info)["progress_action"] == "scanning"
-    assert _error(exc_info)["progress_action_text"] == "Scanning 3 hubs."
+    assert error_body(exc_info)["progress_action"] == "scanning"
+    assert error_body(exc_info)["progress_action_text"] == "Scanning 3 hubs."
     client.abort_options_flow.assert_awaited_once_with("f1")
 
 
@@ -566,8 +564,8 @@ async def test_subentry_flow_at_an_external_step_is_aborted_and_named() -> None:
     with pytest.raises(ToolError) as exc_info:
         await _subentry(client, _resp("ollama"))
 
-    assert "'external'" in _error(exc_info)["error"]["message"]
-    assert "progress_action" not in _error(exc_info)
+    assert "'external'" in error_of(exc_info)["message"]
+    assert "progress_action" not in error_body(exc_info)
     client.abort_config_subentry_flow.assert_awaited_once_with("f1")
 
 

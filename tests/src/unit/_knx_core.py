@@ -8,8 +8,8 @@ interface (the tunnelling or routing socket to the bus) is a mock whose
 before it reaches that interface. Everything above it is Core's and xknx's own
 code: the config entry, ``KNXModule``, the config store and every ``knx/*``
 WebSocket command with its reply. Unlike the kit, the telegram store is the
-real SQLite store, so a test that sets knx up overrides ``hass_config_dir``
-with ``hass_tmp_config_dir`` and the database lands in its own directory.
+real SQLite store; the conftest's ``hass_config_dir`` gives each test a
+temporary config directory, so the database lands in its own directory.
 """
 
 from __future__ import annotations

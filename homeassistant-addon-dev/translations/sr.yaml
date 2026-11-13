@@ -208,17 +208,19 @@ configuration:
       игнорише током извршавања без обзира на њену вредност овде.'
   enable_code_mode:
     name: Омогући прилагођени пешчаник за алате (бета)
-    description: Beta feature. Enables the ha_manage_custom_tool tool, which lets
-      AI assistants create, run, save, and delete custom Python code in a secure sandbox
-      when no built-in tool can handle the request. Code runs in an isolated interpreter
-      with no filesystem or arbitrary network access. Sandbox code can hit the HA
-      REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
-      MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
-      persist to /data/saved_tools.json by default so they survive app (add-on) restarts,
-      and are visible to any client that can connect. See docs/beta.md for known limitations.
-      Requires restart to take effect. REQUIRES the master "Enable beta features"
-      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
-      at runtime regardless of its value here.
+    description: Бета функција. Омогућава alat ha_manage_custom_tool, који омогућава
+      AI асистентима да креирају, покрећу, чувају и бришу прилагођени Python код у
+      безбедном сендбоксу када ниједан уграђени alat не може да обради захтев. Код
+      се извршава у изолованом интерпретеру без приступа систему датотека или произвољном
+      мрежном приступу. Код у сендбоксу може да приступи HA REST API-ју (api_get/api_post),
+      шаље WebSocket команде (ws_send), позива постојеће MCP алате (call_tool) или
+      уклони сачувани alat (delete_saved_tool). Сачувани алати се подразумевано чувају
+      у /data/saved_tools.json тако да преживљавају покретања апликације (add-on-а)
+      и видљиви су сваком клијенту који може да се повеже. Погледајте docs/beta.md
+      за позната ограничења. Захтева поновно покретање да би ступило на снагу. ЗАХТЕВА
+      да главни прекидач „Enable beta features“ изнад (и у веб корисничком интерфејсу)
+      буде укључен — у супротном се ова под-заставица игнорише у току извршавања без
+      обзира на њену вредност овде.
   enable_dashboard_screenshot:
     name: Омогући режим снимка екрана контролне табле (бета)
     description: 'Бета функција — подразумевано искључена. Додаје ha_get_dashboard_screenshot

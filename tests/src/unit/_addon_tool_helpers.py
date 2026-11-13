@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
-import pytest
-
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
 # Standard mock return for a running addon with Ingress support
 RUNNING_ADDON_INFO = {
     "success": True,
@@ -21,8 +15,3 @@ RUNNING_ADDON_INFO = {
         "ingress_port": 5000,
     },
 }
-
-
-def _parse_tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
-    """Parse the JSON payload from a ToolError."""
-    return json.loads(str(exc_info.value))

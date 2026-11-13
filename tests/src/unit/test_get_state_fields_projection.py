@@ -1,118 +1,126 @@
-"""Unit tests for fields= and attribute_keys= projection in ha_get_state (issue #1199)."""
+"""``fields=`` and ``attribute_keys=`` projection in ha_get_state (issue #1199).
 
-from ha_mcp.tools.response_helpers import project_entity_record as _project_entity
+The tool reads the entity through the server's own client from a real
+``hass``, so every record it projects is Core's own state.
+"""
 
-_ENTITY_RECORD = {
-    "entity_id": "light.kitchen",
-    "state": "on",
-    "attributes": {
-        "brightness": 200,
-        "color_temp": 3500,
-        "friendly_name": "Kitchen Light",
-    },
-    "last_changed": "2025-01-01T00:00:00+00:00",
-    "last_updated": "2025-01-01T00:00:00+00:00",
-    "context": {"id": "abc", "parent_id": None, "user_id": None},
-}
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import pytest
+from homeassistant.core import HomeAssistant
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
+
+ENTITY_ID = "light.kitchen"
+ATTRIBUTES = {"brightness": 200, "color_temp": 3500, "friendly_name": "Kitchen Light"}
 
 
-class TestProjectEntity:
-    """Test _project_entity helper.
+@pytest.fixture
+def search_tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> SearchTools:
+    hass.states.async_set(ENTITY_ID, "on", ATTRIBUTES)
+    return SearchTools(core_client, SmartSearchTools(client=core_client))
 
-    _project_entity now returns (record, warning | None).  Tests unpack the
-    tuple; the warning value is checked where relevant.
-    """
 
-    def test_none_fields_and_none_attribute_keys_returns_unchanged(self):
-        result, warn = _project_entity(dict(_ENTITY_RECORD), None, None)
-        assert warn is None
-        assert set(result.keys()) == {
-            "entity_id",
-            "state",
-            "attributes",
-            "last_changed",
-            "last_updated",
-            "context",
-        }
+async def get_state(search_tools: SearchTools, **projection: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await search_tools.ha_get_state(
+        entity_id=ENTITY_ID, **projection
+    )
+    return result
 
-    def test_fields_keeps_only_specified_keys(self):
-        result, warn = _project_entity(dict(_ENTITY_RECORD), ["state"], None)
-        assert warn is None
-        assert set(result.keys()) == {"state"}
-        assert result["state"] == "on"
 
-    def test_fields_multiple_keys(self):
-        result, warn = _project_entity(
-            dict(_ENTITY_RECORD), ["state", "entity_id"], None
-        )
-        assert warn is None
-        assert set(result.keys()) == {"state", "entity_id"}
+async def test_no_projection_returns_cores_whole_record(
+    hass: HomeAssistant, search_tools: SearchTools
+) -> None:
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
 
-    def test_fields_unknown_key_silently_omitted(self):
-        result, warn = _project_entity(dict(_ENTITY_RECORD), ["nonexistent"], None)
-        assert warn is None
-        assert result == {}
+    record = json.loads(state.as_dict_json)
 
-    def test_attribute_keys_filters_attributes_subdict(self):
-        result, warn = _project_entity(dict(_ENTITY_RECORD), None, ["brightness"])
-        assert warn is None
-        assert result["attributes"] == {"brightness": 200}
-        assert "color_temp" not in result["attributes"]
-        assert "friendly_name" not in result["attributes"]
+    result = await get_state(search_tools)
 
-    def test_attribute_keys_unknown_emits_warning(self):
-        """Unknown attribute_keys returns empty attrs AND a warning string."""
-        result, warn = _project_entity(dict(_ENTITY_RECORD), None, ["nonexistent_attr"])
-        assert result["attributes"] == {}
-        assert warn is not None, "Expected warning when attribute filter empties attrs"
-        assert "attribute_keys" in warn
-        assert "brightness" in warn  # available-keys hint
+    # The timestamps come back in the instance's timezone, so only their
+    # presence is compared.
+    assert set(result["data"]) == set(record)
+    for key in ("entity_id", "state", "attributes", "context"):
+        assert result["data"][key] == record[key]
+    assert "warnings" not in result
 
-    def test_attribute_keys_empty_list_no_warning(self):
-        """attribute_keys=[] — original attrs is non-empty but user asked for nothing.
 
-        The empty list explicitly requests zero keys; this is not a typo.
-        The guard fires only when the *original* attrs was non-empty AND the
-        *filter* produced empty — but an empty attribute_keys set means the
-        caller deliberately asked for an empty sub-dict, so no warning.
-        """
-        result, warn = _project_entity(dict(_ENTITY_RECORD), None, [])
-        assert result["attributes"] == {}
-        # Empty attribute_keys is an explicit "keep nothing" request — no warning
-        assert warn is None
+async def test_fields_keep_only_the_requested_keys(search_tools: SearchTools) -> None:
+    result = await get_state(search_tools, fields=["state", "entity_id"])
 
-    def test_fields_and_attribute_keys_combined(self):
-        result, warn = _project_entity(
-            dict(_ENTITY_RECORD), ["state", "attributes"], ["brightness"]
-        )
-        assert warn is None
-        assert set(result.keys()) == {"state", "attributes"}
-        assert result["attributes"] == {"brightness": 200}
+    assert result["data"] == {"state": "on", "entity_id": ENTITY_ID}
+    assert "warnings" not in result
 
-    def test_attribute_keys_no_effect_when_attributes_not_in_fields(self):
-        result, warn = _project_entity(dict(_ENTITY_RECORD), ["state"], ["brightness"])
-        # attribute_keys is set but attributes is not in fields — no attrs to filter
-        # (no typo-guard warning here; the outer attribute_keys_no_effect path handles it)
-        assert warn is None
-        assert set(result.keys()) == {"state"}
-        assert "attributes" not in result
 
-    def test_does_not_mutate_original(self):
-        original = dict(_ENTITY_RECORD)
-        _project_entity(original, ["state"], ["brightness"])
-        assert "last_changed" in original
-        assert original["attributes"]["color_temp"] == 3500
+async def test_unknown_field_is_dropped_silently(search_tools: SearchTools) -> None:
+    result = await get_state(search_tools, fields=["nonexistent"])
 
-    def test_non_dict_record_returned_unchanged(self):
-        # Defensive: error paths may pass None/non-dict; helper must not raise.
-        result, warn = _project_entity(None, ["state"], None)  # type: ignore[arg-type]
-        assert result is None
-        assert warn is None
+    assert result["data"] == {}
+    assert "warnings" not in result
 
-    def test_mixed_known_unknown_attribute_keys_no_warning(self):
-        """Partial match (brightness found) — guard does not fire."""
-        result, warn = _project_entity(
-            dict(_ENTITY_RECORD), None, ["brightness", "typo_key"]
-        )
-        assert warn is None
-        assert result["attributes"] == {"brightness": 200}
+
+async def test_attribute_keys_narrow_the_attributes(search_tools: SearchTools) -> None:
+    result = await get_state(search_tools, attribute_keys=["brightness"])
+
+    assert result["data"]["attributes"] == {"brightness": 200}
+    assert result["data"]["state"] == "on"
+    assert "warnings" not in result
+
+
+async def test_attribute_keys_matching_nothing_warn_with_the_available_keys(
+    search_tools: SearchTools,
+) -> None:
+    result = await get_state(search_tools, attribute_keys=["nonexistent_attr"])
+
+    assert result["data"]["attributes"] == {}
+    assert len(result["warnings"]) == 1
+    assert "attribute_keys" in result["warnings"][0]
+    assert "brightness" in result["warnings"][0]
+
+
+async def test_empty_attribute_keys_ask_for_no_attributes_without_a_warning(
+    search_tools: SearchTools,
+) -> None:
+    # An explicit empty list is a deliberate "keep nothing", not a typo.
+    result = await get_state(search_tools, attribute_keys=[])
+
+    assert result["data"]["attributes"] == {}
+    assert "warnings" not in result
+
+
+async def test_partly_matching_attribute_keys_do_not_warn(
+    search_tools: SearchTools,
+) -> None:
+    result = await get_state(search_tools, attribute_keys=["brightness", "typo_key"])
+
+    assert result["data"]["attributes"] == {"brightness": 200}
+    assert "warnings" not in result
+
+
+async def test_fields_and_attribute_keys_apply_together(
+    search_tools: SearchTools,
+) -> None:
+    result = await get_state(
+        search_tools, fields=["state", "attributes"], attribute_keys=["brightness"]
+    )
+
+    assert result["data"] == {"state": "on", "attributes": {"brightness": 200}}
+    assert "warnings" not in result
+
+
+async def test_attribute_keys_outside_fields_only_warn_that_they_were_ignored(
+    search_tools: SearchTools,
+) -> None:
+    # The record has no attributes to filter, so no typo-guard warning joins
+    # the one saying attribute_keys had no effect.
+    result = await get_state(search_tools, fields=["state"], attribute_keys=["nope"])
+
+    assert result["data"] == {"state": "on"}
+    assert len(result["warnings"]) == 1
+    assert "attribute_keys was ignored" in result["warnings"][0]
