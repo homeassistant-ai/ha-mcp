@@ -4,8 +4,7 @@ Core 2026.11 removes the ``hacs/*`` WebSocket commands and serves
 ``marketplace/*`` instead; the tools must pick whichever answers and keep
 the store's own data (categories, repository fields, refusals) intact.
 
-The Marketplace is Core's own, set up on a real ``hass`` (``_hacs_marketplace``);
-the HACS integration of older releases is a mock integration.
+The Marketplace is Core's own, set up on a real ``hass`` (``_hacs_marketplace``).
 """
 
 from __future__ import annotations
@@ -29,17 +28,15 @@ from ha_mcp.tools.hacs_backend import StoreApi, detect_store_api
 from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 from ha_mcp.tools.tools_hacs import HacsTools
 
+from ._client_spies import sent_commands
 from ._hacs_marketplace import (
     CARD_ID,
     MAIN,
     MAIN_ID,
     MIRROR_ID,
-    HacsIntegration,
     command_types,
     core_install,
-    install_hacs,
     pooled_socket,
-    sent_commands,
     sent_with,
     set_up_marketplace,
     stored,
@@ -88,17 +85,6 @@ async def marketplace(
 
 
 @pytest.fixture
-def hacs(hass: HomeAssistant, core_client: HomeAssistantClient) -> HacsIntegration:
-    store = HacsIntegration(
-        repositories=[
-            {"id": CARD_ID, "full_name": "piitaya/lovelace-mushroom"},
-        ]
-    )
-    install_hacs(hass, store)
-    return store
-
-
-@pytest.fixture
 async def accepted(marketplace: MockConfigEntry, tools: HacsTools) -> None:
     """The server's user accepted the Marketplace's first-run warning."""
     await tools.ha_manage_hacs(action="accept_warning", confirm=True)
@@ -117,13 +103,6 @@ class TestDetectStoreApi:
         assert api.is_marketplace
         assert api.info["warning_accepted"] is False
         spy.assert_awaited_once_with("marketplace/info")
-
-    async def test_older_core_falls_back_to_the_hacs_integration(
-        self, hacs: HacsIntegration, socket: HomeAssistantWebSocketClient
-    ) -> None:
-        api = await detect_store_api(socket)
-        assert not api.is_marketplace
-        assert api.info["categories"] == hacs.categories
 
     async def test_unloaded_marketplace_is_not_reported_as_missing_hacs(
         self,
@@ -262,18 +241,6 @@ async def test_unaccepted_warning_tells_the_user_where_to_accept_it(
     assert "confirm=True" in text
 
 
-async def test_hacs_is_not_sent_the_built_in_confirmation(
-    hacs: HacsIntegration, tools: HacsTools
-) -> None:
-    """HACS has no such gate, and its schema would refuse the field."""
-    result = await tools.ha_manage_hacs(
-        action="download", repository_id=CARD_ID, confirm_replace_built_in=True
-    )
-    assert result["success"] is True
-    assert hacs.commands()[-1] == "hacs/repository/download"
-    assert "confirm_replace_built_in" not in hacs.received[-1]
-
-
 class TestAcceptWarning:
     """Core 2026.11 keeps the first-run warning per user; the server's user
     accepts it once the person confirms they read it (#2970, #2971)."""
@@ -318,14 +285,6 @@ class TestAcceptWarning:
         assert command_types(spy) == ["marketplace/info"]
         assert result["success"] is True
         assert result["warning_accepted"] is True
-
-    async def test_hacs_has_no_warning_to_accept(
-        self, hacs: HacsIntegration, tools: HacsTools
-    ) -> None:
-        with pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="accept_warning", confirm=True)
-        assert "Marketplace" in _error_text(excinfo)
-        assert hacs.commands() == ["hacs/info"]
 
     async def test_repository_parameters_do_not_apply(self, tools: HacsTools) -> None:
         with pytest.raises(ToolError) as excinfo:

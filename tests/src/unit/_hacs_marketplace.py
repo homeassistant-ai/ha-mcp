@@ -6,11 +6,6 @@ Core's own integration from its stored repositories, with GitHub unreachable
 ``marketplace/*`` reply is Core's. What only GitHub could make happen, an
 install that downloads, is reached by replacing Core's install step and
 raising Core's own exceptions from it.
-
-Older Home Assistant runs the HACS custom integration instead. It cannot be
-installed here, so ``install_hacs`` registers its WebSocket commands, with
-their schemas, in a mock integration; Core's WebSocket API still validates,
-routes and answers for them.
 """
 
 from __future__ import annotations
@@ -18,14 +13,11 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
-import probatio
-from homeassistant.components import websocket_api
 from homeassistant.components.marketplace.repositories.base import Repository
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -122,88 +114,11 @@ def core_install(**behaviour: Any) -> Iterator[MagicMock]:
         yield install
 
 
-@dataclass
-class HacsIntegration:
-    """What the HACS custom integration holds, and the commands it was sent."""
-
-    repositories: list[dict[str, Any]]
-    categories: list[str] = field(
-        default_factory=lambda: ["integration", "plugin", "theme", "appdaemon"]
-    )
-    # Command type -> the message HACS refuses it with.
-    refusals: dict[str, str] = field(default_factory=dict)
-    received: list[dict[str, Any]] = field(default_factory=list)
-
-    def commands(self) -> list[str]:
-        return [msg["type"] for msg in self.received]
-
-
-def install_hacs(hass: HomeAssistant, hacs: HacsIntegration) -> None:
-    """Register the HACS integration's commands on Core, with their schemas."""
-    mock_integration(hass, MockModule("hacs"))
-
-    def register(command: str, schema: dict[Any, Any], answer: Any) -> None:
-        @websocket_api.require_admin
-        @websocket_api.websocket_command({probatio.Required("type"): command, **schema})
-        @websocket_api.async_response
-        async def handle(
-            hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
-        ) -> None:
-            hacs.received.append(msg)
-            if command in hacs.refusals:
-                connection.send_error(msg["id"], "error", hacs.refusals[command])
-                return
-            if command == "hacs/subscribe":
-                connection.subscriptions[msg["id"]] = lambda: None
-            connection.send_result(msg["id"], answer(msg))
-
-        websocket_api.async_register_command(hass, handle)
-
-    def listed(msg: dict) -> list[dict[str, Any]]:
-        if "categories" not in msg:
-            return hacs.repositories
-        return [r for r in hacs.repositories if r.get("category") in msg["categories"]]
-
-    def info(msg: dict) -> dict[str, Any] | None:
-        return next(
-            (r for r in hacs.repositories if r["id"] == msg["repository_id"]), None
-        )
-
-    register("hacs/info", {}, lambda msg: {"categories": hacs.categories})
-    register(
-        "hacs/repositories/list",
-        {probatio.Optional("categories"): [str]},
-        listed,
-    )
-    register("hacs/repository/info", {probatio.Required("repository_id"): str}, info)
-    register(
-        "hacs/repository/download",
-        {
-            probatio.Required("repository"): str,
-            probatio.Optional("version"): str,
-        },
-        lambda msg: None,
-    )
-    register(
-        "hacs/repository/remove",
-        {probatio.Required("repository"): str},
-        lambda msg: None,
-    )
-    register("hacs/subscribe", {probatio.Required("signal"): str}, lambda msg: None)
-
-
 async def pooled_socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
     """The pooled socket the tools send their store commands on."""
     return await websocket_manager.get_client(
         url=client.base_url, token=client.token, verify_ssl=False
     )
-
-
-@contextmanager
-def sent_commands(socket: HomeAssistantWebSocketClient) -> Iterator[AsyncMock]:
-    """Spy on the socket's commands; Core still answers each one."""
-    with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
-        yield spy
 
 
 def command_types(spy: AsyncMock) -> list[str]:
