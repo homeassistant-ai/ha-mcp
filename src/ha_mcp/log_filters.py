@@ -43,7 +43,7 @@ class StatelessSessionLogFilter(logging.Filter):
             return True
         try:
             message = record.getMessage()
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             # A malformed %-format record on this logger is not our target, and
             # a filter must not raise: filters run in Logger.handle() with no
             # exception handling, so a raise would crash the logging call.

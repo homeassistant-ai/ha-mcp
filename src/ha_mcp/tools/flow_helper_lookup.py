@@ -1,18 +1,11 @@
 """Resolve the helper behind an entity_id for ha_remove_helpers_integrations."""
 
-import logging
 from typing import Any, Literal, NoReturn
 
-from ..client.rest_client import (
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-)
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .helper_flows import helper_flow_types, listed_helper_flows
 from .helpers import get_entity_state_or_none, raise_tool_error, ws_failure_code
-
-logger = logging.getLogger(__name__)
 
 YAML_HELPER_REMOVAL = (
     "YAML-configured helpers must be removed by editing the configuration file."
@@ -50,42 +43,25 @@ FlowLookupReason = Literal[
     "not_in_registry",
     "not_registry_managed",
     "no_config_entry",
-    "lookup_failed",
 ]
 
 
 async def _read_registry_entry(
-    client: Any, entity_id: str, warnings: list[str] | None = None
+    client: Any, entity_id: str
 ) -> tuple[dict[str, Any] | None, FlowLookupReason]:
     """Read ``entity_id``'s entity-registry entry, or ``(None, reason)``.
 
-    ``reason`` is ``lookup_failed`` for an OSError/TimeoutError from the
-    WebSocket send. On Core's ``not_found`` the entity's state decides between
+    On Core's ``not_found`` the entity's state decides between
     ``not_registry_managed`` and ``not_in_registry``. A ``success: false``
     reply other than ``not_found``, and a reply without an entry, raise a
-    ToolError: neither proves the entity is absent. HomeAssistantConnectionError, HomeAssistantAuthError
-    and a non-404 HomeAssistantAPIError from the state read propagate to the
+    ToolError: neither proves the entity is absent. A registry read that got
+    no answer (HomeAssistantConnectionError, HomeAssistantAuthError) and a
+    non-404 HomeAssistantAPIError from the state read propagate to the
     caller's except chain.
     """
-    try:
-        result = await client.send_websocket_message(
-            {"type": "config/entity_registry/get", "entity_id": entity_id}
-        )
-    except (HomeAssistantConnectionError, HomeAssistantAuthError):
-        # Typed errors must reach the outer handler — do not swallow.
-        raise
-    except (OSError, TimeoutError) as e:
-        # Network / transport errors from the WS layer (ConnectionError,
-        # BrokenPipeError, TimeoutError, …). Programmer-bug-shape
-        # exceptions (KeyError, AttributeError, TypeError) intentionally
-        # propagate — the response is shape-checked at the dict guard
-        # below, and catching them here would mask the bug as a
-        # transient WEBSOCKET_DISCONNECTED.
-        logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
-        if warnings is not None:
-            warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
-        return None, "lookup_failed"
-
+    result = await client.send_websocket_message(
+        {"type": "config/entity_registry/get", "entity_id": entity_id}
+    )
     if not isinstance(result, dict):
         _raise_unexpected_registry_reply(entity_id, result)
     if not result.get("success"):
@@ -168,7 +144,6 @@ async def get_entry_id_for_flow_helper(
     client: Any,
     helper_type: str,
     target: str,
-    warnings: list[str] | None = None,
 ) -> tuple[str | None, FlowLookupReason]:
     """Resolve a flow-helper target to its config_entry_id via entity_registry.
 
@@ -180,7 +155,6 @@ async def get_entry_id_for_flow_helper(
         helper_type: Flow-helper type (one of Core's helper flows).
         target: Full entity_id, e.g. "sensor.my_meter". Bare IDs not
             supported for flow helpers (caller must provide entity_id).
-        warnings: Optional list — appended to on WebSocket failure.
 
     Returns:
         Tuple of (config_entry_id, reason). On success: (entry_id, "ok").
@@ -203,7 +177,7 @@ async def get_entry_id_for_flow_helper(
     if "." not in target:
         return None, "bare_id_not_supported"
 
-    entry, reason = await _read_registry_entry(client, target, warnings)
+    entry, reason = await _read_registry_entry(client, target)
     if entry is None:
         return None, reason
 
@@ -254,7 +228,6 @@ def raise_flow_helper_lookup_error(
     reason: FlowLookupReason,
     helper_type: str | None,
     target: str,
-    detail: str | None = None,
 ) -> NoReturn:
     """Raise the structured error for a failed flow-helper entry_id lookup.
 
@@ -279,24 +252,6 @@ def raise_flow_helper_lookup_error(
                     "entity_id": entity_id,
                 },
                 suggestions=[YAML_HELPER_SUGGESTION],
-            )
-        )
-    if reason == "lookup_failed":
-        # Registry WebSocket call failed transiently. Surface as
-        # a connectivity error so the caller knows to retry,
-        # rather than chasing a non-existent entity_id.
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.WEBSOCKET_DISCONNECTED,
-                (
-                    f"Registry lookup for {entity_id} failed due to a "
-                    f"WebSocket error{f': {detail}' if detail else '.'}"
-                ),
-                context={
-                    "target": target,
-                    "helper_type": helper_type,
-                    "entity_id": entity_id,
-                },
             )
         )
     # wrong_helper_type cannot occur here because the dispatcher
@@ -372,12 +327,9 @@ async def resolve_helper_entity(client: Any, entity_id: str) -> tuple[str, str]:
     included) is removed as that helper type; an entity of any other
     integration is refused.
     """
-    warnings: list[str] = []
-    entry, reason = await _read_registry_entry(client, entity_id, warnings)
+    entry, reason = await _read_registry_entry(client, entity_id)
     if entry is None:
-        raise_flow_helper_lookup_error(
-            reason, None, entity_id, detail="; ".join(warnings) or None
-        )
+        raise_flow_helper_lookup_error(reason, None, entity_id)
     platform = entry.get("platform")
     if platform in SIMPLE_HELPER_TYPES or platform in await listed_helper_flows(
         client, str(platform)

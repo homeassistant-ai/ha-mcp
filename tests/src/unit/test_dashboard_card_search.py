@@ -11,10 +11,26 @@ import pytest
 
 from ha_mcp.tools.tools_config_dashboards import (
     DashboardConfigTools,
+    _find_cards_matching,
     _SearchCriteria,
+    _SearchGaps,
 )
 
-from ._dashboard_search_helpers import _find_cards_in_config
+
+def _find_cards_in_config(
+    config: dict[str, Any],
+    entity_id: str | None = None,
+    card_type: str | None = None,
+    heading: str | None = None,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
+    return _find_cards_matching(
+        config,
+        _SearchCriteria(
+            entity_id=entity_id, card_type=card_type, heading=heading, query=query
+        ),
+        _SearchGaps(),
+    )
 
 
 class TestCardsNestedUnderCustomKeys:

@@ -1,132 +1,42 @@
 """ha_mcp_tools entity_entry / entity_restore: an entity backup written in process.
 
-The fake registry takes what Core's ``EntityRegistry`` takes: an entity_id or
-an entry id in ``async_get``, hidden_by and disabled_by as their enums, the whole
-``categories`` dict, and a ValueError before anything is written for a taken
-entity_id.
+The commands run on a real ``hass`` through Core's WebSocket API: the entity,
+device and config entry are Core's registry rows, a removed entry is one Core
+removed, and every refusal is Core's.
 """
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
-import enum
-import importlib
-import sys
-from types import SimpleNamespace
+import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-import voluptuous as vol
-
-from ha_mcp import backup_entities
-
-from .test_component_ws_search import (
-    FakeHass,
-    _FakeConnection,
-    _Unauthorized,
-    functional_ws,  # noqa: F401 - pytest fixture
-    wsapi,
+from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components.homeassistant.exposed_entities import (
+    async_listen_entity_updates,
 )
+from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
+from homeassistant.helpers.json import json_dumps
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry, async_capture_events
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-er_mod = importlib.import_module("custom_components.ha_mcp_tools.entity_restore")
-
-
-class Hider(enum.StrEnum):
-    INTEGRATION = "integration"
-    USER = "user"
-
-
-class Disabler(enum.StrEnum):
-    CONFIG_ENTRY = "config_entry"
-    DEVICE = "device"
-    HASS = "hass"
-    INTEGRATION = "integration"
-    USER = "user"
-
-
-COMPUTED_NAME = object()
-ER = SimpleNamespace(
-    COMPUTED_NAME=COMPUTED_NAME,
-    RegistryEntryHider=Hider,
-    RegistryEntryDisabler=Disabler,
-    ORPHANED_ENTITY_KEEP_SECONDS=3600 * 24 * 30,
+from custom_components.ha_mcp_tools.entity_restore import (
+    WS_ENTITY_ENTRY,
+    WS_ENTITY_RESTORE,
 )
+from ha_mcp.backup_entities import restore_entity
+from ha_mcp.client.rest_client import HomeAssistantClient
 
+from ._component_core import ws_call, ws_result
 
-@dataclasses.dataclass(frozen=True)
-class Entry:
-    id: str
-    entity_id: str
-    name: str | None = None
-    icon: str | None = None
-    area_id: str | None = None
-    device_class: str | None = None
-    aliases: tuple[Any, ...] = ()
-    labels: frozenset[str] = frozenset()
-    categories: dict[str, str] = dataclasses.field(default_factory=dict)
-    hidden_by: Hider | None = None
-    disabled_by: Disabler | None = None
-    options: dict[str, Any] = dataclasses.field(default_factory=dict)
-    device_id: str | None = "dev1"
-    config_entry_id: str | None = "ce1"
-
-    @property
-    def extended_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "entity_id": self.entity_id, "name": self.name}
-
-
-class FakeRegistry:
-    def __init__(self, *entries: Entry) -> None:
-        self.entities = {e.entity_id: e for e in entries}
-        self.deleted_entities: dict[tuple[str, str, str], Any] = {}
-        self.calls: list[tuple[str, Any]] = []
-
-    def async_get(self, entity_id_or_uuid: str) -> Entry | None:
-        return self.entities.get(entity_id_or_uuid) or next(
-            (e for e in self.entities.values() if e.id == entity_id_or_uuid), None
-        )
-
-    def async_update_entity(self, entity_id: str, **changes: Any) -> Entry:
-        self.calls.append(("update", changes))
-        old = self.entities[entity_id]
-        new_id = changes.pop("new_entity_id", entity_id)
-        if new_id != entity_id and new_id in self.entities:
-            raise ValueError("Entity with this ID is already registered")
-        for key in ("hidden_by", "disabled_by"):
-            assert changes.get(key) is None or isinstance(changes[key], enum.Enum)
-        if "aliases" in changes:
-            changes["aliases"] = tuple(changes["aliases"])
-        if "labels" in changes:
-            assert isinstance(changes["labels"], set)
-            changes["labels"] = frozenset(changes["labels"])
-        new = dataclasses.replace(old, entity_id=new_id, **changes)
-        del self.entities[entity_id]
-        self.entities[new_id] = new
-        return new
-
-    def async_update_entity_options(
-        self, entity_id: str, domain: str, options: dict[str, Any] | None
-    ) -> Entry:
-        self.calls.append(("options", domain))
-        old = self.entities[entity_id]
-        new_options = {d: o for d, o in old.options.items() if d != domain}
-        if options is not None:
-            new_options[domain] = options
-        self.entities[entity_id] = dataclasses.replace(old, options=new_options)
-        return self.entities[entity_id]
-
-
-DESK = Entry(
-    id="reg-desk",
-    entity_id="light.desk",
-    name="Desk",
-    area_id="kitchen",
-    labels=frozenset({"x"}),
-    categories={"automation": "cat-b", "script": "cat-s"},
-    hidden_by=Hider.USER,
-    options={"conversation": {"should_expose": True}},
-)
 SETTINGS = {
     "name": None,
     "icon": "mdi:lamp",
@@ -140,103 +50,145 @@ SETTINGS = {
 
 
 @pytest.fixture
-def parents(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    """The device and config entry, and the exposure calls Core gets."""
-    state = SimpleNamespace(device_disabled=False, entry_disabled=False, exposed=[])
-    device_registry = SimpleNamespace(
-        async_get=lambda hass: SimpleNamespace(
-            async_get=lambda device_id: SimpleNamespace(
-                disabled=state.device_disabled and device_id == DESK.device_id
-            )
-        )
+async def desk(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+) -> er.RegistryEntry:
+    """light.desk on a device of a config entry, with settings of its own.
+
+    The integration names it, so an area of its own needs no name of its own.
+    """
+    config_entry = MockConfigEntry(domain="hue")
+    config_entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={("hue", "desk")}
     )
-    monkeypatch.setattr(
-        sys.modules["homeassistant.helpers"], "device_registry", device_registry
+    entry = entity_registry.async_get_or_create(
+        "light",
+        "hue",
+        "desk",
+        suggested_object_id="desk",
+        config_entry=config_entry,
+        device_id=device.id,
+        original_name="Desk lamp",
     )
-    exposed = SimpleNamespace(
-        async_expose_entity=lambda hass, assistant, entity_id, value: (
-            state.exposed.append(("expose", assistant, entity_id, value))
-        )
+    area_registry.async_create("Office")
+    kitchen = area_registry.async_create("Kitchen")
+    entity_registry.async_update_entity_options(
+        entry.entity_id, "conversation", {"should_expose": True}
     )
-    package = "homeassistant.components.homeassistant"
-    monkeypatch.setitem(sys.modules, package, SimpleNamespace(exposed_entities=exposed))
-    monkeypatch.setitem(sys.modules, f"{package}.exposed_entities", exposed)
-    state.hass = SimpleNamespace(
-        config_entries=SimpleNamespace(
-            async_get_entry=lambda entry_id: SimpleNamespace(
-                disabled_by="user" if state.entry_disabled else None
-            )
-        )
+    return entity_registry.async_update_entity(
+        entry.entity_id,
+        name="Desk",
+        area_id=kitchen.id,
+        labels={"x"},
+        categories={"automation": "cat-b", "script": "cat-s"},
+        hidden_by=er.RegistryEntryHider.USER,
     )
-    return state
 
 
-def _restore(registry: FakeRegistry, parents: Any, **msg: Any) -> dict[str, Any]:
-    msg = {
-        "entry_id": "reg-desk",
-        "entity_id": "light.desk",
-        "settings": SETTINGS,
-        **msg,
-    }
-    return er_mod.write_entry(parents.hass, registry, ER, msg)
+async def _restore(
+    ws: MockHAClientWebSocket, desk: er.RegistryEntry, **msg: Any
+) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(
+        ws,
+        WS_ENTITY_RESTORE,
+        **{
+            "entry_id": desk.id,
+            "entity_id": desk.entity_id,
+            "settings": SETTINGS,
+            **msg,
+        },
+    )
+    return result
 
 
-def test_every_field_goes_in_one_update(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
+async def test_every_saved_field_goes_in_one_registry_update(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    """One update carries the rename and every field, so a refused value
+    leaves the whole entry as it was."""
+    updates = async_capture_events(hass, er.EVENT_ENTITY_REGISTRY_UPDATED)
 
-    result = _restore(registry, parents, new_entity_id="light.lamp")
+    result = await _restore(component_ws, desk, new_entity_id="light.lamp")
 
-    entry = registry.entities["light.lamp"]
+    entry = entity_registry.async_get("light.lamp")
+    assert entry is not None
+    assert entry.id == desk.id
     assert result == {
         "success": True,
-        "entity_entry": entry.extended_dict,
+        "entity_entry": json.loads(json_dumps(entry.extended_dict)),
         "warnings": [],
     }
-    assert [kind for kind, _ in registry.calls] == ["update"]
+    assert len(updates) == 1
     assert entry.categories == {"automation": "cat-a"}
-    assert entry.hidden_by is Hider.INTEGRATION
-    assert entry.aliases == (COMPUTED_NAME, "lamp")
+    assert entry.hidden_by is er.RegistryEntryHider.INTEGRATION
+    assert entry.aliases == [er.COMPUTED_NAME, "lamp"]
     assert (entry.name, entry.icon, entry.area_id, entry.device_class) == (
         None,
         "mdi:lamp",
         "office",
         "outlet",
     )
-    assert entry.labels == frozenset({"work"})
+    assert entry.labels == {"work"}
 
 
-def test_a_hidden_entity_is_shown_again(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
-
-    result = _restore(registry, parents, settings={**SETTINGS, "hidden_by": None})
+async def test_a_hidden_entity_is_shown_again(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    result = await _restore(
+        component_ws, desk, settings={**SETTINGS, "hidden_by": None}
+    )
 
     assert result["success"] is True
-    assert registry.entities["light.desk"].hidden_by is None
+    entry = entity_registry.async_get(desk.id)
+    assert entry is not None
+    assert entry.hidden_by is None
 
 
-def test_the_entry_is_found_by_its_id_only(parents: Any) -> None:
-    """An entity_id in entry_id must not pick that entity."""
-    registry = FakeRegistry(DESK)
+async def test_an_entity_id_in_entry_id_finds_no_entry(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    """Core's registry also finds an entry by entity_id; the backup's entry id
+    must not pick whatever entity holds that entity_id now."""
+    read = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=desk.entity_id)
+    write = await _restore(component_ws, desk, entry_id=desk.entity_id)
 
-    result = _restore(registry, parents, entry_id="light.desk")
+    assert read == {"entry": None, "deleted": None}
+    assert write["error"]["code"] == "entry_deleted"
+    assert entity_registry.async_get(desk.id) == desk
 
-    assert result["error"]["code"] == "entry_deleted"
-    assert registry.calls == []
 
-
-def test_a_renamed_entry_is_not_written(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
-
-    result = _restore(registry, parents, entity_id="light.other")
+async def test_a_renamed_entry_is_not_written(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    result = await _restore(component_ws, desk, entity_id="light.other")
 
     assert result["error"]["code"] == "entity_identity_mismatch"
-    assert registry.calls == []
+    assert entity_registry.async_get(desk.id) == desk
 
 
-def test_cores_refusal_writes_nothing(parents: Any) -> None:
-    registry = FakeRegistry(DESK, Entry(id="reg-lamp", entity_id="light.lamp"))
+async def test_cores_refusal_writes_nothing(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    entity_registry.async_get_or_create(
+        "light", "hue", "lamp", suggested_object_id="lamp"
+    )
 
-    result = _restore(registry, parents, new_entity_id="light.lamp")
+    result = await _restore(component_ws, desk, new_entity_id="light.lamp")
 
     assert result == {
         "success": False,
@@ -245,45 +197,69 @@ def test_cores_refusal_writes_nothing(parents: Any) -> None:
             "message": "Entity with this ID is already registered",
         },
     }
-    assert registry.entities["light.desk"] == DESK
+    assert entity_registry.async_get(desk.id) == desk
 
 
-def test_an_unknown_hider_value_is_invalid(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
-
-    result = _restore(registry, parents, settings={**SETTINGS, "hidden_by": "nobody"})
+async def test_an_unknown_hider_value_is_invalid(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    result = await _restore(
+        component_ws, desk, settings={**SETTINGS, "hidden_by": "nobody"}
+    )
 
     assert result["error"]["code"] == "invalid"
-    assert registry.entities["light.desk"] == DESK
+    assert entity_registry.async_get(desk.id) == desk
 
 
 @pytest.mark.parametrize(
-    ("saved", "device_disabled", "entry_disabled", "written"),
+    ("saved", "disabled_parent", "written"),
     [
-        ("user", False, False, Disabler.USER),
-        ("hass", False, False, Disabler.HASS),
-        ("device", True, False, Disabler.DEVICE),
-        ("config_entry", False, True, Disabler.CONFIG_ENTRY),
-        ("device", False, False, None),
-        ("config_entry", False, False, None),
+        ("user", None, er.RegistryEntryDisabler.USER),
+        ("hass", None, er.RegistryEntryDisabler.HASS),
+        ("device", "device", er.RegistryEntryDisabler.DEVICE),
+        ("config_entry", "config_entry", er.RegistryEntryDisabler.CONFIG_ENTRY),
+        ("device", None, None),
+        ("config_entry", None, None),
     ],
 )
-def test_a_disabler_core_sets_from_a_parent_needs_that_parent_disabled(
-    parents: Any,
+async def test_a_disabler_core_sets_from_a_parent_needs_that_parent_disabled(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    desk: er.RegistryEntry,
     saved: str,
-    device_disabled: bool,
-    entry_disabled: bool,
-    written: Disabler | None,
+    disabled_parent: str | None,
+    written: er.RegistryEntryDisabler | None,
 ) -> None:
     """A device or config_entry value is written only while that parent is
     disabled: Core resets it on the parent's next update otherwise."""
-    parents.device_disabled = device_disabled
-    parents.entry_disabled = entry_disabled
-    registry = FakeRegistry(DESK)
+    assert desk.device_id is not None
+    assert desk.config_entry_id is not None
+    if disabled_parent == "device":
+        device_registry.async_update_device(
+            desk.device_id, disabled_by=dr.DeviceEntryDisabler.USER
+        )
+    elif disabled_parent == "config_entry":
+        await hass.config_entries.async_set_disabled_by(
+            desk.config_entry_id, ConfigEntryDisabler.USER
+        )
+    await hass.async_block_till_done()
+    if disabled_parent is not None:
+        # Core disabled the entity for its parent; the user has disabled it since.
+        entity_registry.async_update_entity(
+            desk.entity_id, disabled_by=er.RegistryEntryDisabler.USER
+        )
 
-    result = _restore(registry, parents, settings={**SETTINGS, "disabled_by": saved})
+    result = await _restore(
+        component_ws, desk, settings={**SETTINGS, "disabled_by": saved}
+    )
 
-    assert registry.entities["light.desk"].disabled_by is written
+    entry = entity_registry.async_get(desk.id)
+    assert entry is not None
+    assert entry.disabled_by is written
     if written is None:
         [warning] = result["warnings"]
         assert f"the backup holds {saved!r}" in warning
@@ -291,25 +267,46 @@ def test_a_disabler_core_sets_from_a_parent_needs_that_parent_disabled(
         assert result["warnings"] == []
 
 
-def test_the_disabled_device_must_be_the_entitys_own(parents: Any) -> None:
-    parents.device_disabled = True
-    registry = FakeRegistry(dataclasses.replace(DESK, device_id="dev2"))
+async def test_the_disabled_device_must_be_the_entitys_own(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    assert desk.config_entry_id is not None
+    other = device_registry.async_get_or_create(
+        config_entry_id=desk.config_entry_id, identifiers={("hue", "other")}
+    )
+    device_registry.async_update_device(
+        other.id, disabled_by=dr.DeviceEntryDisabler.USER
+    )
 
-    result = _restore(registry, parents, settings={**SETTINGS, "disabled_by": "device"})
+    result = await _restore(
+        component_ws, desk, settings={**SETTINGS, "disabled_by": "device"}
+    )
 
-    assert registry.entities["light.desk"].disabled_by is None
+    entry = entity_registry.async_get(desk.id)
+    assert entry is not None
+    assert entry.disabled_by is None
     [warning] = result["warnings"]
     assert "the device is not disabled now" in warning
 
 
-def test_exposure_goes_to_core_before_the_options_write(parents: Any) -> None:
-    """Core tells the assistant only when its expose call changes the value."""
-    registry = FakeRegistry(DESK)
-    registry.calls = parents.exposed
+async def test_the_assistant_hears_of_an_exposure_change(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    """Core tells the assistant only when its expose call is the one that
+    changes the value, so the exposure goes ahead of the options write."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    told: list[None] = []
+    async_listen_entity_updates(hass, "conversation", lambda: told.append(None))
 
-    _restore(
-        registry,
-        parents,
+    await _restore(
+        component_ws,
+        desk,
         options={
             "conversation": {"should_expose": False},
             "light": None,
@@ -317,161 +314,145 @@ def test_exposure_goes_to_core_before_the_options_write(parents: Any) -> None:
         },
     )
 
-    assert registry.entities["light.desk"].options == {
+    entry = entity_registry.async_get(desk.id)
+    assert entry is not None
+    assert entry.options == {
         "conversation": {"should_expose": False},
         "sensor": {"display_precision": 2},
     }
-    assert parents.exposed[1:] == [
-        ("expose", "conversation", "light.desk", False),
-        ("options", "conversation"),
-        ("options", "light"),
-        ("options", "sensor"),
-    ]
+    assert len(told) == 1
 
 
-def test_unchanged_exposure_is_not_sent(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
-
-    _restore(registry, parents, options={"conversation": {"should_expose": True}})
-
-    assert parents.exposed == []
-
-
-def _deleted(**fields: Any) -> SimpleNamespace:
-    base = {
-        "id": "reg-desk",
-        "entity_id": "light.desk",
-        "config_entry_id": None,
-        "orphaned_timestamp": None,
-    }
-    return SimpleNamespace(**{**base, **fields})
-
-
-@pytest.mark.parametrize(
-    ("deleted", "answer"),
-    [
-        (
-            _deleted(config_entry_id="ce1"),
-            {"entity_id": "light.desk", "config_entry_id": "ce1", "kept_until": None},
-        ),
-        (
-            _deleted(orphaned_timestamp=1_800_000_000.0),
-            {
-                "entity_id": "light.desk",
-                "config_entry_id": None,
-                "kept_until": "2027-02-14T08:00:00+00:00",
-            },
-        ),
-        (_deleted(id="reg-other"), None),
-    ],
-)
-def test_a_removed_entry_says_what_core_keeps(
-    parents: Any, deleted: Any, answer: dict[str, Any] | None
+async def test_a_removed_entry_is_kept_while_its_config_entry_exists(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
 ) -> None:
-    registry = FakeRegistry()
-    registry.deleted_entities[("light", "hue", "u")] = deleted
-
-    read = er_mod.read_entry(registry, ER, "reg-desk")
-    write = _restore(registry, parents)
-
-    assert read == {"entry": None, "deleted": answer}
-    assert write["error"]["code"] == "entry_deleted"
-    assert write["error"]["deleted"] == answer
-
-
-def test_a_live_entry_reads_its_current_entity_id() -> None:
-    registry = FakeRegistry(DESK)
-
-    assert er_mod.read_entry(registry, ER, "reg-desk") == {
-        "entry": {"id": "reg-desk", "entity_id": "light.desk"}
+    """Another removed entry is passed over: only this entry's id counts."""
+    assert desk.config_entry_id is not None
+    other = entity_registry.async_get_or_create("light", "hue", "other")
+    entity_registry.async_remove(other.entity_id)
+    entity_registry.async_remove(desk.entity_id)
+    kept = {
+        "entity_id": "light.desk",
+        "config_entry_id": desk.config_entry_id,
+        "kept_until": None,
     }
-    assert er_mod.read_entry(registry, ER, "light.desk")["entry"] is None
+
+    read = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=desk.id)
+    write = await _restore(component_ws, desk)
+
+    assert read == {"entry": None, "deleted": kept}
+    assert write["error"]["code"] == "entry_deleted"
+    assert write["error"]["deleted"] == kept
 
 
-def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F811
-    assert set(er_mod.COMMANDS) <= set(functional_ws.registered)
-    assert {"entity_entry", "entity_restore"} <= set(wsapi.CAPABILITIES)
+async def test_an_orphaned_entry_is_kept_until_the_time_it_reports(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """``kept_until`` is the last moment Core still keeps the entry; once Core
+    purges it, nothing is kept, and another removed entry is no answer."""
+    freezer.move_to(datetime(2026, 11, 13, 10, 0, tzinfo=UTC))
+    lamp = entity_registry.async_get_or_create(
+        "light", "demo", "lamp", suggested_object_id="lamp"
+    )
+    entity_registry.async_remove(lamp.entity_id)
+    entity_registry.async_remove(desk.entity_id)
+
+    found = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=lamp.id)
+    deleted = found["deleted"]
+    assert found["entry"] is None
+    assert (deleted["entity_id"], deleted["config_entry_id"]) == ("light.lamp", None)
+    kept_until = datetime.fromisoformat(deleted["kept_until"])
+
+    freezer.move_to(kept_until)
+    entity_registry.async_purge_expired_orphaned_entities()
+    still = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=lamp.id)
+    freezer.move_to(kept_until + timedelta(seconds=1))
+    entity_registry.async_purge_expired_orphaned_entities()
+    gone = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=lamp.id)
+    write = await _restore(
+        component_ws, lamp, entry_id=lamp.id, entity_id=lamp.entity_id
+    )
+
+    assert still == found
+    assert gone == {"entry": None, "deleted": None}
+    assert write["error"]["code"] == "entry_deleted"
+    assert write["error"]["deleted"] is None
+
+
+async def test_a_live_entry_reads_its_current_entity_id(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    entity_registry.async_update_entity(desk.entity_id, new_entity_id="light.lamp")
+
+    found = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=desk.id)
+
+    assert found == {"entry": {"id": desk.id, "entity_id": "light.lamp"}}
 
 
 @pytest.mark.parametrize(
-    ("command", "extra"),
-    [
-        (er_mod.WS_ENTITY_ENTRY, {"entry_id": "reg-desk"}),
-        (
-            er_mod.WS_ENTITY_RESTORE,
-            {"entry_id": "reg-desk", "entity_id": "light.desk", "settings": {}},
-        ),
-    ],
+    ("command", "restore"), [(WS_ENTITY_ENTRY, False), (WS_ENTITY_RESTORE, True)]
 )
-def test_commands_are_admin_gated(functional_ws, command, extra) -> None:  # noqa: F811
-    handler = functional_ws.registered[command]
-    msg = {"id": 1, "type": command, **extra}
-    with pytest.raises(_Unauthorized):
-        handler(FakeHass(), _FakeConnection(is_admin=False), msg)
+async def test_commands_are_admin_gated(
+    component_ws_read_only: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    desk: er.RegistryEntry,
+    command: str,
+    restore: bool,
+) -> None:
+    extra = {"entity_id": desk.entity_id, "settings": SETTINGS} if restore else {}
+
+    reply = await ws_call(component_ws_read_only, command, entry_id=desk.id, **extra)
+
+    assert reply["success"] is False
+    assert reply["error"]["code"] == "unauthorized"
+    assert entity_registry.async_get(desk.id) == desk
 
 
-def test_each_command_runs_its_own_handler(parents: Any) -> None:
-    registry = FakeRegistry(DESK)
-    wired = SimpleNamespace(**vars(ER), async_get=lambda hass: registry)
-    handlers = {
-        schema["type"]: do_fn
-        for schema, do_fn, _prep in er_mod.command_specs(vol, wired)
+async def test_the_servers_restore_is_written_by_the_component(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    label_registry: lr.LabelRegistry,
+    category_registry: cr.CategoryRegistry,
+    desk: er.RegistryEntry,
+) -> None:
+    """The server's restore message passes the component's schema, a removed
+    options domain and a renamed entity included, and the component writes
+    values Core's own update command refuses (``integration``)."""
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "homeassistant", {})
+    work = label_registry.async_create("Work")
+    lights = category_registry.async_create(scope="automation", name="Lights")
+    snapshot = {
+        "id": desk.id,
+        "entity_id": "light.desk",
+        "name": None,
+        "icon": None,
+        "area_id": "office",
+        "device_class": None,
+        "aliases": [None, "desk lamp"],
+        "labels": [work.label_id],
+        "categories": {"automation": lights.category_id},
+        "hidden_by": "integration",
+        "disabled_by": "user",
+        "options": {"conversation": {"should_expose": False}},
     }
-    read = handlers[er_mod.WS_ENTITY_ENTRY]
-    write = handlers[er_mod.WS_ENTITY_RESTORE]
-    msg = {"entry_id": "reg-desk", "entity_id": "light.desk", "settings": SETTINGS}
+    entity_registry.async_update_entity_options(desk.entity_id, "light", {"x": 1})
+    entity_registry.async_update_entity(desk.entity_id, new_entity_id="light.lamp")
 
-    found = read(parents.hass, msg)
-    written = write(parents.hass, msg)
+    await restore_entity(component_core_client, "light.desk", snapshot)
 
-    assert found["entry"]["entity_id"] == "light.desk"
-    assert written["success"] is True
-    assert registry.entities["light.desk"].icon == "mdi:lamp"
-
-
-SNAPSHOT = {
-    "id": "reg-desk",
-    "entity_id": "light.desk",
-    "name": None,
-    "icon": None,
-    "area_id": "office",
-    "device_class": None,
-    "aliases": [None, "desk lamp"],
-    "labels": ["work"],
-    "categories": {"automation": "cat-a"},
-    "hidden_by": "integration",
-    "disabled_by": "user",
-    "options": {"conversation": {"should_expose": False}},
-}
-
-
-def test_the_servers_message_passes_the_command_schema(monkeypatch) -> None:
-    """Whatever the server sends, the component's schema takes it, a removed
-    options domain and a renamed entity included."""
-    sent: list[dict[str, Any]] = []
-
-    async def capture(client: Any, capability: str, message: dict[str, Any]) -> Any:
-        sent.append(message)
-        return {"success": True, "entity_entry": {}, "warnings": []}
-
-    monkeypatch.setattr(backup_entities, "_component_send", capture)
-    current = {**SNAPSHOT, "options": {"light": {"x": 1}}, "disabled_by": None}
-    asyncio.run(
-        backup_entities._restore_in_process(
-            None, "light.desk", "reg-desk", "light.lamp", current, SNAPSHOT
-        )
-    )
-    schema = vol.Schema(er_mod.command_specs(vol, ER)[1][0])
-
-    [message] = sent
-    assert schema(message) == message
-    assert message["options"] == {
-        "conversation": {"should_expose": False},
-        "light": None,
-    }
-    for broken in (
-        {**message, "settings": {**message["settings"], "labels": [1]}},
-        {key: value for key, value in message.items() if key != "settings"},
-    ):
-        with pytest.raises(vol.Invalid):
-            schema(broken)
+    entry = entity_registry.async_get(desk.id)
+    assert entry is not None
+    assert entry.entity_id == "light.desk"
+    assert entry.hidden_by is er.RegistryEntryHider.INTEGRATION
+    assert entry.disabled_by is er.RegistryEntryDisabler.USER
+    assert entry.options == {"conversation": {"should_expose": False}}
+    assert entry.labels == {work.label_id}

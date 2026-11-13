@@ -1,276 +1,293 @@
-"""Scene activation through ha_config_set_scene(activate=True)."""
+"""Scene activation through ``ha_config_set_scene(activate=True)`` on real Core.
 
-import json
+The scenes live in Core's ``scenes.yaml`` and switch ``input_boolean.tv``, so
+an activation shows as Core's state, and a write's activation can only apply
+the new snapshot once Core's ``scene.reload`` (scheduled after the config
+API's answer) has run.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant import config as conf_util
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.backup_manager import get_backup_manager
 from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
-    SceneResolution,
 )
-from ha_mcp.tools import entity_registration, tools_config_scenes
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
+from ._config_dir_yaml import setup_scenes
+from ._tool_errors import _error
 
-@pytest.fixture
-def mock_client() -> MagicMock:
-    client = MagicMock()
-    # Credential-less: the component route and the reload waiter stay off.
-    client.base_url = None
-    client.token = None
-    client.upsert_scene_config = AsyncMock(
-        return_value={"success": True, "scene_id": "movie_night"}
-    )
-    client.get_entity_state = AsyncMock(
-        return_value={"entity_id": "scene.movie_night", "state": "unknown"}
-    )
-    client.call_service = AsyncMock(return_value=[])
-    client.get_services = AsyncMock(return_value=[])
-    client.get_states = AsyncMock(return_value=[])
-    client.send_websocket_message = AsyncMock(
-        return_value={
-            "success": True,
-            "result": [
-                {
-                    "entity_id": "scene.movie_night",
-                    "unique_id": "movie_night",
-                    "platform": "homeassistant",
-                }
-            ],
-        }
-    )
-    client._resolve_scene = AsyncMock(
-        side_effect=lambda sid: SceneResolution(
-            storage_key=sid.removeprefix("scene."),
-            registry_hit=False,
-            platform=None,
-        )
-    )
-    client._scene_state_exists = AsyncMock(return_value=False)
-    return client
-
-
-class _ConfirmedReload:
-    """Stand-in for config_reload_waiter whose reload is always confirmed."""
-
-    def __init__(self, _client: Any, _event_type: str, *, enabled: bool) -> None:
-        pass
-
-    async def __aenter__(self) -> Any:
-        async def wait_for_reload() -> bool:
-            return True
-
-        return wait_for_reload
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        pass
-
-
-_SCENE = {"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}}
 _WRITE_MODES = ("config", "python_transform")
 
 
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """Core's scene config API writes ``scenes.yaml`` here."""
+    return hass_tmp_config_dir
+
+
+async def _scene(hass: HomeAssistant, entities: dict[str, Any]) -> None:
+    """``movie_night`` (named "Film Night", so ``scene.film_night``) in scenes.yaml."""
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    await setup_scenes(
+        hass, [{"id": "movie_night", "name": "Film Night", "entities": entities}]
+    )
+
+
+def _tv(hass: HomeAssistant) -> str:
+    state = hass.states.get("input_boolean.tv")
+    assert state is not None
+    return state.state
+
+
 async def _write_and_activate(
-    tools: ConfigSceneTools, mode: str, monkeypatch: pytest.MonkeyPatch
+    tools: ConfigSceneTools, mode: str, entities: dict[str, Any]
 ) -> dict[str, Any]:
-    """Write ``movie_night`` through ``mode`` with ``activate=True``."""
+    """Write ``movie_night``'s ``entities`` through ``mode`` with ``activate=True``."""
     if mode == "config":
         return await tools.ha_config_set_scene(
             scene_id="movie_night",
-            config=dict(_SCENE),
+            config={"name": "Film Night", "entities": entities},
             activate=True,
             wait=False,
             MandatoryBPS=False,
         )
-
-    async def fetch_and_verify_hash(
-        scene_id: str, config_hash: str, action: str
-    ) -> tuple[dict[str, Any], str]:
-        return {"id": "movie_night", **_SCENE}, "movie_night"
-
-    async def get_config(
-        scene_id: str, *, _resolved: bool = False
-    ) -> tuple[dict[str, Any], str, str]:
-        return {"id": "movie_night", **_SCENE}, "new-hash", "movie_night"
-
-    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
-    monkeypatch.setattr(tools, "_get_scene_config_internal", get_config)
+    current = await tools.ha_config_get_scene(scene_id="movie_night")
     return await tools.ha_config_set_scene(
         scene_id="movie_night",
-        python_transform="config['name'] = 'Film Night'",
-        config_hash="old-hash",
+        python_transform=f"config['entities'] = {entities!r}",
+        config_hash=current["config_hash"],
         activate=True,
         wait=False,
         MandatoryBPS=False,
     )
 
 
-@pytest.fixture
-def tools(mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch) -> ConfigSceneTools:
-    monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
-    return ConfigSceneTools(mock_client)
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("scene_id", ["scene.movie_night", "movie_night"])
-async def test_standalone_activate_calls_scene_turn_on(
-    tools: ConfigSceneTools, mock_client: MagicMock, scene_id: str
+@pytest.mark.parametrize("scene_id", ["scene.film_night", "movie_night"])
+async def test_activate_alone_applies_the_scene_without_writing_it(
+    hass: HomeAssistant, core_client: HomeAssistantClient, scene_id: str
 ) -> None:
-    result = await tools.ha_config_set_scene(
-        scene_id=scene_id, activate=True, MandatoryBPS=False
-    )
+    """An entity_id or a storage key activates the scene; its config is untouched."""
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
+    assert _tv(hass) == "off"
 
-    assert result["action"] == "activate"
-    assert result["entity_id"] == "scene.movie_night"
-    assert result["activated"] is True
-    mock_client.call_service.assert_awaited_once_with(
-        "scene", "turn_on", {"entity_id": "scene.movie_night"}
-    )
-    mock_client.upsert_scene_config.assert_not_called()
-
-
-@pytest.mark.unit
-async def test_standalone_activate_unknown_scene_is_entity_not_found(
-    tools: ConfigSceneTools, mock_client: MagicMock
-) -> None:
-    mock_client.get_entity_state = AsyncMock(
-        side_effect=HomeAssistantAPIError("not found", status_code=404)
-    )
-
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_scene(scene_id="scene.missing", activate=True)
-
-    assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
-    mock_client.call_service.assert_not_called()
-
-
-@pytest.mark.unit
-async def test_standalone_activate_rejects_category(
-    tools: ConfigSceneTools, mock_client: MagicMock
-) -> None:
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_scene(
-            scene_id="scene.movie_night", activate=True, category="evening"
+    with patch.object(
+        core_client, "upsert_scene_config", wraps=core_client.upsert_scene_config
+    ) as upsert:
+        result = await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id=scene_id, activate=True, MandatoryBPS=False
         )
 
-    assert "category" in str(exc_info.value).lower()
-    mock_client.call_service.assert_not_called()
+    assert result["action"] == "activate"
+    assert result["entity_id"] == "scene.film_night"
+    assert result["activated"] is True
+    assert _tv(hass) == "on"
+    upsert.assert_not_awaited()
 
 
-@pytest.mark.unit
-async def test_standalone_activate_service_failure_raises(
-    tools: ConfigSceneTools, mock_client: MagicMock
+async def test_activate_unknown_scene_is_entity_not_found(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    mock_client.call_service = AsyncMock(
-        side_effect=HomeAssistantConnectionError("connection lost")
-    )
+    """Core's ``scene.turn_on`` accepts an unknown entity silently, so the tool
+    must refuse it before calling the service."""
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
 
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_scene(scene_id="scene.movie_night", activate=True)
+    with (
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="scene.missing", activate=True
+        )
 
-    assert json.loads(str(exc_info.value))["error"]["code"] == "CONNECTION_FAILED"
+    assert _error(exc)["code"] == "ENTITY_NOT_FOUND"
+    call_service.assert_not_awaited()
 
 
-@pytest.mark.unit
+async def test_activate_alone_refuses_a_category(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """A category needs a config write; activating alone cannot assign one."""
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
+
+    with (
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="scene.film_night", activate=True, category="evening"
+        )
+
+    assert "category" in str(exc.value).lower()
+    call_service.assert_not_awaited()
+    assert _tv(hass) == "off"
+
+
+async def test_activate_alone_without_an_answer_is_connection_failed(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
+
+    with (
+        patch.object(
+            core_client,
+            "call_service",
+            AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+        ),
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="scene.film_night", activate=True
+        )
+
+    assert _error(exc)["code"] == "CONNECTION_FAILED"
+
+
 @pytest.mark.parametrize("mode", _WRITE_MODES)
-async def test_config_write_activates_after_scene_reload(
-    tools: ConfigSceneTools,
-    mock_client: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+async def test_write_activates_the_new_snapshot_after_cores_reload(
+    hass: HomeAssistant, core_client: HomeAssistantClient, mode: str
 ) -> None:
-    order: list[str] = []
+    """Core answers the write before its scene reload runs; activating then
+    would apply the previous snapshot (here: leave the TV off)."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
+    tools = ConfigSceneTools(core_client)
+    calls_at_reload: list[tuple[int, int]] = []
+    read_configuration = conf_util.async_hass_config_yaml
 
-    async def upsert(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        order.append("write")
-        return {"success": True, "scene_id": "movie_night"}
+    async def slow_read(hass: HomeAssistant) -> dict[str, Any]:
+        # In-process the reload finishes before the tool's next requests; on a
+        # real install reading the configuration takes longer than they do.
+        await asyncio.sleep(0.3)
+        return await read_configuration(hass)
 
-    async def call_service(*_args: Any, **_kwargs: Any) -> list[Any]:
-        order.append("activate")
-        return []
+    with (
+        patch.object(conf_util, "async_hass_config_yaml", slow_read),
+        patch.object(
+            core_client, "upsert_scene_config", wraps=core_client.upsert_scene_config
+        ) as upsert,
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+    ):
 
-    mock_client.upsert_scene_config = AsyncMock(side_effect=upsert)
-    mock_client.call_service = AsyncMock(side_effect=call_service)
+        @callback
+        def reloaded(_event: Event) -> None:
+            calls_at_reload.append((upsert.await_count, call_service.await_count))
 
-    class _Waiter:
-        def __init__(self, _client: Any, event_type: str, *, enabled: bool) -> None:
-            assert event_type == "scene_reloaded"
-            assert enabled is True
+        unsubscribe = hass.bus.async_listen("scene_reloaded", reloaded)
+        try:
+            result = await _write_and_activate(
+                tools, mode, {"input_boolean.tv": {"state": "on"}}
+            )
+        finally:
+            unsubscribe()
 
-        async def __aenter__(self) -> Any:
-            order.append("subscribe")
-
-            async def wait_for_reload() -> bool:
-                order.append("reloaded")
-                return True
-
-            return wait_for_reload
-
-        async def __aexit__(self, *_exc: Any) -> None:
-            order.append("unsubscribe")
-
-    monkeypatch.setattr(tools_config_scenes, "config_reload_waiter", _Waiter)
-
-    result = await _write_and_activate(tools, mode, monkeypatch)
-
-    assert order == ["subscribe", "write", "reloaded", "unsubscribe", "activate"]
+    # Written, then reloaded, and only then activated.
+    assert calls_at_reload == [(1, 0)]
+    call_service.assert_awaited_once()
     assert result["activated"] is True
     assert not any("reload" in w for w in result.get("warnings", []))
+    assert _tv(hass) == "on"
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("mode", _WRITE_MODES)
-async def test_config_write_activation_failure_is_partial_success(
-    tools: ConfigSceneTools,
-    mock_client: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+async def test_write_whose_activation_fails_still_reports_the_write(
+    hass: HomeAssistant, core_client: HomeAssistantClient, mode: str
 ) -> None:
-    monkeypatch.setattr(tools_config_scenes, "config_reload_waiter", _ConfirmedReload)
-    mock_client.call_service = AsyncMock(
-        side_effect=HomeAssistantAPIError("scene failed")
-    )
+    """The scene names a light whose integration is not set up, so Core refuses
+    ``scene.turn_on``; the config is written all the same."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
+    hass.states.async_set("light.tv", "off")
 
-    result = await _write_and_activate(tools, mode, monkeypatch)
+    result = await _write_and_activate(
+        ConfigSceneTools(core_client), mode, {"light.tv": {"state": "on"}}
+    )
 
     assert result["success"] is True
     assert result["activated"] is False
     assert any("could not be activated" in w for w in result["warnings"])
+    stored = await ConfigSceneTools(core_client).ha_config_get_scene(
+        scene_id="movie_night"
+    )
+    assert stored["config"]["entities"] == {"light.tv": {"state": "on"}}
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    ("kwargs", "expected"),
-    [
-        ({"scene_id": "movie_night", "activate": True}, True),
-        ({"scene_id": "movie_night", "activate": True, "config": {}}, False),
-        ({"scene_id": "movie_night", "config": {}}, False),
-    ],
-)
-def test_scene_backup_skips_only_standalone_activation(
-    kwargs: dict[str, Any], expected: bool
-) -> None:
-    assert tools_config_scenes._skip_scene_activation_backup(kwargs) is expected
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("mode", _WRITE_MODES)
-async def test_config_write_skips_activation_when_reload_unconfirmed(
-    tools: ConfigSceneTools,
-    mock_client: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
+async def test_write_is_not_activated_when_the_reload_cannot_be_watched(
+    hass: HomeAssistant, core_client: HomeAssistantClient, mode: str
 ) -> None:
-    result = await _write_and_activate(tools, mode, monkeypatch)
+    """Without the reload event the tool cannot know the new snapshot is
+    loaded, so it writes, does not activate, and says how to activate."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
 
-    mock_client.call_service.assert_not_called()
+    with (
+        patch.object(
+            HomeAssistantWebSocketClient,
+            "subscribe_events",
+            AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+        ),
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+    ):
+        result = await _write_and_activate(
+            ConfigSceneTools(core_client), mode, {"input_boolean.tv": {"state": "on"}}
+        )
+
+    call_service.assert_not_awaited()
     assert result["activated"] is False
     assert any(
         "not activated" in w and "scene_id='movie_night', activate=True" in w
         for w in result["warnings"]
     )
+    await hass.async_block_till_done()
+    assert _tv(hass) == "off"
+
+
+async def test_only_a_write_takes_a_scene_backup(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Activating alone changes no config, so it leaves no restore point."""
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
+    reset_global_settings()
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
+    tools = ConfigSceneTools(core_client)
+
+    def scene_snapshots() -> list[dict[str, Any]]:
+        manager = get_backup_manager(core_client, get_global_settings())
+        return manager.list_snapshots(domain="scene")
+
+    await tools.ha_config_set_scene(scene_id="movie_night", activate=True)
+    assert scene_snapshots() == []
+
+    await tools.ha_config_set_scene(
+        scene_id="movie_night",
+        config={"name": "Film Night", "entities": {"input_boolean.tv": "off"}},
+        activate=True,
+        wait=False,
+    )
+    assert len(scene_snapshots()) == 1

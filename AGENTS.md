@@ -32,12 +32,10 @@ For a non-documentation change, also verify that the branch is not
 `master`/`main`. Preserve unrelated dirty changes in every checkout. Remove a
 worktree only when its branch is no longer needed and the user has authorized
 any associated destructive cleanup.
-The repository-root checkout is where `master` is kept; `git worktree prune`
-removes stale worktree references.
 
 ## Project Overview
 
-**Home Assistant MCP Server** is a Python 3.13 FastMCP server that lets AI assistants control and configure Home Assistant through MCP. The repository is `homeassistant-ai/ha-mcp`; the package is `ha-mcp` on PyPI.
+**Home Assistant MCP Server** is a Python 3.14 FastMCP server that lets AI assistants control and configure Home Assistant through MCP. The repository is `homeassistant-ai/ha-mcp`; the package is `ha-mcp` on PyPI.
 
 ## Security
 
@@ -98,6 +96,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 Testing behavior belongs in this root because it applies to every code change:
 
 - Complete applicable live testing before merge per the [live-review procedure](docs/agents/github-workflow.md#live-testing-in-pr-reviews); static review and CI cannot replace it.
+- Only current stable HA is officially supported; the next beta may be, with a fallback to stable. While a beta is out, test every change on it and on stable. Releases down to the `hacs.json` minimum run but get no new fallbacks or tests; test an older release only for an update path.
 - Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test; assess live testing separately.
@@ -183,7 +182,7 @@ intentionally tools-entry-only.
 
 ## Translations
 
-Before any translation or translatable-English change, read the [canonical locale guide](src/ha_mcp/settings_ui/locales/README.md). It owns the current language set, four-surface parity, generated projections, best-effort Klingon exception, completeness thresholds, English-source baseline, post-merge translation, and recovery. Never hand-edit generated app catalogs.
+Before any translation or translatable-English change, read the [canonical locale guide](src/ha_mcp/settings_ui/locales/README.md). Never hand-edit generated app catalogs.
 
 ## Home Assistant App
 

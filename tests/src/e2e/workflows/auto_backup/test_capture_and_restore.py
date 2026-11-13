@@ -74,9 +74,9 @@ def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTO_BACKUP_THROTTLE_MINUTES", "0")
     monkeypatch.setenv("AUTO_BACKUP_RETAIN_PER_ENTITY", "20")
     # The directory's autouse fixture pins HAMCP_BACKUP_DIR for in-process tests.
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
 
-    _reset_global_settings()
+    reset_global_settings()
 
 
 def _backups_for(
@@ -1175,9 +1175,9 @@ class TestToggleOffSkipsCapture:
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         # The reset above rebuilds the process-global settings singleton
         # with auto-backup DISABLED, and monkeypatch teardown restores only
         # the env var — the singleton would stay disabled for the rest of
@@ -1190,7 +1190,7 @@ class TestToggleOffSkipsCapture:
             await self._run_disabled_capture_check(mcp_client)
         finally:
             monkeypatch.undo()
-            _reset_global_settings()
+            reset_global_settings()
 
     async def _run_disabled_capture_check(self, mcp_client) -> None:
 

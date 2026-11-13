@@ -146,7 +146,7 @@ def in_process_data_dir(
     too because an existing ``~/.local/share/ha_mcp/backups`` wins over the data
     dir. Remote and stdio lanes set their own environment.
     """
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
     from ha_mcp.utils.data_paths import get_data_dir
 
     config_dir = tmp_path_factory.mktemp("in-process-config")
@@ -154,12 +154,12 @@ def in_process_data_dir(
         mp.setenv("HA_MCP_CONFIG_DIR", str(config_dir))
         mp.setenv("HAMCP_BACKUP_DIR", str(config_dir / "backups"))
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         try:
             yield config_dir
         finally:
             get_data_dir.cache_clear()
-            _reset_global_settings()
+            reset_global_settings()
 
 
 @pytest.fixture(scope="session")

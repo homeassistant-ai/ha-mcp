@@ -155,7 +155,7 @@ except OSError as exc:  # pragma: no cover - packaging guard
 #   __HA_MCP_CSS__         -> settings.css contents (inside <style>)
 #   __HA_MCP_JS__          -> settings_js/ contents (inside <script>)
 #   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
-#                             substituted in _render_settings_html()
+#                             substituted in render_settings_html()
 #   __HA_MCP_I18N__        -> selected merged translation catalog JSON
 #   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
 #   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
@@ -190,7 +190,7 @@ for _sentinel in (
         )
 
 # CSS and JS are injected once at import; __HA_MCP_THEME_PREFS__ remains in the
-# string and is substituted per-request in _render_settings_html().
+# string and is substituted per-request in render_settings_html().
 _SETTINGS_HTML = _settings_html_template.replace(
     "__HA_MCP_CSS__", _SETTINGS_CSS
 ).replace("__HA_MCP_JS__", _SETTINGS_JS)
@@ -373,9 +373,11 @@ def _build_visibility_handlers(*, data_dir: Path) -> dict[str, Any]:
     }
 
 
-def _render_settings_html(request: Request | None = None) -> str:
-    """Substitute theme preferences and the request-selected locale.
+def render_settings_html(request: Request | None = None) -> str:
+    """Render the settings page every settings-page route serves.
 
+    Substitutes theme preferences and the request-selected locale. Public
+    because the JS behaviour tests load the served page from here.
     The ``server-prefs`` head script carries a ``data-prefs`` attribute
     with a placeholder token; request-time substitution keeps
     ``_SETTINGS_HTML`` a static import-time constant (and keeps the script
@@ -455,10 +457,10 @@ def build_settings_handlers(
     """
 
     async def _root_page(request: Request) -> HTMLResponse:
-        return HTMLResponse(_render_settings_html(request))
+        return HTMLResponse(render_settings_html(request))
 
     async def _settings_page(request: Request) -> HTMLResponse:
-        return HTMLResponse(_render_settings_html(request))
+        return HTMLResponse(render_settings_html(request))
 
     handlers: dict[str, Any] = {
         "root_page": _root_page,

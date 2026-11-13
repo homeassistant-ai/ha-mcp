@@ -207,7 +207,7 @@ def refusal_behind_capture_failure(err: BaseException) -> ToolError | None:
         if isinstance(cause, ToolError):
             try:
                 payload = json.loads(str(cause))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 payload = None
             if (
                 isinstance(payload, dict)
@@ -249,7 +249,7 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
     if isinstance(config, str):
         try:
             config = json.loads(config)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             config = None
     if isinstance(config, dict):
         config_id = config.get("id")

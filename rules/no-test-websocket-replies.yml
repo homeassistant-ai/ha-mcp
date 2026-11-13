@@ -1,0 +1,28 @@
+# A unit test that registers its own WebSocket command, or writes a reply on a
+# connection, types in what Core (or an integration, or the component) would
+# have answered: the tool under test is then checked against a guess. The
+# command and its reply come from the integration that owns it, set up in the
+# test (async_setup_component, a config entry, Core's own test kit for the
+# hardware below it). A test may re-register a command's own handler with its
+# own schema to observe it, to hold it until the test releases it, or to drop
+# the connection, but never answers for it.
+id: no-test-websocket-replies
+language: python
+rule:
+  any:
+    # A test-authored command: @websocket_api.websocket_command({...})
+    - kind: decorator
+      regex: '^@\s*(\w+\.)*websocket_command\('
+    # A reply written by the test: connection.send_result(...), send_error,
+    # send_message, send_event.
+    - kind: call
+      regex: '^[\w.]*connection\.send_(result|error|message|event)\('
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+message: |
+  A unit test does not write a WebSocket command or its reply. Set up the
+  integration that owns the command so its own handler answers (Core's own test
+  kit replaces only the hardware below it), or spy on the client to prove a
+  command was or was not sent. See tests/AGENTS.md, "No hand-written reply".
+severity: error

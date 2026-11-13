@@ -46,21 +46,19 @@ def _unavailable(error: str) -> dict[str, Any]:
     return {"status": "unavailable", "error": error}
 
 
-def _core() -> SimpleNamespace | None:
-    """Core's automation parts this bridge uses, or None on a Core without them.
+def _core() -> SimpleNamespace:
+    """Core's automation parts this bridge uses.
 
     A part a Core build lacks is None; the action that needs it answers
     unavailable, the others still run.
     """
-    try:
-        from homeassistant.components import automation
-        from homeassistant.components.automation import config, const
-        from homeassistant.exceptions import HomeAssistantError
-        from homeassistant.helpers import condition, trigger
-        from homeassistant.helpers import entity_registry as er
-        from homeassistant.helpers import issue_registry as ir
-    except ImportError:
-        return None
+    from homeassistant.components import automation
+    from homeassistant.components.automation import config, const
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers import condition, trigger
+    from homeassistant.helpers import entity_registry as er
+    from homeassistant.helpers import issue_registry as ir
+
     return SimpleNamespace(
         # Private, but it is what Core's loader runs and what fills the repair
         # issue; the public one raises instead of reporting the failed section.
@@ -232,8 +230,6 @@ async def async_automation_config(
 ) -> dict[str, Any]:
     _require(msg)
     core = _core()
-    if core is None:
-        return _unavailable("This Home Assistant has no automation integration")
     try:
         return await _HANDLERS[msg["action"]](hass, core, msg)
     except Exception as err:

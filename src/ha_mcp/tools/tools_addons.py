@@ -32,9 +32,9 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
-    _is_ssl_error,
 )
 from ..client.supervisor_client import make_supervisor_httpx_client
+from ..client.transport_errors import is_ssl_error
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -1367,7 +1367,7 @@ def _raise_connect_failure(
     A certificate-verification failure with verification enabled gets the TLS
     remedy; everything else keeps the route-appropriate network guidance.
     """
-    if _is_ssl_error(e) and client.verify_ssl:
+    if is_ssl_error(e) and client.verify_ssl:
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
@@ -1449,7 +1449,7 @@ def _build_ws_result(
     for msg in collected:
         try:
             parsed_messages.append(json.loads(msg))
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             parsed_messages.append(msg)
 
     sliced_messages, pagination = _slice_ws_messages(
@@ -2018,7 +2018,7 @@ def _parse_response_body(response: httpx.Response) -> Any:
     if "application/json" in content_type:
         try:
             return response.json()
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             return response.text
     return response.text
 
@@ -2891,7 +2891,7 @@ class AddOnTools:
         """Return the code from a serialized structured ToolError."""
         try:
             payload = json.loads(error_text)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
         err = payload.get("error") if isinstance(payload, dict) else None
         if not isinstance(err, dict):
@@ -2904,7 +2904,7 @@ class AddOnTools:
         """Return the write outcome from a serialized structured ToolError."""
         try:
             payload = json.loads(error_text)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
         if not isinstance(payload, dict):
             return None
@@ -2922,7 +2922,7 @@ class AddOnTools:
         rather than other serialized error metadata."""
         try:
             payload = json.loads(error_text)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return error_text
         err = payload.get("error") if isinstance(payload, dict) else None
         if isinstance(err, dict):

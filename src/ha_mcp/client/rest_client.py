@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import ssl
 import time
 from dataclasses import dataclass
 from typing import Any, NoReturn
@@ -26,23 +25,12 @@ from .error_log_journald import (
 )
 from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
-
-
-def _is_ssl_error(exc: BaseException) -> bool:
-    """True if ``exc`` (or anything in its cause chain) is an SSL error.
-
-    httpx wraps ``ssl.SSLError`` inside ``httpx.ConnectError``; the only
-    reliable check is to walk ``__cause__`` / ``__context__``.
-    """
-    cur: BaseException | None = exc
-    while cur is not None:
-        if isinstance(cur, ssl.SSLError):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
+from .transport_errors import is_ssl_error, redirect_message
 
 logger = logging.getLogger(__name__)
+
+# How long past a render's own timeout the client waits for Core's verdict.
+RENDER_VERDICT_GRACE_S = 2.0
 
 # Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
 # restarting or briefly overloaded behind it. Retried for SAFE METHODS ONLY.
@@ -268,7 +256,7 @@ def _pick_render_error(first: str, queue: asyncio.Queue[dict[str, Any]]) -> str:
     while True:
         try:
             event = queue.get_nowait().get("event") or {}
-        except (asyncio.QueueEmpty, asyncio.QueueShutDown):
+        except asyncio.QueueEmpty, asyncio.QueueShutDown:
             break
         error = event.get("error")
         if event.get("level") == "ERROR" and isinstance(error, str):
@@ -406,7 +394,7 @@ class HomeAssistantClient:
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
-    async def __aenter__(self) -> "HomeAssistantClient":
+    async def __aenter__(self) -> HomeAssistantClient:
         """Async context manager entry."""
         return self
 
@@ -455,7 +443,7 @@ class HomeAssistantClient:
             HomeAssistantAuthError: 401 response.
             HomeAssistantAPIError: Non-2xx response (with status_code and
                 response_data set from JSON body when possible).
-            HomeAssistantConnectionError: Network, timeout, or transport error.
+            HomeAssistantConnectionError: Network, timeout, transport or redirect.
         """
         backoff = 0.5
         for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
@@ -467,6 +455,11 @@ class HomeAssistantClient:
                         _ADMIN_ONLY_401_MESSAGE
                         if is_admin_only_route(method, endpoint)
                         else "Invalid authentication token"
+                    )
+
+                if 300 <= response.status_code < 400:
+                    raise HomeAssistantConnectionError(
+                        redirect_message(self.base_url, response)
                     )
 
                 if response.status_code >= 400:
@@ -495,7 +488,7 @@ class HomeAssistantClient:
                 return response
 
             except httpx.ConnectError as e:
-                if _is_ssl_error(e) and self.verify_ssl:
+                if is_ssl_error(e) and self.verify_ssl:
                     raise HomeAssistantConnectionError(
                         f"TLS verification failed for {self.base_url}: {e}. "
                         "If this is a self-signed certificate or hostname "
@@ -755,11 +748,9 @@ class HomeAssistantClient:
                 domain, service, payload, return_response
             )
 
-        # When return_response is True, HA returns a dict with service_response key
+        # Core's {changed_states, service_response} envelope, or ``{}`` (non-JSON).
         if return_response:
-            if isinstance(result, dict):
-                return result
-            return {"service_response": result}
+            return result
 
         # Normal behavior: return list of affected states
         if isinstance(result, list):
@@ -817,7 +808,7 @@ class HomeAssistantClient:
         start_time: str | None = None,
         end_time: str | None = None,
         context_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | None:
         """
         Get logbook entries.
 
@@ -828,7 +819,7 @@ class HomeAssistantClient:
             context_id: Optional context ID filter - used as query parameter
 
         Returns:
-            Logbook entries
+            Logbook entries, or None when the reply was not a row list.
         """
         logger.debug(
             f"Fetching logbook entries for entity: {entity_id}, start: {start_time}, end: {end_time}, context: {context_id}"
@@ -852,8 +843,7 @@ class HomeAssistantClient:
         result = await self._request("GET", endpoint, params=params)
         if isinstance(result, list):
             return result
-        else:
-            return []
+        return None
 
     async def fire_event(
         self, event_type: str, data: dict[str, Any] | None = None
@@ -2062,7 +2052,9 @@ class HomeAssistantClient:
 
         try:
             sub_id, queue = await ws_client.subscribe_command(
-                "render_template", wait_timeout=template_timeout + 2, **params
+                "render_template",
+                wait_timeout=template_timeout + RENDER_VERDICT_GRACE_S,
+                **params,
             )
         except HomeAssistantCommandError as e:
             # A rejection of the command itself: the render exceeded its
@@ -2077,7 +2069,7 @@ class HomeAssistantClient:
             }
         except TimeoutError:
             # Template-level, not transport-level: the wait budget here is the
-            # caller's own ``timeout`` (default 3s) plus two seconds, and a
+            # caller's own ``timeout`` (default 3s) plus ``RENDER_VERDICT_GRACE_S``, and a
             # template that is merely slow to render leaves the socket healthy.
             # Deliberately NOT treated as a dead transport, unlike the 30s
             # round-trip ``HomeAssistantCommandTimeout`` in ``send_command``.
@@ -2107,7 +2099,10 @@ class HomeAssistantClient:
 
         try:
             return await _read_render_verdict(
-                queue, template, template_timeout + 2, report_errors
+                queue,
+                template,
+                template_timeout + RENDER_VERDICT_GRACE_S,
+                report_errors,
             )
         finally:
             await ws_client.release_subscription(sub_id)

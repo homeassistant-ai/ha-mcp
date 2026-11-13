@@ -55,7 +55,7 @@ async def note_hidden_icon(
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/get", "entity_id": entity_id}
         )
-    except (HomeAssistantError, OSError, TimeoutError):
+    except HomeAssistantError, OSError, TimeoutError:
         return
     entry = result.get("result") if result.get("success") else None
     override = entry.get("icon") if isinstance(entry, dict) else None

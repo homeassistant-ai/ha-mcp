@@ -1,0 +1,307 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/sr-Latn.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  verify_ssl:
+    name: Potvrdi TLS sertifikate
+    description: 'Potvrdite TLS sertifikat Home Assistant servera. Isključite ovo
+      samo na pouzdanoj mreži, za samopotpisani sertifikat ili nepodudaranje imena
+      hosta: to slabi bezbednost prenosa.'
+  ha_tool_concurrency:
+    name: Istovremenost Home Assistant alata
+    description: Opciono ograničenje spoljnih poziva Home Assistant alata kroz sve
+      sesije. Interni REST, WebSocket i istovremenost razgranavanja po alatima ostaju
+      nepromenjeni. 0 zadržava neograničeno ponašanje. Poziv koji čeka na kapacitet
+      ne uspeva nakon 60 sekundi. Opseg 0–32.
+  custom_instructions:
+    name: Prilagođena uputstva servera
+    description: Tekst poslat svakom AI asistentu koji se poveže, kao deo uputstava
+      MCP servera — na primer gde se drže beleške domaćinstva i kada ih treba čitati
+      ili ažurirati. Takođe deo promptera Home Assistant agenata za razgovor (Assist)
+      koji koriste ovaj skup alata. Koristite ga za smernice koje treba da stignu
+      do svih vaših klijenata odjednom; neka bude kratak i bez tajni. Ostavite prazno
+      da se ništa ne doda. Zahteva ponovno pokretanje; klijenti vide promene kada
+      se ponovo povežu.
+  enable_beta_features:
+    name: Omogući beta funkcije (glavno)
+    description: ⚠ OPASNOST — ove funkcije mogu TRAJNO OŠTETITI vašu Home Assistant
+      instalaciju. One upisuju podatke u vaš YAML konfiguracioni fajl, fajl sistem,
+      instaliraju prilagođene komponente, pokreću proizvoljni Python u okruženju sa
+      ograničenim pristupom (sandbox) i uređuju opise dokumentacije alata koje AI
+      vidi. Ne postoji garancija ni podrška — omogućavate ih na SOPSTVENI RIZIK. Napravite
+      rezervnu kopiju (backup) Home Assistant-a pre nego što ovo uključite i nikada
+      nemojte omogućavati u produkciji bez nje. Glavna kapija za eksperimentalne podzastavice
+      u nastavku; podzastavice se ignorišu u radu dok je ovaj glavni prekidač isključen,
+      čak i kada su izričito podešene na true. Isto dugme se takođe prikazuje u korisničkom
+      interfejsu veb podešavanja pod "Beta funkcije (opasno)" — bilo koji prikaz odražava
+      drugi prilikom ponovnog pokretanja.
+  enable_tool_search:
+    name: Omogući pretragu alata
+    description: 'Zamenjuje kompletan katalog alata otkrivanjem zasnovanim na pretrazi.
+      Smanjuje neaktivni kontekst za otprilike 90%, na oko 5 hiljada tokena. ⚠️ NEMOJTE
+      ovo omogućavati u klijentima sa sopstvenom ugrađenom pretragom alata / odloženim
+      alatima (claude.ai, Claude Desktop, Claude Code) — ova dva sloja pretrage se
+      sukobljavaju, a ugrađena pretraga alata klijenta je bolji izbor u tom slučaju;
+      ostavite ovo isključeno. Da li su alati odloženi zavisi od vaše kombinacije
+      klijenta i modela: koristite ovo kada vaše podešavanje učitava kompletan katalog
+      unapred — modeli bez izvornih odloženih alata (npr. Gemini, lokalni modeli kompatibilni
+      sa OpenAI-jem, Claude Haiku), klijenti koji unose sve šeme alata bez obzira
+      na model (npr. GitHub Copilot CLI), ili manji prozori konteksta. Neki Codex
+      modeli i ChatGPT takođe uključuju odložene alate — proverite direktno svog klijenta/model
+      da biste potvrdili njegove funkcije kako ne biste ostavili ovo omogućeno bespotrebno.
+      Alati se nalaze preko ha_search_tools i izvršavaju se preko kategorizovanih
+      proksija (čitanje/pisanje/brisanje). Zahteva ponovno pokretanje da bi stupilo
+      na snagu.'
+  tool_search_max_results:
+    name: Maksimalan broj rezultata pretrage alata
+    description: Maksimalan broj skrivenih alata vraćenih po pozivu ha_search_tools
+      kada je pretraga alata omogućena; zakačeni alat koji se rangira unutar tog gornjeg
+      broja se dodaje kao kratak unos koji sadrži samo ime na vrh toga. Niže vrednosti
+      (2-3) čuvaju tokene konteksta, ali mogu propustiti relevantne alate. Zahteva
+      ponovno pokretanje. Opseg 2–10.
+  enable_tool_security_policies:
+    name: Omogući bezbednosne politike alata (napredno)
+    description: Zaključajte pozive alata sa velikim ulozima (kontrola bravom/alarmom,
+      pisanje automatizacija, itd.) iza odobrenja korisnika. Kada se pozove zaštićeni
+      alat, agent govori korisniku da otvori karticu Bezbednosne politike alata u
+      veb interfejsu i klikne na Odobri pre nego što se poziv nastavi. Pravila po
+      alatu sa opcionim uslovima argumenata se konfigurišu na kartici Bezbednosne
+      politike alata. Isključeno podrazumevano. Zahteva ponovno pokretanje da bi stupilo
+      na snagu.
+  enable_security_policy_tool:
+    name: Dozvoli AI agentima da uređuju bezbednosne politike alata
+    description: 'Registruje alat ha_manage_security_policy, koji omogućava povezanim
+      AI agentima da čitaju i prepisuju bezbednosne politike alata — uključujući uklanjanje
+      kapija za odobravanje. Isključeno podrazumevano. Nezavisno od gornje opcije
+      Bezbednosne politike alata: ovo kontroliše ko može da uređuje pravila, a ne
+      da li se ona sprovode. Alat ne može da vidi ili odlučuje o odobrenjima na čekanju.
+      Da biste zadržali čoveka u petlji, zaključajte alat pre nego što ga omogućite:
+      uključite "security gated" za Upravljanje bezbednosnom politikom na kartici
+      Alati u veb interfejsu. Zahteva ponovno pokretanje da bi stupilo na snagu.'
+  read_only_mode:
+    name: Režim samo za čitanje
+    description: Isključuje sve alate za pisanje i uklanja mogućnost alatima da prave
+      bilo kakve pozive za pisanje ili destruktivne pozive. Mešani alati za čitanje/pisanje
+      — rezervne kopije, aplikacije (dodaci), energetske preference, glasovni cevovodi
+      i režim koda kada je omogućen — ostaju dostupni sa blokiranim operacijama pisanja.
+      Isti prekidač kao na kartici Alati u veb interfejsu. Isključeno podrazumevano.
+      Zahteva ponovno pokretanje da bi stupilo na snagu.
+  redact_secrets:
+    name: Cenzuriši tajne podatke
+    description: Uklanja tajne podatke iz odgovora alata pre nego što stignu do AI
+      asistenta. Opcije aplikacije (add-on) i polja integracije označena kao lozinke
+      zamenjuju se oznakom set/empty (tako da pitanje "da li je ovaj akreditiv podešen?"
+      ostaje odgovorno), a drugi odgovori alata se čiste od tajnih vrednosti koje
+      je server već video (vrednosti kraće od 6 karaktera se preskaču, pošto bi zamenjivanje
+      malih fragmenata oštetilo nepovezani izlaz). Ostala polja se ne detektuju, osim
+      privatnih ključeva u opcijama aplikacije i imena opcija aplikacije navedenih
+      u nastavku. Isključeno po defaultu.
+  redact_app_option_keys:
+    name: Dodatni ključevi opcija aplikacije za cenzurisanje
+    description: Nazivi opcija aplikacije (add-on) koje treba sakriti poput polja
+      za lozinku, za aplikacije čija šema čuva tajnu kao običan tekst (na primer backup_password).
+      Odvojite nazive zarezima ili novim redovima. Naziv se primenjuje na svaku aplikaciju;
+      napišite app_slug:name da biste ga ograničili na jednu aplikaciju. Imenovanje
+      grupe opcija obuhvata svaku opciju u njoj. Koristi se samo dok je opcija Redact
+      Secrets uključena. Podrazumevano prazno.
+  ipv6_allowed_networks:
+    name: Dodatne dozvoljene IPv6 mreže
+    description: 'IPv6 klijenti pristupaju sopstvenom portu ovog servera samo sa lokalne
+      mreže: loopback, link-local, jedinstvene lokalne (fc00::/7) i mreže sa kojima
+      je Home Assistant domaćin direktno povezan. IPv4 nije pogođen. Navedite druge
+      IPv6 mreže koje želite da dozvolite, odvojene zarezima ili novim redovima (na
+      primer 2001:db8:5::/48). Dodavanje ::/0 dozvoljava svakog IPv6 klijenta, uključujući
+      one sa interneta ako vaš ruter propušta dolazni IPv6 saobraćaj.'
+  enable_mandatory_bps:
+    name: Priloži veštine najbolje prakse pri upisima
+    description: 'Glavni prekidač za funkciju isporuke sadržaja veština alata za pisanje
+      (problem #1182). Kada je omogućeno (podrazumevano), šest alata za pisanje konfiguracije
+      (automatizacije, skripte, scene, pomoćnici, kontrolne table, sirovi YAML) prilažu
+      kanonske referentne datoteke najbolje prakse Home Assistant-a pod `skill_content`
+      pri svakom uspešnom upisu, plus automatski ugrađuju sve referentne odeljke na
+      koje se pozivaju upozorenja o najboljoj praksi. Svaki alat takođe izlaže parametar
+      `MandatoryBPS` po pozivu koji agent može da podesi na false pri naknadnim pozivima
+      kada dobije sadržaj. Kada je ovaj glavni prekidač isključen, NIKAKAV skill_content
+      se ne šalje bez obzira na parametar po pozivu ili upozorenja o BP. Preporučuje
+      se UKLJUČENO kao prvi izbor; onemogućite samo za modele sa vrlo malim prozorima
+      konteksta. Isključivanje ovog podešavanja može da pogorša tačnost upisa. Zahteva
+      ponovno pokretanje da bi stupilo na snagu.'
+  enable_strict_mandatory_bps:
+    name: Režim stroge najbolje prakse
+    description: 'Strogi režim: sprečava klijenta da koristi alat dok ne dokaže da
+      je pročitao najbolje prakse. Dok je uključeno, šest alata za pisanje najbolje
+      prakse (automatizacije, skripte, scene, pomoćnici, kontrolne table, sirovi YAML)
+      su blokirani i vraćaju grešku koja upućuje klijenta da pročita veštinu najbolje
+      prakse preko ha_get_skill_guide i prosledi ključ za potvrdu koji tamo dobije.
+      Dok je uključeno, alat ha_get_skill_guide je zaključan i omogućen — on je jedini
+      izdavač ključa za potvrdu. Podređeno opciji "Priloži veštine najbolje prakse
+      pri upisima" iznad i neaktivno dok je taj roditelj isključen. Zahteva ponovno
+      pokretanje da bi stupilo na snagu.'
+  enable_yaml_config_editing:
+    name: Omogući uređivanje YAML konfiguracije (beta)
+    description: Beta funkcija. Omogućava AI asistentima da dodaju, zamenjuju ili
+      uklanjaju ključeve nivoa vrha u configuration.yaml i packages/*.yaml. Dozvoljeni
+      su samo ključevi sa bele liste (npr. template, sensor, command_line, mqtt, knx);
+      osnovni ključevi kao što su homeassistant, http i recorder su blokirani. Svaka
+      izmena proverava YAML sintaksu, pokreće proveru konfiguracije i kreira automatsku
+      rezervnu kopiju. Promene većine ključeva zahtevaju potpuno ponovno pokretanje
+      HA da bi stupile na snagu. Pogledajte docs/beta.md za poznata ograničenja. Namenski
+      alati (automatizacije, skripte, scene, pomoćnici, senzori šablona) treba da
+      imaju prednost kada su dostupni. ZAHTEVA da glavni prekidač "Omogući beta funkcije"
+      iznad (i u veb interfejsu) bude uključen — u suprotnom se ova podzastavica ignoriše
+      u radu bez obzira na njenu vrednost ovde.
+  enable_yaml_edit_confirm:
+    name: Zahtevaj potvrdu za YAML izmene (pregled razlika)
+    description: 'Podprekidač za uređivanje YAML konfiguracije, UKLJUČENO podrazumevano
+      (preporučuje se). Prvi poziv ha_config_set_yaml vraća unificirani prikaz razlika
+      tačno onoga što bi se promenilo na disku plus token za potvrdu i ništa ne upisuje;
+      izmena se primenjuje tek kada se poziv ponovi sa tim tokenom. Postoji da bi
+      se nenamerne izmene van tražene izmene uhvatile pre nego što stignu na disk
+      (problem #1720). Isključite samo da biste uštedeli jedno kružno putovanje (round-trip)
+      po izmeni.'
+  enable_yaml_packages_automation:
+    name: Dozvoli automatizaciju u packages/*.yaml
+    description: Podprekidač za uređivanje YAML konfiguracije. Kada je uključeno,
+      ha_config_set_yaml prihvata yaml_path='automation' unutar packages/*.yaml. Kada
+      je isključeno, poziv se odbija i na strani klijenta i na strani servera. Alat
+      režima skladištenja (ha_config_set_automation) nije pogođen. Podrazumevano ISKLJUČENO;
+      stupa na snagu samo kada je opcija "Omogući uređivanje YAML konfiguracije" iznad
+      takođe uključena.
+  enable_yaml_packages_script:
+    name: Dozvoli skriptu u packages/*.yaml
+    description: Podprekidač za uređivanje YAML konfiguracije. Kada je uključeno,
+      ha_config_set_yaml prihvata yaml_path='script' unutar packages/*.yaml. Kada
+      je isključeno, poziv se odbija i na strani klijenta i na strani servera. Alat
+      režima skladištenja (ha_config_set_script) nije pogođen. Podrazumevano ISKLJUČENO;
+      stupa na snagu samo kada je opcija "Omogući uređivanje YAML konfiguracije" iznad
+      takođe uključena.
+  enable_yaml_packages_scene:
+    name: Dozvoli scenu u packages/*.yaml
+    description: Podprekidač za uređivanje YAML konfiguracije. Kada je uključeno,
+      ha_config_set_yaml prihvata yaml_path='scene' unutar packages/*.yaml. Kada je
+      isključeno, poziv se odbija i na strani klijenta i na strani servera. Alat režima
+      skladištenja (ha_config_set_scene) nije pogođen. Podrazumevano ISKLJUČENO; stupa
+      na snagu samo kada je opcija "Omogući uređivanje YAML konfiguracije" iznad takođe
+      uključena.
+  enable_lite_docstrings:
+    name: Omogući lake docstring-ove alata (beta)
+    description: 'Beta funkcija. Zamenjuje docstring-ove na 15 teških ha-mcp alata
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) kraćim varijantama koje prenose
+      šemu i detalje primera na ha_get_skill_guide alat (ili njegov skill:// resurs).
+      Jedan izuzetak: ha_report_issue umesto toga upućuje na polje sa uputstvima sopstvenog
+      odgovora. UPOZORENJE: ovo smanjuje potrošnju tokena u stanju mirovanja, ali
+      može da pogorša performanse LLM-a — skraćeni opisi se oslanjaju na to da LLM
+      zaista pozove alat za veštine ili pročita resurs veština za detalje, što nije
+      zagarantovano (neki modeli će preskočiti dodatni poziv alata i završiti sa manje
+      smernica nego ranije). Najbolje se kombinuje sa klijentom koji podržava MCP
+      resurse ili sa enable_tool_search. Zahteva restartovanje da bi stupilo na snagu.
+      ZAHTEVA da glavni prekidač "Enable beta features" iznad (i u veb interfejsu)
+      bude uključen — u suprotnom se ovaj pod-flaj ignoriše u toku izvršavanja bez
+      obzira na njegovu vrednost ovde.'
+  enable_filesystem_tools:
+    name: Omogući alate za fajl sistem (beta)
+    description: 'Postavlja HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Omogućava direktan
+      pristup čitanju/pisanju datoteka u vaš fajl sistem Home Assistant-a. UPOZORENJE:
+      Ovo daje MCP serveru osetljiv direktan pristup datotekama vašeg sistema. Omogućite
+      samo ako verujete AI asistentu u vezi sa operacijama nad datotekama. Zahteva
+      ponovno pokretanje da bi stupilo na snagu. ZAHTEVA da glavni prekidač "Omogući
+      beta funkcije" iznad (i u veb interfejsu) bude uključen — u suprotnom se ova
+      podzastavica ignoriše u radu bez obzira na njenu vrednost ovde.'
+  enable_code_mode:
+    name: Omogući prilagođeno okruženje alata (sandbox) (beta)
+    description: Beta funkcija. Omogućava ha_manage_custom_tool alat, koji omogućava
+      AI asistentima da kreiraju, pokreću, čuvaju i brišu prilagođeni Python kod u
+      bezbednom okruženju (sandbox) kada nijedan ugrađeni alat ne može da obradi zahtev.
+      Kod se izvršava u izolovani interpreter bez pristupa fajl sistemu ili proizvoljnom
+      mrežnom pristupu. Kod u sandbox-u može da poziva HA REST API (api_get/api_post),
+      šalje WebSocket komande (ws_send), poziva postojeće MCP alate (call_tool) ili
+      uklanja sačuvani alat (delete_saved_tool). Sačuvani alati se podrazumevano čuvaju
+      u /data/saved_tools.json tako da preživljavaju restartovanje aplikacije (add-on)
+      i vidljivi su svakom klijentu koji može da se poveže. Pogledajte docs/beta.md
+      za poznata ograničenja. Zahteva restartovanje da bi stupilo na snagu. ZAHTEVA
+      da glavni prekidač "Enable beta features" iznad (i u veb interfejsu) bude uključen
+      — u suprotnom se ovaj pod-flaj ignorisan u toku izvršavanja bez obzira na njegovu
+      vrednost ovde.
+  enable_dashboard_screenshot:
+    name: Omogući režim snimka ekrana kontrolne table (beta)
+    description: 'Beta funkcija — isključena podrazumevano. Dodaje alat ha_get_dashboard_screenshot
+      plus opcije include_screenshot / return_screenshot na alatima za preuzimanje/postavljanje
+      kontrolne table, tako da AI asistenti mogu da pregledaju prilagodljive Lovelace
+      slike. Podržava stabilne imenovane prikaze, pakete za mobilne uređaje/tablete/desktop
+      računare i PNG/JPEG/WebP/BMP izlaz. Renderovanje se pokreće u zasebnoj aplikaciji:
+      balloob''s Puppet ili WPE Screenshot Engine. Instalirajte i konfigurišite jedan
+      endžin sa sopstvenim tokenom za dugotrajan pristup za Home Assistant. HA OS
+      / Supervised otkriva pokrenuti endžin preko Supervisor-a; Docker/Container primene
+      ga pokreću kao sidecar i postavljaju HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Ništa teško se ne instalira osim ako ovo ne omogućite i instalirate endžin.
+      Zahteva restartovanje da bi stupilo na snagu. ZAHTEVA da glavni prekidač "Enable
+      beta features" iznad (i u veb interfejsu) bude uključen — u suprotnom se ovaj
+      pod-flaj ignoriše u toku izvršavanja bez obzira na njegovu vrednost ovde.'
+  enable_auto_backup:
+    name: Automatsko pravljenje rezervnih kopija izmena
+    description: Sačuvajte snimak entiteta pre nego što ga izmeni poziv alata za upis
+      ili brisanje. Dok je ovo isključeno, alati za datoteke i sirovi YAML (ha_write_file,
+      ha_delete_file, ha_config_set_yaml) odbijaju upis.
+  auto_backup_throttle_minutes:
+    name: Ograničenje učestalosti automatskih rezervnih kopija (u minutima)
+    description: Koliko često automatska rezervna kopija može da sačuva isti entitet.
+      0 čuva pri svakom upisu; N iznad 0 čuva najviše jedan snimak po N minuta za
+      svaki entitet. Opseg 0–1440.
+  auto_backup_retain_per_entity:
+    name: Zadržavanje automatskih rezervnih kopija (po entitetu)
+    description: Najveći broj sačuvanih snimaka po entitetu. Svako novo čuvanje uklanja
+      najstarije snimke iznad ovog broja. Opseg 1–10000.
+  enable_snapshot_actions:
+    name: Dozvoli radnje sa potpunim HA snimcima
+    description: Dozvolite AI asistentima da upravljaju potpunim Home Assistant snimcima
+      preko ha_manage_backup i ekvivalentnih usluga i komandi za rezervne kopije u
+      ha_call_service. Isključivanje ovoga blokira svaku radnju sa snimcima, uključujući
+      i prikazivanje liste. Brisanje snimaka je dostupno samo preko ha_manage_backup
+      i takođe zahteva dozvolu za brisanje snimaka. Rezervne kopije izmena i radnje
+      sa rezervnim kopijama koje korisnik obavlja u veb interfejsu podešavanja ostaju
+      dostupne.
+  backup_read_only:
+    name: Učini upravljanje rezervnim kopijama samo za čitanje
+    description: Dozvolite AI asistentima da listaju, pregledaju i upoređuju rezervne
+      kopije izmena, kao i da listaju pune HA snimke kada su radnje sa snimcima omogućene.
+      Blokirajte ručno kreiranje rezervnih kopija, vraćanje u prethodno stanje (uključujući
+      vraćanje izmena) i brisanje, uključujući ekvivalentne usluge i komande rezervnih
+      kopija u ha_call_service. Automatske rezervne kopije pre izmena se nastavljaju.
+      Radnje sa rezervnim kopijama koje korisnik obavlja u veb interfejsu podešavanja
+      ostaju dostupne.
+  enable_snapshot_delete:
+    name: Dozvoli brisanje snimaka
+    description: Dozvolite ha_manage_backup da briše pune Home Assistant snimke. Snimak
+      može biti poslednji način povratka nakon pogrešne izmene, pa korisnik mora ovo
+      da uključi. Zakazane rezervne kopije, najnoviji snimak i snimci mlađi od minimalne
+      starosti ostaju zaštićeni.
+  snapshot_delete_min_age_days:
+    name: Minimalna starost snimka za brisanje (u danima)
+    description: Koliko star snimak mora biti, u danima, pre nego što može biti obrisan.
+      0 isključuje ograničenje starosti; najnoviji snimak i zakazane rezervne kopije
+      ostaju zaštićeni. Opseg 0–365.
+  disabled_tools:
+    name: Onemogućeni alati (odvojeni zarezom)
+    description: Alati navedeni ovde su prisilno isključeni i zaključani u veb interfejsu
+      podešavanja (kartica Alati) — ne mogu se ponovo omogućiti tamo bez prethodnog
+      poništavanja ove opcije. Mali skup obaveznih alata (ha_search, ha_get_overview,
+      ha_get_state, ha_report_issue, ha_manage_backup) ne može biti onemogućen i nastavlja
+      da radi čak i ako je ovde naveden. ha_get_skill_guide se može onemogućiti samo
+      dok je režim strogih najboljih praksi (enable_strict_mandatory_bps) isključen.
+      Nazivi alata odvojeni zarezom (npr. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Zakačeni alati (odvojeni zarezom)
+    description: Alati navedeni ovde su zaključani i zakačeni — pojavljuju se na vrhu
+      kartice Alati i ne mogu se otkačiti sa veb interfejsa podešavanja bez prethodnog
+      poništavanja ove opcije. Korisno u kombinaciji sa pretragom alata. Nazivi alata
+      odvojeni zarezom.
+  secret_path:
+    name: Zamena bezbednosne putanje
+    description: 'Opciona prilagođena HTTP putanja za MCP server. Ostavite prazno
+      da biste koristili automatski generisanu bezbednu putanju.
+
+      '

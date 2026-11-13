@@ -184,7 +184,7 @@ if [ "$CLIENT" = "claude-code" ]; then
     if "$CLAUDE_BIN" mcp add home-assistant --scope user \
         --env HOMEASSISTANT_URL="$DEMO_URL" \
         --env HOMEASSISTANT_TOKEN="$DEMO_TOKEN" \
-        -- "$UVX_PATH" --python 3.13 --refresh ha-mcp@latest; then
+        -- "$UVX_PATH" --python 3.14 --refresh ha-mcp@latest; then
         printf "${GREEN}  Claude Code configured (server: home-assistant)${NC}\n"
     else
         printf "${RED}  'claude mcp add' failed.${NC}\n" >&2
@@ -192,7 +192,7 @@ if [ "$CLIENT" = "claude-code" ]; then
         printf "    claude mcp add home-assistant --scope user \\\\\n" >&2
         printf "      --env HOMEASSISTANT_URL=%s \\\\\n" "$DEMO_URL" >&2
         printf "      --env HOMEASSISTANT_TOKEN=%s \\\\\n" "$DEMO_TOKEN" >&2
-        printf "      -- %s --python 3.13 --refresh ha-mcp@latest\n" "$UVX_PATH" >&2
+        printf "      -- %s --python 3.14 --refresh ha-mcp@latest\n" "$UVX_PATH" >&2
         exit 1
     fi
     printf "\n"
@@ -200,12 +200,12 @@ if [ "$CLIENT" = "claude-code" ]; then
     # Step 3: Pre-download dependencies
     printf "${YELLOW}Step 3: Pre-downloading ha-mcp...${NC}\n"
     printf "  This speeds up the first Claude Code session...\n"
-    if "$UVX_PATH" --python 3.13 --refresh ha-mcp@latest --version > /dev/null 2>&1; then
+    if "$UVX_PATH" --python 3.14 --refresh ha-mcp@latest --version > /dev/null 2>&1; then
         printf "${GREEN}  Dependencies cached${NC}\n"
     else
         printf "${YELLOW}  Could not pre-download ha-mcp (network or PyPI issue).${NC}\n"
         printf "${YELLOW}  Not fatal — it will download on first use. To retry now:${NC}\n"
-        printf "    %s --python 3.13 --refresh ha-mcp@latest --version\n" "$UVX_PATH"
+        printf "    %s --python 3.14 --refresh ha-mcp@latest --version\n" "$UVX_PATH"
     fi
     printf "\n"
 
@@ -311,7 +311,7 @@ if 'mcpServers' not in config:
 # Add/update Home Assistant config (using full path for Claude Desktop compatibility)
 config['mcpServers']['Home Assistant'] = {
     "command": uvx_path,
-    "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"],
+    "args": ["--python", "3.14", "--refresh", "ha-mcp@latest"],
     "env": {
         "HOMEASSISTANT_URL": demo_url,
         "HOMEASSISTANT_TOKEN": demo_token
@@ -345,7 +345,7 @@ else
   "mcpServers": {
     "Home Assistant": {
       "command": "$UVX_PATH",
-      "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"],
+      "args": ["--python", "3.14", "--refresh", "ha-mcp@latest"],
       "env": {
         "HOMEASSISTANT_URL": "$DEMO_URL",
         "HOMEASSISTANT_TOKEN": "$DEMO_TOKEN"
@@ -372,13 +372,13 @@ printf "\n"
 # Step 3: Pre-download dependencies
 printf "${YELLOW}Step 3: Pre-downloading ha-mcp...${NC}\n"
 printf "  This speeds up Claude Desktop startup...\n"
-if "$UVX_PATH" --python 3.13 --refresh ha-mcp@latest --version > /dev/null 2>&1; then
+if "$UVX_PATH" --python 3.14 --refresh ha-mcp@latest --version > /dev/null 2>&1; then
     printf "${GREEN}  Dependencies cached${NC}\n"
 else
     printf "${YELLOW}  Could not pre-download ha-mcp (network or PyPI issue).${NC}\n"
     printf "${YELLOW}  Not fatal — Claude Desktop will download it on first launch,${NC}\n"
     printf "${YELLOW}  which only makes the first start slower. To retry now:${NC}\n"
-    printf "    %s --python 3.13 --refresh ha-mcp@latest --version\n" "$UVX_PATH"
+    printf "    %s --python 3.14 --refresh ha-mcp@latest --version\n" "$UVX_PATH"
 fi
 printf "\n"
 

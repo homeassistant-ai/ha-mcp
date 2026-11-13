@@ -1,0 +1,42 @@
+# A test that writes into a registry's store puts there what Core never put
+# there: an issue, an entity, a device, an area Core did not create, or a
+# deleted entry it never deleted. The tool under test is then checked against
+# a state Core cannot reach. The test creates what it needs through Core
+# (the registry's own async_get_or_create / async_remove / async_update_*,
+# ir.async_create_issue, a real integration setup) and asserts on what Core
+# then holds.
+id: no-test-registry-store-writes
+language: python
+rule:
+  any:
+    # registry.entities[key] = value
+    - kind: assignment
+      regex: '^[^=]*\.(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)\[[^=]*\]\s*(:[^=]+)?=[^=]'
+    # del registry.entities[key]
+    - kind: delete_statement
+      regex: '\.(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)\['
+    # registry.entities.pop(...), .clear(), .update(...), .setdefault(...),
+    # whatever the registry is reached through (ir.async_get(hass).issues).
+    - kind: call
+      has:
+        field: function
+        kind: attribute
+        all:
+          - has:
+              field: attribute
+              regex: '^(pop|clear|update|setdefault)$'
+          - has:
+              field: object
+              kind: attribute
+              has:
+                field: attribute
+                regex: '^(issues|entities|deleted_entities|devices|deleted_devices|areas|floors|labels|categories)$'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+message: |
+  A unit test does not write into a registry's store. Create, update or remove
+  the entry through Core (the registry's own methods, ir.async_create_issue, a
+  real integration setup), so the tool sees a state Core can reach. See
+  tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
+severity: error

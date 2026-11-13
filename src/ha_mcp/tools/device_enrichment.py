@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from .helpers import core_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ async def enrich_zha_metrics(
                 }
         else:
             warnings.append(
-                f"ZHA radio metrics unavailable: {zha_result.get('error') or 'request failed'}"
+                f"ZHA radio metrics unavailable: {core_error_message(zha_result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -41,7 +42,7 @@ async def enrich_zha_metrics(
     ) as e:
         logger.warning(
             "Could not fetch ZHA radio metrics for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"ZHA radio metrics unavailable: {e}")
@@ -60,19 +61,14 @@ async def enrich_zwave_status(
             {"type": "zwave_js/node_status", "device_id": device_id}
         )
         if zwave_result.get("success"):
+            # Z-Wave JS resolves the node (a pre-provisioned device has none),
+            # so its node_id comes from this reply, passed through whole.
             node_data = zwave_result.get("result", {})
-            device_info["node_status"] = {
-                "node_id": node_data.get("node_id"),
-                "status": node_data.get("status"),
-                "is_routing": node_data.get("is_routing"),
-                "is_secure": node_data.get("is_secure"),
-                "highest_security_class": node_data.get("highest_security_class"),
-                "zwave_plus_version": node_data.get("zwave_plus_version"),
-                "is_controller_node": node_data.get("is_controller_node"),
-            }
+            device_info["node_id"] = node_data.get("node_id")
+            device_info["node_status"] = node_data
         else:
             warnings.append(
-                f"Z-Wave node status unavailable: {zwave_result.get('error') or 'request failed'}"
+                f"Z-Wave node status unavailable: {core_error_message(zwave_result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -82,7 +78,7 @@ async def enrich_zwave_status(
     ) as e:
         logger.warning(
             "Could not fetch Z-Wave node status for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"Z-Wave node status unavailable: {e}")
@@ -117,7 +113,7 @@ async def enrich_matter_diagnostics(
             }
         else:
             warnings.append(
-                f"Matter node diagnostics unavailable: {result.get('error') or 'request failed'}"
+                f"Matter node diagnostics unavailable: {core_error_message(result.get('error') or 'request failed')}"
             )
     except (
         HomeAssistantConnectionError,
@@ -127,7 +123,7 @@ async def enrich_matter_diagnostics(
     ) as e:
         logger.warning(
             "Could not fetch Matter node diagnostics for device %s: %s",
-            device_info.get("device_id"),
+            device_info.get("id"),
             e,
         )
         warnings.append(f"Matter node diagnostics unavailable: {e}")

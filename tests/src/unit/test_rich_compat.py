@@ -17,7 +17,7 @@ reachable in practice — the official Home Assistant container ships
 and ``rich`` is absent from HA's ``package_constraints.txt``, so whether the
 runtime install of ``ha-mcp`` drags ``rich`` up is left to the resolver.
 
-``ha_mcp._rich_compat`` filters keyword arguments the installed
+``ha_mcp.rich_compat`` filters keyword arguments the installed
 ``RichHandler`` cannot accept, and only when it cannot accept them. The
 tracebacks lose frame-limiting and framework-frame suppression on such
 installs; they render.
@@ -33,7 +33,7 @@ import textwrap
 
 import pytest
 
-from ha_mcp._rich_compat import ensure_rich_handler_compat
+from ha_mcp.rich_compat import ensure_rich_handler_compat
 
 # The keyword arguments fastmcp passes that predate rich 13.9.4.
 _MODERN_ONLY_KWARGS = ("tracebacks_max_frames", "tracebacks_suppress")
@@ -134,7 +134,7 @@ def test_dropped_kwargs_are_logged(patched_rich, caplog):
     stub = patched_rich(_OldRichHandler)
     ensure_rich_handler_compat()
 
-    with caplog.at_level(logging.DEBUG, logger="ha_mcp._rich_compat"):
+    with caplog.at_level(logging.DEBUG, logger="ha_mcp.rich_compat"):
         stub(rich_tracebacks=True, tracebacks_max_frames=3, tracebacks_suppress=[])
 
     for kwarg in _MODERN_ONLY_KWARGS:

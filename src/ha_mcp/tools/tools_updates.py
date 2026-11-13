@@ -51,7 +51,7 @@ def _parse_version(version_str: str) -> tuple[int, ...] | None:
         return None
     try:
         return tuple(int(x) for x in version_str.split("."))
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
 
 
@@ -243,7 +243,7 @@ async def _get_installed_integration_domains(client: Any) -> set[str]:
         if isinstance(entries, list):
             return {e.get("domain", "") for e in entries} - {""}
         return set()
-    except (httpx.RequestError, ValueError, KeyError):
+    except httpx.RequestError, ValueError, KeyError:
         return set()
 
 
@@ -759,7 +759,7 @@ class UpdateTools:
                 await self._client.call_service("update", action, data)
                 results.append({"success": True, "entity_id": eid})
                 succeeded += 1
-            except (HomeAssistantConnectionError, HomeAssistantAuthError):
+            except HomeAssistantConnectionError, HomeAssistantAuthError:
                 # Fatal transport/auth failure — the connection is gone,
                 # so remaining items would fail identically. Propagate to
                 # surface the root cause instead of N per-item errors.

@@ -44,10 +44,10 @@ from .helpers import (
     exception_to_structured_error,
     get_entity_state_or_none,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-    ws_failure_code,
 )
 from .tool_hints import read_only_hints, write_hints
 
@@ -77,19 +77,6 @@ def _json_names(value: str) -> list[str] | None:
     if isinstance(parsed, list) and all(isinstance(i, str) for i in parsed):
         return parsed
     return None
-
-
-def _raise_core_failure(
-    command: str, result: dict[str, Any], context: dict[str, Any], applied: str = ""
-) -> NoReturn:
-    error = str(result.get("error", "Unknown error")).removeprefix("Command failed: ")
-    raise_tool_error(
-        create_error_response(
-            ws_failure_code(result),
-            f"{command} failed: {error}{applied}",
-            context=context,
-        )
-    )
 
 
 def _removed(
@@ -199,7 +186,7 @@ class TodoTools:
                 )
             )
         if not result.get("success"):
-            _raise_core_failure(label, result, context, applied)
+            raise_core_refusal(f"{label} failed", result, context, suffix=applied)
 
     async def _todo_service(
         self, service: str, entity_id: str, data: dict[str, Any], applied: str = ""
@@ -216,7 +203,9 @@ class TodoTools:
             {"type": "todo/item/list", "entity_id": entity_id}
         )
         if not result.get("success"):
-            _raise_core_failure("todo/item/list", result, {"entity_id": entity_id})
+            raise_core_refusal(
+                "todo/item/list failed", result, {"entity_id": entity_id}
+            )
         items = (result.get("result") or {}).get("items")
         if not isinstance(items, list):
             raise_tool_error(
@@ -380,7 +369,9 @@ class TodoTools:
                 {**message, "return_response": True}
             )
             if not result.get("success"):
-                _raise_core_failure("todo.get_items", result, {"entity_id": entity_id})
+                raise_core_refusal(
+                    "todo.get_items failed", result, {"entity_id": entity_id}
+                )
             response = (result.get("result") or {}).get("response") or {}
             items = (response.get(entity_id) or {}).get("items")
             if not isinstance(items, list):

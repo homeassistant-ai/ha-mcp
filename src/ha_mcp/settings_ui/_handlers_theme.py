@@ -34,7 +34,7 @@ async def _get_theme_prefs(_: Request) -> JSONResponse:
 async def _save_theme_prefs(request: Request) -> JSONResponse:
     try:
         body = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except json.JSONDecodeError, UnicodeDecodeError:
         return JSONResponse(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,

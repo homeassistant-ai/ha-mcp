@@ -53,7 +53,7 @@ export OIDC_CONFIG_URL=https://auth.example.com/application/o/ha-mcp/.well-known
 export OIDC_CLIENT_ID=ha-mcp-client
 export OIDC_CLIENT_SECRET=your-client-secret
 export MCP_BASE_URL=https://mcp.example.com
-uvx --from=ha-mcp@latest ha-mcp-oidc
+uvx --python 3.14 --from=ha-mcp@latest ha-mcp-oidc
 ```
 
 The server must be reachable over HTTPS at `MCP_BASE_URL` — put a

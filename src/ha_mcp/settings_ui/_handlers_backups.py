@@ -38,9 +38,9 @@ from ..backup_manager import (
 from ..backup_todo import TodoListNotLoaded
 from ..config import (
     BACKUP_OVERRIDE_FIELDS,
-    _reset_global_settings,
     get_backup_setting_origin,
     get_global_settings,
+    reset_global_settings,
 )
 from ..config_registry import SETTING_BOUNDS
 from ..errors import ErrorCode, create_error_response
@@ -411,7 +411,7 @@ def _coerce_int_field(field_name: str, raw: Any) -> tuple[Any, str | None]:
         return None, f"Invalid integer for {field_name}: {raw!r}"
     try:
         value = int(raw)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None, f"Invalid integer for {field_name}: {raw!r}"
     bounds = SETTING_BOUNDS.get(field_name)
     if bounds is not None and not (bounds[0] <= value <= bounds[1]):
@@ -557,7 +557,7 @@ def _apply_backup_config_file(clean: dict[str, Any]) -> JSONResponse:
     # File-mode auto-backup settings take effect immediately on the next
     # ``get_global_settings()`` read — no restart needed, hence
     # ``restart_required=False``.
-    _reset_global_settings()
+    reset_global_settings()
     return JSONResponse(
         {"success": True, "applied": clean, "mode": "file", "restart_required": False}
     )
@@ -600,7 +600,7 @@ async def _save_backup_config(
     """
     try:
         payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
+    except ValueError, json.JSONDecodeError:
         return _bad_request("Invalid JSON body")
     clean, err = _validate_backup_payload(payload)
     if err is not None:

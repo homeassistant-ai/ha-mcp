@@ -27,11 +27,11 @@ from ha_mcp.settings_ui import (
     _get_config_path,
     _get_tool_metadata,
     _ingress_only,
-    _render_settings_html,
     apply_tool_visibility,
     get_http_settings_prefix,
     load_tool_config,
     register_settings_routes,
+    render_settings_html,
     save_tool_config,
 )
 
@@ -737,7 +737,7 @@ class TestSettingsJsExtraction:
         for token in render_tokens:
             template_without_tokens = template_without_tokens.replace(token, "")
         assert "__HA_MCP_" not in template_without_tokens
-        assert "__HA_MCP_" not in _render_settings_html()
+        assert "__HA_MCP_" not in render_settings_html()
 
     def test_injected_constant_lists_have_expected_values(self) -> None:
         """Each sentinel must be replaced with the *correct* value, not just
@@ -899,9 +899,9 @@ class TestSaveToolsValidation:
         )
         monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
         monkeypatch.setenv("PINNED_TOOLS", "ha_pinned_on")
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         save = self._capture_handler(monkeypatch)
         # Payload re-sends the env-pinned values verbatim AND flips an
         # unrelated tool — must succeed.
@@ -921,7 +921,7 @@ class TestSaveToolsValidation:
         # stays the single source of truth.
         saved = json.loads(config_path.read_text())
         assert saved["tools"] == {"ha_unrelated_tool": "disabled"}
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_env_pinned_value_mismatch_still_409s(self, monkeypatch, tmp_path):
@@ -935,9 +935,9 @@ class TestSaveToolsValidation:
         )
         monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
         monkeypatch.delenv("PINNED_TOOLS", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         save = self._capture_handler(monkeypatch)
         resp = await save(
             self._make_request(
@@ -952,7 +952,7 @@ class TestSaveToolsValidation:
         assert resp.status_code == 409
         body = json.loads(resp.body)
         assert "ha_pinned_off" in str(body)
-        _reset_global_settings()
+        reset_global_settings()
 
 
 class TestRestartAddon:
@@ -1393,12 +1393,12 @@ class TestApplyBackupOverrides:
         }
         (tmp_path / "backup_settings.json").write_text(json.dumps(override))
         monkeypatch.setattr("ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path)
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         s = cfg_mod.get_global_settings()
         assert s.enable_auto_backup is True
         assert s.auto_backup_throttle_minutes == 7
         assert s.auto_backup_retain_per_entity == 33
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
 
     def test_env_var_wins_over_file(self, monkeypatch, tmp_path):
         from ha_mcp import config as cfg_mod
@@ -1412,11 +1412,11 @@ class TestApplyBackupOverrides:
         }
         (tmp_path / "backup_settings.json").write_text(json.dumps(override))
         monkeypatch.setattr("ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path)
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         s = cfg_mod.get_global_settings()
         assert s.enable_auto_backup is False  # env wins
         assert s.auto_backup_throttle_minutes == 42  # file applied
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
 
     def test_addon_mode_ignores_override_file(self, monkeypatch, tmp_path):
         from ha_mcp import config as cfg_mod
@@ -1429,10 +1429,10 @@ class TestApplyBackupOverrides:
             json.dumps({"enable_auto_backup": True})
         )
         monkeypatch.setattr("ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path)
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         s = cfg_mod.get_global_settings()
         assert s.enable_auto_backup is False
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
 
     def test_out_of_range_skipped(self, monkeypatch, tmp_path):
         from ha_mcp import config as cfg_mod
@@ -1453,11 +1453,11 @@ class TestApplyBackupOverrides:
             )
         )
         monkeypatch.setattr("ha_mcp.utils.data_paths.get_data_dir", lambda: tmp_path)
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         s = cfg_mod.get_global_settings()
         assert s.auto_backup_throttle_minutes == 0  # default
         assert s.auto_backup_retain_per_entity == 100  # default
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
 
 
 class TestSaveBackupConfigEndpoint:
@@ -1582,7 +1582,7 @@ class TestSaveBackupConfigEndpoint:
         ):
             monkeypatch.delenv(env, raising=False)
         handlers = self._capture_handlers(monkeypatch)
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         _ = cfg_mod.get_global_settings()  # warm the cache
         resp = await handlers["post"](
             self._make_request(
@@ -1609,7 +1609,7 @@ class TestSaveBackupConfigEndpoint:
         fresh = cfg_mod.get_global_settings()
         assert fresh.enable_auto_backup is True
         assert fresh.auto_backup_throttle_minutes == 9
-        cfg_mod._reset_global_settings()
+        cfg_mod.reset_global_settings()
         # Guarantee no symbol-import lint trip.
         assert sui_mod is not None
 
@@ -2350,12 +2350,12 @@ class TestSaveFeatureFlagsStandaloneMode:
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("READ_ONLY_MODE", raising=False)
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-        from ha_mcp.config import _reset_global_settings, get_global_settings
+        from ha_mcp.config import get_global_settings, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         assert get_global_settings().read_only_mode is False
 
         handlers = build_settings_handlers(server=None)
@@ -2364,11 +2364,11 @@ class TestSaveFeatureFlagsStandaloneMode:
         resp = await handlers["save_feature_flags"](request)
         assert resp.status_code == 200, json.loads(resp.body)
 
-        _reset_global_settings()
+        reset_global_settings()
         assert get_global_settings().read_only_mode is True
 
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_flat_body_rejected_not_silent_noop(self, monkeypatch, tmp_path):
@@ -2616,10 +2616,10 @@ class TestEnvPinnedTools:
         monkeypatch.setenv("DISABLED_TOOLS", "ha_foo, ha_bar")
         monkeypatch.setenv("PINNED_TOOLS", "ha_baz, ha_qux")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import env_pinned_tools
 
-        _reset_global_settings()
+        reset_global_settings()
         pinned = env_pinned_tools()
         assert pinned == {
             "ha_foo": "disabled",
@@ -2627,7 +2627,7 @@ class TestEnvPinnedTools:
             "ha_baz": "pinned",
             "ha_qux": "pinned",
         }
-        _reset_global_settings()
+        reset_global_settings()
 
     def test_env_pinned_tools_pinned_wins_on_collision(self, monkeypatch):
         """If a name appears in both DISABLED_TOOLS and PINNED_TOOLS, pinned
@@ -2635,12 +2635,12 @@ class TestEnvPinnedTools:
         monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
         monkeypatch.setenv("PINNED_TOOLS", "ha_foo")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import env_pinned_tools
 
-        _reset_global_settings()
+        reset_global_settings()
         assert env_pinned_tools() == {"ha_foo": "pinned"}
-        _reset_global_settings()
+        reset_global_settings()
 
     def test_env_pinned_disabled_tool_stays_disabled_even_after_file_write(
         self, monkeypatch, tmp_path
@@ -2657,10 +2657,10 @@ class TestEnvPinnedTools:
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_foo": "enabled"}})
         )
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import effective_tool_config
 
-        _reset_global_settings()
+        reset_global_settings()
         cfg = effective_tool_config()
         assert cfg["tools"]["ha_foo"] == "disabled"
         get_data_dir.cache_clear()
@@ -2678,10 +2678,10 @@ class TestEnvPinnedTools:
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_bar": ""}})
         )
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import effective_tool_config
 
-        _reset_global_settings()
+        reset_global_settings()
         cfg = effective_tool_config()
         assert cfg["tools"]["ha_bar"] == "pinned"
         get_data_dir.cache_clear()
@@ -2697,10 +2697,10 @@ class TestEnvPinnedTools:
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_other": "disabled"}})
         )
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import effective_tool_config
 
-        _reset_global_settings()
+        reset_global_settings()
         cfg = effective_tool_config()
         assert cfg["tools"]["ha_foo"] == "disabled"  # env-pinned
         assert cfg["tools"]["ha_other"] == "disabled"  # file-set, still editable in UI
@@ -2715,10 +2715,10 @@ class TestEnvPinnedTools:
         get_data_dir.cache_clear()
         monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         request = MagicMock()
         request.json = AsyncMock(return_value={"states": {"ha_foo": "enabled"}})
@@ -2728,7 +2728,7 @@ class TestEnvPinnedTools:
         assert body["success"] is False
         assert "ha_foo" in str(body)
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_tools_llm_api_only_change_needs_no_restart(
@@ -2748,10 +2748,10 @@ class TestEnvPinnedTools:
         (tmp_path / "tool_config.json").write_text(
             json.dumps({"tools": {"ha_other": "disabled"}})
         )
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
 
         get_resp = await handlers["get_tools"](MagicMock())
@@ -2773,7 +2773,7 @@ class TestEnvPinnedTools:
         saved = json.loads((tmp_path / "tool_config.json").read_text())
         assert saved["llm_api"] == {"ha_manage_pipeline": False}
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_tools_states_change_still_needs_restart(
@@ -2787,10 +2787,10 @@ class TestEnvPinnedTools:
         monkeypatch.delenv("DISABLED_TOOLS", raising=False)
         monkeypatch.delenv("PINNED_TOOLS", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         request = MagicMock()
         request.json = AsyncMock(
@@ -2801,7 +2801,7 @@ class TestEnvPinnedTools:
         assert body["success"] is True
         assert body["restart_required"] is True
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_get_tools_llm_api_map_and_stub_beta_default(
@@ -2823,9 +2823,9 @@ class TestEnvPinnedTools:
             json.dumps({"tools": {}, "llm_api": {"ha_get_state": False}})
         )
         from ha_mcp import settings_ui as sui
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         monkeypatch.setattr(
             sui._persistence,
             "load_tool_metadata_cache",
@@ -2864,7 +2864,7 @@ class TestEnvPinnedTools:
         # toggle (nothing consumes the exposure on this install method).
         assert body["llm_api_available"] is False
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_get_tools_llm_api_available_true_when_embedded(
@@ -2879,9 +2879,9 @@ class TestEnvPinnedTools:
 
         get_data_dir.cache_clear()
         from ha_mcp import settings_ui as sui
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         monkeypatch.setattr(
             sui,
             "load_tool_metadata_cache",
@@ -2902,7 +2902,7 @@ class TestEnvPinnedTools:
 
         assert body["llm_api_available"] is True
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_tools_rejects_non_dict_llm_api(self, monkeypatch, tmp_path):
@@ -2914,10 +2914,10 @@ class TestEnvPinnedTools:
         monkeypatch.delenv("DISABLED_TOOLS", raising=False)
         monkeypatch.delenv("PINNED_TOOLS", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         request = MagicMock()
         request.json = AsyncMock(return_value={"states": {}, "llm_api": ["nope"]})
@@ -2925,7 +2925,7 @@ class TestEnvPinnedTools:
         assert resp.status_code == 400
         assert "llm_api" in str(json.loads(resp.body))
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_get_tools_includes_env_pinned_map(self, monkeypatch):
@@ -2934,17 +2934,17 @@ class TestEnvPinnedTools:
         monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
         monkeypatch.delenv("PINNED_TOOLS", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_tools"](MagicMock())
         body = json.loads(resp.body)
         assert body["env_pinned"] == {"ha_foo": "disabled"}
         # Also confirm the overlay is reflected in states / tools.
         assert body["states"].get("ha_foo") == "disabled"
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_get_tools_includes_read_only_exempt_list(self, monkeypatch):
@@ -2976,12 +2976,12 @@ class TestGetHandlersAddonLiveOptions:
 
     @pytest.mark.asyncio
     async def test_features_addon_surface_live_options(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot-time value
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             # options.json edited since boot: tool search now on.
@@ -2999,17 +2999,17 @@ class TestGetHandlersAddonLiveOptions:
         row = body["flags"]["enable_tool_search"]
         assert row["value"] is True  # live options win over stale boot-env
         assert row["origin"] == "addon"
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_advanced_addon_surface_live_options(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("HA_TOOL_CONCURRENCY", "8")  # boot-time value
         monkeypatch.setenv("HA_VERIFY_SSL", "true")  # boot-time value
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             return {"ha_tool_concurrency": 4, "verify_ssl": False}, None
@@ -3030,13 +3030,13 @@ class TestGetHandlersAddonLiveOptions:
         # origin/editable semantics are unchanged by the live-value surfacing.
         assert cc_row["origin"] == "addon"
         assert cc_row["editable"] is True
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_advanced_addon_falls_back_to_boot_env_on_fetch_error(
         self, monkeypatch
     ):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import (
             _SupervisorOptionsError,
             build_settings_handlers,
@@ -3044,7 +3044,7 @@ class TestGetHandlersAddonLiveOptions:
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("HA_TOOL_CONCURRENCY", "8")  # boot-time value
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             return {}, _SupervisorOptionsError.transport("supervisor unreachable")
@@ -3061,7 +3061,7 @@ class TestGetHandlersAddonLiveOptions:
         body = json.loads(resp.body)
         cc_row = next(f for f in body["fields"] if f["field"] == "ha_tool_concurrency")
         assert cc_row["value"] == 8  # boot-env fallback, never blank
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_features_addon_falls_back_to_boot_env_on_fetch_error(
@@ -3070,7 +3070,7 @@ class TestGetHandlersAddonLiveOptions:
         """Feature-flags GET mirrors the advanced handler: a Supervisor
         options fetch failure falls back to the boot-env value rather than
         crashing or blanking the flag."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import (
             _SupervisorOptionsError,
             build_settings_handlers,
@@ -3078,7 +3078,7 @@ class TestGetHandlersAddonLiveOptions:
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot-time value
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             return {}, _SupervisorOptionsError.transport("supervisor unreachable")
@@ -3096,7 +3096,7 @@ class TestGetHandlersAddonLiveOptions:
         row = body["flags"]["enable_tool_search"]
         assert row["value"] is False  # boot-env fallback, not blanked
         assert row["origin"] == "addon"
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_advanced_non_addon_origin_not_overridden_by_live_options(
@@ -3106,7 +3106,7 @@ class TestGetHandlersAddonLiveOptions:
         structural via ADDON_SYNCED_ADVANCED_FIELDS. A non-addon-synced
         advanced field present in the Supervisor options payload must NOT be
         overridden (it isn't Supervisor-managed, so the live value is noise)."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
@@ -3115,7 +3115,7 @@ class TestGetHandlersAddonLiveOptions:
         # value must be ignored even though it appears in the payload.
         monkeypatch.delenv("FUZZY_THRESHOLD", raising=False)
         monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             return {"fuzzy_threshold": 99}, None
@@ -3132,7 +3132,7 @@ class TestGetHandlersAddonLiveOptions:
         row = next(f for f in body["fields"] if f["field"] == "fuzzy_threshold")
         assert row["origin"] == "default"  # not addon-synced
         assert row["value"] == 60  # pydantic default, NOT live-options 99
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_features_default_origin_surfaces_live_options(self, monkeypatch):
@@ -3142,14 +3142,14 @@ class TestGetHandlersAddonLiveOptions:
         The fresh saved value must still be surfaced — the staleness fix targets
         exactly this case, so the guard widened from origin=="addon" to "any
         flag in live_options whose origin isn't env"."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         # Master beta flag: env var unset in addon mode -> origin "default".
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         monkeypatch.setattr("ha_mcp.config_overrides._read_feature_flag_override_file", dict)  # fmt: skip
-        _reset_global_settings()
+        reset_global_settings()
 
         async def fake_fetch(_verify_ssl):
             return {"enable_beta_features": True}, None  # saved, not yet restarted
@@ -3166,7 +3166,7 @@ class TestGetHandlersAddonLiveOptions:
         row = body["flags"]["enable_beta_features"]
         assert row["origin"] == "default"  # env var not written at this boot
         assert row["value"] is True  # live (saved) value wins over stale default
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_features_env_origin_not_overridden_by_live_options(
@@ -3177,12 +3177,12 @@ class TestGetHandlersAddonLiveOptions:
         user must unset the env var to change it (the `origin != "env"` part of
         the widened guard)."""
         from ha_mcp import config as ha_config
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot/env value
-        _reset_global_settings()
+        reset_global_settings()
 
         # In add-on mode the real origin logic returns "addon" for non-master
         # flags, so pin this field's origin to "env" directly to exercise the
@@ -3211,18 +3211,18 @@ class TestGetHandlersAddonLiveOptions:
         row = body["flags"]["enable_tool_search"]
         assert row["origin"] == "env"
         assert row["value"] is False  # env-pinned; live value ignored
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_live_addon_options_skips_fetch_outside_addon(self, monkeypatch):
         """_live_addon_options short-circuits to {} (no Supervisor fetch)
         outside add-on mode / with no live server, so the GET handlers just
         use boot-env values."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)  # not in add-on
-        _reset_global_settings()
+        reset_global_settings()
 
         called: list[bool] = []
 
@@ -3239,7 +3239,7 @@ class TestGetHandlersAddonLiveOptions:
         resp = await handlers["get_feature_flags"](MagicMock())
         assert resp.status_code == 200
         assert called == [], "Supervisor options must not be fetched outside add-on"
-        _reset_global_settings()
+        reset_global_settings()
 
 
 class TestAdvancedSettingsEndpoints:
@@ -3249,7 +3249,7 @@ class TestAdvancedSettingsEndpoints:
     async def test_get_advanced_returns_all_registered_fields(self, monkeypatch):
         from ha_mcp.config import (
             ADVANCED_SETTINGS_FIELDS,
-            _reset_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
 
@@ -3257,7 +3257,7 @@ class TestAdvancedSettingsEndpoints:
         for _fname, ename, *_ in ADVANCED_SETTINGS_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         assert resp.status_code == 200
@@ -3273,11 +3273,11 @@ class TestAdvancedSettingsEndpoints:
         sidecar (nothing HTTP-mounted), False for HTTP/OAuth/OIDC/addon —
         including the OAuth/OIDC dedicated-secret mount where the prefix is
         hidden but the UI is still HTTP-served (GHSA-mx64-982r-65vg)."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
 
         # stdio sidecar: nothing HTTP-mounted.
@@ -3299,11 +3299,11 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_advanced_marks_connection_fields_display_only(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
@@ -3313,12 +3313,12 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_advanced_log_level_has_choices(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("LOG_LEVEL", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
@@ -3327,12 +3327,12 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_advanced_masks_token_when_set(self, monkeypatch, tmp_path):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("HOMEASSISTANT_TOKEN", "real-secret-jwt-value")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
@@ -3344,11 +3344,11 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_unknown_field(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"made_up_field": 42})
@@ -3359,11 +3359,11 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_display_only_field(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"homeassistant_url": "http://attacker"})
@@ -3372,12 +3372,12 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_env_pinned_field(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("HA_TIMEOUT", "60")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": 90})
@@ -3391,7 +3391,7 @@ class TestAdvancedSettingsEndpoints:
         """Out-of-bounds POST returns 400 AND must NOT write to the
         override file. A regression that returns 400 while still
         mutating the file would silently persist bad values."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3400,7 +3400,7 @@ class TestAdvancedSettingsEndpoints:
         get_data_dir.cache_clear()
         monkeypatch.delenv("HA_TIMEOUT", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": -5})
@@ -3412,12 +3412,12 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_invalid_choice(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("LOG_LEVEL", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"log_level": "BANANAS"})
@@ -3426,7 +3426,7 @@ class TestAdvancedSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_save_advanced_happy_path(self, monkeypatch, tmp_path):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3435,7 +3435,7 @@ class TestAdvancedSettingsEndpoints:
         monkeypatch.delenv("HA_TIMEOUT", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": 90})
@@ -3450,7 +3450,7 @@ class TestAdvancedSettingsEndpoints:
 
         assert get_global_settings().timeout == 90
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_sidecar_pin_port_sentinel_and_bounds(
@@ -3459,7 +3459,7 @@ class TestAdvancedSettingsEndpoints:
         """POST path: the 0 off-sentinel and a bounded port are accepted, a
         privileged port is rejected. Exercises the _ADVANCED_SETTINGS_SENTINELS
         bypass (coerced != sentinel) alongside the (1024, 65535) bounds."""
-        from ha_mcp.config import _reset_global_settings, get_global_settings
+        from ha_mcp.config import get_global_settings, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3468,7 +3468,7 @@ class TestAdvancedSettingsEndpoints:
         monkeypatch.delenv("HA_MCP_SIDECAR_PORT", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
 
         async def _save(value):
@@ -3481,28 +3481,28 @@ class TestAdvancedSettingsEndpoints:
         assert resp.status_code == 200
         assert get_global_settings().sidecar_pin_port == 0
 
-        _reset_global_settings()
+        reset_global_settings()
         # A bounded port: accepted and applied.
         resp = await _save(8099)
         assert resp.status_code == 200
         assert get_global_settings().sidecar_pin_port == 8099
 
-        _reset_global_settings()
+        reset_global_settings()
         # A privileged port (not the sentinel, below the floor): rejected.
         resp = await _save(80)
         assert resp.status_code == 400
 
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_rejects_null_byte_in_str(self, monkeypatch):
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.delenv("MCP_SERVER_NAME", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"mcp_server_name": "evil\x00name"})
@@ -3515,12 +3515,12 @@ class TestAdvancedSettingsEndpoints:
     ):
         """env-pinned advanced field: GET surfaces origin='env' + editable=False
         so the UI renders the locked banner pointing at the env var."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("HA_TIMEOUT", "60")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
@@ -3535,7 +3535,7 @@ class TestAdvancedSettingsEndpoints:
         """If feature_flags.json is corrupt, refuse to overwrite — avoid
         clobbering whatever toggles the user previously persisted past
         the corruption point."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3545,14 +3545,14 @@ class TestAdvancedSettingsEndpoints:
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         get_data_dir.cache_clear()
         (tmp_path / "feature_flags.json").write_text("{not valid json")
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": 90})
         resp = await handlers["save_advanced_settings"](req)
         assert resp.status_code == 409
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_addon_synced_routes_through_supervisor(
@@ -3565,13 +3565,13 @@ class TestAdvancedSettingsEndpoints:
         the addon-Configuration ↔ web-UI sync the panel promises would
         be silently file-only.
         """
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
         monkeypatch.setenv("HA_VERIFY_SSL", "true")
-        _reset_global_settings()
+        reset_global_settings()
         merge_mock = AsyncMock(return_value=(True, None))
         monkeypatch.setattr(
             "ha_mcp.settings_ui._supervisor._supervisor_merge_and_post_options",
@@ -3589,7 +3589,7 @@ class TestAdvancedSettingsEndpoints:
         assert body["applied"] == {"ha_tool_concurrency": 4}
         assert body["restart_required"] is True
         merge_mock.assert_awaited_once_with(True, {"ha_tool_concurrency": 4})
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_addon_synced_supervisor_4xx_surfaces_validation_failed(
@@ -3600,7 +3600,7 @@ class TestAdvancedSettingsEndpoints:
         actual Supervisor status code preserved, not a generic 502.
         Mirrors the feature-flag addon-route behaviour.
         """
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import (
             _SupervisorOptionsError,
             build_settings_handlers,
@@ -3608,7 +3608,7 @@ class TestAdvancedSettingsEndpoints:
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
-        _reset_global_settings()
+        reset_global_settings()
         merge_mock = AsyncMock(
             return_value=(
                 False,
@@ -3633,7 +3633,7 @@ class TestAdvancedSettingsEndpoints:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_origin_for_addon_synced_field_is_addon_in_addon_mode(
@@ -3644,13 +3644,13 @@ class TestAdvancedSettingsEndpoints:
         ``SUPERVISOR_TOKEN`` is set, regardless of env-var presence.
         Standalone mode falls through to env/file/default as usual.
         """
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
         monkeypatch.setenv("HA_TOOL_CONCURRENCY", "0")
         monkeypatch.setenv("HA_VERIFY_SSL", "true")
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
@@ -3667,14 +3667,14 @@ class TestAdvancedSettingsEndpoints:
         assert verify_row["editable"] is True
         # A non-addon-synced env-pinned field (e.g. timeout) stays env-locked.
         monkeypatch.setenv("HA_TIMEOUT", "60")
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         resp = await handlers["get_advanced_settings"](MagicMock())
         body = json.loads(resp.body)
         timeout_row = next(f for f in body["fields"] if f["field"] == "timeout")
         assert timeout_row["origin"] == "env"
         assert timeout_row["editable"] is False
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_preserves_prior_feature_flag_entries(
@@ -3683,7 +3683,7 @@ class TestAdvancedSettingsEndpoints:
         """Advanced + feature-flag overrides share one file. A new
         advanced save must merge into the existing file, not overwrite
         prior feature-flag toggles."""
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3696,7 +3696,7 @@ class TestAdvancedSettingsEndpoints:
         (tmp_path / "feature_flags.json").write_text(
             json.dumps({"enable_tool_search": True})
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": 90})
@@ -3706,7 +3706,7 @@ class TestAdvancedSettingsEndpoints:
         assert merged["enable_tool_search"] is True  # prior preserved
         assert merged["timeout"] == 90  # new merged in
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
 
 class TestBetaMasterGateInSave:
@@ -3717,14 +3717,14 @@ class TestBetaMasterGateInSave:
         self, monkeypatch, tmp_path
     ):
         """POST {enable_yaml_config_editing: true} while master is off → 409."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -3741,7 +3741,7 @@ class TestBetaMasterGateInSave:
     ):
         """POST {enable_beta_features: true, enable_yaml_config_editing: true}
         in one batch succeeds — effective master state is derived AFTER merge."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3751,7 +3751,7 @@ class TestBetaMasterGateInSave:
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -3766,7 +3766,7 @@ class TestBetaMasterGateInSave:
         # Must NOT be 409 — both arrive in one batch so effective master = True.
         assert resp.status_code == 200
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_allows_subflag_when_master_already_on(
@@ -3774,7 +3774,7 @@ class TestBetaMasterGateInSave:
     ):
         """If feature_flags.json already has master=True, a sub-flag save
         with no master in the payload succeeds (no 409)."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3787,14 +3787,14 @@ class TestBetaMasterGateInSave:
         (tmp_path / "feature_flags.json").write_text(
             json.dumps({"enable_beta_features": True})
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"flags": {"enable_filesystem_tools": True}})
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 200
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_rejects_subflag_when_payload_turns_master_off(
@@ -3804,7 +3804,7 @@ class TestBetaMasterGateInSave:
         in one batch → 409. Post-merge effective master is False, so the
         sub-flag write must be rejected even though master was True
         before the call."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -3818,7 +3818,7 @@ class TestBetaMasterGateInSave:
         (tmp_path / "feature_flags.json").write_text(
             json.dumps({"enable_beta_features": True})
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -3832,7 +3832,7 @@ class TestBetaMasterGateInSave:
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 409
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_master_off_preserves_subflag_values(
@@ -3850,7 +3850,7 @@ class TestBetaMasterGateInSave:
         from ha_mcp.config import (
             BETA_FEATURE_FIELDS,
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
@@ -3866,7 +3866,7 @@ class TestBetaMasterGateInSave:
         for sub in BETA_FEATURE_FIELDS:
             prior[sub] = True
         (tmp_path / "feature_flags.json").write_text(json.dumps(prior))
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         # User flips ONLY the master off — no sub-flag entries in payload.
@@ -3883,7 +3883,7 @@ class TestBetaMasterGateInSave:
                 f"sub-flag {sub} was clobbered on master-off — should have stayed True"
             )
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_master_on_restores_runtime_subflag_values(
@@ -3894,8 +3894,8 @@ class TestBetaMasterGateInSave:
         """
         from ha_mcp.config import (
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
             get_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
@@ -3917,7 +3917,7 @@ class TestBetaMasterGateInSave:
                 }
             )
         )
-        _reset_global_settings()
+        reset_global_settings()
         settings = get_global_settings()
         assert settings.enable_beta_features is False
         assert settings.enable_yaml_config_editing is False  # gated off
@@ -3928,7 +3928,7 @@ class TestBetaMasterGateInSave:
         req.json = AsyncMock(return_value={"flags": {"enable_beta_features": True}})
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 200, json.loads(resp.body)
-        _reset_global_settings()
+        reset_global_settings()
         settings = get_global_settings()
         # Sub-flags resume their prior True state because the file
         # still has them.
@@ -3936,7 +3936,7 @@ class TestBetaMasterGateInSave:
         assert settings.enable_yaml_config_editing is True
         assert settings.enable_filesystem_tools is True
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_payload_master_false_sub_true_rejected_by_gate(
@@ -3951,7 +3951,7 @@ class TestBetaMasterGateInSave:
         """
         from ha_mcp.config import (
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
@@ -3972,7 +3972,7 @@ class TestBetaMasterGateInSave:
                 }
             )
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         # Caller's payload tries the inconsistent state — master off
@@ -3994,7 +3994,7 @@ class TestBetaMasterGateInSave:
         on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
         assert on_disk["enable_yaml_config_editing"] is True
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_acquires_override_file_lock(
@@ -4007,7 +4007,7 @@ class TestBetaMasterGateInSave:
         persisted state, but the protection is invisible to other
         tests — they'd still pass without it.
         """
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4040,7 +4040,7 @@ class TestBetaMasterGateInSave:
         monkeypatch.setattr(
             ui_mod._persistence, "_get_override_file_lock", patched_get_lock
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"flags": {"enable_tool_search": True}})
@@ -4052,7 +4052,7 @@ class TestBetaMasterGateInSave:
             "concurrent-save serialisation"
         )
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_advanced_acquires_override_file_lock(
@@ -4063,7 +4063,7 @@ class TestBetaMasterGateInSave:
         can't race against each other on the shared
         ``feature_flags.json``.
         """
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4094,7 +4094,7 @@ class TestBetaMasterGateInSave:
         monkeypatch.setattr(
             ui_mod._persistence, "_get_override_file_lock", patched_get_lock
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"timeout": 90})
@@ -4106,7 +4106,7 @@ class TestBetaMasterGateInSave:
             "concurrent-save serialisation"
         )
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_master_on_restores_subflag_values_in_addon_mode(
@@ -4120,7 +4120,7 @@ class TestBetaMasterGateInSave:
         only works in addon mode if Supervisor keeps the merged options
         intact.
         """
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
@@ -4149,7 +4149,7 @@ class TestBetaMasterGateInSave:
         # returns 'addon' for it and the save handler picks the
         # addon-route branch.
         monkeypatch.setenv("ENABLE_BETA_FEATURES", "false")
-        _reset_global_settings()
+        reset_global_settings()
         server = MagicMock()
         server.settings.verify_ssl = True
         handlers = build_settings_handlers(server=server)
@@ -4167,7 +4167,7 @@ class TestBetaMasterGateInSave:
             f"addon-route POST must NOT clobber sub-flag values; "
             f"posted: {posted_args[1]}"
         )
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_features_master_off_applied_dict_contains_only_master(
@@ -4181,7 +4181,7 @@ class TestBetaMasterGateInSave:
         from ha_mcp.config import (
             BETA_FEATURE_FIELDS,
             FEATURE_FLAG_FIELDS,
-            _reset_global_settings,
+            reset_global_settings,
         )
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
@@ -4197,7 +4197,7 @@ class TestBetaMasterGateInSave:
                 {"enable_beta_features": True, "enable_yaml_config_editing": True}
             )
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
@@ -4212,7 +4212,7 @@ class TestBetaMasterGateInSave:
         for sub in BETA_FEATURE_FIELDS:
             assert sub not in applied
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
 
 def _http_request(
@@ -4252,7 +4252,7 @@ class TestStrictMandatoryBpsGateInSave:
         """POST {enable_mandatory_bps: false, enable_strict_mandatory_bps: true}
         in one batch → 409. Post-merge parent is False, so the strict write
         must be rejected."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4262,7 +4262,7 @@ class TestStrictMandatoryBpsGateInSave:
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -4278,13 +4278,13 @@ class TestStrictMandatoryBpsGateInSave:
         body = json.loads(resp.body)
         assert "enable_strict_mandatory_bps" in str(body)
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_rejects_strict_when_parent_already_off(self, monkeypatch, tmp_path):
         """Parent persisted off + POST {enable_strict_mandatory_bps: true} with
         no parent in the payload → 409 (effective parent is the file value)."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4297,7 +4297,7 @@ class TestStrictMandatoryBpsGateInSave:
         (tmp_path / "feature_flags.json").write_text(
             json.dumps({"enable_mandatory_bps": False})
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -4306,13 +4306,13 @@ class TestStrictMandatoryBpsGateInSave:
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 409
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_accepts_strict_when_parent_on_default(self, monkeypatch, tmp_path):
         """POST {enable_strict_mandatory_bps: true} with no parent in the
         payload succeeds — the parent defaults ON, so effective parent = True."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4322,7 +4322,7 @@ class TestStrictMandatoryBpsGateInSave:
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -4331,13 +4331,13 @@ class TestStrictMandatoryBpsGateInSave:
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 200
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_accepts_parent_and_strict_in_same_batch(self, monkeypatch, tmp_path):
         """POST {enable_mandatory_bps: true, enable_strict_mandatory_bps: true}
         in one batch succeeds — parent state is derived AFTER merge."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4347,7 +4347,7 @@ class TestStrictMandatoryBpsGateInSave:
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         req.json = AsyncMock(
@@ -4361,7 +4361,7 @@ class TestStrictMandatoryBpsGateInSave:
         resp = await handlers["save_feature_flags"](req)
         assert resp.status_code == 200
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_accepts_parent_off_alone_and_preserves_strict_value(
@@ -4373,7 +4373,7 @@ class TestStrictMandatoryBpsGateInSave:
         off parent; turning the parent off alone is accepted (the runtime gate
         renders strict inert without clobbering its saved value). Mirrors the
         beta gate's test_save_features_master_off_preserves_subflag_values."""
-        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
         from ha_mcp.utils.data_paths import get_data_dir
 
@@ -4392,7 +4392,7 @@ class TestStrictMandatoryBpsGateInSave:
                 }
             )
         )
-        _reset_global_settings()
+        reset_global_settings()
         handlers = build_settings_handlers(server=None)
         req = MagicMock()
         # User flips ONLY the parent off — strict absent from the payload.
@@ -4406,7 +4406,7 @@ class TestStrictMandatoryBpsGateInSave:
             "strict value was clobbered on parent-off — should have stayed True"
         )
         get_data_dir.cache_clear()
-        _reset_global_settings()
+        reset_global_settings()
 
 
 class TestIngressOnlyGuard:
@@ -4879,19 +4879,11 @@ class TestBpsSkillGuideDependency:
         flags = {"enable_strict_mandatory_bps": strict_on}
         flags.update(extra_flags or {})
         (tmp_path / "feature_flags.json").write_text(json.dumps(flags))
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
 
-        _reset_global_settings()
+        reset_global_settings()
         return build_settings_handlers(server=None)
-
-    @staticmethod
-    def _teardown():
-        from ha_mcp.config import _reset_global_settings
-        from ha_mcp.utils.data_paths import get_data_dir
-
-        get_data_dir.cache_clear()
-        _reset_global_settings()
 
     @pytest.mark.asyncio
     async def test_save_tools_rejects_skill_guide_disable_in_strict_mode(
@@ -4907,7 +4899,6 @@ class TestBpsSkillGuideDependency:
         body = json.loads(resp.body)
         assert body["success"] is False
         assert "ha_get_skill_guide" in str(body)
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_tools_allows_skill_guide_disable_without_strict(
@@ -4923,7 +4914,6 @@ class TestBpsSkillGuideDependency:
         assert body["success"] is True
         saved = json.loads((tmp_path / "tool_config.json").read_text())
         assert saved["tools"]["ha_get_skill_guide"] == "disabled"
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_tools_allows_echo_of_persisted_disabled(
@@ -4942,7 +4932,6 @@ class TestBpsSkillGuideDependency:
         )
         resp = await handlers["save_tools"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_rejects_strict_on_with_tool_disabled(
@@ -4960,7 +4949,6 @@ class TestBpsSkillGuideDependency:
         assert resp.status_code == 409
         body = json.loads(resp.body)
         assert "ha_get_skill_guide" in str(body)
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_allows_strict_on_when_tool_enabled(
@@ -4973,7 +4961,6 @@ class TestBpsSkillGuideDependency:
         )
         resp = await handlers["save_feature_flags"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_save_features_ignores_env_pinned_skill_guide_disable(
@@ -4986,28 +4973,25 @@ class TestBpsSkillGuideDependency:
         disable rejects."""
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
         monkeypatch.setenv("DISABLED_TOOLS", "ha_get_skill_guide")
-        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.config import reset_global_settings
 
-        _reset_global_settings()
+        reset_global_settings()
         request = MagicMock()
         request.json = AsyncMock(
             return_value={"flags": {"enable_strict_mandatory_bps": True}}
         )
         resp = await handlers["save_feature_flags"](request)
         assert json.loads(resp.body)["success"] is True
-        self._teardown()
 
     @pytest.mark.asyncio
     async def test_get_tools_reports_bps_locked_tools(self, monkeypatch, tmp_path):
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=True)
         resp = await handlers["get_tools"](MagicMock())
         assert json.loads(resp.body)["bps_locked_tools"] == ["ha_get_skill_guide"]
-        self._teardown()
 
         handlers = self._handlers(monkeypatch, tmp_path, strict_on=False)
         resp = await handlers["get_tools"](MagicMock())
         assert json.loads(resp.body)["bps_locked_tools"] == []
-        self._teardown()
 
     def test_apply_strips_skill_guide_disable_in_strict_mode(self):
         """apply_tool_visibility is the authoritative enforcement — env
@@ -5057,7 +5041,6 @@ class TestBpsSkillGuideDependency:
         resp = await handlers["save_feature_flags"](request)
         assert resp.status_code == 409
         assert "ha_get_skill_guide" in str(json.loads(resp.body))
-        self._teardown()
 
 
 class TestPolicyScopeNotice:

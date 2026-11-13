@@ -37,7 +37,6 @@ class ErrorCode(StrEnum):
     # Connection errors
     CONNECTION_FAILED = "CONNECTION_FAILED"
     CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
-    WEBSOCKET_DISCONNECTED = "WEBSOCKET_DISCONNECTED"
     WEBSOCKET_NOT_AUTHENTICATED = "WEBSOCKET_NOT_AUTHENTICATED"
 
     # Authentication errors
@@ -151,11 +150,6 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Home Assistant may be overloaded or slow to respond",
         "Check network latency to Home Assistant",
         "Try increasing the timeout value if available",
-    ],
-    ErrorCode.WEBSOCKET_DISCONNECTED: [
-        "WebSocket connection was lost",
-        "Check Home Assistant logs for errors",
-        "The operation may need to be retried",
     ],
     ErrorCode.WEBSOCKET_NOT_AUTHENTICATED: [
         "WebSocket connection is not authenticated",

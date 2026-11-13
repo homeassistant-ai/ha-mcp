@@ -344,7 +344,7 @@ def _get_backup_settings_override_path() -> Path:
 
     Sits next to ``tool_config.json`` in the same data dir. Web UI edits
     in standalone (non-addon) mode persist here; ``get_global_settings``
-    reads the file on the next call after ``_reset_global_settings``.
+    reads the file on the next call after ``reset_global_settings``.
     """
     return get_data_dir() / "backup_settings.json"
 

@@ -48,6 +48,7 @@ RENAMED_PARAMETERS: dict[str, dict[str, str]] = {
     "ha_config_get_automation": {"identifier": "entity_id"},
     "ha_config_set_automation": {"identifier": "entity_id"},
     "ha_config_remove_automation": {"identifier": "entity_id"},
+    "ha_get_automation_traces": {"automation_id": "entity_id"},
 }
 
 # How each client re-fetches the tool list, for every text that tells an agent

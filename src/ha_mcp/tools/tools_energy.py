@@ -5,7 +5,6 @@ previews, duplicate protection and optimistic locking. Semantic validation is
 post-save because energy/validate only examines persisted preferences.
 """
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
@@ -219,7 +218,7 @@ class EnergyTools:
           device-consumption entry. The tool performs a fresh read-modify-write
           internally.
         - mode='add_source': append a single entry to ``energy_sources``.
-          Same optimistic read-modify-write semantics.
+          Same internal read-modify-write.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
@@ -344,21 +343,21 @@ class EnergyTools:
     async def _set_prefs(
         self,
         config: dict[str, Any],
-        config_hash: str | dict[str, str],
-        *,
-        current_prefs: dict[str, Any] | None = None,
+        config_hash: str | dict[str, str] | None,
     ) -> dict[str, Any]:
         """Hash-check, submit to Core, then report authoritative saved state.
 
         Core validates every submitted entry. Existing siblings are never checked
-        against a narrower local schema. The convenience path supplies its fresh
-        snapshot; the per-key form locks exactly the submitted keys.
+        against a narrower local schema. A ``config_hash`` from an earlier read
+        is checked against the current prefs; the per-key form locks exactly the
+        submitted keys. The convenience modes read, edit and save within one
+        call and pass none.
         """
         try:
             command_payload("energy/save_prefs", config)
-            current_prefs = await self._resolve_current_prefs(current_prefs)
-
-            self._check_config_hash(config, config_hash, current_prefs)
+            if config_hash is not None:
+                current_prefs: dict[str, Any] = (await self._get_prefs())["config"]
+                self._check_config_hash(config, config_hash, current_prefs)
 
             # 3. Save
             save_payload = command_payload("energy/save_prefs", config)
@@ -430,23 +429,6 @@ class EnergyTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
-
-    async def _resolve_current_prefs(
-        self, current_prefs: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        """Return ``current_prefs`` if supplied, else fetch a fresh snapshot.
-
-        Extracted from ``_set_prefs`` step 2 (snapshot acquisition).
-        Convenience modes pass their already-fetched snapshot in to skip
-        the re-read; external mode='set' callers fall through to a fresh
-        read here. Maps "No prefs" (never configured) to the empty default
-        so the hash-check works on fresh installations too.
-        """
-        if current_prefs is not None:
-            return current_prefs
-
-        config: dict[str, Any] = (await self._get_prefs())["config"]
-        return config
 
     @staticmethod
     def _check_config_hash(
@@ -596,9 +578,7 @@ class EnergyTools:
         """Add a device-consumption entry using a fresh snapshot.
 
         Reads current prefs, checks for duplicate ``stat_consumption`` in the
-        target list, appends the new entry, and writes back with the freshly
-        captured ``config_hash``. On hash conflict (concurrent modification),
-        retries once before failing.
+        target list, appends the new entry and writes the list back.
         """
         if stat_consumption is None:
             raise_tool_error(
@@ -847,25 +827,6 @@ class EnergyTools:
             "new_count": len(new_list),
         }
 
-    @staticmethod
-    def _is_hash_conflict(exc: ToolError) -> bool:
-        """Return True if ``exc`` is a ``_set_prefs`` ``ToolError`` raised
-        for ``RESOURCE_LOCKED`` (hash mismatch / concurrent modification).
-
-        ``raise_tool_error`` serialises the structured error as JSON in the
-        exception message, so we parse rather than substring-match.
-        """
-        try:
-            parsed = json.loads(str(exc))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return False
-        if not isinstance(parsed, dict):
-            return False
-        err_dict = parsed.get("error")
-        if not isinstance(err_dict, dict):
-            return False
-        return bool(err_dict.get("code") == ErrorCode.RESOURCE_LOCKED.value)
-
     async def _mutate_atomic(
         self,
         *,
@@ -875,10 +836,11 @@ class EnergyTools:
         dry_run: bool,
         preview_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Retry one detected snapshot conflict; Core has no conditional-save API.
+        """Read the prefs, change one list and save it back in one call.
 
-        Dry runs validate the whole mutated proposal without saving. This is
-        optimistic locking, not a transaction against concurrent native writers.
+        Dry runs validate the whole mutated proposal without saving. Core has
+        no conditional save, and the read and the save are one round trip
+        apart, so no hash is checked here.
         """
         try:
             if dry_run:
@@ -889,66 +851,23 @@ class EnergyTools:
                     preview_payload=preview_payload,
                 )
 
-            max_attempts = 2
-            for attempt in range(max_attempts):
-                current = await self._get_prefs()
-                current_config = current["config"]
-                current_hash: str = current["config_hash"]
+            current_config = (await self._get_prefs())["config"]
+            new_list = mutator(list(current_config.get(target_key, [])))
+            set_result = await self._set_prefs({target_key: new_list}, None)
 
-                existing_list = list(current_config.get(target_key, []))
-                new_list = mutator(existing_list)
-
-                partial_config = {target_key: new_list}
-                try:
-                    set_result = await self._set_prefs(
-                        partial_config,
-                        current_hash,
-                        current_prefs=current_config,
-                    )
-                except ToolError as exc:
-                    # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
-                    # Retry once with a fresh read in case of a benign race.
-                    if self._is_hash_conflict(exc) and attempt + 1 < max_attempts:
-                        logger.warning(
-                            f"{mode} on {target_key}: hash conflict on attempt "
-                            f"{attempt + 1}, retrying"
-                        )
-                        continue
-                    raise
-
-                return {
-                    "success": True,
-                    "mode": mode,
-                    "config_hash": set_result["config_hash"],
-                    "target_key": target_key,
-                    "new_count": len(new_list),
-                    "message": set_result.get("message", f"{mode} succeeded."),
-                    **{
-                        k: v
-                        for k, v in set_result.items()
-                        if k not in self._CONVENIENCE_RESPONSE_OVERRIDES
-                    },
-                }
-
-            # Unreachable as long as every iteration either returns or raises:
-            # the only ``continue`` is gated on ``attempt + 1 < max_attempts``,
-            # which is False on the final iteration — so the bare ``raise``
-            # in the except block always fires there. Surface as an actionable
-            # structured error rather than a bare AssertionError that would
-            # otherwise fall through to ``except Exception`` and lose context.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"_mutate_atomic({mode}, {target_key}): retry loop exited "
-                    "without a return or raise",
-                    context={"mode": mode, "target_key": target_key},
-                    suggestions=[
-                        "This indicates a bug in the optimistic-concurrency "
-                        "loop logic — please file an issue with the mode and "
-                        "target_key from the context.",
-                    ],
-                )
-            )
+            return {
+                "success": True,
+                "mode": mode,
+                "config_hash": set_result["config_hash"],
+                "target_key": target_key,
+                "new_count": len(new_list),
+                "message": set_result.get("message", f"{mode} succeeded."),
+                **{
+                    k: v
+                    for k, v in set_result.items()
+                    if k not in self._CONVENIENCE_RESPONSE_OVERRIDES
+                },
+            }
 
         except ToolError:
             raise
@@ -963,7 +882,6 @@ class EnergyTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

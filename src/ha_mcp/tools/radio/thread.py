@@ -17,7 +17,6 @@ from typing import Any
 from .base import (
     ActionSpec,
     integration_not_found,
-    integration_required,
     ok,
     resolve_entry_id,
     ws_call,
@@ -71,17 +70,19 @@ SUPPORTED: dict[str, ActionSpec] = {
 }
 
 
-async def _resolve_extended_address(client: Any, args: dict[str, Any]) -> str | None:
+async def _resolve_extended_address(client: Any, args: dict[str, Any]) -> str:
     """Return the target OTBR extended address.
 
     Uses the caller-supplied value, else the first (typically only) border
-    router reported by ``otbr/info``. Returns None when no OTBR is present.
+    router reported by ``otbr/info``. Core answers ``otbr/info`` with an error
+    when no OTBR entry is loaded, which ``ws_call`` raises, so a successful
+    reply always names at least one border router.
     """
     addr = args.get("extended_address")
     if addr:
         return str(addr)
     info = await ws_call(client, "otbr/info")
-    return next(iter(info or {}), None)
+    return str(next(iter(info)))
 
 
 async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -137,10 +138,8 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
 async def _handle_otbr(
     client: Any, action: str, args: dict[str, Any]
 ) -> dict[str, Any]:
-    """Execute a border-router write, requiring a configured OTBR."""
+    """Execute a border-router write against a configured OTBR."""
     extended_address = await _resolve_extended_address(client, args)
-    if not extended_address:
-        integration_required("thread", "otbr")
     ctx = {"extended_address": extended_address}
 
     if action == "create_network":

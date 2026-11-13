@@ -318,7 +318,6 @@ class LegacySearchMixin(EntityModesMixin):
             if area_filter:
                 area_result = await self._smart_tools.get_entities_by_area(
                     area_filter,
-                    group_by_domain=True,
                     include_hidden=include_hidden_bool,
                     **(
                         {"include_membership": True}

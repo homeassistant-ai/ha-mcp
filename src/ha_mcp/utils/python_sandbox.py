@@ -41,11 +41,12 @@ class PythonSandboxExecutionError(PythonSandboxError):
 # can carry tokens / passwords / device addresses, and Python's default
 # repr happily embeds dict and list values into KeyError/TypeError text.
 # 240 chars is enough to identify the failure (exception type + a short
-# snippet) without pasting the input config back to the caller.
-_EXECUTION_ERROR_TEXT_LIMIT = 240
+# snippet) without pasting the input config back to the caller. Public so
+# tests can check the cap.
+EXECUTION_ERROR_TEXT_LIMIT = 240
 
 
-def _truncate_for_error(text: str, limit: int = _EXECUTION_ERROR_TEXT_LIMIT) -> str:
+def _truncate_for_error(text: str, limit: int = EXECUTION_ERROR_TEXT_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
@@ -233,8 +234,9 @@ BLOCKED_FUNCTIONS = {
 # transforms — type checks, length, numeric/string coercion, simple
 # collection helpers. Expanding this list is fine if another pure builtin
 # is genuinely needed; adding anything that touches the filesystem, network,
-# or interpreter state is not.
-_SAFE_BUILTINS: dict[str, Any] = {
+# or interpreter state is not. Public, like SAFE_METHODS, so tests can check
+# the security documentation against it.
+SAFE_BUILTINS: dict[str, Any] = {
     "isinstance": isinstance,
     "len": len,
     "range": range,
@@ -383,7 +385,7 @@ def safe_execute_expression(
         )
 
     safe_globals: dict[str, Any] = {
-        "__builtins__": dict(_SAFE_BUILTINS),
+        "__builtins__": dict(SAFE_BUILTINS),
         "__name__": "__main__",
         "__doc__": None,
     }
@@ -391,7 +393,7 @@ def safe_execute_expression(
 
     try:
         exec(expr, safe_globals, safe_locals)
-    except (MemoryError, RecursionError):
+    except MemoryError, RecursionError:
         # Resource exhaustion — let the host decide. Reframing
         # "ran out of memory" as "your transform was bad" would
         # mislead the agent into rewriting an expression that

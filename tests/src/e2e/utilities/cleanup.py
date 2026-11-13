@@ -57,7 +57,7 @@ class CleanupSteps:
     failed body.
     """
 
-    def __enter__(self) -> "CleanupSteps":
+    def __enter__(self) -> CleanupSteps:
         body_exception = sys.exception()
         self._body_failed = body_exception is not None and not isinstance(
             body_exception, pytest.skip.Exception

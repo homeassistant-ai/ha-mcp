@@ -71,7 +71,7 @@ def all_tools() -> Any:
     behind would hand the next test in the session a different tool surface
     than it asked for.
     """
-    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.config import reset_global_settings
 
     previous = os.environ.get("HAMCP_ENABLE_DEV_MODE")
     os.environ["HAMCP_ENABLE_DEV_MODE"] = "true"
@@ -82,7 +82,7 @@ def all_tools() -> Any:
             os.environ.pop("HAMCP_ENABLE_DEV_MODE", None)
         else:
             os.environ["HAMCP_ENABLE_DEV_MODE"] = previous
-        _reset_global_settings()
+        reset_global_settings()
 
 
 def _exclusive_bounds(node: Any, path: str) -> list[str]:

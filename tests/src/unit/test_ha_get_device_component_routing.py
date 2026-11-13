@@ -33,6 +33,7 @@ from ha_mcp.tools.tools_registry import (
     _resolve_device_id_for_entity,
     register_registry_tools,
 )
+from ha_mcp.utils.device_registry_semantics import EFFECTIVE_AREA_MARKER
 
 from ._component_routing_helpers import (
     make_ws,
@@ -72,6 +73,7 @@ def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
         "via_device_id": None,
         "disabled_by": None,
         "config_entries": ["cfg-1"],
+        "config_entry_id": "cfg-1",
         "connections": [],
         # A non-radio integration so the single-device enrichers (zha/zwave/matter)
         # do not fire — those dedicated paths are out of the device_get seam.
@@ -113,6 +115,8 @@ class RoutingClient:
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg_type = msg.get("type")
+        if msg_type == "config_entries/get":
+            return {"success": True, "result": [{"entry_id": "cfg-1", "domain": "hue"}]}
         if msg_type == "config/device_registry/list":
             self.device_list_calls += 1
             return {"success": True, "result": list(self._devices)}
@@ -133,6 +137,10 @@ class RoutingClient:
             if row is None:
                 return {"success": False, "error": "not found"}
             return {"success": True, "result": row}
+        if msg_type == "config/device_registry/list_linked_devices":
+            return {"success": True, "result": {"linked_devices": []}}
+        if msg_type == "config/device_registry/list_composite_splits":
+            return {"success": True, "result": {}}
         raise AssertionError(f"unexpected ws message {msg_type!r}")
 
 
@@ -190,8 +198,10 @@ async def test_single_lookup_served_by_component() -> None:
         resp = await get_device(device_id="dev-1")
 
     assert resp["success"] is True
-    assert resp["device"]["device_id"] == "dev-1"
-    assert resp["device"]["name"] == "Kitchen"
+    assert resp["device"]["id"] == "dev-1"
+    # Core's row passes through: the user's name next to the integration's.
+    assert resp["device"]["name_by_user"] == "Kitchen"
+    assert resp["device"]["name"] == "Device dev-1"
     # The device came from the component; the legacy device dump never ran.
     assert client.device_list_calls == 0
     assert len(_device_get_calls(ws)) == 1
@@ -201,7 +211,7 @@ async def test_single_lookup_served_by_component() -> None:
     # The device's entity list came from the join — the whole entity registry
     # was never dumped.
     assert resp["entity_count"] == 1
-    assert resp["entities"][0]["entity_id"] == "sensor.kitchen"
+    assert resp["device"]["entities"][0]["entity_id"] == "sensor.kitchen"
     assert client.entity_list_calls == 0
 
 
@@ -230,8 +240,12 @@ async def test_child_component_result_preserves_effective_area_and_ownership() -
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="child-1")
 
-    assert resp["device"]["area_id"] == "office"
-    assert resp["device"]["config_entries"] == ["cfg-child"]
+    assert resp["device"]["effective_area_id"] == "office"
+    assert resp["device"]["area_id"] is None
+    assert resp["device"]["config_entry_id"] == "cfg-child"
+    assert resp["device"]["parent_device_id"] == "parent-1"
+    assert "config_entries" not in resp["device"]
+    assert EFFECTIVE_AREA_MARKER not in resp["device"]
     assert client.device_list_calls == 0
 
 
@@ -253,7 +267,7 @@ async def test_entity_id_lookup_resolves_then_device_get() -> None:
         resp = await get_device(entity_id="light.lr")
 
     assert resp["success"] is True
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert resp["queried_by"] == "entity_id"
     # Device resolved via one targeted entity read; no registry was dumped.
     assert client.entity_get_calls == 1
@@ -265,7 +279,7 @@ async def test_entity_id_lookup_resolves_then_device_get() -> None:
 @pytest.mark.asyncio
 async def test_missing_device_via_component_raises_not_found() -> None:
     """A component-reported missing device falls back to the LEGACY device list for
-    the not-found error's suggestions (device_get authoritatively said None)."""
+    the not-found error's valid ids (device_get authoritatively said None)."""
     ws = make_ws(
         "ha_mcp_tools/device_get",
         info_result=_CAPS_DEVICES,
@@ -280,7 +294,7 @@ async def test_missing_device_via_component_raises_not_found() -> None:
     assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
         excinfo.value
     )
-    # The legacy device list served the not-found suggestion.
+    # The legacy device list served the not-found error's valid ids.
     assert client.device_list_calls == 1
 
 
@@ -304,7 +318,7 @@ async def test_entities_half_absent_falls_back_to_legacy() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # Both registries were read from the legacy path so the entity list survives.
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
@@ -357,7 +371,7 @@ async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device()
 
-    assert {row["device_id"] for row in resp["devices"]} == {
+    assert {row["id"] for row in resp["devices"]} == {
         "parent-1",
         "child-1",
     }
@@ -386,7 +400,7 @@ async def test_area_filter_matches_child_through_parent_effective_area() -> None
     with patch_ws(ws, component_devices):
         resp = await get_device(area_id="office")
 
-    assert {row["device_id"] for row in resp["devices"]} == {
+    assert {row["id"] for row in resp["devices"]} == {
         "parent-1",
         "child-1",
     }
@@ -408,7 +422,7 @@ async def test_capsless_component_uses_legacy_registries() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # Both registries came from the legacy WS path.
     assert client.device_list_calls == 1
     assert not _device_get_calls(ws)
@@ -516,7 +530,7 @@ async def test_unknown_command_falls_back_and_invalidates_caps() -> None:
     with patch_ws(ws, component_devices):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     # The component command was tried, failed unknown_command → legacy full list.
     assert client.device_list_calls == 1
     # Caps were invalidated (dropped from the cache) so the next call re-probes.
@@ -543,7 +557,7 @@ async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
         resp = await get_device(device_id="dev-1")
 
     # The legacy registries served the byte-identical device + entity list.
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
     assert resp["entity_count"] == 1
@@ -572,7 +586,7 @@ async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> No
     ):
         resp = await get_device(device_id="dev-1")
 
-    assert resp["device"]["device_id"] == "dev-1"
+    assert resp["device"]["id"] == "dev-1"
     assert client.device_list_calls == 1
     assert client.entity_list_calls == 1
     assert resp["entity_count"] == 1

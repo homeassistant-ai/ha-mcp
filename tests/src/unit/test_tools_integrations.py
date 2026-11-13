@@ -622,33 +622,6 @@ class TestRemoveHelpersIntegrations:
         assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
-    async def test_flow_path_lookup_failed_maps_to_websocket_disconnected(
-        self, tools, mock_client
-    ):
-        """FLOW: registry lookup raises a WebSocket exception →
-        WEBSOCKET_DISCONNECTED, not ENTITY_NOT_FOUND (R8 in KP13 review #1056).
-
-        The lookup helper appends to warnings and returns reason='lookup_failed';
-        the caller must surface that as a transient connectivity error so the
-        user retries instead of chasing a non-existent entity_id.
-        """
-        # Initial lookup raises a non-typed WS exception (anything that
-        # isn't HomeAssistantConnectionError/HomeAssistantAuthError, since
-        # those propagate by design). The lookup helper catches it and
-        # returns (None, "lookup_failed").
-        mock_client.send_websocket_message.side_effect = ConnectionError(
-            "websocket dropped mid-call"
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_remove_helpers_integrations(
-                target="sensor.energy_meter",
-                helper_type="utility_meter",
-                confirm=True,
-            )
-        err = json.loads(str(exc_info.value))
-        assert err["error"]["code"] == "WEBSOCKET_DISCONNECTED"
-        assert "sensor.energy_meter" in err["error"]["message"]
-
     async def test_flow_path_yaml_helper_no_config_entry(self, tools, mock_client):
         """FLOW: entity exists but config_entry_id is None (YAML) →
         RESOURCE_NOT_FOUND."""

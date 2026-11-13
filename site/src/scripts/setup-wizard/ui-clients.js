@@ -107,7 +107,7 @@ export function pushUiClientSteps(ctx, instructions) {
               <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                 <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
                 <li>Command: <code class="bg-slate-800 px-1 rounded">uvx</code></li>
-                <li>Arguments: <code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code></li>
+                <li>Arguments: <code class="bg-slate-800 px-1 rounded">--python 3.14 ha-mcp@latest</code></li>
               </ul>
             </li>
             <li>Add environment variables:
@@ -173,7 +173,7 @@ export function pushUiClientSteps(ctx, instructions) {
                 <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
                   <li>Server Name: <code class="bg-slate-800 px-1 rounded">home-assistant</code></li>
                   <li>Server Type: Press <strong>2</strong> for STDIO</li>
-                  <li>Command: <code class="bg-slate-800 px-1 rounded">${isDocker ? 'docker run --rm -i -v ha-mcp-data:/home/mcpuser/.ha-mcp -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} ghcr.io/homeassistant-ai/ha-mcp:latest' : 'uvx ha-mcp@latest'}</code></li>
+                  <li>Command: <code class="bg-slate-800 px-1 rounded">${isDocker ? 'docker run --rm -i -v ha-mcp-data:/home/mcpuser/.ha-mcp -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} ghcr.io/homeassistant-ai/ha-mcp:latest' : 'uvx --python 3.14 ha-mcp@latest'}</code></li>
                   ${isDocker ? '' : `<li>Environment Variables: <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}</code></li>`}
                   <li>Tools: <code class="bg-slate-800 px-1 rounded">*</code></li>
                 </ul>

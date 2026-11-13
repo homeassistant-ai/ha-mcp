@@ -170,6 +170,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Cache invalidates when ANY input that gets baked into the qcow2
@@ -411,6 +415,10 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         # Shared with every other HAOS lane in this file (``haos-e2e``,
@@ -643,6 +651,10 @@ jobs:
           submodules: true
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Compute image cache key
         id: key
@@ -919,6 +931,10 @@ jobs:
           # key deterministic.
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+
       - name: Compute image cache key
         id: key
         run: |
@@ -1108,6 +1124,10 @@ jobs:
           submodules: true
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Compute image cache key
         id: key
@@ -1349,6 +1369,10 @@ jobs:
           submodules: true
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: Compute image cache key
         id: key

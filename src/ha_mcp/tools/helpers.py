@@ -118,7 +118,7 @@ def extract_tool_error_message(te: ToolError | str) -> str:
         error_data = json.loads(str(te))
         msg = error_data.get("error", {}).get("message", str(te))
         return str(msg)
-    except (json.JSONDecodeError, TypeError, AttributeError):
+    except json.JSONDecodeError, TypeError, AttributeError:
         return str(te)
 
 
@@ -136,7 +136,7 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
     """
     try:
         payload = json.loads(str(exc))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -813,6 +813,33 @@ def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
     if code == "not_found":
         return ErrorCode.RESOURCE_NOT_FOUND
     return ErrorCode.SERVICE_CALL_FAILED
+
+
+def core_error_message(error: object) -> str:
+    """Core's error text without the ``Command failed:`` prefix the WebSocket
+    client puts on a refused command (a result's ``error`` or the raised
+    ``HomeAssistantCommandError``)."""
+    return str(error).removeprefix("Command failed: ")
+
+
+def raise_core_refusal(
+    what: str,
+    result: dict[str, Any],
+    context: dict[str, Any] | None = None,
+    suggestions: list[str] | None = None,
+    suffix: str = "",
+) -> NoReturn:
+    """Raise a failed WebSocket command as ``{what}: <error>{suffix}``, the
+    error without the client's prefix, coded by :func:`ws_failure_code` with
+    Core's own code kept as ``ha_error_code``."""
+    raise_tool_error(
+        create_error_response(
+            ws_failure_code(result),
+            f"{what}: {core_error_message(result.get('error', 'Unknown error'))}{suffix}",
+            suggestions=suggestions,
+            context={**(context or {}), "ha_error_code": result.get("error_code")},
+        )
+    )
 
 
 def clear_or_keep(value: str | None, param_name: str) -> str | None:

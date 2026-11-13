@@ -1,27 +1,40 @@
-"""Capability-aware search catalogs preserve the callable legacy signature."""
+"""Capability-aware search catalogs preserve the callable legacy signature.
+
+The transform asks the client's component for its capabilities: here the
+server's own client on a real ``hass``, with the ha_mcp_tools commands
+registered (``component_core_client``) or not (``core_client``), so every
+capability answer is the real component's.
+"""
 
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 
+from custom_components.ha_mcp_tools import websocket_api
+from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.experimental.transforms.code_mode import GetSchemas
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
-from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.websocket_client import websocket_manager
+from ha_mcp.tools.component_api import INFO_COMMAND, invalidate_caps
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
-from ha_mcp.transforms import CategorizedSearchTransform, ComponentSearchSchemaTransform
-
-pytestmark = pytest.mark.asyncio
-
-_CAPABILITIES = frozenset(
-    {"search", "device_registry_child_semantics", "search_unified"}
+from ha_mcp.transforms import (
+    CategorizedSearchTransform,
+    ComponentSearchSchemaTransform,
+    component_search,
 )
+
+_UNIFIED = ("search", "device_registry_child_semantics", "search_unified")
 _HIDDEN = {"search_types", "include_config", "config_time_budget"}
 _RETAINED = {
     "query",
@@ -39,29 +52,27 @@ _RETAINED = {
 }
 
 
-def _caps(capabilities: frozenset[str] = _CAPABILITIES) -> ComponentCaps:
-    return ComponentCaps(1, "999.0.0", capabilities, {})
+def _advertise_without(monkeypatch: pytest.MonkeyPatch, *missing: str) -> None:
+    """The component advertises its capabilities less ``missing``, as an older
+    component does."""
+    monkeypatch.setattr(
+        system, "CAPABILITIES", [c for c in system.CAPABILITIES if c not in missing]
+    )
 
 
 @pytest.fixture
-def probe(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    probe = AsyncMock(return_value=_caps())
-    monkeypatch.setattr("ha_mcp.transforms.component_search.get_component_caps", probe)
-    return probe
-
-
-@pytest.fixture
-def search_tool() -> Tool:
-    return Tool.from_function(SearchTools(MagicMock(), MagicMock()).ha_search)
+def search_tool(core_client: HomeAssistantClient) -> Tool:
+    return Tool.from_function(
+        SearchTools(core_client, SmartSearchTools(client=core_client)).ha_search
+    )
 
 
 async def test_registered_search_schema_hides_only_legacy_options(
-    probe: AsyncMock, search_tool: Tool
+    component_core_client: HomeAssistantClient, search_tool: Tool
 ) -> None:
     original = deepcopy(search_tool.parameters)
     description = search_tool.description
-    client = MagicMock()
-    transform = ComponentSearchSchemaTransform(client)
+    transform = ComponentSearchSchemaTransform(component_core_client)
 
     listed = (await transform.list_tools([search_tool]))[0]
     resolved = await transform.get_tool(
@@ -88,126 +99,165 @@ async def test_registered_search_schema_hides_only_legacy_options(
     assert (
         resolved.parameters["properties"]["query"]["description"] != "changed by caller"
     )
-    probe.assert_awaited_with(client)
 
 
-@pytest.mark.parametrize("missing", [None, *sorted(_CAPABILITIES)])
-async def test_absent_or_incomplete_component_keeps_original_catalog(
-    missing: str | None, probe: AsyncMock, search_tool: Tool
+async def _assert_original_catalog(client: HomeAssistantClient, tool: Tool) -> None:
+    transform = ComponentSearchSchemaTransform(client)
+    assert (await transform.list_tools([tool]))[0] is tool
+    assert await transform.get_tool("ha_search", AsyncMock(return_value=tool)) is tool
+
+
+async def test_install_without_the_component_keeps_original_catalog(
+    core_client: HomeAssistantClient, search_tool: Tool
 ) -> None:
-    probe.return_value = None if missing is None else _caps(_CAPABILITIES - {missing})
-    transform = ComponentSearchSchemaTransform(MagicMock())
-    assert (await transform.list_tools([search_tool]))[0] is search_tool
-    assert (
-        await transform.get_tool("ha_search", AsyncMock(return_value=search_tool))
-        is search_tool
-    )
+    await _assert_original_catalog(core_client, search_tool)
 
 
-async def test_failed_probe_keeps_original_catalog(
-    probe: AsyncMock, search_tool: Tool
+@pytest.mark.parametrize("missing", _UNIFIED)
+async def test_component_missing_a_unified_capability_keeps_original_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    component_core_client: HomeAssistantClient,
+    search_tool: Tool,
+    missing: str,
 ) -> None:
-    probe.side_effect = RuntimeError("capability discovery unavailable")
-    transform = ComponentSearchSchemaTransform(MagicMock())
-    assert (await transform.list_tools([search_tool]))[0] is search_tool
-    assert (
-        await transform.get_tool("ha_search", AsyncMock(return_value=search_tool))
-        is search_tool
-    )
+    _advertise_without(monkeypatch, missing)
+
+    await _assert_original_catalog(component_core_client, search_tool)
 
 
-async def test_unrelated_or_missing_tools_do_not_probe(probe: AsyncMock) -> None:
+async def test_unanswered_probe_keeps_original_catalog(
+    component_core_client: HomeAssistantClient, search_tool: Tool
+) -> None:
+    """With no WebSocket answer at all, the legacy contract stays advertised."""
+    with patch(
+        "ha_mcp.tools.component_api.get_websocket_client",
+        AsyncMock(side_effect=HomeAssistantConnectionError("connection refused")),
+    ):
+        await _assert_original_catalog(component_core_client, search_tool)
+
+
+async def test_unrelated_or_missing_tools_do_not_probe(
+    component_core_client: HomeAssistantClient, search_tool: Tool
+) -> None:
     async def other() -> str:
         return "ok"
 
     tool = Tool.from_function(other)
-    transform = ComponentSearchSchemaTransform(MagicMock())
-    assert (await transform.list_tools([tool]))[0] is tool
-    assert await transform.get_tool("other", AsyncMock(return_value=tool)) is tool
-    assert await transform.get_tool("missing", AsyncMock(return_value=None)) is None
-    probe.assert_not_awaited()
+    transform = ComponentSearchSchemaTransform(component_core_client)
+    with patch.object(
+        component_search,
+        "get_component_caps",
+        wraps=component_search.get_component_caps,
+    ) as probe:
+        assert (await transform.list_tools([tool]))[0] is tool
+        assert await transform.get_tool("other", AsyncMock(return_value=tool)) is tool
+        assert await transform.get_tool("missing", AsyncMock(return_value=None)) is None
+        probe.assert_not_awaited()
+
+        await transform.list_tools([tool, search_tool])
+        probe.assert_awaited_with(component_core_client)
 
 
 async def test_capabilities_are_rechecked_without_mutating_catalog(
-    probe: AsyncMock, search_tool: Tool
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    search_tool: Tool,
 ) -> None:
-    probe.side_effect = [None, _caps(), None]
-    transform = ComponentSearchSchemaTransform(MagicMock())
+    """The catalog follows the component as it is installed and downgraded,
+    and the registered tool never takes the trimmed schema."""
+    original = deepcopy(search_tool.parameters)
+    transform = ComponentSearchSchemaTransform(core_client)
     assert (await transform.list_tools([search_tool]))[0] is search_tool
+
+    websocket_api.async_register_commands(hass)
+    invalidate_caps(core_client)
     assert _HIDDEN.isdisjoint(
         (await transform.list_tools([search_tool]))[0].parameters["properties"]
     )
+
+    _advertise_without(monkeypatch, "search_unified")
+    invalidate_caps(core_client)
     assert (await transform.list_tools([search_tool]))[0] is search_tool
+    assert search_tool.parameters == original
 
 
-async def test_capability_cache_is_shared_per_ha_client(
-    monkeypatch: pytest.MonkeyPatch, search_tool: Tool
+async def _unified(client: HomeAssistantClient, tool: Tool) -> bool:
+    """Whether a fresh transform on ``client`` lists the trimmed schema."""
+    listed = (await ComponentSearchSchemaTransform(client).list_tools([tool]))[0]
+    return listed is not tool and _HIDDEN.isdisjoint(listed.parameters["properties"])
+
+
+@pytest.fixture
+async def second_client(
+    component_core_client: HomeAssistantClient,
+) -> AsyncIterator[HomeAssistantClient]:
+    """Another client of the same Home Assistant, as a second user's would be."""
+    client = HomeAssistantClient(
+        base_url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+async def test_capability_cache_is_kept_per_ha_client(
+    monkeypatch: pytest.MonkeyPatch,
+    component_core_client: HomeAssistantClient,
+    second_client: HomeAssistantClient,
+    search_tool: Tool,
 ) -> None:
-    modern = MagicMock(base_url="http://modern.invalid", token="test", verify_ssl=True)
-    old = MagicMock(base_url="http://old.invalid", token="test", verify_ssl=True)
-    modern_ws = MagicMock(
-        send_command=AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "schema_version": 1,
-                    "component_version": "2.0.0",
-                    "capabilities": sorted(_CAPABILITIES),
-                    "limits": {},
-                },
-            }
-        )
+    """Each client is probed once and keeps its own answer: a component that
+    changed between the two probes does not leak into the other's catalog."""
+    socket = await websocket_manager.get_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
     )
-    old_ws = MagicMock(
-        send_command=AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "schema_version": 1,
-                    "component_version": "999.0.0",
-                    "capabilities": ["search"],
-                    "limits": {},
-                },
-            }
-        )
-    )
-    connect = AsyncMock(side_effect=[modern_ws, old_ws])
-    monkeypatch.setattr("ha_mcp.tools.component_api.get_websocket_client", connect)
-    for client in (modern, old, modern, old):
-        transform = ComponentSearchSchemaTransform(client)
-        listed = (await transform.list_tools([search_tool]))[0]
-        if client is modern:
-            assert _HIDDEN.isdisjoint(listed.parameters["properties"])
-        else:
-            assert listed is search_tool
-    assert connect.await_count == 2
-    modern_ws.send_command.assert_awaited_once()
-    old_ws.send_command.assert_awaited_once()
+    with patch.object(socket, "send_command", wraps=socket.send_command) as sent:
+        assert await _unified(component_core_client, search_tool)
+        # The second client meets an older component.
+        _advertise_without(monkeypatch, "search_unified")
+        assert not await _unified(second_client, search_tool)
+        # Asked again, each keeps the answer it was given.
+        assert await _unified(component_core_client, search_tool)
+        assert not await _unified(second_client, search_tool)
+
+    assert [c.args[0] for c in sent.call_args_list].count(INFO_COMMAND) == 2
+
+
+async def _echo_ha_search(
+    query: str | None = None,
+    search_types: list[str] | None = None,
+    include_config: bool = False,
+    config_time_budget: float = 20,
+) -> dict[str, Any]:
+    """A tool with ha_search's legacy options that returns what it was given."""
+    return {
+        "query": query,
+        "search_types": search_types,
+        "include_config": include_config,
+        "config_time_budget": config_time_budget,
+    }
 
 
 @pytest.mark.usefixtures("tool_search_default")
 @pytest.mark.parametrize("categorized", [False, True])
 async def test_wire_catalog_and_calls_preserve_legacy_arguments(
-    categorized: bool, probe: AsyncMock
+    component_core_client: HomeAssistantClient, categorized: bool
 ) -> None:
-    async def ha_search(
-        query: str | None = None,
-        search_types: list[str] | None = None,
-        include_config: bool = False,
-        config_time_budget: float = 20,
-    ) -> dict[str, Any]:
-        return {
-            "query": query,
-            "search_types": search_types,
-            "include_config": include_config,
-            "config_time_budget": config_time_budget,
-        }
-
     mcp = FastMCP("component-search-schema")
     mcp.add_tool(
-        Tool.from_function(ha_search, annotations=ToolAnnotations(read_only_hint=True))
+        Tool.from_function(
+            _echo_ha_search,
+            name="ha_search",
+            annotations=ToolAnnotations(read_only_hint=True),
+        )
     )
-    mcp.add_transform(ComponentSearchSchemaTransform(MagicMock()))
+    mcp.add_transform(ComponentSearchSchemaTransform(component_core_client))
     if categorized:
         mcp.add_transform(CategorizedSearchTransform(always_visible=["ha_search"]))
     arguments = {
@@ -233,11 +283,11 @@ async def test_wire_catalog_and_calls_preserve_legacy_arguments(
 
 @pytest.mark.usefixtures("tool_search_default")
 async def test_search_and_get_schema_share_transformed_catalog(
-    probe: AsyncMock, search_tool: Tool
+    component_core_client: HomeAssistantClient, search_tool: Tool
 ) -> None:
     mcp = FastMCP("component-search-discovery")
     mcp.add_tool(search_tool)
-    mcp.add_transform(ComponentSearchSchemaTransform(MagicMock()))
+    mcp.add_transform(ComponentSearchSchemaTransform(component_core_client))
     search = CategorizedSearchTransform(always_visible=["get_schema"])
     mcp.add_transform(search)
     mcp.add_tool(GetSchemas()(search.get_tool_catalog))

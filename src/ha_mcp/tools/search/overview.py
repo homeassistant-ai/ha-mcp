@@ -23,9 +23,9 @@ from ..util_helpers import filter_active_repairs, project_repair_fields
 from .base import SearchToolsBase
 
 __all__ = [
-    "_OVERVIEW_AVAILABLE_FIELDS",
-    "_OVERVIEW_ENTITY_FIELDS",
-    "_OVERVIEW_INDEPENDENT_FIELDS",
+    "OVERVIEW_AVAILABLE_FIELDS",
+    "OVERVIEW_ENTITY_FIELDS",
+    "OVERVIEW_INDEPENDENT_FIELDS",
     "OverviewMixin",
     "_OverviewInputs",
     "logger",
@@ -73,8 +73,9 @@ class _OverviewSlices:
 
 
 # These disjoint sets partition every key documented by ha_get_overview's
-# fields parameter. Keep the manifest test in sync when the public schema changes.
-_OVERVIEW_INDEPENDENT_FIELDS = frozenset(
+# fields parameter. Public so the fields-docstring drift test can check that
+# partition; keep it in sync when the public schema changes.
+OVERVIEW_INDEPENDENT_FIELDS = frozenset(
     {
         "success",
         "system_info",
@@ -108,7 +109,7 @@ _OVERVIEW_REPAIR_FIELDS = frozenset(
 )
 
 
-_OVERVIEW_ENTITY_FIELDS = frozenset(
+OVERVIEW_ENTITY_FIELDS = frozenset(
     {
         "system_summary",
         "domain_stats",
@@ -123,7 +124,7 @@ _OVERVIEW_ENTITY_FIELDS = frozenset(
 )
 
 
-_OVERVIEW_AVAILABLE_FIELDS = _OVERVIEW_INDEPENDENT_FIELDS | _OVERVIEW_ENTITY_FIELDS
+OVERVIEW_AVAILABLE_FIELDS = OVERVIEW_INDEPENDENT_FIELDS | OVERVIEW_ENTITY_FIELDS
 
 
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
@@ -381,15 +382,7 @@ class OverviewMixin(SearchToolsBase):
                 )
             )
             if repairs_result.get("success"):
-                raw_issues = repairs_result.get("result", {}).get("issues", [])
-                # Core's ``repairs/list_issues`` filters ``if issue.active``; the
-                # component's ``overview`` repairs slice does NOT (it emits every
-                # registry issue, carrying ``active`` additively). After an HA
-                # restart the registry restores previously-reported issues as
-                # ``active=False`` placeholders the legacy path and Repairs UI
-                # never show, so drop them here for parity. Legacy rows omit
-                # ``active`` (None) → no-op for them.
-                all_issues = [i for i in raw_issues if i.get("active") is not False]
+                all_issues = repairs_result.get("result", {}).get("issues", [])
                 visible_issues = filter_active_repairs(
                     all_issues,
                     include_dismissed=include_dismissed_repairs_bool,

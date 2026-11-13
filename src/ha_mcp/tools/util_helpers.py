@@ -111,9 +111,11 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # registry invariant checks), or that have no escape-hatch-appropriate use case
 # (`config/core/update` rewrites the installation's location/timezone/currency/
 # lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
-# below, so they stay in lockstep. Registry deletion command names differ on
-# HA Core: device deletion is `remove_config_entry` and entity deletion is
-# `remove` (not `delete`) -- ha_remove_device / ha_remove_entity emit those.
+# below, so they stay in lockstep. Registry deletion on HA Core is `remove`
+# (not `delete`) for devices and entities; ha_remove_device / ha_remove_entity
+# emit it. Device `remove_config_entry` stays blocked: every Core that has it
+# removes devices through it, as the only command before 2026.9 and as a
+# deprecated alias of `remove` until Core drops it in 2027.9.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
@@ -135,6 +137,7 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
         "config/device_registry/delete",
         "config/device_registry/disable",
         "config/device_registry/update",
+        "config/device_registry/remove",
         "config/device_registry/remove_config_entry",
         "config/entity_registry/delete",
         "config/entity_registry/disable",
@@ -341,16 +344,10 @@ def filter_active_repairs(
     Repairs UI hides ignored ones by default). Mirror that UI default so
     overview / system-health responses don't surface repairs the user has
     already dismissed.
-
-    Entries with ``active=False`` are always dropped, regardless of
-    ``include_dismissed``: HA core's ``ws_list_issues`` never emits them
-    (on restart the registry reloads each stored non-persistent issue as an
-    inactive stub until it is re-raised or deleted), but the component's
-    raw registry dump does.
     """
     if include_dismissed:
-        return [r for r in issues if r.get("active") is not False]
-    return [r for r in issues if r.get("active") is not False and not r.get("ignored")]
+        return list(issues)
+    return [r for r in issues if not r.get("ignored")]
 
 
 def project_repair_fields(issue: dict[str, Any]) -> dict[str, Any]:

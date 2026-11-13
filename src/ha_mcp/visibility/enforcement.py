@@ -75,6 +75,7 @@ from .identifier_aliases import (
     IdentifierAliases,
     build_identifier_aliases,
     hidden_identifier_argument,
+    is_trace_query,
     result_reveals_hidden,
 )
 from .model import VisibilityConfig
@@ -84,6 +85,7 @@ from .resolver import (
     config_needs_device_registry,
     load_hidden_set,
 )
+from .result_payloads import result_payloads, serialize_result
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.tools import ToolResult
@@ -290,38 +292,6 @@ class _HiddenMatcher:
     def embeds(self, text: str) -> bool:
         """Whether ``text`` is, or embeds, a hidden entity_id (exact included)."""
         return self.regex is not None and self.regex.search(text) is not None
-
-
-def _serialize_result(result: ToolResult) -> str:
-    """Flatten a tool result's text content and structured content for scanning."""
-    parts: list[str] = []
-    for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            parts.append(text)
-    structured = getattr(result, "structured_content", None)
-    if structured is not None:
-        try:
-            parts.append(json.dumps(structured, default=str))
-        except (TypeError, ValueError):
-            parts.append(str(structured))
-    return "\n".join(parts)
-
-
-def _result_payloads(result: ToolResult) -> list[Any]:
-    """A tool result's structured content and text blocks, JSON-parsed if possible."""
-    payloads: list[Any] = []
-    structured = getattr(result, "structured_content", None)
-    if structured is not None:
-        payloads.append(structured)
-    for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            try:
-                payloads.append(json.loads(text))
-            except json.JSONDecodeError:
-                payloads.append(text)
-    return payloads
 
 
 # Sentinel returned for a hidden-naming string value or a mapping whose
@@ -671,9 +641,11 @@ class _VisibilityEnforcementBase(Middleware):
             return None
         return config
 
-    async def _hidden_matcher(self, config: VisibilityConfig) -> _HiddenMatcher:
+    async def _hidden_matcher(
+        self, config: VisibilityConfig, *, fresh: bool = False
+    ) -> _HiddenMatcher:
         """Resolve the hidden set, aliases and regex through the module-shared cache."""
-        return await _hidden_cache.get(config, self._get_client())
+        return await _hidden_cache.get(config, self._get_client(), fresh=fresh)
 
 
 class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
@@ -715,7 +687,9 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
             _raise_enforced(effective_name, reason)
 
         try:
-            matcher = await self._hidden_matcher(config)
+            matcher = await self._hidden_matcher(
+                config, fresh=is_trace_query(effective_name, effective_args)
+            )
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
 
@@ -808,8 +782,8 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                     scrub_tally.unwarnable_representations,
                 )
                 _raise_enforced(name, _outbound_reason(name))
-        if matcher.embeds(_serialize_result(result)) or result_reveals_hidden(
-            _result_payloads(result), matcher.identifier_aliases
+        if matcher.embeds(serialize_result(result)) or result_reveals_hidden(
+            result_payloads(result), matcher.identifier_aliases
         ):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
@@ -878,10 +852,12 @@ class _HiddenSetCache:
     cold cache and that instance's CLOSED client ("Cannot send a request, as the
     client has been closed" — CI round 3). Every ``get`` therefore takes the
     caller's own live client for any refresh, and all callers share one view of
-    the hidden set. On a refresh failure: fall back to the last-known-good set
-    for the SAME config key (a set computed under a different denylist is a
+    the hidden set. On a TTL refresh failure: fall back to the last-known-good
+    set for the SAME config key (a set computed under a different denylist is a
     different policy); with none, raise ``VisibilityDataUnavailable`` so call
-    gates fail closed. The lock prevents a refresh stampede.
+    gates fail closed. A forced refresh (trace queries) never uses
+    last-known-good: that snapshot may predate a newly registered trace key, so
+    it raises instead. The lock prevents a refresh stampede.
     """
 
     def __init__(self) -> None:
@@ -890,15 +866,29 @@ class _HiddenSetCache:
         self._key: str | None = None
         self._expiry = 0.0
 
-    async def get(self, config: VisibilityConfig, client: Any) -> _HiddenMatcher:
+    async def get(
+        self, config: VisibilityConfig, client: Any, *, fresh: bool = False
+    ) -> _HiddenMatcher:
         key = _config_cache_key(config)
         now = time.monotonic()
         async with self._lock:
-            if self._matcher is not None and self._key == key and now < self._expiry:
+            if (
+                not fresh
+                and self._matcher is not None
+                and self._key == key
+                and now < self._expiry
+            ):
                 return self._matcher
             try:
                 matcher = await _refresh_hidden_set(config, client)
             except Exception:
+                if fresh:
+                    logger.warning(
+                        "visibility enforce: forced hidden-set refresh failed; "
+                        "failing closed",
+                        exc_info=True,
+                    )
+                    raise VisibilityDataUnavailable("hidden set unavailable") from None
                 if self._matcher is not None and self._key == key:
                     logger.warning(
                         "visibility enforce: hidden-set refresh failed; using "
@@ -991,7 +981,7 @@ def scrub_records(
     for record in records:
         try:
             blob = json.dumps(record, default=str)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             blob = str(record)
         if not regex.search(blob):
             kept.append(record)
