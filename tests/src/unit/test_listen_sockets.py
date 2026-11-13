@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 import pytest_socket
 
-from ._core_client import free_port
 from ._embedded_server_helpers import _load as _load
 from ._embedded_server_helpers import _require_ipv6_loopback as _require_ipv6_loopback
+from .test_sidecar_pin_port import _a_free_port
 
 # These tests run their own listener on the loopback interface; Core's test
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
@@ -38,7 +38,7 @@ def test_wildcard_host_accepts_ipv4_and_ipv6_clients() -> None:
     _require_ipv6_loopback()
     # Core's test plugin allows connections to 127.0.0.1 only.
     pytest_socket.socket_allow_hosts(["127.0.0.1", "::1"])
-    port = free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -79,7 +79,7 @@ def test_machine_without_ipv6_still_serves_ipv4(
             super().bind(address)
 
     monkeypatch.setattr(listen_sockets, "_ListenSocket", _NoIPv6Socket)
-    port = free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -95,7 +95,7 @@ def test_startup_line_logged_when_every_socket_serves(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _require_ipv6_loopback()
-    port = free_port()
+    port = _a_free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None and len(sockets) == 2
     caplog.set_level(logging.INFO, logger="uvicorn.error")
@@ -112,7 +112,7 @@ def test_startup_line_logged_when_every_socket_serves(
 
 
 def test_specific_host_is_left_to_uvicorn() -> None:
-    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", free_port()) is None
+    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", _a_free_port()) is None
 
 
 def test_app_hands_dual_stack_sockets_to_the_server(
@@ -129,7 +129,7 @@ def test_app_hands_dual_stack_sockets_to_the_server(
             for sock in kwargs["sockets"] or []:
                 sock.close()
 
-    assert start._run_mcp_server(_Mcp(), "0.0.0.0", free_port(), "/p", {}) == 0
+    assert start._run_mcp_server(_Mcp(), "0.0.0.0", _a_free_port(), "/p", {}) == 0
     assert seen["host"] == "0.0.0.0"
     # IPv6 is only ever bound behind the local-network guard (#2915).
     assert [m.cls.__name__ for m in seen["middleware"]] == ["IPv6LanGuard"]
@@ -151,7 +151,7 @@ def test_app_with_a_specific_host_keeps_uvicorns_own_bind(
         def run(self, **kwargs: Any) -> None:
             seen.update(kwargs)
 
-    assert start._run_mcp_server(_Mcp(), "127.0.0.1", free_port(), "/p", {}) == 0
+    assert start._run_mcp_server(_Mcp(), "127.0.0.1", _a_free_port(), "/p", {}) == 0
     assert seen["sockets"] is None
     assert "middleware" not in seen
     assert "proxy_headers" not in seen["uvicorn_config"]
@@ -169,7 +169,7 @@ def test_a_failed_family_releases_the_one_already_bound(
             super().bind(address)
 
     monkeypatch.setattr(listen_sockets, "_ListenSocket", _IPv6Refused)
-    port = free_port()
+    port = _a_free_port()
     with pytest.raises(OSError):
         listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     # The IPv4 socket bound before IPv6 failed must be closed again: a plain

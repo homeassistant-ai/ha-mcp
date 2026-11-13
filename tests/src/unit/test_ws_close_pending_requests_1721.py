@@ -176,7 +176,7 @@ async def test_a_normal_close_cut_short_is_logged_at_info_not_warning(
         closing = asyncio.create_task(client.websocket.close(), eager_start=True)
         abort_transport(client)
         async with asyncio.timeout(5):
-            await closing
+            _ = await closing
         await until(lambda: not client.is_connected)
 
     close_records = [

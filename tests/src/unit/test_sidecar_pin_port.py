@@ -14,7 +14,7 @@ import pytest
 from ha_mcp import stdio_settings_sidecar as sidecar
 from ha_mcp.config import Settings
 
-from ._core_client import free_port
+from ._core_client import free_port as _a_free_port
 
 # These tests run their own listener on the loopback interface; Core's test
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
@@ -27,7 +27,7 @@ class TestBindListener:
             assert 0 < sock.getsockname()[1] <= 65535
 
     def test_binds_preferred_port_when_available(self) -> None:
-        preferred = free_port()
+        preferred = _a_free_port()
         with contextlib.closing(sidecar._bind_listener(preferred, "Pinned")) as sock:
             assert sock.getsockname()[1] == preferred
 
