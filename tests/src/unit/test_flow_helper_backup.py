@@ -43,6 +43,7 @@ from pytest_homeassistant.common import (
     mock_platform,
 )
 
+from ha_mcp import backup_entity_ids
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -447,10 +448,13 @@ async def test_entities_renamed_before_a_later_one_fails_are_reported(
     client: HomeAssistantClient,
     settings: SimpleNamespace,
     entity_registry: er.EntityRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A meter whose entry held a second entity is recreated with only its
     own sensor; the outcome still names the first entity's restore when the
     second is never found."""
+    # The second entity never appears, so the restore waits out the whole window.
+    monkeypatch.setattr(backup_entity_ids, "RECREATED_ENTITY_WAIT_S", 0.3)
     entry = await _meter(hass)
     entity_registry.async_get_or_create(
         "sensor", _METER, f"{entry.entry_id}_peak", config_entry=entry

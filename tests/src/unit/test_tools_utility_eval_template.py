@@ -18,6 +18,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client import rest_client
 from ha_mcp.client.rest_client import (
     RENDER_NO_VERDICT_WITHOUT_REPORT_ERRORS,
     HomeAssistantClient,
@@ -239,9 +240,13 @@ class TestTemplateResults:
         assert "line_unavailable" not in error
 
     async def test_no_verdict_uses_the_component_error(
-        self, component_core_client: HomeAssistantClient
+        self,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """With report_errors off Core sends nothing; the component says why."""
+        # Core never sends a verdict, so the client waits out the whole grace.
+        monkeypatch.setattr(rest_client, "RENDER_VERDICT_GRACE_S", 0.2)
         error = await _eval_error(
             component_core_client, template="{% if %}", report_errors=False, timeout=1
         )
@@ -251,8 +256,9 @@ class TestTemplateResults:
         assert error["line"] == 1
 
     async def test_no_verdict_without_the_component_explains_itself(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(rest_client, "RENDER_VERDICT_GRACE_S", 0.2)
         error = await _eval_error(
             core_client, template="{% if %}", report_errors=False, timeout=1
         )

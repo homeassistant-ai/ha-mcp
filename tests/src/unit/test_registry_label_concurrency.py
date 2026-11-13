@@ -394,7 +394,7 @@ async def test_template_restore_verifies_before_concurrent_name_update(
         row["name"] = message["name"]
         return {"success": True, "result": {"entity_entry": dict(row)}}
 
-    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_entity_ids.created_entity", created)
     monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     monkeypatch.setattr("ha_mcp.backup_manager._ws_send", restore_send)
     client = SimpleNamespace(send_websocket_message=entity_send)
@@ -459,7 +459,7 @@ async def test_template_restore_rereads_after_lock_wait(
         return dict(row)
 
     monkeypatch.setattr("ha_mcp.backup_manager.registry_update_lock", observed_lock)
-    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_entity_ids.created_entity", created)
     monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     monkeypatch.setattr("ha_mcp.backup_manager._ws_send", send)
     async with registry_update_lock("entity", source):
@@ -500,7 +500,7 @@ async def test_template_restore_releases_both_ids_on_failure(
     async def send(message: dict[str, Any]) -> dict[str, Any]:
         return {"success": True, "result": {"entity_entry": dict(message)}}
 
-    monkeypatch.setattr("ha_mcp.backup_manager._created_entity", created)
+    monkeypatch.setattr("ha_mcp.backup_entity_ids.created_entity", created)
     monkeypatch.setattr("ha_mcp.backup_manager._check_entity_collision", collision)
     client = SimpleNamespace(send_websocket_message=send)
     # A transient error is reported as a restore outcome; cancellation passes.

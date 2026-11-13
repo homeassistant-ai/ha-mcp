@@ -29,6 +29,9 @@ from .transport_errors import is_ssl_error, redirect_message
 
 logger = logging.getLogger(__name__)
 
+# How long past a render's own timeout the client waits for Core's verdict.
+RENDER_VERDICT_GRACE_S = 2.0
+
 # Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
 # restarting or briefly overloaded behind it. Retried for SAFE METHODS ONLY.
 #
@@ -2049,7 +2052,9 @@ class HomeAssistantClient:
 
         try:
             sub_id, queue = await ws_client.subscribe_command(
-                "render_template", wait_timeout=template_timeout + 2, **params
+                "render_template",
+                wait_timeout=template_timeout + RENDER_VERDICT_GRACE_S,
+                **params,
             )
         except HomeAssistantCommandError as e:
             # A rejection of the command itself: the render exceeded its
@@ -2064,7 +2069,7 @@ class HomeAssistantClient:
             }
         except TimeoutError:
             # Template-level, not transport-level: the wait budget here is the
-            # caller's own ``timeout`` (default 3s) plus two seconds, and a
+            # caller's own ``timeout`` (default 3s) plus ``RENDER_VERDICT_GRACE_S``, and a
             # template that is merely slow to render leaves the socket healthy.
             # Deliberately NOT treated as a dead transport, unlike the 30s
             # round-trip ``HomeAssistantCommandTimeout`` in ``send_command``.
@@ -2094,7 +2099,10 @@ class HomeAssistantClient:
 
         try:
             return await _read_render_verdict(
-                queue, template, template_timeout + 2, report_errors
+                queue,
+                template,
+                template_timeout + RENDER_VERDICT_GRACE_S,
+                report_errors,
             )
         finally:
             await ws_client.release_subscription(sub_id)
