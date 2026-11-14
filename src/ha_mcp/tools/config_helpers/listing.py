@@ -200,14 +200,25 @@ def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
     ``<type>/list`` adds more than the stored items) must NOT
     be trusted as "none exist". A response with no ``covered_types`` at all (an
     older component) is treated conservatively as covering nothing, so the
-    caller falls back rather than trusting a possibly-partial list. A response
-    without a ``helpers`` list is malformed, which counts as no component.
+    caller falls back rather than trusting a possibly-partial list. A malformed
+    response counts as no component.
     """
     covered = result.get("covered_types")
     return (
         isinstance(covered, list)
         and helper_type in covered
-        and isinstance(result.get("helpers"), list)
+        and well_formed_helpers(result)
+    )
+
+
+def well_formed_helpers(result: dict[str, Any]) -> bool:
+    """A helpers_list reply whose records the shapers can read: a list of
+    records, each collection record with its ``storage_id``."""
+    records = result.get("helpers")
+    return isinstance(records, list) and all(
+        isinstance(rec, dict)
+        and (rec.get("kind") != "collection" or "storage_id" in rec)
+        for rec in records
     )
 
 
