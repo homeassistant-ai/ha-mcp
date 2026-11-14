@@ -1,7 +1,7 @@
 """Contract test for the component-``system_snapshot`` seam.
 
 The component's ``_do_system_snapshot`` and the server's
-``_fetch_zwave_network`` / ``read_matter_network`` / ``_fetch_dead_entities``
+``_fetch_zwave_network`` / ``_fetch_dead_entities``
 were written against the same design contract but never against each other's
 code. This suite drives the REAL ``_do_system_snapshot`` (fake hass, real
 registry/state joins) through the REAL ``ha_get_system_health``
@@ -174,11 +174,11 @@ def _clear_caps_cache() -> Any:
 async def test_component_and_legacy_paths_agree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """zwave_network / matter_network / dead_entities are byte-identical
+    """zwave_network / dead_entities are byte-identical
     whether served by the real component snapshot or the legacy per-section
     fetches over the same underlying data."""
     monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: _view())
-    include = "zwave_network,matter_network,dead_entities"
+    include = "zwave_network,dead_entities"
 
     # --- component path: the real _do_system_snapshot backs one WS frame ---
     hass = _hass()
@@ -199,7 +199,7 @@ async def test_component_and_legacy_paths_agree(
             include=include
         )
 
-    for key in ("zwave_network", "matter_network", "dead_entities"):
+    for key in ("zwave_network", "dead_entities"):
         assert component_resp[key] == legacy_resp[key], key
 
     # The component path never touched the legacy fetches system_snapshot
@@ -210,13 +210,11 @@ async def test_component_and_legacy_paths_agree(
     assert component_health_ws.config_entries_get_calls == 0
     assert component_health_ws.zwave_status_calls == 1
 
-    # The legacy path paid for every fetch the snapshot would have collapsed —
-    # including the TOCTOU-prone double config_entries/get (zwave + matter
-    # each resolve it independently).
+    # The legacy path paid for every fetch the snapshot would have collapsed.
     assert legacy_client.get_states_calls == 1
     assert legacy_client.entity_registry_list_calls == 1
     assert legacy_client.config_entries_get_calls == 1
-    assert legacy_health_ws.config_entries_get_calls == 2
+    assert legacy_health_ws.config_entries_get_calls == 1
     assert legacy_health_ws.zwave_status_calls == 1
 
     # Sanity: the fixture actually exercises all three dead_entities tiers.
@@ -231,4 +229,3 @@ async def test_component_and_legacy_paths_agree(
     assert orphan_ids == {"sensor.orphan"}
     assert stale_ids == {"light.stale"}
     assert component_resp["zwave_network"]["nodes"] == []
-    assert component_resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"

@@ -58,32 +58,32 @@ async def _section(client: HomeAssistantClient, name: str) -> dict[str, Any]:
     return section
 
 
-@pytest.fixture
-def zwave_js_server() -> Iterator[MagicMock]:
-    with zwave_js_server_connection(node_state([])) as client:
-        yield client
-
-
 async def test_zwave_network_reports_the_client_and_moves_the_nodes_out(
-    hass: HomeAssistant, core_client: HomeAssistantClient, zwave_js_server: MagicMock
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    await set_up_zwave_js(hass)
-    # What Core reads for the status: the connection's own attributes, the
-    # server's version message and its answer to ``controller.get_state``.
-    zwave_js_server.version = VersionInfo(
-        driver_version="15.0.0",
-        server_version="3.0.0",
-        home_id=HOME_ID,
-        min_schema_version=0,
-        max_schema_version=44,
-    )
-    zwave_js_server.ws_server_url = "ws://test.org"
-    zwave_js_server.server_logging_enabled = False
-    zwave_js_server.async_send_command.return_value = {
-        "state": {"homeId": HOME_ID, "ownNodeId": 1, "inclusionState": 0, "status": 0}
-    }
+    with zwave_js_server_connection(node_state([])) as server:
+        await set_up_zwave_js(hass)
+        # What Core reads for the status: the connection's own attributes, the
+        # server's version message and its answer to ``controller.get_state``.
+        server.version = VersionInfo(
+            driver_version="15.0.0",
+            server_version="3.0.0",
+            home_id=HOME_ID,
+            min_schema_version=0,
+            max_schema_version=44,
+        )
+        server.ws_server_url = "ws://test.org"
+        server.server_logging_enabled = False
+        server.async_send_command.return_value = {
+            "state": {
+                "homeId": HOME_ID,
+                "ownNodeId": 1,
+                "inclusionState": 0,
+                "status": 0,
+            }
+        }
 
-    zwave = await _section(core_client, "zwave_network")
+        zwave = await _section(core_client, "zwave_network")
 
     assert "error" not in zwave
     assert zwave["client"]["state"] == "connected"

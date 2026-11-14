@@ -96,8 +96,8 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
 ) -> None:
     await _set_up_frontend(hass, tmp_path)
     mock_component(hass, "hassio")
-    # Embedded mode: the server reaches the Supervisor through Core, as it does
-    # everywhere outside the app.
+    # ``load_supervisor_api`` sets ``SUPERVISOR_TOKEN``, which alone makes the
+    # server call the Supervisor directly; embedded mode keeps it on Core.
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
     load_supervisor_api(
         hass,

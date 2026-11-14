@@ -286,7 +286,7 @@ class TestFetchZwaveNetwork:
 
 class TestFetchThreadNetwork:
     """``_fetch_thread_network`` never raises a section failure. What Core
-    answers is tested on real Core in ``test_system_health_networks.py``."""
+    answers is tested on real Core in ``test_radio_thread.py``."""
 
     @pytest.mark.asyncio
     async def test_ws_exception_captured_as_error(self):

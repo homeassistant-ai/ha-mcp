@@ -1,14 +1,12 @@
 """Routing tests for ``ha_get_system_health`` over the ``ha_mcp_tools`` component gate.
 
-``ha_get_system_health`` fetched ``config_entries/get`` up to THREE separate
-times per call (once each inside ``_fetch_zwave_network``,
-``read_matter_network``, and ``_fetch_dead_entities``) plus a whole-registry
+``ha_get_system_health`` fetched ``config_entries/get`` twice per call (once
+each inside ``_fetch_zwave_network`` and ``_fetch_dead_entities``) plus a whole-registry
 ``config/entity_registry/list`` dump for ``dead_entities`` — a TOCTOU across
 sections, since each fetch could see a different instant of the registries.
 When the component advertises ``system_snapshot``, ONE
 ``ha_mcp_tools/system_snapshot`` read replaces all of that: its
-``config_entries`` slice feeds ``_fetch_zwave_network`` +
-``read_matter_network`` (the ``zwave_js/network_status`` call itself is
+``config_entries`` slice feeds ``_fetch_zwave_network`` (the ``zwave_js/network_status`` call itself is
 unchanged — system_snapshot doesn't reach into the radio integration), and its
 ``entities``/``states``/``config_entries`` slices feed ``_fetch_dead_entities``.
 Repairs always come from Core's ``repairs/list_issues``.
@@ -165,8 +163,6 @@ def _health_ws(
                 "success": True,
                 "result": zwave_status or {"controller": {"nodes": []}},
             }
-        if command == "matter/network_topology":
-            raise HomeAssistantCommandError("Command failed: Unknown command.")
         raise AssertionError(f"unexpected health command {command!r}")
 
     ws.send_command = AsyncMock(side_effect=_send)
@@ -199,12 +195,12 @@ def _snapshot_calls(ws: Any) -> list[Any]:
     ]
 
 
-_INCLUDE_ALL = "zwave_network,matter_network,dead_entities"
+_INCLUDE_ALL = "zwave_network,dead_entities"
 
 
 @pytest.mark.asyncio
 async def test_snapshot_fetched_once_for_multi_section_call() -> None:
-    """One snapshot read serves zwave + matter + dead_entities; every legacy
+    """One snapshot read serves zwave + dead_entities; every legacy
     fetch it replaces never runs."""
     snapshot_result = {
         "config_entries": [
@@ -242,11 +238,6 @@ async def test_snapshot_fetched_once_for_multi_section_call() -> None:
     assert health_ws.zwave_status_calls == 1
 
     assert resp["zwave_network"]["controller"]["name"] == "Z-Stick"
-    matter = resp["matter_network"]
-    assert (matter["config_entry"]["entry_id"], matter["config_entry"]["title"]) == (
-        "cfg-matter",
-        "Matter Hub",
-    )
     orphan_ids = {
         i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
     }
@@ -307,14 +298,11 @@ async def test_capability_miss_falls_back_to_legacy_per_section() -> None:
         resp = await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
 
     assert not _snapshot_calls(ws)
-    # Both zwave_network and matter_network independently resolve their own
-    # config_entries/get in the legacy path (the TOCTOU the snapshot fixes).
-    assert health_ws.config_entries_get_calls == 2
+    assert health_ws.config_entries_get_calls == 1
     assert client.get_states_calls == 1
     assert client.entity_registry_list_calls == 1
     assert client.config_entries_get_calls == 1
 
-    assert resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"
     orphan_ids = {
         i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
     }
@@ -393,7 +381,7 @@ async def test_malformed_snapshot_slice_falls_back_to_legacy() -> None:
 async def test_section_error_still_degrades_to_error_subdict() -> None:
     """Even with a successful snapshot, a real failure in a call the snapshot
     does NOT replace (zwave_js/network_status) still degrades to a per-section
-    error sub-dict instead of raising — and sibling sections are unaffected."""
+    error sub-dict instead of raising."""
     snapshot_result = {
         "config_entries": [
             _entry("cfg-zwave", "zwave_js"),
@@ -412,14 +400,10 @@ async def test_section_error_still_degrades_to_error_subdict() -> None:
     client = RoutingClient()
 
     with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(
-            include="matter_network,zwave_network"
-        )
+        resp = await SystemTools(client).ha_get_system_health(include="zwave_network")
 
     assert "error" in resp["zwave_network"]
     assert "boom" in resp["zwave_network"]["error"]
-    # The sibling matter section, served from the same snapshot, is unaffected.
-    assert resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"
 
 
 @pytest.mark.asyncio

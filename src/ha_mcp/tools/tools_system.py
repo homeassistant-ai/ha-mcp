@@ -68,8 +68,8 @@ class _SystemSnapshotSlices:
     (mirrors ``ha_get_overview``'s ``_OverviewSlices`` in ``search/overview.py``).
 
     ``config_entries`` / ``registry`` are wrapped in the ``{success, result}``
-    envelope ``_fetch_zwave_network`` / ``read_matter_network`` /
-    ``_fetch_dead_entities`` (via ``_ws_result_list``) already unwrap;
+    envelope ``_fetch_zwave_network`` / ``_fetch_dead_entities`` (via
+    ``_ws_result_list``) already unwrap;
     ``states`` stays the bare list matching ``get_states()``, which
     ``_fetch_dead_entities`` reads directly.
     """
@@ -624,15 +624,15 @@ class SystemTools:
             # every consuming section below, when the component supports it and
             # at least one consuming section was actually requested — never
             # fetched (and never counted against the component) for a call that
-            # only wants repairs/zha_network/thread_network/integration_startup/
-            # supervisor/config_check. ``None`` (capability miss, command error/timeout, or
+            # only wants repairs/zha_network/thread_network/matter_network/
+            # integration_startup/supervisor/config_check. ``None`` (capability miss, command error/timeout, or
             # a malformed slice) means every consuming section below falls back
             # to its own legacy fetch — all-or-nothing per call, never a partial
             # hybrid. Only the slices a requested section actually needs are
             # asked for, so e.g. a zwave-only call doesn't pay for a full
             # states/entities dump.
             snapshot: _SystemSnapshotSlices | None = None
-            if want_zwave or want_matter or want_dead_entities:
+            if want_zwave or want_dead_entities:
                 snapshot = await self._fetch_system_snapshot(
                     include_entities=want_dead_entities,
                     include_states=want_dead_entities,
@@ -804,12 +804,7 @@ class SystemTools:
             sections.append(
                 (
                     "matter_network",
-                    read_matter_network(
-                        ws_client,
-                        prefetched_entries=(
-                            snapshot.config_entries if snapshot else None
-                        ),
-                    ),
+                    read_matter_network(ws_client),
                 )
             )
         if want_startup:
@@ -984,12 +979,11 @@ class SystemTools:
         """One ``ha_mcp_tools/system_snapshot`` read; ``None`` ⇒ every consuming
         section runs its own legacy fetch.
 
-        Threads into ``_fetch_zwave_network`` + ``read_matter_network``
-        (config_entries — the zwave_js/matter status calls themselves are
-        unchanged), and ``_fetch_dead_entities`` (entities + states +
-        config_entries), collapsing what was up to 3x ``config_entries/get``
-        round-trips (a TOCTOU across sections) into one consistent in-process
-        read. Repairs are not read from it: Core's ``repairs/list_issues`` also
+        Threads into ``_fetch_zwave_network`` (config_entries — the zwave_js
+        status call itself is unchanged), and ``_fetch_dead_entities``
+        (entities + states + config_entries), collapsing what was up to 2x
+        ``config_entries/get`` round-trips (a TOCTOU across sections) into one
+        consistent in-process read. Repairs are not read from it: Core's ``repairs/list_issues`` also
         drops the issues of a disabled config entry, and the slice does not.
 
         All-or-nothing per call, mirroring ``_fetch_exposure_via_component`` /
@@ -1003,7 +997,7 @@ class SystemTools:
         ``HomeAssistantConnectionError`` - a pooled-WS drop, or a failed
         (re)connect - is caught here and mapped to ``None``: the consuming
         sections' legacy fetches run on a DEDICATED health WS client
-        (zwave/matter) plus REST ``get_states()`` and the
+        (zwave) plus REST ``get_states()`` and the
         ``send_websocket_message`` bridge (dead_entities), so a component-side
         fault degrades per-section rather than failing the WHOLE
         ``ha_get_system_health``. A genuinely dead transport is a different

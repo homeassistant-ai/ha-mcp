@@ -290,25 +290,19 @@ async def read_supervisor(client: Any) -> dict[str, Any]:
     return section
 
 
-async def read_matter_network(
-    ws_client: Any, prefetched_entries: dict[str, Any] | None = None
-) -> dict[str, Any]:
+async def read_matter_network(ws_client: Any) -> dict[str, Any]:
     """What the Matter panel reads: Core's Matter config entry and its
     ``matter/network_topology``, each as Core serves it.
 
     The entry is the first enabled one that is not ignored, as on the panel.
-    ``prefetched_entries`` (the component's ``config_entries`` slice in the
-    ``{success, result}`` envelope) skips the ``config_entries/get`` call.
-    Only ``nodes`` and ``connections`` are replaced, each capped at
-    ``MATTER_TOPOLOGY_LIMIT``, with ``node_count`` and ``connection_count``
+    It is read with ``config_entries/get``, not from the component's snapshot,
+    whose rows carry the identity fields only. Only ``nodes`` and
+    ``connections`` are replaced, each capped at ``MATTER_TOPOLOGY_LIMIT``,
+    with ``node_count`` and ``connection_count``
     giving the full sizes.
     """
     try:
-        entries = (
-            prefetched_entries
-            if prefetched_entries is not None
-            else await ws_client.send_command("config_entries/get")
-        )
+        entries = await ws_client.send_command("config_entries/get", domain="matter")
     except Exception as exc:  # noqa: BLE001
         reraise_if_fatal(exc)
         logger.warning("Failed to fetch Matter network data: %s", exc)
