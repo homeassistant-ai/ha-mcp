@@ -358,7 +358,8 @@ async def test_component_and_legacy_responses_match(
     active visibility filter."""
     request.getfixturevalue(visibility)
     # Probed before the component is registered: this client stays legacy.
-    legacy, _ = await _overview(client)
+    legacy, legacy_reads = await _overview(client)
+    assert _total(legacy_reads) > 0
     component_ws_api.async_register_commands(hass)
 
     component, spies = await _overview(second_client)

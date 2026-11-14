@@ -494,7 +494,9 @@ async def test_component_and_legacy_response_shape_parity(
     envelope on both serving paths: key set, pagination axis, partial semantics
     and the body-skip warning."""
     # Probed before the component is registered: this client stays legacy.
-    legacy = await _search(client, query="kitchen", domain_filter="light")
+    with routes(client, await pooled(client)) as spies:
+        legacy = await _search(client, query="kitchen", domain_filter="light")
+    assert not frames(spies.component, SEARCH)
     component_ws_api.async_register_commands(hass)
     socket = await pooled(second_client)
 
