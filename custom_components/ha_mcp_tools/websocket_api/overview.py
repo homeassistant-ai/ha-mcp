@@ -502,16 +502,19 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
     ``ignored`` is derived from ``dismissed_version`` so the server's
     ``filter_active_repairs`` (which keys off ``ignored``) works unchanged.
 
-    Inactive entries are skipped to match HA core's ``ws_list_issues``: on
-    restart the registry reloads each stored non-persistent issue as an
-    inactive stub (``active=False``), and it stays inactive until the
-    integration re-raises or deletes it.
+    Inactive entries and repairs whose config entry is disabled are skipped to
+    match HA core's ``ws_list_issues``. On restart the registry reloads each
+    stored non-persistent issue as an inactive stub (``active=False``), and it
+    stays inactive until the integration re-raises or deletes it.
     """
     registry = _safe(ir.async_get, hass)
     issues = getattr(registry, "issues", None) if registry is not None else None
     out: list[dict[str, Any]] = []
     for issue in _mapping_values(issues):
         if getattr(issue, "active", True) is False:
+            continue
+        is_hidden = getattr(registry, "async_is_hidden", None)
+        if is_hidden is not None and is_hidden(issue):
             continue
         dismissed = getattr(issue, "dismissed_version", None)
         out.append(
