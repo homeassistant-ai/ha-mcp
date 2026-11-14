@@ -35,8 +35,9 @@ from ._tool_errors import error_of
 
 class Counter:
     """``light.turn_on`` and ``counter.bump``: each writes ``light.a`` / ``sensor.count``
-    and returns no response. ``counter.fail`` and ``counter.crash`` write
-    ``sensor.count``, then raise a ``HomeAssistantError`` / a ``ValueError``."""
+    and returns no response. ``counter.fail``, ``counter.crash`` and
+    ``counter.invalid`` write ``sensor.count``, then raise a ``HomeAssistantError``
+    / a ``ValueError`` / a ``vol.Invalid``."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -46,6 +47,7 @@ class Counter:
             ("counter", "bump"),
             ("counter", "fail"),
             ("counter", "crash"),
+            ("counter", "invalid"),
         ):
             hass.services.async_register(
                 domain,
@@ -66,6 +68,8 @@ class Counter:
             raise HomeAssistantError("upstream failed")
         if call.service == "crash":
             raise ValueError("library bug")
+        if call.service == "invalid":
+            raise vol.Invalid("upstream rejected the value")
         return None
 
 
@@ -113,7 +117,7 @@ async def test_without_the_component_a_rejected_response_is_not_called_again(
     assert counter.calls == 1
 
 
-@pytest.mark.parametrize("service", ["fail", "crash"])
+@pytest.mark.parametrize("service", ["fail", "crash", "invalid"])
 async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,

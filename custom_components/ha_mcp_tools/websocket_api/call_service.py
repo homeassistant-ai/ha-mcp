@@ -6,7 +6,6 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-import voluptuous as vol
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
@@ -410,9 +409,10 @@ async def _dispatch(
     msg: dict[str, Any],
 ) -> tuple[Any, dict[str, Any] | None]:
     """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
-    Core rejected the response, or when a call asking for one raised anything but
-    a schema error (``error["failed"]``): the service may have run, so the server
-    must not send it again. Any other raise propagates (D9)."""
+    Core rejected the response, or when the handler of a call asking for one
+    raised (``error["failed"]``): the service ran, so the server must not send it
+    again. A raise before the handler ran, and any raise of another call,
+    propagates (D9)."""
     try:
         response = await hass.services.async_call(
             domain,
@@ -422,32 +422,33 @@ async def _dispatch(
             return_response=return_response,
             context=msg.get("ha_mcp_context"),
         )
-    except Exception as err:  # a response call reports any raise
+    except Exception as err:  # a response call reports a handler's raise
         key = (
             getattr(err, "translation_domain", None),
             getattr(err, "translation_key", None),
         )
-        rejected = (
-            isinstance(err, HomeAssistantError)
-            and key == _RESPONSE_REJECTED
-            and _raised_by_async_call(err)
-        )
-        # Core checks the service schema before the handler runs.
-        if isinstance(err, vol.Invalid) or not (rejected or return_response):
-            raise
+        origin = _origin(err)
         error: dict[str, Any] = {"translation_key": key[1], "message": str(err)}
-        if not rejected:
-            error["failed"] = True
+        if origin == "call" and key == _RESPONSE_REJECTED:
+            return None, error
+        if origin != "handler" or not return_response:
+            raise
+        error["failed"] = True
         return None, error
     return response, None
 
 
-def _raised_by_async_call(err: BaseException) -> bool:
-    """Whether ``err`` came from the awaited ``async_call`` itself, where Core
-    checks the response after the service returned, and not from a service the
-    handler called (whose rejected response aborts the handler)."""
-    tb = err.__traceback__
-    return tb is not None and tb.tb_next is not None and tb.tb_next.tb_next is None
+def _origin(err: BaseException) -> str:
+    """Where in the awaited ``async_call`` ``err`` was raised: ``"call"`` in its
+    own frame (its checks, the response one after the handler returned),
+    ``"handler"`` under ``_execute_service`` (the handler ran; a rejected response
+    of a service it called lands here too) or ``"before"`` (the schema check)."""
+    call = err.__traceback__.tb_next if err.__traceback__ else None
+    if call is None or call.tb_next is None:
+        return "call"
+    if call.tb_next.tb_frame.f_code.co_name == "_execute_service":
+        return "handler"
+    return "before"
 
 
 def _build_call_service_result(
