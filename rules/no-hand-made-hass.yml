@@ -33,7 +33,6 @@ ignores:
   - "tests/src/unit/test_card_review_round6.py"
   - "tests/src/unit/test_component_ws_logbook.py"
   - "tests/src/unit/test_config_flow.py"
-  - "tests/src/unit/test_custom_component_file_writes.py"
   - "tests/src/unit/test_custom_component_filesystem.py"
   - "tests/src/unit/test_embedded_server.py"
   - "tests/src/unit/test_embedded_setup.py"
