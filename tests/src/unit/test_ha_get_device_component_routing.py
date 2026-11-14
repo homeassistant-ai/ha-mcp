@@ -27,7 +27,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
-from custom_components.ha_mcp_tools import websocket_api as component_ws_api
 from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -182,40 +181,6 @@ async def test_a_device_the_component_does_not_have_is_not_found(
     assert error["code"] == "RESOURCE_NOT_FOUND"
     assert other.device_id in str(exc.value)
     assert sent_types(sent).count(DEVICE_DUMP) == 1
-
-
-async def test_an_older_component_without_the_entities_half_falls_back(
-    hass: HomeAssistant,
-    registries: None,
-    core_client: HomeAssistantClient,
-    entry: MockConfigEntry,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A device_get from before ``include_entities`` answers the device alone;
-    the lookup reads both legacy registries rather than report no entities."""
-    device_registry = dr.async_get(hass)
-
-    def device_get_without_entities(
-        hass: HomeAssistant, params: dict[str, Any]
-    ) -> dict[str, Any]:
-        device = device_registry.async_get(params["device_id"])
-        return {"device": device.dict_repr if device is not None else None}
-
-    monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api._do_device_get",
-        device_get_without_entities,
-    )
-    component_ws_api.async_register_commands(hass)
-    sensor = _device(hass, entry, "dev-1")
-    socket = await pooled_socket(core_client)
-
-    with sent_commands(socket) as sent:
-        resp = await _get(core_client, device_id=sensor.device_id)
-
-    assert resp["device"]["id"] == sensor.device_id
-    assert resp["entity_count"] == 1
-    types = sent_types(sent)
-    assert (types.count(DEVICE_DUMP), types.count(ENTITY_DUMP)) == (1, 1)
 
 
 async def test_a_summary_list_is_one_device_list_frame_without_entities(

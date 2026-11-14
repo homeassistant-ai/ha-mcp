@@ -3,7 +3,7 @@
 Before a storage helper is created, the tool reads ``{type}/list`` to find a
 helper with the same name. If that read loses its connection, the create goes
 ahead (Home Assistant suffixes a duplicate name itself) and the skipped check
-is logged. A token Core refuses is no outage: the tool reports it at once
+is logged and reported as skipped. A token Core refuses is no outage: the tool reports it at once
 instead of logging in again for the create. Core and its WebSocket API are
 real; only the socket drops or the token is revoked.
 """
@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_helpers.registry import _NAME_CHECK_SKIPPED
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 from ._command_faults import dropped_on, pooled_socket
@@ -44,6 +45,7 @@ async def test_a_dropped_name_check_still_creates_the_helper(
 
     assert result["success"] is True
     assert result["action"] == "create"
+    assert _NAME_CHECK_SKIPPED in result["warnings"]
     assert any(
         "input_boolean/list failed; skipped the name check" in r.getMessage()
         for r in caplog.records

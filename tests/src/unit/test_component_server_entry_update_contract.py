@@ -9,11 +9,13 @@ entries; the frames go over Core's WebSocket API.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from custom_components.ha_mcp_tools.const import DEFAULT_PIP_SPEC, DOMAIN
@@ -37,6 +39,21 @@ async def _applied(hass: HomeAssistant) -> None:
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
+# Long enough that only the test's clock releases the deferred write.
+_HELD_S = 60
+
+
+@pytest.fixture
+def held_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(system, "SERVER_ENTRY_UPDATE_FLUSH_DELAY_S", _HELD_S)
+
+
+async def _release(hass: HomeAssistant) -> None:
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=_HELD_S + 1))
+    await _applied(hass)
+
+
+@pytest.mark.usefixtures("held_write")
 async def test_the_change_lands_after_the_answer_and_keeps_every_other_option(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
@@ -49,7 +66,7 @@ async def test_the_change_lands_after_the_answer_and_keeps_every_other_option(
 
     result = await _update(component_ws, pip_spec="ha-mcp==2.0.0")
     before = dict(entry.options)
-    await _applied(hass)
+    await _release(hass)
 
     assert result["scheduled"] is True
     assert result["entry_id"] == entry.entry_id
@@ -65,6 +82,7 @@ async def test_the_change_lands_after_the_answer_and_keeps_every_other_option(
     }
 
 
+@pytest.mark.usefixtures("held_write")
 async def test_a_change_made_while_the_write_waits_survives_it(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
@@ -76,7 +94,7 @@ async def test_a_change_made_while_the_write_waits_survives_it(
     hass.config_entries.async_update_entry(
         entry, options={**entry.options, "server_url": "http://changed:8123"}
     )
-    await _applied(hass)
+    await _release(hass)
 
     assert dict(entry.options) == {
         "pip_spec": "ha-mcp==2.0.0",
@@ -86,7 +104,7 @@ async def test_a_change_made_while_the_write_waits_survives_it(
 
 @pytest.fixture
 def no_flush_delay(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The deferred write runs at once; its deferral is the test above's."""
+    """The deferred write runs at once; its deferral is the tests above's."""
     monkeypatch.setattr(system, "SERVER_ENTRY_UPDATE_FLUSH_DELAY_S", 0)
 
 

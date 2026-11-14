@@ -20,7 +20,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import response_helpers
 from ha_mcp.tools.response_helpers import add_timezone_metadata
 
@@ -78,7 +78,9 @@ class TestEnvelope:
         """The wrapper stays; the zone is UTC and the note says nothing was
         converted."""
         monkeypatch.setattr(
-            client, "get_config", AsyncMock(side_effect=OSError("connection refused"))
+            client,
+            "get_config",
+            AsyncMock(side_effect=HomeAssistantConnectionError("connection refused")),
         )
 
         result = await add_timezone_metadata(

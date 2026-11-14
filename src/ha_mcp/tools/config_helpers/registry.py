@@ -344,6 +344,10 @@ async def validate_registry_ids(
         )
 
 
+class _NameCheckSkipped(Exception):
+    """A name check's read got no answer from Home Assistant."""
+
+
 async def _find_collision_in_flow_helpers(
     client: Any, helper_type: str, name: str
 ) -> str | None:
@@ -366,7 +370,7 @@ async def _find_collision_in_flow_helpers(
         logger.warning(
             "config_entries/get failed; skipped the %s name check: %r", helper_type, exc
         )
-        return None
+        raise _NameCheckSkipped from exc
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
         return None
@@ -410,7 +414,7 @@ async def _find_collision_in_simple_helpers(
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
-        return None
+        raise _NameCheckSkipped from exc
     for item in _flatten_helper_list_result(result):
         if not isinstance(item, dict):
             continue
@@ -511,6 +515,12 @@ _NEAR_DUPLICATES_UNCHECKED = (
     "helper numbered (..._2). " + COMPONENT_INSTALL_HINT
 )
 
+_NAME_CHECK_SKIPPED = (
+    "No duplicate check ran: Home Assistant did not answer the helper list, so a "
+    "helper with this name may already exist, and Home Assistant numbers a new "
+    "one with the same name (..._2)."
+)
+
 
 async def _check_name_collision(
     client: Any,
@@ -527,7 +537,9 @@ async def _check_name_collision(
     Which names collide is Core's rule (its ``slugify``), so the component
     answers with Core's own function. Without the component only a helper
     with exactly this name or id is found, and Core numbers a near-duplicate:
-    the returned warning says so, for the caller's response.
+    the returned warning says so, for the caller's response. A lookup Home
+    Assistant does not answer lets the create go ahead with a warning that no
+    check ran.
 
     Empty / missing / whitespace-only `name` is left to Core's name check.
     """
@@ -542,11 +554,17 @@ async def _check_name_collision(
         existing_id = named["ids"][0] if named["ids"] else None
         slug = named.get("slug")
         not_stored = existing_id in (named.get("not_stored") or [])
-    # ha_config_set_helper checked the type: not storage means a helper flow.
-    elif helper_type not in SIMPLE_HELPER_TYPES:
-        existing_id = await _find_collision_in_flow_helpers(client, helper_type, name)
     else:
-        existing_id = await _find_collision_in_simple_helpers(client, helper_type, name)
+        # ha_config_set_helper checked the type: not storage means a helper flow.
+        find = (
+            _find_collision_in_simple_helpers
+            if helper_type in SIMPLE_HELPER_TYPES
+            else _find_collision_in_flow_helpers
+        )
+        try:
+            existing_id = await find(client, helper_type, name)
+        except _NameCheckSkipped:
+            return _NAME_CHECK_SKIPPED
 
     if existing_id is None:
         return unchecked
