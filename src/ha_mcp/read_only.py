@@ -255,7 +255,7 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
 # 'list_datasets', 'get_config_params' and 'get_config_param' have no pure-read
 # duplicate elsewhere, while its
-# 'diagnostics'/'network_status' reads mirror ha_get_device /
+# 'diagnostics'/'network_status' reads overlap ha_get_device /
 # ha_get_system_health but stay reachable here mid-management;
 # ha_manage_security_policy's policy read is duplicated only by the
 # dev-mode-only ha_dev_manage_settings('get_policy')). Everything

@@ -19,6 +19,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools import tools_system
 from ha_mcp.tools.tools_system import SystemTools
 
 
@@ -238,120 +239,6 @@ class TestHaRestartErrorHandling:
         )
 
 
-def _ws_client_with_issues(issues):
-    """Mock ws_client whose send_command('repairs/list_issues') returns ``issues``."""
-    ws = AsyncMock()
-    ws.send_command.return_value = {
-        "success": True,
-        "result": {"issues": issues},
-    }
-    return ws
-
-
-class TestFetchRepairs:
-    """Regression coverage for #1307: dismissed repairs must be filtered by default."""
-
-    @pytest.mark.asyncio
-    async def test_default_filters_ignored_repairs(self):
-        ws = _ws_client_with_issues(
-            [
-                {"issue_id": "active", "ignored": False},
-                {
-                    "issue_id": "dismissed",
-                    "ignored": True,
-                    "dismissed_version": "2026.4.0",
-                },
-            ]
-        )
-
-        result = await SystemTools._fetch_repairs(ws)
-
-        assert result["count"] == 1
-        assert [i["issue_id"] for i in result["issues"]] == ["active"]
-        assert result["dismissed_count"] == 1
-
-    @pytest.mark.asyncio
-    async def test_include_dismissed_returns_all(self):
-        ws = _ws_client_with_issues(
-            [
-                {"issue_id": "active", "ignored": False},
-                {"issue_id": "dismissed", "ignored": True},
-            ]
-        )
-
-        result = await SystemTools._fetch_repairs(ws, include_dismissed=True)
-
-        assert result["count"] == 2
-        assert "dismissed_count" not in result
-        ids = {i["issue_id"] for i in result["issues"]}
-        assert ids == {"active", "dismissed"}
-
-    @pytest.mark.asyncio
-    async def test_no_dismissed_omits_counter(self):
-        """When nothing is filtered, the `dismissed_count` key stays out."""
-        ws = _ws_client_with_issues([{"issue_id": "active", "ignored": False}])
-
-        result = await SystemTools._fetch_repairs(ws)
-
-        assert result["count"] == 1
-        assert "dismissed_count" not in result
-
-    @pytest.mark.asyncio
-    async def test_repair_fields_pass_through_unmodified(self):
-        """`_fetch_repairs` returns full payloads — fields like `ignored`,
-        `dismissed_version`, `is_fixable`, and the verbose
-        `translation_placeholders` all survive (no projection at this layer,
-        unlike `ha_get_overview`'s compact view).
-        """
-        ws = _ws_client_with_issues(
-            [
-                {
-                    "issue_id": "active",
-                    "ignored": False,
-                    "dismissed_version": None,
-                    "is_fixable": True,
-                    "severity": "warning",
-                    "translation_placeholders": {"foo": "bar"},
-                }
-            ]
-        )
-
-        result = await SystemTools._fetch_repairs(ws, include_dismissed=True)
-
-        entry = result["issues"][0]
-        assert entry["ignored"] is False
-        assert entry["is_fixable"] is True
-        assert entry["translation_placeholders"] == {"foo": "bar"}
-
-    @pytest.mark.asyncio
-    async def test_success_false_surfaces_error_message(self):
-        """When HA responds `success: False`, surface the error message
-        instead of silently returning an empty list.
-        """
-        ws = AsyncMock()
-        ws.send_command.return_value = {
-            "success": False,
-            "error": {"code": "unknown_error", "message": "boom"},
-        }
-
-        result = await SystemTools._fetch_repairs(ws)
-
-        assert result["count"] == 0
-        assert result["issues"] == []
-        assert "boom" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_ws_exception_captured_as_error(self):
-        """Exceptions during the WS call are caught and surfaced via `error`."""
-        ws = AsyncMock()
-        ws.send_command.side_effect = RuntimeError("ws disconnect")
-
-        result = await SystemTools._fetch_repairs(ws)
-
-        assert result["count"] == 0
-        assert "ws disconnect" in result["error"]
-
-
 class TestFetchZwaveNetwork:
     """``_fetch_zwave_network`` resolves the zwave_js config entry then fetches
     network status. Regression guard for the config_entries/get command name —
@@ -398,68 +285,8 @@ class TestFetchZwaveNetwork:
 
 
 class TestFetchThreadNetwork:
-    """``_fetch_thread_network`` calls ``otbr/info`` and summarizes each border
-    router (channel, extended_pan_id, border_agent_id) keyed by extended
-    address — mirrors the Z-Wave/ZHA never-raise section convention."""
-
-    def _thread_ws_client(self, info_resp):
-        """ws_client whose send_command('otbr/info') returns ``info_resp``."""
-        ws = MagicMock()
-
-        async def _send(command, **kwargs):
-            if command == "otbr/info":
-                return info_resp
-            return {"success": False, "error": {"message": "Unknown command."}}
-
-        ws.send_command = AsyncMock(side_effect=_send)
-        return ws
-
-    @pytest.mark.asyncio
-    async def test_summarizes_border_routers(self):
-        """A loaded OTBR maps to one border-router summary with the three
-        documented fields, keyed by its extended address."""
-        ws = self._thread_ws_client(
-            {
-                "success": True,
-                "result": {
-                    "f00dcafef00dcafe": {
-                        "active_dataset_tlvs": "0e08...",
-                        "border_agent_id": "deadbeefdeadbeef",
-                        "channel": 15,
-                        "extended_address": "f00dcafef00dcafe",
-                        "extended_pan_id": "abcdef0123456789",
-                        "url": "http://core-silabs-multiprotocol:8081",
-                    }
-                },
-            }
-        )
-        result = await SystemTools._fetch_thread_network(ws)
-
-        sent = [call.args[0] for call in ws.send_command.call_args_list]
-        assert "otbr/info" in sent
-        assert "error" not in result
-        assert result["count"] == 1
-        br = result["border_routers"][0]
-        assert br["extended_address"] == "f00dcafef00dcafe"
-        assert br["channel"] == 15
-        assert br["extended_pan_id"] == "abcdef0123456789"
-        assert br["border_agent_id"] == "deadbeefdeadbeef"
-
-    @pytest.mark.asyncio
-    async def test_not_loaded_surfaces_error(self):
-        """``otbr/info`` answers success=false (code not_loaded) when no OTBR is
-        configured; the section surfaces the message as an error sub-dict."""
-        ws = self._thread_ws_client(
-            {
-                "success": False,
-                "error": {"code": "not_loaded", "message": "No OTBR API loaded"},
-            }
-        )
-        result = await SystemTools._fetch_thread_network(ws)
-
-        assert result["count"] == 0
-        assert result["border_routers"] == []
-        assert "No OTBR API loaded" in result["error"]
+    """``_fetch_thread_network`` never raises a section failure. What Core
+    answers is tested on real Core in ``test_radio_thread.py``."""
 
     @pytest.mark.asyncio
     async def test_ws_exception_captured_as_error(self):
@@ -469,100 +296,18 @@ class TestFetchThreadNetwork:
 
         result = await SystemTools._fetch_thread_network(ws)
 
-        assert result["count"] == 0
+        assert result["border_router_count"] == 0
         assert "ws disconnect" in result["error"]
 
     @pytest.mark.asyncio
     async def test_fatal_cancellation_propagates_not_embedded(self):
         """A CancelledError must unwind, not demote to a section error — guards
-        the ``_reraise_if_fatal`` gate."""
+        the ``reraise_if_fatal`` gate."""
         ws = AsyncMock()
         ws.send_command.side_effect = asyncio.CancelledError()
 
         with pytest.raises(asyncio.CancelledError):
             await SystemTools._fetch_thread_network(ws)
-
-
-class TestFetchMatterNetwork:
-    """``_fetch_matter_network`` resolves the matter config entry via
-    ``config_entries/get`` and returns a lightweight presence summary."""
-
-    def _matter_ws_client(self, entries_resp):
-        """ws_client whose send_command('config_entries/get') returns
-        ``entries_resp``."""
-        ws = MagicMock()
-
-        async def _send(command, **kwargs):
-            if command == "config_entries/get":
-                return entries_resp
-            return {"success": False, "error": {"message": "Unknown command."}}
-
-        ws.send_command = AsyncMock(side_effect=_send)
-        return ws
-
-    @pytest.mark.asyncio
-    async def test_resolves_matter_entry(self):
-        """The matter entry is selected by domain and reduced to
-        {config_entry_id, state, title}. Pins the canonical (underscore)
-        command name like the zwave helper test."""
-        ws = self._matter_ws_client(
-            {
-                "success": True,
-                "result": [
-                    {
-                        "domain": "hue",
-                        "entry_id": "hue1",
-                        "state": "loaded",
-                        "title": "Hue",
-                    },
-                    {
-                        "domain": "matter",
-                        "entry_id": "m1",
-                        "state": "loaded",
-                        "title": "Matter Server",
-                    },
-                ],
-            }
-        )
-        result = await SystemTools._fetch_matter_network(ws)
-
-        sent = [call.args[0] for call in ws.send_command.call_args_list]
-        assert "config_entries/get" in sent
-        assert "config/entries/get" not in sent
-        assert result == {
-            "config_entry_id": "m1",
-            "state": "loaded",
-            "title": "Matter Server",
-        }
-
-    @pytest.mark.asyncio
-    async def test_no_matter_entry_returns_not_found(self):
-        """No matter entry → the documented not-found error sub-dict."""
-        ws = self._matter_ws_client(
-            {"success": True, "result": [{"domain": "hue", "entry_id": "hue1"}]}
-        )
-        result = await SystemTools._fetch_matter_network(ws)
-
-        assert result == {"error": "Matter integration not found"}
-
-    @pytest.mark.asyncio
-    async def test_ws_exception_captured_as_error(self):
-        """Exceptions during the WS call are caught and surfaced via ``error``."""
-        ws = AsyncMock()
-        ws.send_command.side_effect = RuntimeError("ws disconnect")
-
-        result = await SystemTools._fetch_matter_network(ws)
-
-        assert "ws disconnect" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_fatal_cancellation_propagates_not_embedded(self):
-        """A CancelledError must unwind, not demote to a section error."""
-        ws = AsyncMock()
-        ws.send_command.side_effect = asyncio.CancelledError()
-
-        with pytest.raises(asyncio.CancelledError):
-            await SystemTools._fetch_matter_network(ws)
 
 
 class TestGetSystemHealthThreadMatterWiring:
@@ -574,22 +319,27 @@ class TestGetSystemHealthThreadMatterWiring:
     async def test_both_sections_populated_when_requested(self):
         client = MagicMock()
         tools = SystemTools(client)
-        mock_thread = AsyncMock(return_value={"border_routers": [], "count": 0})
+        mock_thread = AsyncMock(
+            return_value={"border_routers": [], "border_router_count": 0}
+        )
         mock_matter = AsyncMock(
-            return_value={"config_entry_id": "m1", "state": "loaded", "title": "M"}
+            return_value={"config_entry": {"entry_id": "m1", "state": "loaded"}}
         )
 
         with (
             _patch_health_info_baseline() as (_, ws_client),
             patch.object(SystemTools, "_fetch_thread_network", new=mock_thread),
-            patch.object(SystemTools, "_fetch_matter_network", new=mock_matter),
+            patch.object(tools_system, "read_matter_network", new=mock_matter),
         ):
             result = await tools.ha_get_system_health(
                 include="thread_network,matter_network"
             )
 
-        assert result["thread_network"] == {"border_routers": [], "count": 0}
-        assert result["matter_network"]["config_entry_id"] == "m1"
+        assert result["thread_network"] == {
+            "border_routers": [],
+            "border_router_count": 0,
+        }
+        assert result["matter_network"]["config_entry"]["entry_id"] == "m1"
         mock_thread.assert_awaited_once()
         mock_matter.assert_awaited_once()
         ws_client.disconnect.assert_awaited_once()
@@ -609,7 +359,7 @@ class TestGetSystemHealthThreadMatterWiring:
                 new=AsyncMock(return_value={"issues": [], "count": 0}),
             ),
             patch.object(SystemTools, "_fetch_thread_network", new=mock_thread),
-            patch.object(SystemTools, "_fetch_matter_network", new=mock_matter),
+            patch.object(tools_system, "read_matter_network", new=mock_matter),
         ):
             result = await tools.ha_get_system_health(include="repairs")
 
@@ -904,309 +654,9 @@ class TestGetSystemHealthGather:
         mock_zwave.assert_not_awaited()
 
 
-class TestGetSystemHealthDiagnostics:
-    """Wire-up tests for ha_get_system_health's include='diagnostics' branch."""
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_without_config_entry_id_returns_error_subdict(self):
-        client = MagicMock()
-        tools = SystemTools(client)
-        with _patch_health_info_baseline():
-            result = await tools.ha_get_system_health(include="diagnostics")
-        assert "diagnostics" in result
-        assert "error" in result["diagnostics"]
-        assert "config_entry_id is required" in result["diagnostics"]["error"]
-        assert "ha_get_integration" in result["diagnostics"]["error"]
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_with_config_entry_id_calls_helper(self):
-        client = MagicMock()
-        tools = SystemTools(client)
-        diag_payload = {
-            "config_entry_id": "entry_abc",
-            "data": {"home_assistant": {"version": "2026.5.0"}},
-        }
-        with (
-            _patch_health_info_baseline(),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value=diag_payload),
-            ) as mock_fetch,
-        ):
-            result = await tools.ha_get_system_health(
-                include="diagnostics", config_entry_id="entry_abc"
-            )
-        assert result["diagnostics"] == diag_payload
-        mock_fetch.assert_awaited_once_with(
-            client,
-            "entry_abc",
-            None,
-            fields=None,
-            truncate_at_bytes=None,
-            data_path=None,
-            data_offset=0,
-            data_limit=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_with_device_id_forwarded_to_helper(self):
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value={"data": {}}),
-            ) as mock_fetch,
-        ):
-            await tools.ha_get_system_health(
-                include="diagnostics",
-                config_entry_id="entry_abc",
-                device_id="dev_xyz",
-            )
-        mock_fetch.assert_awaited_once_with(
-            client,
-            "entry_abc",
-            "dev_xyz",
-            fields=None,
-            truncate_at_bytes=None,
-            data_path=None,
-            data_offset=0,
-            data_limit=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_combined_with_repairs(self):
-        """include='repairs,diagnostics' should populate both sections."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        mock_repairs = AsyncMock(return_value={"issues": [], "count": 0})
-        with (
-            _patch_health_info_baseline(),
-            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value={"data": {"x": 1}}),
-            ) as mock_diag,
-        ):
-            result = await tools.ha_get_system_health(
-                include="repairs,diagnostics", config_entry_id="entry_abc"
-            )
-        assert "repairs" in result
-        assert "diagnostics" in result
-        assert result["diagnostics"]["data"] == {"x": 1}
-        # Both branches actually fired — guards against a silent no-op
-        # in either fetch.
-        mock_repairs.assert_awaited_once()
-        mock_diag.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_fields_and_truncate_forwarded_to_helper(self):
-        """Tool surfaces ``diagnostics_fields`` + ``diagnostics_truncate_at_bytes``."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value={"data": {}}),
-            ) as mock_fetch,
-        ):
-            await tools.ha_get_system_health(
-                include="diagnostics",
-                config_entry_id="entry_abc",
-                diagnostics_fields="home_assistant, issues",
-                diagnostics_truncate_at_bytes=20000,
-            )
-        mock_fetch.assert_awaited_once_with(
-            client,
-            "entry_abc",
-            None,
-            fields=["home_assistant", "issues"],
-            truncate_at_bytes=20000,
-            data_path=None,
-            data_offset=0,
-            data_limit=None,
-        )
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_data_path_and_pagination_forwarded_to_helper(self):
-        """Tool surfaces ``diagnostics_data_path`` + offset/limit through to
-        the helper."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value={"data": {}}),
-            ) as mock_fetch,
-        ):
-            await tools.ha_get_system_health(
-                include="diagnostics",
-                config_entry_id="entry_abc",
-                diagnostics_data_path="data.devices",
-                diagnostics_data_offset=10,
-                diagnostics_data_limit=5,
-            )
-        mock_fetch.assert_awaited_once_with(
-            client,
-            "entry_abc",
-            None,
-            fields=None,
-            truncate_at_bytes=None,
-            data_path="data.devices",
-            data_offset=10,
-            data_limit=5,
-        )
-
-    @pytest.mark.asyncio
-    async def test_missing_config_entry_id_forwarded_as_none_not_empty_string(
-        self,
-    ):
-        """``include=diagnostics`` without ``config_entry_id`` forwards ``None``
-        to the helper (not ``""``) so the echo field reflects the actual input
-        rather than a coerced placeholder."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(
-                    return_value={
-                        "config_entry_id": None,
-                        "error": "config_entry_id is required for diagnostics fetch.",
-                    }
-                ),
-            ) as mock_fetch,
-        ):
-            result = await tools.ha_get_system_health(include="diagnostics")
-        # Positional config_entry_id is None, not "".
-        assert mock_fetch.await_args is not None
-        assert mock_fetch.await_args.args[1] is None
-        assert result["diagnostics"]["config_entry_id"] is None
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_omitted_from_include_skips_helper(self):
-        """include='repairs' (no diagnostics) must not invoke the diagnostics helper."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch.object(
-                SystemTools,
-                "_fetch_repairs",
-                new=AsyncMock(return_value={"issues": [], "count": 0}),
-            ),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(),
-            ) as mock_fetch,
-        ):
-            result = await tools.ha_get_system_health(
-                include="repairs", config_entry_id="entry_abc"
-            )
-        mock_fetch.assert_not_awaited()
-        assert "diagnostics" not in result
-
-    @pytest.mark.asyncio
-    async def test_orphaned_ids_surface_parity_warning(self):
-        """config_entry_id/device_id without 'diagnostics' in include surface a
-        warnings entry (parity with ha_get_integration's `include_diagnostics=False
-        + device_id` warning)."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch.object(
-                SystemTools,
-                "_fetch_repairs",
-                new=AsyncMock(return_value={"issues": [], "count": 0}),
-            ),
-        ):
-            result = await tools.ha_get_system_health(
-                include="repairs",
-                config_entry_id="entry_abc",
-                device_id="dev_xyz",
-            )
-        assert "warnings" in result
-        assert any(
-            "config_entry_id" in w or "device_id" in w for w in result["warnings"]
-        )
-
-    @pytest.mark.asyncio
-    async def test_orphaned_data_offset_alone_surfaces_warning(self):
-        """Pure ``diagnostics_data_offset > 0`` (no other diagnostics args)
-        without 'diagnostics' in include triggers the orphan-args warning —
-        guards the ``data_offset_int > 0`` term in the predicate."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            _patch_health_info_baseline(),
-            patch.object(
-                SystemTools,
-                "_fetch_repairs",
-                new=AsyncMock(return_value={"issues": [], "count": 0}),
-            ),
-        ):
-            result = await tools.ha_get_system_health(
-                include="repairs",
-                diagnostics_data_offset=5,
-            )
-        assert "warnings" in result
-        assert any("diagnostics_data_offset" in w for w in result["warnings"])
-
-    @pytest.mark.asyncio
-    async def test_data_path_non_string_rejected_with_validation_error(self):
-        """Non-string ``diagnostics_data_path`` (dict / list / int) surfaces
-        as ``VALIDATION_INVALID_PARAMETER`` instead of leaking ``INTERNAL_ERROR``
-        from the resolver's ``.strip()`` call downstream. Pins the
-        ``isinstance(str)`` type-guard at the ``ha_get_system_health`` layer."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with _patch_health_info_baseline(), pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_system_health(
-                include="diagnostics",
-                config_entry_id="entry_abc",
-                diagnostics_data_path={"not": "a string"},  # type: ignore[arg-type]
-            )
-        err_payload = json.loads(str(excinfo.value))
-        assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "diagnostics_data_path" in err_payload["error"]["message"]
-
-
 class TestGetSystemHealthConfigCheck:
     """Wire-up tests for ha_get_system_health's include='config_check' branch —
     the folded-in replacement for the removed standalone ha_check_config tool."""
-
-    @pytest.mark.asyncio
-    async def test_config_check_populates_section_when_valid(self):
-        """include='config_check' calls client.check_config() (REST) and embeds
-        the result/is_valid/errors sub-dict the old ha_check_config returned."""
-        client = MagicMock()
-        client.check_config = AsyncMock(return_value={"result": "valid"})
-        tools = SystemTools(client)
-        with _patch_health_info_baseline():
-            result = await tools.ha_get_system_health(include="config_check")
-        assert "config_check" in result
-        assert result["config_check"]["is_valid"] is True
-        assert result["config_check"]["result"] == "valid"
-        assert result["config_check"]["errors"] == []
-        client.check_config.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_config_check_surfaces_invalid_with_errors(self):
-        client = MagicMock()
-        client.check_config = AsyncMock(
-            return_value={"result": "invalid", "errors": ["bad yaml at line 3"]}
-        )
-        tools = SystemTools(client)
-        with _patch_health_info_baseline():
-            result = await tools.ha_get_system_health(include="config_check")
-        assert result["config_check"]["is_valid"] is False
-        assert result["config_check"]["result"] == "invalid"
-        assert result["config_check"]["errors"] == ["bad yaml at line 3"]
 
     @pytest.mark.asyncio
     async def test_config_check_absent_when_not_requested(self):
@@ -1219,37 +669,6 @@ class TestGetSystemHealthConfigCheck:
             result = await tools.ha_get_system_health()
         client.check_config.assert_not_awaited()
         assert "config_check" not in result
-
-    @pytest.mark.asyncio
-    async def test_config_check_backend_failure_embeds_error_not_raises(self):
-        """A check_config backend failure surfaces as an embedded error sub-dict;
-        the parent tool still succeeds (the _fetch_* never-raise convention)."""
-        client = MagicMock()
-        client.check_config = AsyncMock(side_effect=RuntimeError("boom"))
-        tools = SystemTools(client)
-        with _patch_health_info_baseline():
-            result = await tools.ha_get_system_health(include="config_check")
-        assert result.get("success") is True
-        assert "error" in result["config_check"]
-        assert "boom" in result["config_check"]["error"]
-        # Pin the safe baseline contract: on failure config must read as
-        # NOT valid so a caller never mistakes a transient error for "config OK".
-        assert result["config_check"]["is_valid"] is False
-        assert result["config_check"]["result"] == "unknown"
-        assert result["config_check"]["errors"] == []
-
-    @pytest.mark.asyncio
-    async def test_config_check_non_dict_check_config_result_embeds_error(self):
-        """client.check_config() returning None (non-dict) is caught and embedded
-        as an error, not raised (defensive boundary the old tool also had)."""
-        client = MagicMock()
-        client.check_config = AsyncMock(return_value=None)
-        tools = SystemTools(client)
-        with _patch_health_info_baseline():
-            result = await tools.ha_get_system_health(include="config_check")
-        assert result.get("success") is True
-        assert "error" in result["config_check"]
-        assert result["config_check"]["is_valid"] is False
 
     @pytest.mark.asyncio
     async def test_config_check_returns_even_when_health_ws_unavailable(self):
@@ -1267,7 +686,6 @@ class TestGetSystemHealthConfigCheck:
         ):
             result = await tools.ha_get_system_health(include="config_check")
         assert result["success"] is True
-        assert result["config_check"]["is_valid"] is True
         assert result["config_check"]["result"] == "valid"
         client.check_config.assert_awaited_once()
 
@@ -1288,27 +706,11 @@ class TestGetSystemHealthConfigCheck:
             result = await tools.ha_get_system_health(include="repairs,config_check")
         assert result["success"] is True
         assert result["baseline_available"] is False
-        assert result["config_check"]["is_valid"] is True
+        assert result["config_check"]["result"] == "valid"
         # Dropped WS section carries the same {error} shape it would if the
         # baseline were up and the fetch itself failed — not a vanished key.
         assert "error" in result["repairs"]
         assert any("repairs" in w for w in result.get("warnings", []))
-
-    @pytest.mark.asyncio
-    async def test_themes_section_reported_unavailable_when_ws_fails(self):
-        """include='themes' with WS baseline failure embeds error in themes."""
-        client = MagicMock()
-        client.check_config = AsyncMock(return_value={"result": "valid"})
-        tools = SystemTools(client)
-        with patch.object(
-            SystemTools,
-            "_fetch_health_info",
-            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
-        ):
-            result = await tools.ha_get_system_health(include="themes,config_check")
-        assert result["success"] is True
-        assert "error" in result["themes"]
-        assert "WebSocket" in result["themes"]["error"]
 
     @pytest.mark.asyncio
     async def test_bare_call_raises_when_health_ws_unavailable(self):
@@ -1346,31 +748,6 @@ class TestGetSystemHealthConfigCheck:
             await tools.ha_get_system_health(include="repairs")
 
     @pytest.mark.asyncio
-    async def test_diagnostics_returns_when_health_ws_unavailable(self):
-        """diagnostics is REST-based, so it too survives a WS-baseline failure —
-        the degradation guarantee is not specific to config_check."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with (
-            patch.object(
-                SystemTools,
-                "_fetch_health_info",
-                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
-            ),
-            patch(
-                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-                new=AsyncMock(return_value={"data": {"ok": True}}),
-            ) as mock_diag,
-        ):
-            result = await tools.ha_get_system_health(
-                include="diagnostics", config_entry_id="entry_abc"
-            )
-        assert result["success"] is True
-        assert result["baseline_available"] is False
-        assert result["diagnostics"] == {"data": {"ok": True}}
-        mock_diag.assert_awaited_once()
-
-    @pytest.mark.asyncio
     async def test_config_check_combined_with_repairs(self):
         """include='repairs,config_check' populates both — proves the standalone
         ``if`` is not mutually exclusive with the ws-gather sections."""
@@ -1388,7 +765,7 @@ class TestGetSystemHealthConfigCheck:
             result = await tools.ha_get_system_health(include="repairs,config_check")
         assert "repairs" in result
         assert "config_check" in result
-        assert result["config_check"]["is_valid"] is True
+        assert result["config_check"]["result"] == "valid"
 
 
 def _make_dead_entities_client(
@@ -1676,7 +1053,7 @@ class TestFetchDeadEntities:
     @pytest.mark.asyncio
     async def test_fatal_cancellation_propagates_not_embedded(self):
         """A CancelledError from a source fetch must unwind, not be demoted to a
-        section error string — guards the _reraise_if_fatal pre-pass."""
+        section error string — guards the reraise_if_fatal pre-pass."""
         client = _make_dead_entities_client(
             states=None,
             states_exc=asyncio.CancelledError(),
@@ -1932,7 +1309,7 @@ class TestFetchDeadEntities:
     @pytest.mark.asyncio
     async def test_dead_entities_returns_when_health_ws_unavailable(self):
         """dead_entities is REST-based, so it survives a WS-baseline failure —
-        mirrors the config_check / diagnostics degradation guarantee."""
+        mirrors the config_check / supervisor degradation guarantee."""
         client = MagicMock()
         tools = SystemTools(client)
         payload = {"summary": {"candidate_total": 0, "registry_total": 0}}
@@ -1966,7 +1343,7 @@ class TestWsResultList:
 
     def test_recoverable_exception_returns_cause_string(self):
         """A bare ``Exception`` from ``gather`` is recoverable (per
-        ``_reraise_if_fatal`` policy): returns ``(None, cause)`` with the
+        ``reraise_if_fatal`` policy): returns ``(None, cause)`` with the
         exception class name + message preserved."""
         data, err = SystemTools._ws_result_list(RuntimeError("ws boom"))
         assert data is None
@@ -2049,13 +1426,13 @@ class TestWsResultList:
         assert err is None
 
     def test_cancelled_error_unwinds_not_returned(self):
-        """Per ``_reraise_if_fatal``: cancellation must propagate; the
+        """Per ``reraise_if_fatal``: cancellation must propagate; the
         function never returns ``(None, ...)`` for it."""
         with pytest.raises(asyncio.CancelledError):
             SystemTools._ws_result_list(asyncio.CancelledError())
 
     def test_home_assistant_connection_error_unwinds_not_returned(self):
-        """Transport-dead errors propagate via ``_reraise_if_fatal`` (the
+        """Transport-dead errors propagate via ``reraise_if_fatal`` (the
         #1624 policy folded into this PR) — once the HA connection is dead
         the remaining section fetches will fail anyway, so a propagated
         root cause beats N per-section embedded errors."""
@@ -2193,7 +1570,7 @@ class TestWarningsBubbleToTopLevel:
 
 class TestHomeAssistantConnectionErrorPropagation:
     """#1624 policy folded into this PR: a dead HA transport propagates as
-    ``isError=true`` (via ``_reraise_if_fatal``) rather than being demoted to
+    ``isError=true`` (via ``reraise_if_fatal``) rather than being demoted to
     N per-section embedded errors. Applies to ``_fetch_dead_entities``, every
     sibling section helper, and the ws ``sections`` gather pre-pass — the
     cross-section consistency was the whole point of the #1624 decision."""
@@ -2218,7 +1595,7 @@ class TestHomeAssistantConnectionErrorPropagation:
         Exercises the shape production actually produces: since #1947
         ``send_websocket_message`` raises ``HomeAssistantConnectionError``
         when no answer came back, so the failure reaches the caller's
-        ``gather`` as an exception and ``_reraise_if_fatal`` decides. The
+        ``gather`` as an exception and ``reraise_if_fatal`` decides. The
         predecessor of this test injected a failure envelope, which is the
         shape the bridge no longer produces for a dead transport."""
         client = _make_dead_entities_client(
@@ -2321,7 +1698,6 @@ class TestHomeAssistantConnectionErrorPropagation:
             "_fetch_repairs",
             "_fetch_zha_network",
             "_fetch_zwave_network",
-            "_fetch_themes",
         ],
     )
     @pytest.mark.asyncio
@@ -2329,7 +1705,7 @@ class TestHomeAssistantConnectionErrorPropagation:
         self, helper_name
     ):
         """Each ws-backed sibling section helper's ``except Exception`` chain
-        routes through ``_reraise_if_fatal`` as its first line, so a
+        routes through ``reraise_if_fatal`` as its first line, so a
         connection error from one section unwinds the request rather than
         embedding N per-section errors. Parametrized across every helper
         so a regression that removes the call from one (and only one) is
@@ -2338,7 +1714,7 @@ class TestHomeAssistantConnectionErrorPropagation:
         ws_client.send_command = AsyncMock(
             side_effect=HomeAssistantConnectionError("ws gone")
         )
-        helper = getattr(SystemTools, helper_name)
+        helper = getattr(SystemTools(MagicMock()), helper_name)
         kwargs: dict[str, Any] = {}
         if helper_name == "_fetch_zha_network":
             kwargs["full"] = False
@@ -2363,12 +1739,12 @@ class TestHomeAssistantConnectionErrorPropagation:
         self,
     ):
         """The ws ``sections`` gather pre-pass uses the same
-        ``_reraise_if_fatal`` policy: a HomeAssistantConnectionError from
+        ``reraise_if_fatal`` policy: a HomeAssistantConnectionError from
         any section result element unwinds the gather and is then wrapped
         by ``ha_get_system_health``'s outer ``except Exception``
         (``exception_to_structured_error``) into a ``ToolError`` with the
         ``CONNECTION_FAILED`` code — the MCP ``isError=true`` contract for
-        a dead transport. Without ``_reraise_if_fatal``, the connection
+        a dead transport. Without ``reraise_if_fatal``, the connection
         error would have been demoted to one section's ``error`` string,
         and the tool would have returned ``success=True`` with the dead
         transport silently embedded — the exact #1624 anti-pattern."""

@@ -1,6 +1,6 @@
 """The dev group installs the integration libraries Core's manifests pin.
 
-Unit tests run Core's own Thread, OTBR, Z-Wave JS, ZHA, KNX, Local Calendar
+Unit tests run Core's own Thread, OTBR, Z-Wave JS, Matter, ZHA, KNX, Local Calendar
 and Remote Calendar handlers, so the dev group installs their requirements. A
 Core update that moves a manifest pin must move the dev pin with it, or the
 tests run a library that Core version never ships with.
@@ -21,11 +21,13 @@ _INTEGRATIONS = (
     "otbr",
     "thread",
     "zwave_js",
+    "matter",
     "zha",
     "usb",
     "hassio",
     "homeassistant_hardware",
     "infrared",
+    "stream",
     "knx",
     "local_calendar",
     "remote_calendar",

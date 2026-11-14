@@ -31,6 +31,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .flow_translations import configured_language
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -249,34 +250,14 @@ async def _fetch_catalog_and_translations(
     component_payload = await _fetch_services_list_via_component(client, domain=domain)
     if component_payload is not None:
         return component_payload["services"], component_payload["translations"]
-    language, language_warning = await _configured_language(client)
+    language, language_warning = await configured_language(
+        client, "service descriptions"
+    )
     if language_warning and warnings is not None:
         warnings.append(language_warning)
     rest_services = await client.get_services()
     translations = await _get_service_translations(client, language, warnings)
     return rest_services, translations
-
-
-async def _configured_language(client: Any) -> tuple[str, str | None]:
-    """Core's configured language, plus a warning when it could not be read.
-
-    ``frontend/get_translations`` requires a language. Core serves the configured
-    one in ``/api/config``; falling back to English keeps the catalog usable when
-    that read is unavailable, but the caller is told the text may be untranslated.
-    """
-    try:
-        config = await client.get_config()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read the configured language: %r", exc)
-        return (
-            "en",
-            f"service descriptions may be untranslated: language unavailable: {exc}",
-        )
-    language = config.get("language") if isinstance(config, Mapping) else None
-    if isinstance(language, str) and language:
-        return language, None
-    logger.warning("Home Assistant config carries no usable language: %r", config)
-    return "en", "service descriptions may be untranslated: language unavailable"
 
 
 async def _fetch_services_list_via_component(

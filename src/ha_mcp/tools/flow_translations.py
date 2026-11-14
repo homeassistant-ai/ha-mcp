@@ -1,17 +1,18 @@
-"""Home Assistant's own strings for config, options and subentry flows.
+"""Home Assistant's own strings for flows, repairs, system health and names.
 
 ``frontend/get_translations`` returns an integration's ``strings.json`` for one
 top-level category, flattened by Core to ``component.<domain>.<category>.<...>``
 keys (``homeassistant.helpers.translation.recursive_flatten``). These are the
-texts the UI shows for a flow's fields, errors and abort reasons, so the tools
-read them from Core instead of keeping their own wording.
+texts the UI shows for a flow's fields, errors and abort reasons, a repair's
+title and description, a system health key's label and an integration's name,
+so the tools read them from Core instead of keeping their own wording.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,22 +28,47 @@ def strings_unread_warning(domain: str) -> str:
     )
 
 
+async def configured_language(client: Any, subject: str) -> tuple[str, str | None]:
+    """Core's configured language, plus a warning when it could not be read.
+
+    ``frontend/get_translations`` requires a language. Core serves the configured
+    one in ``/api/config``; falling back to English keeps the text usable when
+    that read is unavailable, but the caller is told that ``subject`` may be
+    untranslated.
+    """
+    try:
+        config = await client.get_config()
+    except Exception as exc:
+        logger.warning("Could not read the configured language", exc_info=True)
+        return "en", f"{subject} may be untranslated: language unavailable: {exc}"
+    language = config.get("language") if isinstance(config, Mapping) else None
+    if isinstance(language, str) and language:
+        return language, None
+    logger.warning("Home Assistant config carries no usable language: %r", config)
+    return "en", f"{subject} may be untranslated: language unavailable"
+
+
 async def fetch_flow_strings(
-    client: Any, domain: str, category: str
+    client: Any,
+    domain: str | Sequence[str],
+    category: str,
+    *,
+    language: str = "en",
 ) -> dict[str, Any] | None:
-    """One ``frontend/get_translations`` read in English; ``None`` if it failed.
+    """One ``frontend/get_translations`` read; ``None`` if it failed.
 
     ``category`` is a top-level ``strings.json`` key (``config``, ``options``,
-    ``config_subentries``). ``None`` (no answer, or an error answer) is kept
-    apart from ``{}`` (Core ships no strings) so a caller can say so.
+    ``config_subentries``, ``issues``, ``system_health``, ``title``) and ``domain`` one integration or several.
+    ``None`` (no answer, or an error answer) is kept apart from ``{}`` (Core
+    ships no strings) so a caller can say so.
     """
     try:
         result = await client.send_websocket_message(
             {
                 "type": "frontend/get_translations",
-                "language": "en",
+                "language": language,
                 "category": category,
-                "integration": [domain],
+                "integration": [domain] if isinstance(domain, str) else list(domain),
             }
         )
     except Exception:
@@ -94,9 +120,9 @@ def flow_text(
     """The string at ``component.<domain>.<key>`` with its placeholders filled.
 
     ``key`` continues from the domain, e.g. ``config.abort.<reason>``.
-    ``placeholders`` is the flow step's ``description_placeholders``; a
-    ``{name}`` with no value stays as written. ``None`` when Core ships no
-    string for the key.
+    ``placeholders`` fills the ``{name}`` fields, for example a flow step's
+    ``description_placeholders``; a ``{name}`` with no value stays as written.
+    ``None`` when Core ships no string for the key.
     """
     text = strings.get(f"component.{domain}.{key}")
     if not isinstance(text, str) or not text:

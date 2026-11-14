@@ -655,15 +655,20 @@ dev = [
     # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
     "hamcp-test-env",
     # The requirements of the Core integrations whose own handlers the unit
-    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, ZHA,
+    # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, Matter, ZHA,
     # KNX, Local Calendar and Remote Calendar, plus usb, hassio,
-    # homeassistant_hardware and infrared, which those load. Only the device,
+    # homeassistant_hardware, infrared and stream, which those load. Only the device,
     # bus or server below each library is replaced. Each pin
     # equals the integration's manifest in the Core above;
     # test_dev_integration_pins.py keeps them equal.
     "python-otbr-api==3.1.0",
     "pyroute2==0.9.6",
     "zwave-js-server-python==0.74.0",
+    "matter-python-client==1.5.5",
+    "matter-ble-proxy==0.7.1",
+    "PyTurboJPEG==1.8.3",
+    "av==19.0.0",
+    "numpy==2.3.2",
     "zha==2.4.3",
     "zha-quirks==2.4.1",
     "aiousbwatcher==1.1.2",
