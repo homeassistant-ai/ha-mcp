@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
+import yaml
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
@@ -19,7 +21,8 @@ from homeassistant.helpers import label_registry as lr
 
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager, BackupRestoreError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 
@@ -600,8 +603,6 @@ async def test_a_restore_reads_areas_and_categories_through_the_component(
 ) -> None:
     """With the component installed the registry read takes its route and gets
     an answer; a second restore still finds the first one's item."""
-    from ha_mcp import backup_manager as backup_manager_module
-    from ha_mcp.backup_manager import _ws_send as original_send
     from ha_mcp.tools import component_registries
 
     answers: list[object] = []
@@ -624,26 +625,24 @@ async def test_a_restore_reads_areas_and_categories_through_the_component(
     )
     categories.async_delete(scope="automation", category_id=category.category_id)
     answers.clear()
-    sent: list[str] = []
-    send = original_send
-
-    async def recording(client: Any, message: dict[str, Any]) -> Any:
-        sent.append(message["type"])
-        return await send(client, message)
-
-    monkeypatch.setattr(backup_manager_module, "_ws_send", recording)
-
-    for snapshot in (
-        area_snapshot,
-        area_snapshot,
-        category_snapshot,
-        category_snapshot,
-    ):
-        await backup_manager.restore_snapshot(snapshot)
+    with patch.object(
+        HomeAssistantWebSocketClient,
+        "send_command",
+        autospec=True,
+        wraps=HomeAssistantWebSocketClient.send_command,
+    ) as sent:
+        for snapshot in (
+            area_snapshot,
+            area_snapshot,
+            category_snapshot,
+            category_snapshot,
+        ):
+            await backup_manager.restore_snapshot(snapshot)
 
     assert answers
     assert all(answer is not None for answer in answers)
-    assert not [t for t in sent if t.endswith("_registry/list")], sent
+    sent_types = [call.args[1] for call in sent.call_args_list]
+    assert not [t for t in sent_types if t.endswith("_registry/list")], sent_types
     assert [a.name for a in areas.areas.values()] == ["Corridor"]
     assert [c.name for c in categories.categories["automation"].values()] == [
         "Lighting"
@@ -849,35 +848,26 @@ async def test_an_area_restored_under_another_id_keeps_every_warning(
 
 
 async def test_a_create_refused_for_another_reason_does_not_blame_a_name_holder(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """Only Core's name refusal names a holder; any other refusal of the create
-    keeps its own reason, still as not applied."""
-    from ha_mcp import backup_manager as backup_manager_module
-    from ha_mcp.backup_manager import _ws_send as original_send
-
+    keeps its own reason, still as not applied. The snapshot file is edited as a
+    user could edit it, so that Core itself refuses the field."""
     registry = lr.async_get(hass)
     label = registry.async_create("Alpha")
     registry.async_update(label.label_id, name="Beta")
     snapshot = await _snapshot(backup_manager, "label", label.label_id)
     registry.async_delete(label.label_id)
     other = registry.async_create("Beta", color="green")
-    send = original_send
+    path = next(backup_manager.backup_dir.rglob(snapshot))
+    stored = yaml.safe_load(path.read_text())
+    stored["config"]["color"] = ["not", "a", "string"]
+    path.write_text(yaml.safe_dump(stored))
 
-    async def refusing(client: Any, message: dict[str, Any]) -> Any:
-        if message["type"].endswith("/create"):
-            raise HomeAssistantCommandError(
-                "Command failed: bad field", "invalid_format"
-            )
-        return await send(client, message)
-
-    monkeypatch.setattr(backup_manager_module, "_ws_send", refusing)
-
-    with pytest.raises(BackupRestoreError, match="bad field") as refused:
+    with pytest.raises(BackupRestoreError) as refused:
         await backup_manager.restore_snapshot(snapshot)
 
     assert other.label_id not in str(refused.value)
+    assert "already in use" not in str(refused.value)
     assert refused.value.outcome["apply_status"] == "not_applied"
     assert not refused.value.outcome.get("suggestions")
