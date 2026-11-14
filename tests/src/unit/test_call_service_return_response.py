@@ -110,6 +110,36 @@ async def test_the_component_lists_a_confirmed_calls_changed_state_once(
     assert "warnings" not in response, response
 
 
+async def test_a_verbose_confirmed_call_keeps_every_write_of_its_target(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The confirmation is the target's verification, not a replacement for
+    the writes Core recorded under the call's context."""
+
+    async def turn_on(call: ServiceCall) -> ServiceResponse:
+        for level in (10, 200):
+            hass.states.async_set(
+                "light.x", "on", {"brightness": level}, context=call.context
+            )
+        return dict(SHELL_RESPONSE)
+
+    hass.states.async_set("light.x", "off")
+    hass.services.async_register(
+        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+    )
+
+    response = await ServiceTools(component_core_client, None).ha_call_service(
+        domain="light",
+        service="turn_on",
+        entity_id="light.x",
+        return_response=True,
+        verbose=True,
+    )
+
+    levels = [r["attributes"]["brightness"] for r in response["result"]]
+    assert levels == [10, 200]
+
+
 @pytest.mark.parametrize("verbose", [False, True], ids=["compact", "verbose"])
 async def test_the_component_lists_an_unconfirmed_calls_changed_states(
     hass: HomeAssistant, component_core_client: HomeAssistantClient, verbose: bool
