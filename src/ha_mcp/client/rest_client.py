@@ -1826,8 +1826,6 @@ class HomeAssistantClient:
 
         max_retries = 2
         retry_delay = 0.5  # seconds
-        # Whether an earlier attempt got past acquisition, so may have sent.
-        sent_before = False
 
         for attempt in range(max_retries):
             # Whether the failure happened before a usable connection existed.
@@ -1858,15 +1856,16 @@ class HomeAssistantClient:
                 error_str = str(e)
                 is_403 = "403" in error_str and "Forbidden" in error_str
 
-                # Transient 403 (rate limiting / reverse proxy throttling): retry
-                # before deciding anything, since the next attempt may succeed.
-                if is_403 and attempt < max_retries - 1:
+                # Transient 403 (rate limiting / reverse proxy throttling) while
+                # connecting: retry, since the next attempt may succeed. Once a
+                # frame may have gone out, a 403 is the command's own answer, and
+                # sending it again could run a service twice.
+                if is_403 and acquiring and attempt < max_retries - 1:
                     logger.warning(
                         f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
                         f"retrying after {retry_delay}s: {error_str}"
                     )
                     await asyncio.sleep(retry_delay)
-                    sent_before = sent_before or not acquiring
                     continue
 
                 # Phase first, type second. Failing before a client exists is
@@ -1885,14 +1884,11 @@ class HomeAssistantClient:
                     logger.error(
                         f"WebSocket transport failed ({message.get('type')}): {e}"
                     )
-                    if acquiring and not sent_before:
-                        # No attempt obtained a client, so nothing was sent.
+                    if acquiring:
+                        # Only a pre-send attempt retries, so nothing was sent.
                         raise HomeAssistantCommandNotSent(error_str) from e
-                    if isinstance(e, HomeAssistantConnectionError) and not (
-                        sent_before and isinstance(e, HomeAssistantCommandNotSent)
-                    ):
-                        # Re-raised unchanged so subtypes and the traceback
-                        # survive; not "never sent" once an attempt may have sent.
+                    if isinstance(e, HomeAssistantConnectionError):
+                        # Re-raised unchanged so subtypes and the traceback survive.
                         raise
                     raise HomeAssistantConnectionError(error_str) from e
 

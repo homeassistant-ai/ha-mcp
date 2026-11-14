@@ -32,6 +32,14 @@ COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
     "and lost with the confirmation. Re-read state to confirm the outcome."
 )
 
+#: Added when a non-administrator's token sends the call over WebSocket, whose
+#: answer lists no changed states.
+STATES_NOT_LISTED_WARNING = (
+    "This token's user is not a Home Assistant administrator, so the call went "
+    "over WebSocket, which lists no changed states: an empty 'result' does not "
+    "mean nothing changed. Read the entity's state to confirm."
+)
+
 #: Added to a failed ``return_response`` call without the component: Core checks
 #: the response only after the service ran, and only the component's answer says
 #: whether the service ran before a refusal.
@@ -39,6 +47,13 @@ RESPONSE_CALL_FAILED_HINT = (
     "The service may have run before Home Assistant refused its response: check "
     "its effect before calling it again. The ha_mcp_tools component reports a "
     f"refused response as such. {COMPONENT_INSTALL_HINT}"
+)
+
+
+#: Added to the error of a call the component dispatched that then failed.
+SERVICE_FAILED_AFTER_DISPATCH_HINT = (
+    "The service may have changed something before it failed: check its effect "
+    "before calling it again."
 )
 
 
