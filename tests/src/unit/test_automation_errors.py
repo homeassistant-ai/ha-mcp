@@ -230,18 +230,18 @@ async def test_platforms_that_never_answer_release_the_subscription(
     """A first event that never came left the subscription open on the shared
     socket; the rejection still carries Core's text.
 
-    Core acknowledges the subscription, then holds its trigger descriptions.
+    Core acknowledges the subscription, then holds its trigger descriptions;
+    released, Core answers with its own.
     """
     released = asyncio.Event()
+    core_descriptions = ws_commands.async_get_all_trigger_descriptions
 
-    async def descriptions_never_ready(core: HomeAssistant) -> str:
+    async def descriptions_held(core: HomeAssistant) -> dict[str, Any]:
         await released.wait()
-        return "{}"
+        return await core_descriptions(core)
 
     monkeypatch.setattr(
-        ws_commands,
-        "_async_get_all_trigger_descriptions_json",
-        descriptions_never_ready,
+        ws_commands, "async_get_all_trigger_descriptions", descriptions_held
     )
     monkeypatch.setattr(automation_errors, "DESCRIPTIONS_TIMEOUT_S", 0.05)
     ws = await get_websocket_client(
@@ -326,6 +326,24 @@ async def test_closest_keys_come_from_the_keys_domain_first(
             {
                 "alias": "porch",
                 "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
+                "actions": [
+                    {"choose": [{"conditions": [], "sequence": [{"conditions": []}]}]}
+                ],
+            },
+            "root",
+        ),
+        (
+            {
+                "alias": "porch",
+                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
+                "action": {"trigger": "state"},
+            },
+            "root",
+        ),
+        (
+            {
+                "alias": "porch",
+                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
                 "actions": [],
                 "variables": "porch",
             },
@@ -341,7 +359,13 @@ async def test_closest_keys_come_from_the_keys_domain_first(
             "'platform'",
         ),
     ],
-    ids=["root-field-in-action-step", "variables-not-a-dict", "condition-as-trigger"],
+    ids=[
+        "root-field-in-action-step",
+        "root-field-in-nested-step",
+        "root-field-as-lone-legacy-step",
+        "variables-not-a-dict",
+        "condition-as-trigger",
+    ],
 )
 async def test_rejection_hint_names_what_core_objected_to(
     hass: HomeAssistant,

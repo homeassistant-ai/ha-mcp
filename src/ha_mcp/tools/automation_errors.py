@@ -141,22 +141,36 @@ def _platform_condition(config: dict[str, Any]) -> bool:
 
 
 _ROOT_ONLY_FIELDS = frozenset({"triggers", "trigger", "conditions"})
+_UNKNOWN_ACTION = re.compile(r"unable to determine action at '([^']+)'", re.IGNORECASE)
+_PATH_PART = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
 
 
-def _root_field_in_action(config: dict[str, Any]) -> bool:
-    actions = config.get("actions", config.get("action"))
-    steps = actions if isinstance(actions, list) else [actions]
-    return any(isinstance(s, dict) and _ROOT_ONLY_FIELDS & s.keys() for s in steps)
+def _step_at(config: dict[str, Any], path: str) -> Any:
+    """The step at Core's error path (``actions[0].choose[0].sequence[0]``)."""
+    node: Any = config
+    for name, index in _PATH_PART.findall(path):
+        if name:
+            fallback = node.get("action") if name == "actions" else None
+            node = node.get(name, fallback) if isinstance(node, dict) else None
+        elif isinstance(node, list) and int(index) < len(node):
+            node = node[int(index)]
+        elif isinstance(node, dict) and index == "0":
+            continue  # Core reads a lone step as a one-step list.
+        else:
+            return None
+    return node
 
 
 def text_suggestions(core_text: str, config: dict[str, Any]) -> list[str]:
     """Targeted hints for Core rejections agents commonly cause."""
     lowered = core_text.lower()
     suggestions = []
-    if "unable to determine action" in lowered and _root_field_in_action(config):
+    unknown = _UNKNOWN_ACTION.search(core_text)
+    step = _step_at(config, unknown.group(1)) if unknown else None
+    if isinstance(step, dict) and _ROOT_ONLY_FIELDS & step.keys():
         suggestions.append(
-            "A root-level field such as alias, triggers or conditions is inside "
-            "an action step."
+            "A root-level field such as triggers or conditions is inside an "
+            "action step."
         )
     elif "'variables'" in core_text and "expected a mapping" in lowered:
         suggestions.append(
