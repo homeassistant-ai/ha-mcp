@@ -352,7 +352,12 @@ async def _find_collision_in_flow_helpers(
         result = await client.send_websocket_message(
             {"type": "config_entries/get", "domain": helper_type}
         )
-    except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
+    except (
+        HomeAssistantAPIError,
+        HomeAssistantConnectionError,
+        ConnectionError,
+        TimeoutError,
+    ) as exc:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning(
@@ -390,7 +395,12 @@ async def _find_collision_in_simple_helpers(
     Core's ``{type}/list``."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
+    except (
+        HomeAssistantAPIError,
+        HomeAssistantConnectionError,
+        ConnectionError,
+        TimeoutError,
+    ) as exc:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
