@@ -358,6 +358,9 @@ async def _find_collision_in_flow_helpers(
         ConnectionError,
         TimeoutError,
     ) as exc:
+        # A refused token is no outage: creating would only log in and fail again.
+        if isinstance(exc.__cause__, HomeAssistantAuthError):
+            raise
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning(
@@ -401,6 +404,9 @@ async def _find_collision_in_simple_helpers(
         ConnectionError,
         TimeoutError,
     ) as exc:
+        # A refused token is no outage: creating would only log in and fail again.
+        if isinstance(exc.__cause__, HomeAssistantAuthError):
+            raise
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
