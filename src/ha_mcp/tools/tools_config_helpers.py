@@ -42,6 +42,7 @@ from .config_helpers.listing import (
     _shape_component_helpers_response,
     raise_if_helper_flows_degraded,
     shape_all_helpers_response,
+    well_formed_helpers,
 )
 from .config_helpers.registry import (
     _check_name_collision,
@@ -487,7 +488,7 @@ class HelperConfigTools:
             logger.warning("ha_mcp_tools/helpers_list (all) failed: %r", exc)
             return None
         result = raw.get("result") or {}
-        if not isinstance(result.get("helpers"), list):
+        if not well_formed_helpers(result):
             # A malformed reply counts as no component.
             return None
         return await shape_all_helpers_response(
