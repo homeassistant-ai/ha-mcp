@@ -503,9 +503,13 @@ _MEMBERSHIP_CASES = [
 
 @pytest.mark.parametrize(("attributes", "expected"), _MEMBERSHIP_CASES)
 def test_the_servers_membership_normalizer(
-    attributes: dict[str, Any], expected: list[str] | None
+    hass: HomeAssistant, attributes: dict[str, Any], expected: list[str] | None
 ) -> None:
-    assert normalize_member_entity_ids(attributes) == expected
+    hass.states.async_set("light.marker", "on", attributes)
+    state = hass.states.get("light.marker")
+    assert state is not None
+
+    assert normalize_member_entity_ids(state.attributes) == expected
 
 
 @pytest.mark.parametrize(("attributes", "expected"), _MEMBERSHIP_CASES)

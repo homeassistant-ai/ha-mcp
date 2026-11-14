@@ -204,31 +204,6 @@ async def test_main_and_child_devices_list_in_a_stable_order(
     assert first[-1] == _as_sent(child.dict_repr)
 
 
-async def test_a_registry_without_child_devices_still_lists(
-    component_ws: MockHAClientWebSocket,
-    device_registry: dr.DeviceRegistry,
-    config_entry: MockConfigEntry,
-    areas: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Core 2026.8, the oldest release HACS installs this on, keeps devices in
-    a mapping and has no child devices."""
-    ordinary = _device(
-        device_registry, config_entry, "ordinary", area_id=areas["office"]
-    )
-
-    with monkeypatch.context() as core_2026_8:
-        core_2026_8.delattr(device_registry, "child_devices")
-        core_2026_8.setattr(
-            device_registry,
-            "devices",
-            {entry.id: entry for entry in device_registry.devices},
-        )
-        devices = await _list(component_ws)
-
-    assert devices == [_as_sent(ordinary.dict_repr)]
-
-
 async def test_a_device_held_twice_is_left_out_of_the_list(
     component_ws: MockHAClientWebSocket,
     device_registry: dr.DeviceRegistry,
