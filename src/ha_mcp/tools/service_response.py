@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .component_api import COMPONENT_INSTALL_HINT
+from .component_api import (
+    COMPONENT_INSTALL_HINT,
+    component_supports,
+    get_component_caps,
+)
 
 #: Emitted when a ``return_response=true`` reply is not HA's
 #: ``{"changed_states": [...], "service_response": ...}`` envelope. Without it an
@@ -32,14 +36,28 @@ COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
     "and lost with the confirmation. Re-read state to confirm the outcome."
 )
 
-#: Added to a failed ``return_response`` call without the component: Core checks
-#: the response only after the service ran, and only the component's answer says
-#: whether the service ran before a refusal.
+#: Added to a failed ``return_response`` call that went to Core's REST API: Core
+#: checks the response only after the service ran.
 RESPONSE_CALL_FAILED_HINT = (
     "The service may have run before Home Assistant refused its response: check "
-    "its effect before calling it again. The ha_mcp_tools component reports a "
-    f"refused response as such. {COMPONENT_INSTALL_HINT}"
+    "its effect before calling it again."
 )
+
+
+async def response_call_failed_hint(client: Any, return_response: bool) -> str | None:
+    """``RESPONSE_CALL_FAILED_HINT`` for a call that asked for a response.
+
+    Only the component's answer says whether the service ran before a refusal,
+    so an installation without it is also told to install it.
+    """
+    if not return_response:
+        return None
+    if component_supports(await get_component_caps(client), "call_service"):
+        return RESPONSE_CALL_FAILED_HINT
+    return (
+        f"{RESPONSE_CALL_FAILED_HINT} The ha_mcp_tools component reports a "
+        f"refused response as such. {COMPONENT_INSTALL_HINT}"
+    )
 
 
 #: Added to the error of a call the component dispatched that then failed.

@@ -61,9 +61,9 @@ from .helpers import (
 from .response_helpers import compact_service_result, project_entity_record
 from .service_response import (
     COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
-    RESPONSE_CALL_FAILED_HINT,
     SERVICE_FAILED_AFTER_DISPATCH_HINT,
     note_rejected_response,
+    response_call_failed_hint,
     split_return_response_envelope,
 )
 from .tool_hints import read_only_hints, write_hints
@@ -2024,7 +2024,7 @@ class ServiceTools(EventCallMixin):
                 domain=domain,
                 service=service,
                 entity_id=entity_id,
-                hint=RESPONSE_CALL_FAILED_HINT if return_response else None,
+                hint=await response_call_failed_hint(self._client, return_response),
             )
             return (
                 None  # unreachable: _raise_unexpected_call_service_error always raises

@@ -23,6 +23,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.service_response import (
     RESPONSE_CALL_FAILED_HINT,
@@ -78,6 +79,11 @@ def counter(hass: HomeAssistant) -> Counter:
     return Counter(hass)
 
 
+def _may_have_run_hints(exc: pytest.ExceptionInfo[ToolError]) -> list[str]:
+    suggestions: list[str] = error_of(exc)["suggestions"]
+    return [hint for hint in suggestions if RESPONSE_CALL_FAILED_HINT in hint]
+
+
 def _rejected(resp: dict[str, object]) -> None:
     """The call ran; Core's refusal of the response is reported as such."""
     assert resp["success"] is True
@@ -111,7 +117,8 @@ async def test_without_the_component_a_rejected_response_is_not_called_again(
             core_client, DeviceControlTools(core_client)
         ).ha_call_service(domain="counter", service="bump", return_response=True)
 
-    assert RESPONSE_CALL_FAILED_HINT in error_of(exc)["suggestions"]
+    (hint,) = _may_have_run_hints(exc)
+    assert COMPONENT_INSTALL_HINT in hint
     state = hass.states.get("sensor.count")
     assert state is not None and state.state == "1"
     assert counter.calls == 1
@@ -139,7 +146,8 @@ async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
 async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """Core checks the schema before the service runs, so nothing ran."""
+    """Core checks the schema before the service runs, so nothing ran. The
+    error does not tell a user who has the component to install it."""
     calls: list[ServiceCall] = []
 
     async def _handle(call: ServiceCall) -> ServiceResponse:
@@ -161,6 +169,7 @@ async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
 
     assert error_of(exc)["code"] == "VALIDATION_FAILED"
     assert calls == []
+    assert not any(COMPONENT_INSTALL_HINT in hint for hint in _may_have_run_hints(exc))
 
 
 async def test_a_rejected_response_inside_the_service_is_its_failure(
