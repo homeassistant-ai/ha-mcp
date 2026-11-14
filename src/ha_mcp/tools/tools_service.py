@@ -19,6 +19,7 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -62,6 +63,8 @@ from .response_helpers import compact_service_result, project_entity_record
 from .service_response import (
     COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
     RESPONSE_CALL_FAILED_HINT,
+    SERVICE_FAILED_AFTER_DISPATCH_HINT,
+    STATES_NOT_LISTED_WARNING,
     note_rejected_response,
     split_return_response_envelope,
 )
@@ -1064,7 +1067,9 @@ class ServiceTools(EventCallMixin):
         # Check if this is a timeout - for service calls, timeouts typically
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
-        if isinstance(error.__cause__, httpx.TimeoutException):
+        if isinstance(
+            error.__cause__, (httpx.TimeoutException, HomeAssistantCommandTimeout)
+        ):
             return self._build_timeout_response(
                 domain, service, entity_id, data, return_response=return_response
             )
@@ -1080,6 +1085,10 @@ class ServiceTools(EventCallMixin):
         )
         return None  # unreachable: exception_to_structured_error always raises
 
+    def _websocket_route_warnings(self) -> list[str]:
+        """A non-administrator's call goes over WebSocket, which lists no states."""
+        return [STATES_NOT_LISTED_WARNING] if self._client.admin_route_refused else []
+
     @staticmethod
     def _raise_unexpected_call_service_error(
         error: Exception,
@@ -1087,13 +1096,13 @@ class ServiceTools(EventCallMixin):
         domain: str,
         service: str,
         entity_id: str | None,
-        return_response: bool = False,
+        hint: str | None = None,
     ) -> NoReturn:
-        """Raise a structured ToolError for an unexpected ha_call_service failure."""
+        """Raise a structured ToolError for an unexpected ha_call_service failure;
+        ``hint`` leads the suggestions when the service may have run."""
         suggestions = _build_service_suggestions(domain, service, entity_id)
-        if return_response:
-            # Core checks a requested response only after the service ran.
-            suggestions.insert(0, RESPONSE_CALL_FAILED_HINT)
+        if hint:
+            suggestions.insert(0, hint)
         if entity_id:
             suggestions.append(
                 f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')"
@@ -1286,11 +1295,9 @@ class ServiceTools(EventCallMixin):
           (``get_websocket_client`` raising before the frame is sent) all mean the
           component never dispatched. A command-ERROR RESPONSE is also ``None``: it is
           pre-dispatch for the component's own guards (the D1 domain block and
-          ``ServiceNotFound`` raise before any ``async_call``), and for a non-unknown
-          command error it is the ONE documented residual — an ``async_call`` that
-          mutated state and THEN raised could double-apply on the legacy re-POST
-          (accepted per the approved design; no idempotency token exists anywhere in
-          the write path).
+          ``ServiceNotFound`` raise before any ``async_call``); an ``async_call`` that
+          raised comes back as ``service_error`` instead, and is reported, never
+          re-POSTed.
         * POST-SEND → never retried: a confirmation that lapsed comes back as a
           normal result dict (``partial=True`` / ``dispatched=True``). A response-wait
           TIMEOUT (``HomeAssistantCommandTimeout`` — the frame was sent) or any
@@ -1370,8 +1377,8 @@ class ServiceTools(EventCallMixin):
             return None
         except HomeAssistantCommandError as exc:
             # unknown_command means the command vanished: invalidate the cached caps so
-            # the next call re-probes. Any other command error → legacy re-POST (the
-            # documented at-most-once residual, see D9 above).
+            # the next call re-probes. Any other command error is pre-dispatch → legacy
+            # (see D9 above).
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
             else:
@@ -1679,6 +1686,16 @@ class ServiceTools(EventCallMixin):
             )
         if component_result is None:
             return None
+        if (failure := component_result.get("service_error")) is not None:
+            self._raise_unexpected_call_service_error(
+                HomeAssistantAPIError(
+                    f"API error: 500 - {failure.get('message')}", status_code=500
+                ),
+                domain=domain,
+                service=service,
+                entity_id=entity_id,
+                hint=SERVICE_FAILED_AFTER_DISPATCH_HINT,
+            )
         return self._build_component_call_response(
             component_result,
             domain=domain,
@@ -1748,10 +1765,9 @@ class ServiceTools(EventCallMixin):
                 description=(
                     "If True, the service's response data is returned once, as the "
                     "top-level 'service_response' key — never nested inside 'result'. "
-                    "If Home Assistant rejects the response after the service ran, "
-                    "the call still succeeds, with 'response_error' and a warning not "
-                    "to call it again. The states such a call changed are listed only "
-                    "with the ha_mcp_tools component; without it a warning says so."
+                    "With the ha_mcp_tools component, a response Home Assistant "
+                    "rejects after the service ran still succeeds, with "
+                    "'response_error' and a warning not to call it again."
                 ),
             ),
         ] = False,
@@ -1969,7 +1985,11 @@ class ServiceTools(EventCallMixin):
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            call_warnings = [*projection_warnings, *envelope_warnings]
+            call_warnings = [
+                *projection_warnings,
+                *envelope_warnings,
+                *self._websocket_route_warnings(),
+            ]
             if call_warnings:
                 response.setdefault("warnings", []).extend(call_warnings)
 
@@ -2006,7 +2026,7 @@ class ServiceTools(EventCallMixin):
                 domain=domain,
                 service=service,
                 entity_id=entity_id,
-                return_response=return_response,
+                hint=RESPONSE_CALL_FAILED_HINT if return_response else None,
             )
             return (
                 None  # unreachable: _raise_unexpected_call_service_error always raises

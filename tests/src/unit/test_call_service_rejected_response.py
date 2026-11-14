@@ -18,11 +18,15 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.device_control import DeviceControlTools
-from ha_mcp.tools.service_response import RESPONSE_CALL_FAILED_HINT
+from ha_mcp.tools.service_response import (
+    RESPONSE_CALL_FAILED_HINT,
+    SERVICE_FAILED_AFTER_DISPATCH_HINT,
+)
 from ha_mcp.tools.tools_service import ServiceTools
 
 from ._tool_errors import error_of
@@ -30,12 +34,16 @@ from ._tool_errors import error_of
 
 class Counter:
     """``light.turn_on`` and ``counter.bump``: each writes ``light.a`` / ``sensor.count``
-    and returns no response."""
+    and returns no response. ``counter.fail`` writes ``sensor.count`` and fails."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self.calls = 0
-        for domain, service in (("light", "turn_on"), ("counter", "bump")):
+        for domain, service in (
+            ("light", "turn_on"),
+            ("counter", "bump"),
+            ("counter", "fail"),
+        ):
             hass.services.async_register(
                 domain,
                 service,
@@ -51,6 +59,8 @@ class Counter:
             self.hass.states.async_set("light.a", "on")
         else:
             self.hass.states.async_set("sensor.count", str(self.calls))
+        if call.service == "fail":
+            raise HomeAssistantError("upstream failed")
         return None
 
 
@@ -93,6 +103,21 @@ async def test_without_the_component_a_rejected_response_is_not_called_again(
         ).ha_call_service(domain="counter", service="bump", return_response=True)
 
     assert RESPONSE_CALL_FAILED_HINT in error_of(exc)["suggestions"]
+    state = hass.states.get("sensor.count")
+    assert state is not None and state.state == "1"
+    assert counter.calls == 1
+
+
+async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, counter: Counter
+) -> None:
+    """The component dispatched it, so the error is reported, not re-posted."""
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(
+            component_core_client, DeviceControlTools(component_core_client)
+        ).ha_call_service(domain="counter", service="fail", return_response=True)
+
+    assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]
     state = hass.states.get("sensor.count")
     assert state is not None and state.state == "1"
     assert counter.calls == 1

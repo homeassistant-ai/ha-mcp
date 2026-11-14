@@ -39,8 +39,8 @@ async def _applied(hass: HomeAssistant) -> None:
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
-# Long enough that only the test's clock releases the deferred write.
-_HELD_S = 60
+# A week: no real timer expires during a test, so only its clock releases the write.
+_HELD_S = 7 * 24 * 3600
 
 
 @pytest.fixture

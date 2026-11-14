@@ -85,9 +85,10 @@ async def _call_service_prep(
     Raised exceptions PROPAGATE — the WS handler turns them into a command error the
     server maps (D7). Two distinct classes propagate: the D1 domain block and
     ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
-    landed); an ``async_call`` / ``return_response`` validation error is MID-dispatch
-    (the handler may mutate state and THEN raise — the documented D9 at-most-once
-    residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
+    landed). A ``HomeAssistantError`` from ``async_call`` itself is MID-dispatch (the
+    handler may mutate state and THEN raise), so it is not raised: it comes back
+    as ``service_error`` (``response_error`` when Core rejected the response) and
+    the server reports it without sending the call again. A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
 
     The whole POST-dispatch section — the immediate-match re-read, the wait, and the
@@ -183,7 +184,8 @@ async def _call_service_prep(
             response=response,
         )
         if response_error is not None:
-            result["response_error"] = response_error
+            failed = response_error.pop("failed", False)
+            result["service_error" if failed else "response_error"] = response_error
         if return_response:
             result["changed_states"] = changed
     except Exception:
@@ -406,7 +408,9 @@ async def _dispatch(
     msg: dict[str, Any],
 ) -> tuple[Any, dict[str, Any] | None]:
     """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
-    the service ran and Core rejected its response."""
+    it raised. ``error["failed"]`` marks a raise other than Core rejecting the
+    response; either way the service may have run, so the server must not send
+    the call again."""
     try:
         response = await hass.services.async_call(
             domain,
@@ -417,9 +421,13 @@ async def _dispatch(
             context=msg.get("ha_mcp_context"),
         )
     except HomeAssistantError as err:
+        error: dict[str, Any] = {
+            "translation_key": err.translation_key,
+            "message": str(err),
+        }
         if (err.translation_domain, err.translation_key) != _RESPONSE_REJECTED:
-            raise
-        return None, {"translation_key": err.translation_key, "message": str(err)}
+            error["failed"] = True
+        return None, error
     return response, None
 
 
