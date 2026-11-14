@@ -513,7 +513,8 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
     for issue in _mapping_values(issues):
         if getattr(issue, "active", True) is False:
             continue
-        if registry.async_is_hidden(issue):
+        is_hidden = getattr(registry, "async_is_hidden", None)
+        if is_hidden is not None and is_hidden(issue):
             continue
         dismissed = getattr(issue, "dismissed_version", None)
         out.append(

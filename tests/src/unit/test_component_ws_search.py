@@ -733,9 +733,6 @@ class FakeIssueRegistry:
     def __init__(self, issues):
         self.issues = {(i.domain, i.issue_id): i for i in issues}
 
-    def async_is_hidden(self, issue):
-        return False
-
 
 class FakeIssueRegModule:
     """Stand-in for the ``issue_registry`` module (``async_get`` seam)."""
