@@ -19,10 +19,9 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
 
-from ._search_tool import _setup_visibility_disabled
+from ._search_tool import search_tools_on
 
 
 @pytest.fixture
@@ -32,10 +31,7 @@ def search_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> SearchTools:
     """``ha_search`` and ``ha_get_overview`` served by the component on ``hass``."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    return SearchTools(
-        component_core_client, SmartSearchTools(client=component_core_client)
-    )
+    return search_tools_on(component_core_client, tmp_path, monkeypatch)
 
 
 def _outlet_power_sensor(hass: HomeAssistant) -> tuple[str, str, str]:

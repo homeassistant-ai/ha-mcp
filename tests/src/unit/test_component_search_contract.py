@@ -1,13 +1,12 @@
 """Contract test for the component-search seam (ha_mcp_tools/search).
 
-The component's ``_do_search`` and the server's
-``_shape_component_search_response`` were written against the same design
-contract but never against each other's code. This suite pipes the REAL
-component output (fake hass, real joins/scoring) through the REAL server
-shaper and pins the result to the legacy ha_search record shapes — so a
-vocabulary drift on either side (``alias`` vs ``friendly_name``, ``options``
-vs ``config``, id-key renames) fails here instead of shipping a
-component-served response whose records don't match the legacy path.
+The component's search and the server's ``ha_search`` shaping were written
+against the same design contract but never against each other's code. Here
+``ha_search`` runs on the server's own client against a real ``hass`` that
+answers the component's commands (``component_core_client``), and its records
+are pinned to the legacy ``ha_search`` record shapes, so a vocabulary drift on
+either side (``alias`` vs ``friendly_name``, ``options`` vs ``config``, id-key
+renames) fails here instead of shipping.
 
 Legacy per-bucket record keys (the contract being pinned; see
 ``smart_search/_deep.py`` / ``_scenes.py`` record builders):
@@ -22,36 +21,39 @@ Legacy per-bucket record keys (the contract being pinned; see
 
 ``config`` is present only under ``include_config=True`` (mirroring the
 legacy pipeline's pop), and YAML-backed records must never carry a body.
-Scene records never carry a body either: a scene's config is always ``None``
-from the component (its ``states`` are runtime objects), and it matches on the
-entity-id KEYS of ``states`` (here ``light.contractmarker_lamp``).
+Scene records never carry a body either.
 """
 
 from __future__ import annotations
 
-import pytest
+import ast
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
-from ha_mcp.tools.search.component import (
-    _COMPONENT_BODY_SEARCH_TYPES,
-    _DASHBOARD_SEARCH_TYPE,
-    _shape_component_search_response,
+import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import MockHAClientWebSocket
+
+from custom_components.ha_mcp_tools.websocket_api.constants import (
+    ALL_SEARCH_TYPES,
+    WS_SEARCH,
 )
-from ha_mcp.tools.search.response import _VALID_SEARCH_TYPES, _ResolvedSearch
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.utils.entity_membership import normalize_member_entity_ids
 
-from .test_component_ws_search import (
-    FakeArea,
-    FakeChildDevice,
-    FakeConfigEntries,
-    FakeDevice,
-    FakeFloor,
-    FakeHass,
-    FakeLabel,
-    FakeRegEntry,
-    FakeState,
-    make_view,
-    wsapi,
-)
+from ._component_core import ws_result
+from ._core_setup import add_test_entry, set_up_domain
+from ._search_tool import _build_ha_search, _setup_visibility_disabled
 
 AUTOMATION_KEYS = {
     "entity_id",
@@ -76,594 +78,163 @@ HELPER_COLLECTION_KEYS = {
     "match_in_config",
     "match_in_references",
 }
-HELPER_FLOW_KEYS = {
-    "entry_id",
-    "helper_type",
-    "name",
-    "score",
-    "match_in_name",
-    "match_in_config",
-    "match_in_references",
-}
-ENTITY_KEYS = {
-    "entity_id",
-    "friendly_name",
-    "domain",
-    "state",
-    "score",
-    "match_type",
-}
+HELPER_FLOW_KEYS = HELPER_COLLECTION_KEYS - {"entity_id"} | {"entry_id"}
+ENTITY_KEYS = {"entity_id", "friendly_name", "domain", "state", "score", "match_type"}
 # The component path adds the name Core composes, which only it can ask for.
 COMPONENT_ENTITY_KEYS = ENTITY_KEYS | {"name"}
+SECRET = "hunter2-contractmarker-secret"
 
 
-class _Entity:
-    """Minimal automation/script entity double (raw_config accessor)."""
-
-    def __init__(self, entity_id, name, raw_config, unique_id=None):
-        self.entity_id = entity_id
-        self.name = name
-        self.raw_config = raw_config
-        self.unique_id = unique_id
-
-
-class _SceneEntity:
-    def __init__(self, entity_id, name, scene_config, unique_id=None):
-        self.entity_id = entity_id
-        self.name = name
-        self.scene_config = scene_config
-        self.unique_id = unique_id
+@pytest.fixture
+def search(
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[..., Any]:
+    """``ha_search`` served by the component on ``hass``."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    return _build_ha_search(component_core_client)
 
 
-class _Component:
-    def __init__(self, entities):
-        self.entities = entities
+@pytest.fixture
+async def marker_home(hass: HomeAssistant) -> None:
+    """A home where the query 'contractmarker' hits every surface once."""
+    hass.states.async_set(
+        "light.contractmarker_lamp", "on", {"friendly_name": "Contractmarker Lamp"}
+    )
+    await set_up_domain(
+        hass, "input_boolean", {"contractmarker_flag": {"name": "Contractmarker Flag"}}
+    )
+    trigger = [{"trigger": "event", "event_type": "probe"}]
+    await set_up_domain(
+        hass,
+        "automation",
+        [
+            {
+                "id": "auto1",
+                "alias": "Contractmarker Storage Automation",
+                "triggers": trigger,
+                "actions": [],
+            },
+            {
+                "alias": "Yaml Automation",
+                "triggers": trigger,
+                "actions": [
+                    {"action": "notify.contractmarker", "data": {"message": SECRET}}
+                ],
+            },
+        ],
+    )
+    await set_up_domain(
+        hass,
+        "script",
+        {"contractmarker_script": {"alias": "Contractmarker Script", "sequence": []}},
+    )
+    await set_up_domain(
+        hass,
+        "scene",
+        [
+            {
+                "id": "scn1",
+                "name": "Contractmarker Scene",
+                "entities": {"light.contractmarker_lamp": "on"},
+            }
+        ],
+    )
+    MockConfigEntry(
+        domain="template",
+        entry_id="entry1",
+        title="Contractmarker Template Helper",
+        options={"template": "{{ 1 }}"},
+        data={"credential": "should-never-appear"},
+    ).add_to_hass(hass)
 
 
-class _Entry:
-    def __init__(self, entry_id, domain, title, options, data=None):
-        self.entry_id = entry_id
-        self.domain = domain
-        self.title = title
-        self.options = options
-        self.data = data or {}
-
-
-def _search_marker_hass() -> FakeHass:
-    """A hass where the query 'contractmarker' hits every surface once."""
-    states = [
-        FakeState(
-            "light.contractmarker_lamp", "on", friendly_name="Contractmarker Lamp"
-        ),
-        FakeState(
-            "input_boolean.contractmarker_flag",
-            "off",
-            friendly_name="Contractmarker Flag",
-        ),
-    ]
-    data = {
-        "automation": _Component(
-            [
-                _Entity(
-                    "automation.storage_hit",
-                    "Contractmarker Storage Automation",
-                    {"id": "auto1", "alias": "Contractmarker Storage Automation"},
-                    unique_id="auto1",
-                ),
-                _Entity(
-                    "automation.yaml_hit",
-                    "Yaml Automation",
-                    {
-                        "alias": "Yaml Automation",
-                        "action": [{"service": "notify.contractmarker"}],
-                        "secret_value": "hunter2-contractmarker-secret",
-                    },
-                    unique_id=None,
-                ),
-            ]
-        ),
-        "script": _Component(
-            [
-                _Entity(
-                    "script.contractmarker_script",
-                    "Contractmarker Script",
-                    {"id": "scr1", "alias": "Contractmarker Script"},
-                    unique_id="scr1",
-                )
-            ]
-        ),
-        "scene": _Component(
-            [
-                _SceneEntity(
-                    "scene.contractmarker_scene",
-                    "Contractmarker Scene",
-                    # ``states`` keys are entity ids (the scene match corpus); the
-                    # runtime State VALUES are never scored or emitted.
-                    {
-                        "id": "scn1",
-                        "name": "Contractmarker Scene",
-                        "states": {"light.contractmarker_lamp": {"state": "on"}},
-                    },
-                    unique_id="scn1",
-                )
-            ]
-        ),
-    }
-    entries = [
-        _Entry(
-            "entry1",
-            "template",
-            "Contractmarker Template Helper",
-            {"template": "{{ 1 }}"},
-            data={"credential": "should-never-appear"},
-        )
-    ]
-    hass = FakeHass(states=states, data=data)
-    hass.config_entries = FakeConfigEntries(entries)
-    return hass
-
-
-def _resolved(include_config: bool) -> _ResolvedSearch:
-    return _ResolvedSearch(
+async def _marker_search(search: Callable[..., Any], include_config: bool) -> Any:
+    return await search(
         query="contractmarker",
-        query_text="contractmarker",
-        domain_filter=None,
-        area_filter=None,
-        state_filter=None,
-        parsed_search_types=None,
-        parsed_fields=None,
-        result_fields=None,
-        limit=10,
-        offset=0,
         exact_match=True,
         include_hidden=False,
         include_config=include_config,
-        group_by_domain=False,
-        per_domain_limit=None,
-        config_time_budget=None,
-        registry_eligible=True,
-        body_eligible=True,
-        body_skipped_by_intent_gate=False,
+        limit=10,
     )
 
 
-def _component_result(monkeypatch, include_config: bool):
-    hass = _search_marker_hass()
-    monkeypatch.setattr(
-        wsapi, "_resolve_registries", lambda hass: wsapi._RegistryView()
-    )
-    return wsapi._do_search(
-        hass,
-        {
-            "query": "contractmarker",
-            "search_types": ["entity", "automation", "script", "scene", "helper"],
-            "exact": True,
-            "include_hidden": False,
-            "include_config": include_config,
-            "limit": 10,
-            "offset": 0,
-        },
-    )
-
-
-def _records(shaped, bucket):
+def _records(shaped: dict[str, Any], bucket: str) -> list[dict[str, Any]]:
     recs = shaped.get(bucket)
     assert isinstance(recs, list) and recs, f"expected records in {bucket}: {shaped}"
     return recs
 
 
-def test_all_surfaces_match_and_shape_to_legacy_keys(monkeypatch) -> None:
-    """Real component output → real server shaper → exact legacy key sets."""
-    result = _component_result(monkeypatch, include_config=True)
-    shaped = _shape_component_search_response(_resolved(True), result)
+@pytest.mark.usefixtures("marker_home")
+async def test_all_surfaces_match_and_shape_to_legacy_keys(
+    search: Callable[..., Any],
+) -> None:
+    shaped = await _marker_search(search, include_config=True)
 
     assert shaped["success"] is True
-
     for rec in _records(shaped, "entities"):
         assert set(rec) == COMPONENT_ENTITY_KEYS, f"entity record keys drifted: {rec}"
-
     autos = _records(shaped, "automations")
     assert {r["entity_id"] for r in autos} == {
-        "automation.storage_hit",
-        "automation.yaml_hit",
+        "automation.contractmarker_storage_automation",
+        "automation.yaml_automation",
     }
     for rec in autos:
-        assert set(rec) == AUTOMATION_KEYS | {"config"}, (
-            f"automation record keys drifted: {rec}"
-        )
+        assert set(rec) == AUTOMATION_KEYS | {"config"}, rec
         assert rec["friendly_name"], "friendly_name must be populated from alias"
-
     for rec in _records(shaped, "scripts"):
-        assert set(rec) == SCRIPT_KEYS | {"config"}, (
-            f"script record keys drifted: {rec}"
-        )
-        assert rec["script_id"] == "scr1"
-
+        assert set(rec) == SCRIPT_KEYS | {"config"}, rec
+        assert rec["script_id"] == "contractmarker_script"
     for rec in _records(shaped, "scenes"):
-        assert set(rec) == SCENE_KEYS | {"config"}, f"scene record keys drifted: {rec}"
+        assert set(rec) == SCENE_KEYS | {"config"}, rec
         assert rec["scene_id"] == "scn1"
-        # Scenes never emit a component-served body: the config key follows the
-        # include_config pop rule, but its value from the component is always None.
         assert rec["config"] is None
-
-    helper_recs = _records(shaped, "helpers")
-    by_kind = {("flow" if "entry_id" in r else "collection"): r for r in helper_recs}
-    assert set(by_kind["collection"]) == HELPER_COLLECTION_KEYS | {"config"}, (
-        f"collection helper keys drifted: {by_kind['collection']}"
-    )
-    assert set(by_kind["flow"]) == HELPER_FLOW_KEYS | {"config"}, (
-        f"flow helper keys drifted: {by_kind['flow']}"
-    )
-    # Flow helper body rides `options` component-side, `config` in the envelope.
+    by_kind = {
+        ("flow" if "entry_id" in r else "collection"): r
+        for r in _records(shaped, "helpers")
+    }
+    assert set(by_kind["collection"]) == HELPER_COLLECTION_KEYS | {"config"}
+    assert set(by_kind["flow"]) == HELPER_FLOW_KEYS | {"config"}
+    # The flow helper's body rides `options` component-side, `config` here.
     assert by_kind["flow"]["config"] == {"template": "{{ 1 }}"}
 
 
-def test_yaml_body_withheld_but_matched(monkeypatch) -> None:
-    """A YAML automation matched on its body must carry no config body, and
-    the resolved-secret string must be absent from the whole response."""
-    result = _component_result(monkeypatch, include_config=True)
-    shaped = _shape_component_search_response(_resolved(True), result)
+@pytest.mark.usefixtures("marker_home")
+async def test_a_yaml_body_is_matched_but_withheld(
+    search: Callable[..., Any],
+) -> None:
+    shaped = await _marker_search(search, include_config=True)
 
-    yaml_rec = next(
-        r for r in shaped["automations"] if r["entity_id"] == "automation.yaml_hit"
+    by_id = {r["entity_id"]: r for r in shaped["automations"]}
+    yaml_rec = by_id["automation.yaml_automation"]
+    assert (yaml_rec["match_in_config"], yaml_rec["config"]) == (True, None)
+    assert SECRET not in repr(shaped)
+    storage = by_id["automation.contractmarker_storage_automation"]["config"]
+    assert (storage["id"], storage["alias"]) == (
+        "auto1",
+        "Contractmarker Storage Automation",
     )
-    assert yaml_rec["match_in_config"] is True
-    assert yaml_rec["config"] is None
-    assert "hunter2-contractmarker-secret" not in repr(shaped)
-    # Storage sibling keeps its body under include_config.
-    storage_rec = next(
-        r for r in shaped["automations"] if r["entity_id"] == "automation.storage_hit"
-    )
-    assert storage_rec["config"] == {
-        "id": "auto1",
-        "alias": "Contractmarker Storage Automation",
-    }
 
 
-def test_include_config_false_strips_config_keys(monkeypatch) -> None:
-    """Without include_config, no record in any bucket carries a config key —
-    mirroring the legacy pipeline's include_config pop."""
-    result = _component_result(monkeypatch, include_config=False)
-    shaped = _shape_component_search_response(_resolved(False), result)
+@pytest.mark.usefixtures("marker_home")
+async def test_without_include_config_no_record_carries_a_config_key(
+    search: Callable[..., Any],
+) -> None:
+    """Mirrors the legacy pipeline's include_config pop; entry.data never
+    surfaces, with or without include_config."""
+    shaped = await _marker_search(search, include_config=False)
 
     for bucket in ("automations", "scripts", "scenes", "helpers"):
         for rec in _records(shaped, bucket):
             assert "config" not in rec, f"{bucket} record leaked config key: {rec}"
-
-    # entry.data must never surface anywhere, with or without include_config.
     assert "should-never-appear" not in repr(shaped)
 
 
-def _resolved_result_fields(result_fields) -> _ResolvedSearch:
-    """An entity-only resolved search with a given ``result_fields`` request."""
-    return _ResolvedSearch(
-        query="enrichmarker",
-        query_text="enrichmarker",
-        domain_filter=None,
-        area_filter=None,
-        state_filter=None,
-        parsed_search_types=None,
-        parsed_fields=None,
-        result_fields=result_fields,
-        limit=10,
-        offset=0,
-        exact_match=True,
-        include_hidden=True,
-        include_config=False,
-        group_by_domain=False,
-        per_domain_limit=None,
-        config_time_budget=None,
-        registry_eligible=True,
-        body_eligible=False,
-        body_skipped_by_intent_gate=False,
-    )
+@pytest.mark.usefixtures("marker_home")
+async def test_the_envelope_has_the_legacy_keys(search: Callable[..., Any]) -> None:
+    shaped = await _marker_search(search, include_config=False)
 
-
-def _enrichment_component_result(
-    monkeypatch,
-    *,
-    membership: bool = False,
-    members: object = frozenset({"light.two", "light.one"}),
-):
-    """Real ``_do_search`` output for one entity carrying a full registry join."""
-    view = make_view(
-        entity={
-            "light.enrichmarker": FakeRegEntry(
-                "light.enrichmarker",
-                aliases={"desk"},
-                area_id="a1",
-                labels={"lb1"},
-            )
-        },
-        areas=[FakeArea("a1", "Office", floor_id="f1")],
-        floors=[FakeFloor("f1", "Upstairs")],
-        labels=[FakeLabel("lb1", "Favorites")],
-    )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-    hass = FakeHass(
-        states=[
-            FakeState(
-                "light.enrichmarker",
-                "on",
-                friendly_name="Enrichmarker",
-                **({"group_entities": members} if members is not None else {}),
-            )
-        ]
-    )
-    return wsapi._do_search(
-        hass,
-        {
-            "query": "enrichmarker",
-            "search_types": ["entity"],
-            "exact": True,
-            "include_hidden": True,
-            "include_config": False,
-            "limit": 10,
-            "offset": 0,
-            **(
-                {"result_fields": ["is_group", "member_entity_ids"]}
-                if membership
-                else {}
-            ),
-        },
-    )
-
-
-def test_component_skips_membership_work_by_default(monkeypatch) -> None:
-    """The default component path pays no membership-normalization cost."""
-    original = wsapi._normalize_member_entity_ids
-    calls: list[object] = []
-
-    def tracking_normalizer(attributes):
-        """Record attributes passed through the component membership normalizer."""
-        calls.append(attributes)
-        return original(attributes)
-
-    monkeypatch.setattr(wsapi, "_normalize_member_entity_ids", tracking_normalizer)
-    default = _enrichment_component_result(monkeypatch)
-    assert calls == []
-    assert "is_group" not in default["entities"][0]
-
-    requested = _enrichment_component_result(monkeypatch, membership=True)
-    assert len(calls) == 1
-    assert requested["entities"][0]["is_group"] is True
-
-
-def test_membership_normalizers_share_malformed_modern_fallback_semantics() -> None:
-    """Both deployment artifacts reject malformed modern data before fallback."""
-    attributes = {
-        "group_entities": ["light.valid", "not-an-entity"],
-        "entity_id": ["light.legacy_two", "light.legacy_one"],
-    }
-    expected = ["light.legacy_one", "light.legacy_two"]
-
-    assert normalize_member_entity_ids(attributes) == expected
-    assert wsapi._normalize_member_entity_ids(attributes) == expected
-
-
-def test_result_fields_default_shape_is_base_keys_plus_name(monkeypatch) -> None:
-    """No result_fields → the shaped entity record is the six base keys plus the
-    composed name, even though the real component record already carries the
-    enrichment join."""
-    result = _enrichment_component_result(monkeypatch)
-    shaped = _shape_component_search_response(_resolved_result_fields(None), result)
-    assert set(shaped["entities"][0]) == COMPONENT_ENTITY_KEYS
-
-
-def test_result_fields_enrichment_additive(monkeypatch) -> None:
-    """Requested enrichment keys survive the projection with the real join values;
-    the additive fields appear ONLY because result_fields named them."""
-    result = _enrichment_component_result(monkeypatch)
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "area", "floor", "labels", "aliases"]),
-        result,
-    )
-    assert shaped["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "area": "Office",
-        "floor": "Upstairs",
-        "labels": ["Favorites"],
-        "aliases": ["desk"],
-    }
-
-
-def test_child_device_effective_area_and_floor_reach_public_search(
-    monkeypatch,
-) -> None:
-    """The public ``ha_search`` projection uses Core's child placement rules."""
-    view = make_view(
-        entity={
-            "sensor.enrichmarker": FakeRegEntry(
-                "sensor.enrichmarker", device_id="child"
-            )
-        },
-        areas=[
-            FakeArea("office", "Office", floor_id="upstairs"),
-            FakeArea("garage", "Garage", floor_id="ground"),
-        ],
-        floors=[
-            FakeFloor("upstairs", "Upstairs"),
-            FakeFloor("ground", "Ground"),
-        ],
-        devices=[FakeDevice("parent", area_id="office")],
-        child_devices=[FakeChildDevice("child", "parent", area_id="garage")],
-    )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-    result = wsapi._do_search(
-        FakeHass(
-            states=[
-                FakeState("sensor.enrichmarker", "on", friendly_name="Enrichmarker")
-            ]
-        ),
-        {
-            "query": "enrichmarker",
-            "search_types": ["entity"],
-            "result_fields": ["area", "floor"],
-        },
-    )
-
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "area", "floor"]), result
-    )
-
-    # The child's direct area wins over its parent's area, exactly as Core does.
-    assert shaped["entities"] == [
-        {
-            "entity_id": "sensor.enrichmarker",
-            "area": "Garage",
-            "floor": "Ground",
-        }
-    ]
-
-
-def test_conflicting_device_identity_does_not_enrich_public_search(
-    monkeypatch,
-) -> None:
-    """Ambiguous device rows cannot assign an arbitrary area or floor."""
-    office = FakeDevice("duplicate", area_id="office")
-    garage = FakeDevice("duplicate", area_id="garage")
-
-    class _ConflictingRegistry:
-        devices = (office, garage)
-        child_devices = ()
-
-        def async_get(self, device_id):
-            return office if device_id == "duplicate" else None
-
-    view = make_view(
-        entity={
-            "sensor.enrichmarker": FakeRegEntry(
-                "sensor.enrichmarker", device_id="duplicate"
-            )
-        },
-        areas=[FakeArea("office", "Office", floor_id="upstairs")],
-        floors=[FakeFloor("upstairs", "Upstairs")],
-    )
-    view.device = _ConflictingRegistry()
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-
-    result = wsapi._do_search(
-        FakeHass(
-            states=[
-                FakeState("sensor.enrichmarker", "on", friendly_name="Enrichmarker")
-            ]
-        ),
-        {
-            "query": "enrichmarker",
-            "search_types": ["entity"],
-            "result_fields": ["area", "floor"],
-        },
-    )
-
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "area", "floor"]), result
-    )
-
-    assert shaped["entities"] == [
-        {
-            "entity_id": "sensor.enrichmarker",
-            "area": None,
-            "floor": None,
-        }
-    ]
-
-
-def test_result_fields_membership_additive(monkeypatch) -> None:
-    """Explicit HA membership is generic, deterministic, and opt-in."""
-    result = _enrichment_component_result(monkeypatch, membership=True)
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
-        result,
-    )
-    assert shaped["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "is_group": True,
-        "member_entity_ids": ["light.one", "light.two"],
-    }
-
-
-def test_result_fields_leaf_omits_member_ids(monkeypatch) -> None:
-    """Leaf records use is_group=False; absence is not rewritten to null."""
-    result = _enrichment_component_result(monkeypatch, membership=True, members=None)
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
-        result,
-    )
-    assert shaped["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "is_group": False,
-    }
-
-
-def test_result_fields_empty_group_is_explicit(monkeypatch) -> None:
-    """An explicitly empty collection remains distinguishable from a leaf."""
-    result = _enrichment_component_result(monkeypatch, membership=True, members=[])
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
-        result,
-    )
-    assert shaped["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "is_group": True,
-        "member_entity_ids": [],
-    }
-
-
-def test_member_projection_also_retains_group_discriminator(
-    monkeypatch,
-) -> None:
-    """Member IDs never lose the group/leaf discriminator."""
-    result = _enrichment_component_result(monkeypatch, membership=True)
-    is_group = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "is_group"]), result
-    )
-    members = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "member_entity_ids"]), result
-    )
-    assert is_group["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "is_group": True,
-    }
-    assert members["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "is_group": True,
-        "member_entity_ids": ["light.one", "light.two"],
-    }
-
-
-def test_component_member_redaction_covers_visibility_and_hidden_registry() -> None:
-    """Member IDs honor both hard visibility and include_hidden=False."""
-    view = make_view(
-        entity={
-            "light.hidden": FakeRegEntry("light.hidden", hidden_by="user"),
-            "light.denied": FakeRegEntry("light.denied"),
-        }
-    )
-    visibility_record = {
-        "is_group": True,
-        "member_entity_ids": ["light.denied", "light.visible"],
-    }
-    hidden_record = {
-        "is_group": True,
-        "member_entity_ids": ["light.hidden", "light.visible"],
-    }
-
-    wsapi._redact_hidden_members(
-        [visibility_record], {"light.denied"}, view=view, include_hidden=True
-    )
-    wsapi._redact_hidden_members(
-        [hidden_record], set(), view=view, include_hidden=False
-    )
-
-    assert visibility_record == {"is_group": True}
-    assert hidden_record == {"is_group": True}
-
-
-def test_envelope_matches_legacy_keys(monkeypatch) -> None:
-    """Envelope keys parity: the component-served response exposes the same
-    top-level keys the legacy path emits for a both-branches query."""
-    result = _component_result(monkeypatch, include_config=False)
-    shaped = _shape_component_search_response(_resolved(False), result)
     for key in (
         "success",
         "query",
@@ -683,154 +254,325 @@ def test_envelope_matches_legacy_keys(monkeypatch) -> None:
         assert key in shaped, f"envelope key missing: {key}"
 
 
-def test_component_body_search_types_lockstep() -> None:
-    """The routing gate's allowlist tracks the REAL component schema and the
-    public ``search_types`` vocabulary (issue #2008 drift guard).
-
-    The route-ineligible legacy fallback is deliberately silent, so a
-    ``search_types`` value that is server-valid but neither component-served
-    nor named here would reproduce #2008's schema bounce with no warning left
-    to catch it. Growing either vocabulary must fail this pin and force a
-    conscious routing decision.
-    """
-    # The gate's allowlist is exactly the component's search surfaces minus
-    # the entity surface (appended separately by the request builder).
-    assert set(wsapi.ALL_SEARCH_TYPES) - {"entity"} == _COMPONENT_BODY_SEARCH_TYPES
-    # ``dashboard`` is the one public value the search command cannot take. It
-    # is not legacy-only: the dashboards leg serves that bucket alongside the
-    # command and the server merges the two (issue #2289). Any OTHER value
-    # outside the allowlist would still route its whole call to legacy in
-    # silence, which is what this pin exists to prevent.
-    unserved = _VALID_SEARCH_TYPES - _COMPONENT_BODY_SEARCH_TYPES
-    assert unserved == {_DASHBOARD_SEARCH_TYPE}
-
-
-@pytest.mark.parametrize(
-    ("attributes", "expected"),
-    [
-        (
-            {
-                "group_entities": ["light.two", "light.one", "light.two"],
-                "entity_id": ["light.legacy"],
-            },
-            ["light.one", "light.two"],
-        ),
-        ({"entity_id": ("light.two", "light.one")}, ["light.one", "light.two"]),
-        ({"group_entities": [], "entity_id": ["light.legacy"]}, []),
-        ({"entity_id": "light.reference"}, None),
-        ({"entity_id": b"light.reference"}, None),
-        ({"entity_id": bytearray(b"light.reference")}, None),
-        ({"group_entities": {"light.member": True}}, None),
-        (
-            {"group_entities": frozenset({"light.two", "light.one"})},
-            ["light.one", "light.two"],
-        ),
-        ({"entity_id": ["light.Not_Valid"]}, None),
-        ({"entity_id": ["light.not-valid"]}, None),
-        ({"entity_id": ["light.lämp"]}, None),
-        ({"group_entities": ["light.valid", "not-an-entity"]}, None),
-        (
-            {
-                "group_entities": ["light.valid", "not-an-entity"],
-                "entity_id": ["light.legacy"],
-            },
-            ["light.legacy"],
-        ),
-        (
-            {
-                "group_entities": ["light.modern"],
-                "entity_id": ["light.legacy"],
-            },
-            ["light.modern"],
-        ),
-        (
-            {"group_entities": ["light.group", "light.member"]},
-            ["light.group", "light.member"],
-        ),
-        ({"group_members": ["light.not_supported"]}, None),
-    ],
-)
-@pytest.mark.parametrize(
-    "normalizer",
-    [normalize_member_entity_ids, wsapi._normalize_member_entity_ids],
-)
-def test_membership_normalizer_artifacts_remain_in_lockstep(
-    normalizer, attributes, expected
+async def test_every_public_search_type_but_dashboards_is_served_by_the_component(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    search: Callable[..., Any],
 ) -> None:
-    """Keep server and component normalization aligned across all edge cases."""
-    assert normalizer(attributes) == expected
-
-
-def test_component_projection_keeps_missing_base_and_enrichment_keys(
-    monkeypatch,
-) -> None:
-    """Base and requested enrichment fields use a stable null-bearing shape."""
-    result = _enrichment_component_result(monkeypatch)
-    record = result["entities"][0]
-    record.pop("state")
-    record.pop("area")
-    shaped = _shape_component_search_response(
-        _resolved_result_fields(["entity_id", "state", "area"]),
-        result,
+    """#2008: a type the server accepts but the component does not serve would
+    route its whole call to legacy in silence. ``dashboard`` is served by the
+    dashboards leg alongside the command (#2289)."""
+    with pytest.raises(ToolError, match="Valid types") as refused:
+        await search(query="x", search_types=["frobnicate"])
+    message = str(refused.value)
+    listed = message[message.index("Valid types: ") + len("Valid types: ") :]
+    valid = set(ast.literal_eval(listed[: listed.index("]") + 1]))
+    ws = await get_websocket_client(
+        url=component_core_client.base_url,
+        token=component_core_client.token,
+        verify_ssl=False,
     )
-    assert shaped["entities"][0] == {
-        "entity_id": "light.enrichmarker",
-        "state": None,
-        "area": None,
+
+    assert valid - {"dashboard"} == set(ALL_SEARCH_TYPES) - {"entity"}
+    for search_type in sorted(valid - {"dashboard"}):
+        with patch.object(ws, "send_command", wraps=ws.send_command) as send:
+            await search(query="x", search_types=[search_type])
+        assert WS_SEARCH in [c.args[0] for c in send.call_args_list], search_type
+
+
+# --- entity records ----------------------------------------------------------------
+@pytest.fixture
+def enrich_marker(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+    label_registry: lr.LabelRegistry,
+) -> Callable[[Any], None]:
+    """``light.enrichmarker`` in the Office upstairs, labeled, with an alias;
+    the returned setter gives its state the ``group_entities`` it is passed
+    (``None``: none)."""
+    upstairs = floor_registry.async_create("Upstairs")
+    office = area_registry.async_create("Office", floor_id=upstairs.floor_id)
+    label = label_registry.async_create("Favorites")
+    entry = entity_registry.async_get_or_create(
+        "light", "test", "enrichmarker", suggested_object_id="enrichmarker"
+    )
+    entity_registry.async_update_entity(
+        entry.entity_id, aliases=["desk"], area_id=office.id, labels={label.label_id}
+    )
+
+    def set_members(members: Any) -> None:
+        attributes: dict[str, Any] = {"friendly_name": "Enrichmarker"}
+        if members is not None:
+            attributes["group_entities"] = members
+        hass.states.async_set("light.enrichmarker", "on", attributes)
+
+    set_members(["light.two", "light.one"])
+    return set_members
+
+
+async def _entity(search: Callable[..., Any], **kwargs: Any) -> Any:
+    shaped = await search(query="enrichmarker", exact_match=True, **kwargs)
+    return shaped["entities"][0]
+
+
+@pytest.mark.usefixtures("enrich_marker")
+async def test_the_default_entity_record_is_the_base_keys_plus_the_name(
+    search: Callable[..., Any],
+) -> None:
+    """Even though the component record already carries the enrichment join."""
+    assert set(await _entity(search)) == COMPONENT_ENTITY_KEYS
+
+
+@pytest.fixture
+def sensor_on_a_device(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    """``sensor.enrichmarker`` on a child device in the Garage downstairs whose
+    parent is in the Office upstairs."""
+    upstairs = floor_registry.async_create("Upstairs")
+    ground = floor_registry.async_create("Ground")
+    office = area_registry.async_create("Office", floor_id=upstairs.floor_id)
+    garage = area_registry.async_create("Garage", floor_id=ground.floor_id)
+    config_entry = add_test_entry(hass)
+    parent = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={("test", "parent")}
+    )
+    device_registry.async_update_device(parent.id, area_id=office.id)
+    child = device_registry.async_get_or_create_child(
+        config_entry_id=config_entry.entry_id,
+        identifiers={("test", "child")},
+        parent_device_id=parent.id,
+    )
+    device_registry.async_update_child_device(child.id, area_id=garage.id)
+    entity_registry.async_get_or_create(
+        "sensor",
+        "test",
+        "enrichmarker",
+        suggested_object_id="enrichmarker",
+        device_id=child.id,
+    )
+    hass.states.async_set(
+        "sensor.enrichmarker", "on", {"friendly_name": "Enrichmarker"}
+    )
+
+
+@pytest.mark.usefixtures("sensor_on_a_device")
+async def test_a_child_devices_own_area_and_floor_reach_the_public_search(
+    search: Callable[..., Any],
+) -> None:
+    """The child's direct area wins over its parent's, exactly as Core does."""
+    record = await _entity(search, result_fields=["entity_id", "area", "floor"])
+
+    assert record == {
+        "entity_id": "sensor.enrichmarker",
+        "area": "Garage",
+        "floor": "Ground",
     }
 
 
-def test_component_search_redacts_denied_members_through_public_projection(
-    monkeypatch,
+async def test_a_device_held_twice_gives_no_area_to_the_public_search(
+    hass: HomeAssistant,
+    search: Callable[..., Any],
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
 ) -> None:
-    """Exercise visibility redaction through the real component search chain."""
-    view = make_view(
-        entity={
-            "light.membership_group": FakeRegEntry("light.membership_group"),
-            "light.visible": FakeRegEntry("light.visible"),
-            "light.denied": FakeRegEntry("light.denied"),
-        }
+    """Ambiguous device rows cannot assign an arbitrary area or floor."""
+    upstairs = floor_registry.async_create("Upstairs")
+    office = area_registry.async_create("Office", floor_id=upstairs.floor_id)
+    garage = area_registry.async_create("Garage")
+    device = device_registry.async_get_or_create(
+        config_entry_id=add_test_entry(hass).entry_id,
+        identifiers={("test", "dup")},
     )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-    hass = FakeHass(
-        states=[
-            FakeState(
-                "light.membership_group",
-                "on",
-                friendly_name="Membership marker",
-                group_entities=["light.visible", "light.denied"],
-            ),
-            FakeState("light.visible", "on", friendly_name="Visible"),
-            FakeState("light.denied", "on", friendly_name="Denied"),
-        ]
+    before = device_registry.async_update_device(device.id, area_id=office.id)
+    after = device_registry.async_update_device(device.id, area_id=garage.id)
+    entity_registry.async_get_or_create(
+        "sensor",
+        "test",
+        "enrichmarker",
+        suggested_object_id="enrichmarker",
+        device_id=device.id,
     )
-    result = wsapi._do_search(
-        hass,
+    hass.states.async_set(
+        "sensor.enrichmarker", "on", {"friendly_name": "Enrichmarker"}
+    )
+
+    with patch.object(
+        dr.ActiveDeviceRegistryItems, "values", return_value=[before, after]
+    ):
+        record = await _entity(search, result_fields=["entity_id", "area", "floor"])
+
+    assert record == {"entity_id": "sensor.enrichmarker", "area": None, "floor": None}
+
+
+@pytest.mark.parametrize(
+    ("members", "expected"),
+    [
+        (
+            ["light.two", "light.one"],
+            {"is_group": True, "member_entity_ids": ["light.one", "light.two"]},
+        ),
+        # A leaf says is_group=False; absence is not rewritten to null.
+        (None, {"is_group": False}),
+        # An explicitly empty collection remains distinguishable from a leaf.
+        ([], {"is_group": True, "member_entity_ids": []}),
+    ],
+    ids=["group", "leaf", "empty-group"],
+)
+async def test_membership_fields_are_opt_in_and_explicit(
+    search: Callable[..., Any],
+    enrich_marker: Callable[[Any], None],
+    members: Any,
+    expected: dict[str, Any],
+) -> None:
+    enrich_marker(members)
+
+    default = await _entity(search)
+    requested = await _entity(
+        search, result_fields=["entity_id", "is_group", "member_entity_ids"]
+    )
+
+    assert "is_group" not in default
+    assert requested == {"entity_id": "light.enrichmarker", **expected}
+
+
+@pytest.mark.usefixtures("enrich_marker")
+async def test_member_ids_never_lose_the_group_discriminator(
+    search: Callable[..., Any],
+) -> None:
+    is_group = await _entity(search, result_fields=["entity_id", "is_group"])
+    members = await _entity(search, result_fields=["entity_id", "member_entity_ids"])
+
+    assert is_group == {"entity_id": "light.enrichmarker", "is_group": True}
+    assert members == {
+        "entity_id": "light.enrichmarker",
+        "is_group": True,
+        "member_entity_ids": ["light.one", "light.two"],
+    }
+
+
+_MEMBERSHIP_CASES = [
+    (
         {
-            "query": "membership marker",
-            "search_types": ["entity"],
-            "exact": True,
-            "include_hidden": False,
-            "include_config": False,
-            "result_fields": ["is_group", "member_entity_ids"],
-            "visibility": {"deny_entity_ids": ["light.denied"]},
-            "limit": 10,
-            "offset": 0,
+            "group_entities": ["light.two", "light.one", "light.two"],
+            "entity_id": ["light.legacy"],
+        },
+        ["light.one", "light.two"],
+    ),
+    ({"entity_id": ("light.two", "light.one")}, ["light.one", "light.two"]),
+    ({"group_entities": [], "entity_id": ["light.legacy"]}, []),
+    ({"entity_id": "light.reference"}, None),
+    ({"entity_id": b"light.reference"}, None),
+    ({"entity_id": bytearray(b"light.reference")}, None),
+    ({"group_entities": {"light.member": True}}, None),
+    (
+        {"group_entities": frozenset({"light.two", "light.one"})},
+        ["light.one", "light.two"],
+    ),
+    ({"entity_id": ["light.Not_Valid"]}, None),
+    ({"entity_id": ["light.not-valid"]}, None),
+    ({"entity_id": ["light.lämp"]}, None),
+    ({"group_entities": ["light.valid", "not-an-entity"]}, None),
+    # Malformed modern data is rejected before the legacy fallback.
+    (
+        {
+            "group_entities": ["light.valid", "not-an-entity"],
+            "entity_id": ["light.legacy"],
+        },
+        ["light.legacy"],
+    ),
+    (
+        {"group_entities": ["light.modern"], "entity_id": ["light.legacy"]},
+        ["light.modern"],
+    ),
+    (
+        {"group_entities": ["light.group", "light.member"]},
+        ["light.group", "light.member"],
+    ),
+    ({"group_members": ["light.not_supported"]}, None),
+]
+
+
+@pytest.mark.parametrize(("attributes", "expected"), _MEMBERSHIP_CASES)
+def test_the_servers_membership_normalizer(
+    attributes: dict[str, Any], expected: list[str] | None
+) -> None:
+    assert normalize_member_entity_ids(attributes) == expected
+
+
+@pytest.mark.parametrize(("attributes", "expected"), _MEMBERSHIP_CASES)
+async def test_the_component_normalizes_membership_like_the_server(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    attributes: dict[str, Any],
+    expected: list[str] | None,
+) -> None:
+    """Server and component normalization stay aligned across all edge cases."""
+    hass.states.async_set(
+        "light.marker", "on", {"friendly_name": "Membership marker", **attributes}
+    )
+
+    result = await ws_result(
+        component_ws,
+        WS_SEARCH,
+        query="membership marker",
+        search_types=["entity"],
+        result_fields=["is_group", "member_entity_ids"],
+    )
+
+    (record,) = result["entities"]
+    assert record.get("member_entity_ids") == expected
+    assert record["is_group"] is (expected is not None)
+
+
+@pytest.mark.parametrize(
+    ("visibility", "include_hidden"),
+    [({"deny_entity_ids": ["light.denied"]}, True), (None, False)],
+    ids=["visibility-denied", "registry-hidden"],
+)
+async def test_a_group_withholds_members_it_may_not_show(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    visibility: dict[str, Any] | None,
+    include_hidden: bool,
+) -> None:
+    """Member ids honor both hard visibility and include_hidden=False."""
+    for object_id in ("membership_group", "visible", "denied"):
+        entity_registry.async_get_or_create(
+            "light", "test", object_id, suggested_object_id=object_id
+        )
+    entity_registry.async_update_entity(
+        "light.denied", hidden_by=er.RegistryEntryHider.USER
+    )
+    hass.states.async_set(
+        "light.membership_group",
+        "on",
+        {
+            "friendly_name": "Membership marker",
+            "group_entities": ["light.visible", "light.denied"],
         },
     )
-    assert result["entities"] == [
-        {
-            "entity_id": "light.membership_group",
-            "name": "Membership marker",
-            "friendly_name": "Membership marker",
-            "domain": "light",
-            "state": "on",
-            "area": None,
-            "floor": None,
-            "labels": [],
-            "aliases": [],
-            "score": 100,
-            "match_type": "exact_match",
-            "is_group": True,
-        }
-    ]
+    extra = {"visibility": visibility} if visibility else {}
+
+    result = await ws_result(
+        component_ws,
+        WS_SEARCH,
+        query="membership marker",
+        search_types=["entity"],
+        include_hidden=include_hidden,
+        result_fields=["is_group", "member_entity_ids"],
+        **extra,
+    )
+
+    (record,) = result["entities"]
+    assert record["is_group"] is True
+    assert "member_entity_ids" not in record

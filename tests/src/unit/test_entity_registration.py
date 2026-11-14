@@ -29,6 +29,8 @@ from ha_mcp.tools.component_config_reads import (
     fetch_entity_lookup_via_component,
 )
 
+from ._core_setup import with_config_component
+
 KEY = "storage_key"
 Domain = Literal["scene", "script"]
 
@@ -84,8 +86,7 @@ async def legacy_client(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> HomeAssistantClient:
     """No component: the lookup reads Core's entity registry commands."""
-    assert await async_setup_component(hass, "config", {})
-    return core_client
+    return await with_config_component(hass, core_client)
 
 
 def _platform(domain: Domain) -> str:

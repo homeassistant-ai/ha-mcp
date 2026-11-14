@@ -1,108 +1,288 @@
+"""The visibility resolver over Core's own registry, device and state replies.
+
+``hidden_entity_ids`` turns what Core answers the server's client
+(``config/entity_registry/list``, ``config/device_registry/list``, the states)
+into the set the filter hides; ``load_hidden_set`` adds Core's Assist
+exposure. Entities, devices, areas and labels are Core's, created through its
+registries; exposure goes through Core's ``homeassistant`` integration.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import logging
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.homeassistant.exposed_entities import (
+    async_expose_entity,
+)
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 from ha_mcp.visibility.resolver import (
+    VisibilityDataUnavailable,
     config_has_active_hide_dimensions,
     hidden_entity_ids,
+    load_hidden_set,
     visibility_filter_active,
 )
 
-
-def _reg(*entries):
-    return {"success": True, "result": list(entries)}
+from .._visibility_config import visibility_config as _cfg
 
 
-def _hidden(registry_result, config):
-    """Just the hidden set (drops the warnings tuple element) for set-equality tests."""
-    return hidden_entity_ids(registry_result, config)[0]
+class Core:
+    """Core's registries on one ``hass``, and its replies to the server's client."""
 
+    def __init__(self, hass: HomeAssistant, client: HomeAssistantClient) -> None:
+        self.hass = hass
+        self.client = client
+        self.entry = MockConfigEntry(domain="test")
+        self.entry.add_to_hass(hass)
 
-def _dev(*devices):
-    return {"success": True, "result": list(devices)}
+    def _area(self, area: str | None) -> str | None:
+        if area is None:
+            return None
+        areas = ar.async_get(self.hass)
+        found = areas.async_get_area(area) or areas.async_create(area.title())
+        return found.id
 
+    def _labels(self, labels: tuple[str, ...]) -> set[str]:
+        registry = lr.async_get(self.hass)
+        for label in labels:
+            if registry.async_get_label(label) is None:
+                registry.async_create(label)
+        return set(labels)
 
-def _hidden_dev(registry_result, config, device_registry_result):
-    """Hidden set with a device registry payload threaded in (area/label inheritance)."""
-    return hidden_entity_ids(
-        registry_result, config, None, None, False, device_registry_result
-    )[0]
+    def device(
+        self,
+        name: str,
+        *,
+        area: str | None = None,
+        labels: tuple[str, ...] = (),
+        parent: str | None = None,
+    ) -> str:
+        devices = dr.async_get(self.hass)
+        if parent is None:
+            device_id = devices.async_get_or_create(
+                config_entry_id=self.entry.entry_id, identifiers={("test", name)}
+            ).id
+        else:
+            device_id = devices.async_get_or_create_child(
+                config_entry_id=self.entry.entry_id,
+                identifiers={("test", name)},
+                parent_device_id=parent,
+            ).id
+        if area or labels:
+            devices.async_update_device(
+                device_id, area_id=self._area(area), labels=self._labels(labels)
+            )
+        return device_id
 
-
-def test_enabled_bad_payload_warns_and_fails_open(caplog):
-    with caplog.at_level(logging.WARNING):
-        assert _hidden({"success": False}, VisibilityConfig(enabled=True)) == set()
-    assert any("unusable" in r.message for r in caplog.records)
-
-
-def test_enabled_exception_payload_fails_open(caplog):
-    # gather(return_exceptions=True) can hand an Exception object through as the
-    # registry payload; it is non-dict, so the filter degrades to empty (open).
-    with caplog.at_level(logging.WARNING):
-        assert _hidden(RuntimeError("boom"), VisibilityConfig(enabled=True)) == set()
-    assert any("unusable" in r.message for r in caplog.records)
-
-
-def test_enabled_non_list_result_warns_and_fails_open(caplog):
-    with caplog.at_level(logging.WARNING):
-        assert (
-            _hidden({"success": True, "result": "nope"}, VisibilityConfig(enabled=True))
-            == set()
+    def entity(
+        self,
+        entity_id: str,
+        *,
+        category: EntityCategory | None = None,
+        hidden: bool = False,
+        area: str | None = None,
+        labels: tuple[str, ...] = (),
+        device_id: str | None = None,
+        device_class: str | None = None,
+    ) -> None:
+        domain, _, object_id = entity_id.partition(".")
+        entities = er.async_get(self.hass)
+        row = entities.async_get_or_create(
+            domain,
+            "test",
+            object_id,
+            suggested_object_id=object_id,
+            config_entry=self.entry,
+            device_id=device_id,
+            entity_category=category,
+            original_device_class=device_class,
+            original_name=object_id,
         )
-    assert any("not a list" in r.message for r in caplog.records)
+        assert row.entity_id == entity_id
+        entities.async_update_entity(
+            entity_id,
+            area_id=self._area(area),
+            labels=self._labels(labels),
+            hidden_by=er.RegistryEntryHider.USER if hidden else None,
+        )
+        self.hass.states.async_set(entity_id, "on")
+
+    async def registry(self) -> Any:
+        return await self.client.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+
+    async def devices(self) -> Any:
+        return await self.client.send_websocket_message(
+            {"type": "config/device_registry/list"}
+        )
+
+    async def states(self) -> list[dict[str, Any]]:
+        states: list[dict[str, Any]] = await self.client.get_states()
+        return states
+
+    async def hidden(self, config: VisibilityConfig, **kwargs: Any) -> set[str]:
+        hidden, _ = hidden_entity_ids(
+            await self.registry(),
+            config,
+            await self.states(),
+            device_registry_result=await self.devices(),
+            **kwargs,
+        )
+        return hidden
 
 
-def test_disabled_bad_payload_stays_silent(caplog):
-    # Disabled is the default no-op; it must NOT warn on every call.
+@pytest.fixture
+async def core(hass: HomeAssistant, core_client: HomeAssistantClient) -> Core:
+    assert await async_setup_component(hass, "config", {})
+    return Core(hass, core_client)
+
+
+@pytest.fixture
+async def unconfigured(core_client: HomeAssistantClient) -> Any:
+    """Core refuses the registry list: its ``config`` integration is not set up."""
+    reply = await core_client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    assert reply["success"] is False
+    return reply
+
+
+# --- an unusable registry ----------------------------------------------------------
+
+
+async def test_an_unusable_registry_fails_open_and_says_so(
+    unconfigured: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     with caplog.at_level(logging.WARNING):
-        assert _hidden({"success": False}, VisibilityConfig(enabled=False)) == set()
+        hidden, warnings = hidden_entity_ids(
+            unconfigured, VisibilityConfig(enabled=True)
+        )
+
+    assert hidden == set()
+    assert any("unavailable" in w for w in warnings)
+    assert any("unusable" in r.message for r in caplog.records)
+
+
+async def test_a_registry_read_that_got_no_answer_fails_open(
+    core: Core, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The callers gather the reads with ``return_exceptions``: the payload is
+    the transport error itself."""
+    with patch.object(
+        core.client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("socket closed")),
+    ):
+        payloads = await asyncio.gather(core.registry(), return_exceptions=True)
+    payload = payloads[0]
+
+    with caplog.at_level(logging.WARNING):
+        hidden, _ = hidden_entity_ids(payload, VisibilityConfig(enabled=True))
+
+    assert hidden == set()
+    assert any("unusable" in r.message for r in caplog.records)
+
+
+async def test_a_disabled_filter_is_silent_on_an_unusable_registry(
+    unconfigured: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Disabled is the default: it must not warn on every call."""
+    with caplog.at_level(logging.WARNING):
+        result = hidden_entity_ids(unconfigured, VisibilityConfig(enabled=False))
+
+    assert result == (set(), [])
     assert not caplog.records
 
 
-def test_disabled_config_hides_nothing():
-    reg = _reg({"entity_id": "sensor.a", "entity_category": "diagnostic"})
-    assert _hidden(reg, VisibilityConfig(enabled=False)) == set()
-
-
-def test_category_exclude():
-    reg = _reg(
-        {"entity_id": "sensor.batt", "entity_category": "diagnostic"},
-        {"entity_id": "light.lr", "entity_category": None},
+async def test_an_unusable_registry_still_hides_the_denied_entity(
+    unconfigured: Any,
+) -> None:
+    hidden, warnings = hidden_entity_ids(
+        unconfigured, _cfg(deny_entity_ids=["sensor.ghost"])
     )
-    cfg = VisibilityConfig(enabled=True, exclude_categories=["diagnostic"])
-    assert _hidden(reg, cfg) == {"sensor.batt"}
+
+    assert hidden == {"sensor.ghost"}
+    assert any("unavailable" in w for w in warnings)
 
 
-# ---------------------------------------------------------------------------
-# config_has_active_hide_dimensions / visibility_filter_active — the ha_search
-# component-routing gate (a query search must NOT hit the visibility-blind
-# component while the filter can hide something).
-# ---------------------------------------------------------------------------
-def test_active_dimensions_disabled_is_inactive():
-    # Even with every dimension populated, a disabled config hides nothing.
-    cfg = VisibilityConfig(enabled=False, deny_entity_ids=["light.x"])
-    assert config_has_active_hide_dimensions(cfg) is False
+async def test_an_unusable_registry_keeps_the_entity_allowlist(
+    hass: HomeAssistant, core_client: HomeAssistantClient, unconfigured: Any
+) -> None:
+    """allow_entity_ids needs no registry: entities outside it stay hidden, the
+    listed one visible, and deny still wins."""
+    for entity_id in ("light.allowed", "light.allowed_but_denied", "light.other"):
+        hass.states.async_set(entity_id, "on")
+    config = _cfg(
+        deny_entity_ids=["light.allowed_but_denied"],
+        allow_entity_ids=["light.allowed", "light.allowed_but_denied"],
+        allow_areas=["kitchen"],
+    )
+
+    hidden, warnings = hidden_entity_ids(
+        unconfigured, config, await core_client.get_states()
+    )
+
+    assert hidden == {"light.allowed_but_denied", "light.other"}
+    assert any("unavailable" in w for w in warnings)
 
 
-def test_active_dimensions_enabled_but_all_cleared_is_inactive():
-    # enabled=True with exclude_categories emptied and no other dimension hides
-    # nothing → the component may still serve.
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[])
-    assert config_has_active_hide_dimensions(cfg) is False
+async def test_without_an_entity_allowlist_an_unusable_registry_hides_only_denied(
+    hass: HomeAssistant, core_client: HomeAssistantClient, unconfigured: Any
+) -> None:
+    hass.states.async_set("light.denied", "on")
+    hass.states.async_set("light.other", "on")
+    config = _cfg(deny_entity_ids=["light.denied"], allow_areas=["kitchen"])
+
+    hidden, _ = hidden_entity_ids(unconfigured, config, await core_client.get_states())
+
+    assert hidden == {"light.denied"}
 
 
-def test_active_dimensions_default_enabled_is_active():
-    # The bare enabled config keeps its default exclude_categories
-    # (diagnostic/config) — an active dimension.
+async def test_strict_mode_fails_closed_on_an_unusable_registry(
+    unconfigured: Any,
+) -> None:
+    """The enforcement path never leaks on degraded data."""
+    with pytest.raises(VisibilityDataUnavailable):
+        hidden_entity_ids(unconfigured, _cfg(exclude_areas=["office"]), strict=True)
+
+
+# --- which configs can hide anything (the ha_search routing gate) -------------------
+
+
+def test_a_disabled_config_has_no_active_dimension() -> None:
+    config = VisibilityConfig(enabled=False, deny_entity_ids=["light.x"])
+    assert config_has_active_hide_dimensions(config) is False
+
+
+def test_an_enabled_config_with_nothing_set_has_no_active_dimension() -> None:
+    assert config_has_active_hide_dimensions(_cfg()) is False
+
+
+def test_the_default_enabled_config_hides_its_default_categories() -> None:
     assert config_has_active_hide_dimensions(VisibilityConfig(enabled=True)) is True
 
 
-def test_active_dimensions_each_dimension_activates():
-    for kwargs in (
+@pytest.mark.parametrize(
+    "kwargs",
+    [
         {"deny_entity_ids": ["light.x"]},
         {"exclude_hidden": True},
         {"exclude_areas": ["garage"]},
@@ -111,650 +291,354 @@ def test_active_dimensions_each_dimension_activates():
         {"allow_areas": ["kitchen"]},
         {"allow_labels": ["ok"]},
         {"respect_assist_exposure": True},
-    ):
-        cfg = VisibilityConfig(enabled=True, exclude_categories=[], **kwargs)
-        assert config_has_active_hide_dimensions(cfg) is True, kwargs
+    ],
+)
+def test_each_dimension_activates_the_filter(kwargs: dict[str, Any]) -> None:
+    assert config_has_active_hide_dimensions(_cfg(**kwargs)) is True
 
 
-def test_active_dimensions_unknown_category_only_is_inactive():
-    # A typo'd category is not one the resolver would ever hide on, so it does
-    # not, by itself, force the legacy path.
-    cfg = VisibilityConfig(enabled=True, exclude_categories=["typo_not_a_category"])
-    assert config_has_active_hide_dimensions(cfg) is False
+def test_an_unknown_category_alone_activates_nothing() -> None:
+    """A typo'd category is none the resolver would hide on."""
+    config = VisibilityConfig(enabled=True, exclude_categories=["typo_not_a_category"])
+    assert config_has_active_hide_dimensions(config) is False
 
 
-def _active(tmp_path, monkeypatch, config=None):
-    if config is not None:
-        save_visibility_config(tmp_path, config)
+def _active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> bool:
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
     return asyncio.run(visibility_filter_active())
 
 
-def test_filter_active_missing_file_routes_to_component(tmp_path, monkeypatch):
-    # No config file → disabled default → inactive (component may serve).
-    assert _active(tmp_path, monkeypatch) is False
+@pytest.mark.parametrize(
+    ("config", "active"),
+    [
+        (None, False),
+        (_cfg(deny_entity_ids=["input_boolean.probe"]), True),
+        (VisibilityConfig(enabled=False), False),
+    ],
+    ids=["no-file", "enabled-deny", "disabled"],
+)
+def test_the_saved_config_decides_whether_the_filter_is_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config: VisibilityConfig | None,
+    active: bool,
+) -> None:
+    if config is not None:
+        save_visibility_config(tmp_path, config)
+    assert _active(tmp_path, monkeypatch) is active
 
 
-def test_filter_active_enabled_deny_is_active(tmp_path, monkeypatch):
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], deny_entity_ids=["input_boolean.probe"]
-    )
-    assert _active(tmp_path, monkeypatch, cfg) is True
-
-
-def test_filter_active_disabled_is_inactive(tmp_path, monkeypatch):
-    assert _active(tmp_path, monkeypatch, VisibilityConfig(enabled=False)) is False
-
-
-def test_filter_active_malformed_config_fails_closed_to_legacy(tmp_path, monkeypatch):
-    # A malformed enabled config must NOT silently route to the unfiltered
-    # component: visibility_filter_active fails closed to True (keep legacy).
+def test_a_malformed_config_keeps_the_filtered_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config that cannot be read must not route to the unfiltered component."""
     (tmp_path / "entity_visibility.json").write_text("{not json", encoding="utf-8")
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    assert asyncio.run(visibility_filter_active()) is True
+    assert _active(tmp_path, monkeypatch) is True
 
 
-def test_denylist_and_area_and_label_union():
-    reg = _reg(
-        {"entity_id": "sensor.x", "area_id": "garage"},
-        {"entity_id": "sensor.y", "labels": ["noise"]},
-        {"entity_id": "sensor.z"},
+# --- categories, hidden, deny -------------------------------------------------------
+
+
+async def test_categories_hide_only_when_enabled(core: Core) -> None:
+    """The default excludes both diagnostic and config entities."""
+    core.entity("sensor.batt", category=EntityCategory.DIAGNOSTIC)
+    core.entity("number.cfg", category=EntityCategory.CONFIG)
+    core.entity("light.lr")
+
+    assert await core.hidden(VisibilityConfig(enabled=False)) == set()
+    assert await core.hidden(_cfg(exclude_categories=["diagnostic"])) == {"sensor.batt"}
+    hidden, warnings = hidden_entity_ids(
+        await core.registry(), VisibilityConfig(enabled=True)
     )
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        deny_entity_ids=["sensor.z"],
-        exclude_areas=["garage"],
-        exclude_labels=["noise"],
-    )
-    assert _hidden(reg, cfg) == {"sensor.x", "sensor.y", "sensor.z"}
+    assert (hidden, warnings) == ({"sensor.batt", "number.cfg"}, [])
 
 
-# --- device-inherited area/labels (round-4 finding: most real entities are
-# device-bound, registry area_id None + a device_id, inheriting the device's
-# area; device labels apply to their entities) --------------------------------
-
-
-def test_exclude_area_hides_device_inherited_entity():
-    # Entity carries no entity-level area_id; its area comes from its device.
-    # exclude_areas must hide it via the device's area (the round-4 under-hide).
-    reg = _reg({"entity_id": "light.spot", "area_id": None, "device_id": "d1"})
-    dev = _dev({"id": "d1", "area_id": "garage"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["garage"]
-    )
-    assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
-
-
-def test_exclude_area_hides_child_device_entity_via_parent_area():
-    reg = _reg({"entity_id": "sensor.child", "area_id": None, "device_id": "child"})
-    dev = _dev(
-        {"id": "parent", "area_id": "office"},
-        {"id": "child", "area_id": None, "parent_device_id": "parent"},
-    )
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["office"]
-    )
-
-    assert _hidden_dev(reg, cfg, dev) == {"sensor.child"}
-
-
-def test_strict_area_filter_rejects_conflicting_device_identity():
-    reg = _reg(
-        {"entity_id": "sensor.ambiguous", "area_id": None, "device_id": "duplicate"}
-    )
-    dev = _dev(
-        {"id": "duplicate", "area_id": "office"},
-        {"id": "duplicate", "area_id": "garage"},
-    )
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["office"]
-    )
-
-    with pytest.raises(resolver.VisibilityDataUnavailable):
-        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
-
-
-def test_strict_area_filter_rejects_child_with_missing_parent():
-    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
-    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["office"]
-    )
-
-    with pytest.raises(
-        resolver.VisibilityDataUnavailable, match="invalid area relationships"
-    ):
-        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
-
-
-def test_non_strict_area_filter_warns_for_child_with_missing_parent():
-    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
-    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["office"]
-    )
+async def test_an_unknown_category_is_dropped_with_a_warning(core: Core) -> None:
+    core.entity("sensor.d", category=EntityCategory.DIAGNOSTIC)
 
     hidden, warnings = hidden_entity_ids(
-        reg, cfg, device_registry_result=dev, strict=False
+        await core.registry(),
+        VisibilityConfig(enabled=True, exclude_categories=["diagnostic", "typo"]),
     )
 
-    assert hidden == set()
-    assert warnings == [resolver._DEVICE_REGISTRY_INVALID_AREA_WARNING]
-
-
-def test_present_invalid_entity_area_blocks_child_device_area_fallback():
-    reg = _reg({"entity_id": "sensor.child", "area_id": "", "device_id": "child"})
-    dev = _dev(
-        {"id": "parent", "area_id": "office"},
-        {"id": "child", "area_id": None, "parent_device_id": "parent"},
-    )
-    exclude = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["office"]
-    )
-    allow = VisibilityConfig(
-        enabled=True, exclude_categories=[], allow_areas=["office"]
-    )
-
-    assert _hidden_dev(reg, exclude, dev) == set()
-    assert _hidden_dev(reg, allow, dev) == {"sensor.child"}
-
-
-def test_allow_area_keeps_device_inherited_entity():
-    # The dangerous direction: allow_areas must NOT hide a device-bound entity in
-    # the allowed area (the round-4 over-hide that collapsed the overview). A
-    # device-bound entity in another area is still hidden.
-    reg = _reg(
-        {"entity_id": "light.spot", "area_id": None, "device_id": "d1"},
-        {"entity_id": "light.other", "area_id": None, "device_id": "d2"},
-    )
-    dev = _dev({"id": "d1", "area_id": "garage"}, {"id": "d2", "area_id": "attic"})
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["garage"])
-    assert _hidden_dev(reg, cfg, dev) == {"light.other"}
-
-
-def test_exclude_label_hides_device_inherited_entity():
-    reg = _reg({"entity_id": "light.spot", "device_id": "d1"})
-    dev = _dev({"id": "d1", "labels": ["noise"]})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["noise"]
-    )
-    assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
-
-
-def test_allow_label_keeps_device_inherited_entity():
-    reg = _reg(
-        {"entity_id": "light.spot", "device_id": "d1"},
-        {"entity_id": "light.other", "device_id": "d2"},
-    )
-    dev = _dev({"id": "d1", "labels": ["voice"]}, {"id": "d2", "labels": ["misc"]})
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_labels=["voice"])
-    assert _hidden_dev(reg, cfg, dev) == {"light.other"}
-
-
-def test_entity_area_overrides_device_area():
-    # HA precedence: an entity's own area_id wins over its device's. Excluding the
-    # device's area must NOT hide it; excluding the entity's own area must.
-    reg = _reg({"entity_id": "light.spot", "area_id": "kitchen", "device_id": "d1"})
-    dev = _dev({"id": "d1", "area_id": "garage"})
-    hide_device_area = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["garage"]
-    )
-    assert _hidden_dev(reg, hide_device_area, dev) == set()
-    hide_entity_area = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["kitchen"]
-    )
-    assert _hidden_dev(reg, hide_entity_area, dev) == {"light.spot"}
-
-
-def test_labels_are_entity_and_device_union():
-    # A device-bound entity is hidden by EITHER its own label or its device's.
-    reg = _reg({"entity_id": "light.spot", "labels": ["own"], "device_id": "d1"})
-    dev = _dev({"id": "d1", "labels": ["dev"]})
-    by_own = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["own"]
-    )
-    by_device = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["dev"]
-    )
-    assert _hidden_dev(reg, by_own, dev) == {"light.spot"}
-    assert _hidden_dev(reg, by_device, dev) == {"light.spot"}
-
-
-def test_no_device_payload_falls_back_to_entity_area_only():
-    # Without the device registry the area/label dimensions match entity-level
-    # only (fail-open): a device-bound entity is not matched, an entity-level one
-    # still is. This is the pre-round-4 behavior, now the graceful degradation.
-    reg = _reg(
-        {"entity_id": "light.device_bound", "area_id": None, "device_id": "d1"},
-        {"entity_id": "light.entity_area", "area_id": "garage"},
-    )
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_areas=["garage"]
-    )
-    assert _hidden(reg, cfg) == {"light.entity_area"}
-
-
-def test_deny_hides_entity_absent_from_registry():
-    # A denied entity that has no entity-registry entry (legacy YAML / template
-    # entity present only in states) must still be hidden — deny is a literal
-    # entity_id match, not registry-gated. Only the registry-derived dimensions
-    # (category/area/label/hidden_by) require a registry entry.
-    reg = _reg({"entity_id": "sensor.registered"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
-    )
-    assert _hidden(reg, cfg) == {"sensor.ghost"}
-
-
-def test_deny_applies_over_empty_registry():
-    # Empty registry list (healthy read, no entries) still honours the denylist.
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
-    )
-    assert _hidden(_reg(), cfg) == {"sensor.ghost"}
-
-
-def test_exclude_hidden_flag():
-    reg = _reg({"entity_id": "sensor.h", "hidden_by": "user"})
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], exclude_hidden=True)
-    assert _hidden(reg, cfg) == {"sensor.h"}
-
-
-def test_label_string_value_is_not_char_iterated():
-    # A label served as a bare string (unexpected payload / mock) must count as
-    # one whole label, not be char-iterated by set.intersection.
-    reg = _reg({"entity_id": "sensor.s", "labels": "noise"})
-    # "n" is a character of "noise" but not the whole label -> must NOT hide.
-    char_cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["n"]
-    )
-    assert _hidden(reg, char_cfg) == set()
-    # The exact whole-string label DOES hide.
-    exact_cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["noise"]
-    )
-    assert _hidden(reg, exact_cfg) == {"sensor.s"}
-
-
-def test_label_non_iterable_value_skips_entry_not_whole_filter():
-    # A labels payload of an unexpected non-iterable type (int/dict) must not
-    # raise (which would fail-open-disable the filter for every entity); the one
-    # bad entry is skipped while a well-formed sibling still gets hidden.
-    reg = _reg(
-        {"entity_id": "sensor.bad", "labels": 5},
-        {"entity_id": "sensor.good", "labels": ["noise"]},
-    )
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], exclude_labels=["noise"]
-    )
-    assert _hidden(reg, cfg) == {"sensor.good"}
-
-
-def test_malformed_registry_returns_empty():
-    cfg = VisibilityConfig(enabled=True)
-    assert _hidden({"success": False}, cfg) == set()
-    assert _hidden("nonsense", cfg) == set()
-
-
-def test_deny_honored_on_unusable_registry():
-    # deny_entity_ids is a literal entity_id match, registry-independent. A
-    # transient unusable-registry read must NOT silently drop it (fail-fully-open
-    # was not the goal): both degraded early returns still yield the deny seed.
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
-    )
-    # non-dict / unsuccessful payload
-    assert _hidden({"success": False}, cfg) == {"sensor.ghost"}
-    assert _hidden("nonsense", cfg) == {"sensor.ghost"}
-    # dict-success payload but result is not a list
-    assert _hidden({"success": True, "result": "nope"}, cfg) == {"sensor.ghost"}
-
-
-def test_degraded_registry_surfaces_warning():
-    # An enabled-but-degraded read returns the deny seed AND a caller-facing
-    # warning so the response can signal the degradation, not just log it.
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
-    )
-    hidden, warnings = hidden_entity_ids({"success": False}, cfg)
-    assert hidden == {"sensor.ghost"}
-    assert any("unavailable" in w for w in warnings)
-
-
-def test_unusable_registry_keeps_allow_entity_ids_restriction():
-    # allow_entity_ids needs no registry data, so a degraded registry read must
-    # not fail restrict mode open: states-only candidates outside the explicit
-    # list stay hidden, the listed one stays visible, and deny still wins.
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        deny_entity_ids=["light.allowed_but_denied"],
-        allow_entity_ids=["light.allowed", "light.allowed_but_denied"],
-        allow_areas=["kitchen"],
-    )
-    states = [
-        {"entity_id": "light.allowed", "attributes": {}},
-        {"entity_id": "light.allowed_but_denied", "attributes": {}},
-        {"entity_id": "light.other", "attributes": {}},
-    ]
-    hidden, warnings = hidden_entity_ids({"success": False}, cfg, states)
-    assert hidden == {"light.allowed_but_denied", "light.other"}
-    assert any("unavailable" in w for w in warnings)
-
-
-def test_unusable_registry_without_allow_entity_ids_hides_only_denied():
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        deny_entity_ids=["light.denied"],
-        allow_areas=["kitchen"],
-    )
-    states = [{"entity_id": "light.denied"}, {"entity_id": "light.other"}]
-    hidden, _warnings = hidden_entity_ids({"success": False}, cfg, states)
-    assert hidden == {"light.denied"}
-
-
-def test_unknown_category_dropped_with_warning():
-    # A typo'd / unknown category is dropped (not hard-rejected) and surfaced as a
-    # warning; the valid sibling category still hides.
-    reg = _reg({"entity_id": "sensor.d", "entity_category": "diagnostic"})
-    hidden, warnings = hidden_entity_ids(
-        reg, VisibilityConfig(enabled=True, exclude_categories=["diagnostic", "typo"])
-    )
     assert hidden == {"sensor.d"}
     assert any("typo" in w for w in warnings)
 
 
-def test_disabled_returns_no_warnings():
-    hidden, warnings = hidden_entity_ids(
-        {"success": False}, VisibilityConfig(enabled=False)
+async def test_exclude_hidden_hides_what_the_user_hid(core: Core) -> None:
+    core.entity("sensor.h", hidden=True)
+    core.entity("sensor.v")
+
+    assert await core.hidden(_cfg(exclude_hidden=True)) == {"sensor.h"}
+
+
+async def test_deny_hides_an_entity_with_no_registry_row(core: Core) -> None:
+    """Deny matches the entity_id; only the registry dimensions need a row."""
+    config = _cfg(deny_entity_ids=["sensor.ghost"])
+    assert await core.hidden(config) == {"sensor.ghost"}
+    core.entity("sensor.registered")
+    assert await core.hidden(config) == {"sensor.ghost"}
+
+
+async def test_deny_area_and_label_add_up(core: Core) -> None:
+    core.entity("sensor.x", area="garage")
+    core.entity("sensor.y", labels=("noise",))
+    core.entity("sensor.z")
+    config = _cfg(
+        deny_entity_ids=["sensor.z"], exclude_areas=["garage"], exclude_labels=["noise"]
     )
-    assert hidden == set()
-    assert warnings == []
+
+    assert await core.hidden(config) == {"sensor.x", "sensor.y", "sensor.z"}
 
 
-def test_enabled_default_config_hides_both_diagnostic_and_config():
-    # The shipped default exclude_categories is ["diagnostic", "config"]. Every
-    # other test overrides that field, so this is the only one that fires the
-    # actual default and proves BOTH default categories hide (config was never
-    # exercised before).
-    reg = _reg(
-        {"entity_id": "sensor.diag", "entity_category": "diagnostic"},
-        {"entity_id": "number.cfg", "entity_category": "config"},
-        {"entity_id": "light.normal", "entity_category": None},
+# --- what an entity inherits from its device ----------------------------------------
+
+
+async def test_a_device_bound_entity_inherits_its_devices_area(core: Core) -> None:
+    """Most entities have no area of their own; excluding the device's area
+    hides them, allowing it keeps them."""
+    spot = core.device("d1", area="garage")
+    other = core.device("d2", area="attic")
+    core.entity("light.spot", device_id=spot)
+    core.entity("light.other", device_id=other)
+
+    assert await core.hidden(_cfg(exclude_areas=["garage"])) == {"light.spot"}
+    assert await core.hidden(_cfg(allow_areas=["garage"])) == {"light.other"}
+
+
+async def test_a_child_devices_entity_inherits_its_parents_area(core: Core) -> None:
+    parent = core.device("parent", area="office")
+    child = core.device("child", parent=parent)
+    core.entity("sensor.child", device_id=child)
+
+    assert await core.hidden(_cfg(exclude_areas=["office"])) == {"sensor.child"}
+
+
+async def test_an_entitys_own_area_wins_over_its_devices(core: Core) -> None:
+    spot = core.device("d1", area="garage")
+    core.entity("light.spot", area="kitchen", device_id=spot)
+
+    assert await core.hidden(_cfg(exclude_areas=["garage"])) == set()
+    assert await core.hidden(_cfg(exclude_areas=["kitchen"])) == {"light.spot"}
+
+
+async def test_an_entitys_labels_are_its_own_and_its_devices(core: Core) -> None:
+    spot = core.device("d1", labels=("dev",))
+    other = core.device("d2", labels=("misc",))
+    core.entity("light.spot", labels=("own",), device_id=spot)
+    core.entity("light.other", device_id=other)
+
+    assert await core.hidden(_cfg(exclude_labels=["own"])) == {"light.spot"}
+    assert await core.hidden(_cfg(exclude_labels=["dev"])) == {"light.spot"}
+    assert await core.hidden(_cfg(allow_labels=["dev"])) == {"light.other"}
+
+
+async def test_without_the_device_list_only_entity_areas_match(core: Core) -> None:
+    """The degraded read: a device-bound entity is not matched, one with its
+    own area still is."""
+    bound = core.device("d1", area="garage")
+    core.entity("light.device_bound", device_id=bound)
+    core.entity("light.entity_area", area="garage")
+
+    hidden, _ = hidden_entity_ids(await core.registry(), _cfg(exclude_areas=["garage"]))
+
+    assert hidden == {"light.entity_area"}
+
+
+# --- the allowlist (restrict mode) -----------------------------------------------------
+
+
+async def test_an_allowlist_hides_everything_it_does_not_name(core: Core) -> None:
+    core.entity("light.kitchen", area="kitchen", labels=("voice",))
+    core.entity("light.bedroom", area="bedroom", labels=("other",))
+    hass = core.hass
+
+    assert await core.hidden(_cfg(allow_areas=["kitchen"])) == {"light.bedroom"}
+    assert await core.hidden(_cfg(allow_labels=["voice"])) == {"light.bedroom"}
+    assert await core.hidden(_cfg(allow_entity_ids=["light.kitchen"])) == {
+        "light.bedroom"
+    }
+    # An entity Core holds only as a state is hidden unless named.
+    hass.states.async_set("sensor.yaml_only", "1")
+    assert "sensor.yaml_only" in await core.hidden(_cfg(allow_areas=["kitchen"]))
+    assert (
+        await core.hidden(
+            _cfg(
+                allow_entity_ids=["light.kitchen", "light.bedroom", "sensor.yaml_only"]
+            )
+        )
+        == set()
     )
-    hidden, warnings = hidden_entity_ids(reg, VisibilityConfig(enabled=True))
-    assert hidden == {"sensor.diag", "number.cfg"}
-    assert warnings == []
 
 
-# --- Allowlist dimension (opt-in restrict mode) ---
+async def test_no_allowlist_hides_nothing(core: Core) -> None:
+    core.entity("light.a", area="kitchen")
+
+    assert await core.hidden(_cfg()) == set()
 
 
-def _states(*entries):
-    return list(entries)
+async def test_deny_and_an_explicit_area_exclude_win_over_the_allowlist(
+    core: Core,
+) -> None:
+    core.entity("light.kitchen", area="kitchen")
+    core.entity("light.conflict", area="office")
+
+    assert await core.hidden(
+        _cfg(allow_areas=["kitchen"], deny_entity_ids=["light.kitchen"])
+    ) == {"light.kitchen", "light.conflict"}
+    assert await core.hidden(
+        _cfg(
+            exclude_areas=["office"],
+            allow_entity_ids=["light.conflict", "light.kitchen"],
+        )
+    ) == {"light.conflict"}
 
 
-def test_allowlist_area_hides_non_matching():
-    reg = _reg(
-        {"entity_id": "light.kitchen", "area_id": "kitchen"},
-        {"entity_id": "light.bedroom", "area_id": "bedroom"},
+async def test_an_allowlist_match_overrides_the_category_and_hidden_filters(
+    core: Core,
+) -> None:
+    """The allowlist authorizes what it names; broad automatic filters do not
+    hide it again."""
+    core.entity(
+        "sensor.diag_allowed",
+        category=EntityCategory.DIAGNOSTIC,
+        hidden=True,
+        area="kitchen",
     )
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
-    assert _hidden(reg, cfg) == {"light.bedroom"}
-
-
-def test_allowlist_entity_id_literal():
-    reg = _reg({"entity_id": "light.a"}, {"entity_id": "light.b"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], allow_entity_ids=["light.a"]
-    )
-    assert _hidden(reg, cfg) == {"light.b"}
-
-
-def test_allowlist_labels():
-    reg = _reg(
-        {"entity_id": "light.a", "labels": ["voice"]},
-        {"entity_id": "light.b", "labels": ["other"]},
-    )
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_labels=["voice"])
-    assert _hidden(reg, cfg) == {"light.b"}
-
-
-def test_allowlist_inactive_hides_nothing():
-    # Empty allow_* => allowlist inactive => nothing hidden by it.
-    reg = _reg({"entity_id": "light.a", "area_id": "x"})
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[])
-    assert _hidden(reg, cfg) == set()
-
-
-def test_allowlist_hides_states_only_entity():
-    # M1 fix: a states-only entity (no registry entry) under an active allowlist
-    # must be hidden unless literally allowed - the resolver reaches it via the
-    # states list, not just the registry.
-    reg = _reg({"entity_id": "light.kitchen", "area_id": "kitchen"})
-    states = _states(
-        {"entity_id": "light.kitchen"},
-        {"entity_id": "sensor.yaml_only"},  # not in registry
-    )
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
-    hidden, _ = hidden_entity_ids(reg, cfg, states)
-    assert "sensor.yaml_only" in hidden  # states-only, not allowed => hidden
-    assert "light.kitchen" not in hidden  # allowed via area
-
-
-def test_allowlist_states_only_entity_allowed_by_id():
-    reg = _reg()
-    states = _states({"entity_id": "sensor.yaml_only"})
-    cfg = VisibilityConfig(
-        enabled=True, exclude_categories=[], allow_entity_ids=["sensor.yaml_only"]
-    )
-    hidden, _ = hidden_entity_ids(reg, cfg, states)
-    assert hidden == set()
-
-
-def test_allowlist_deny_still_wins():
-    reg = _reg({"entity_id": "light.kitchen", "area_id": "kitchen"})
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        allow_areas=["kitchen"],
-        deny_entity_ids=["light.kitchen"],
-    )
-    assert _hidden(reg, cfg) == {"light.kitchen"}
-
-
-def test_allow_match_overrides_category_and_hidden_filters():
-    # An active allowlist is an authorization boundary: a matching entity stays
-    # visible even when a broad automatic category filter also matches it. Hard
-    # deny/entity-area-label exclusions can still hide an allowlisted entity.
-    reg = _reg(
-        # Diagnostic AND in the allowed area -> the allow match authorizes it.
-        {
-            "entity_id": "sensor.diag_allowed",
-            "entity_category": "diagnostic",
-            "hidden_by": "user",
-            "area_id": "kitchen",
-        },
-        # allowed area, not excluded -> the one entity that stays visible.
-        {"entity_id": "light.kitchen", "area_id": "kitchen"},
-        # not allowed, not excluded -> hidden by the allowlist restriction.
-        {"entity_id": "light.bedroom", "area_id": "bedroom"},
-    )
-    cfg = VisibilityConfig(
+    core.entity("light.kitchen", area="kitchen")
+    core.entity("light.bedroom", area="bedroom")
+    config = VisibilityConfig(
         enabled=True,
         exclude_categories=["diagnostic"],
         exclude_hidden=True,
         allow_areas=["kitchen"],
     )
-    assert _hidden(reg, cfg) == {"light.bedroom"}
+
+    assert await core.hidden(config) == {"light.bedroom"}
 
 
-def test_explicit_exclude_area_still_wins_over_allow_match():
-    reg = _reg(
-        {"entity_id": "light.conflict", "area_id": "office"},
-        {"entity_id": "light.allowed", "area_id": "kitchen"},
+async def test_an_empty_registry_drops_an_area_allowlist_instead_of_blanking(
+    core: Core,
+) -> None:
+    """The registry answered but holds nothing: the area allowlist would hide
+    every entity, so it is skipped with a warning; allow_entity_ids still holds."""
+    core.hass.states.async_set("light.a", "on")
+    core.hass.states.async_set("sensor.b", "1")
+    registry, states = await core.registry(), await core.states()
+
+    open_hidden, warnings = hidden_entity_ids(
+        registry, _cfg(allow_areas=["kitchen"]), states
     )
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        exclude_areas=["office"],
-        allow_entity_ids=["light.conflict", "light.allowed"],
+    named_hidden, _ = hidden_entity_ids(
+        registry, _cfg(allow_areas=["kitchen"], allow_entity_ids=["light.a"]), states
     )
-    assert _hidden(reg, cfg) == {"light.conflict"}
+
+    assert open_hidden == set()
+    assert any("registry returned no entries" in w for w in warnings)
+    assert named_hidden == {"sensor.b"}
 
 
-def test_allow_match_overrides_assist_exposure():
-    reg = _reg(
-        {"entity_id": "sensor.allowed", "entity_category": "diagnostic"},
-        {"entity_id": "sensor.not_allowed"},
-    )
-    cfg = VisibilityConfig(
+# --- Assist exposure -------------------------------------------------------------------
+
+
+@pytest.fixture
+async def assist(core: Core, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Core's Assist exposure, and the resolver over a saved config."""
+    assert await async_setup_component(core.hass, "homeassistant", {})
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+    async def resolve(config: VisibilityConfig, *, expose_new: bool) -> set[str]:
+        reply = await core.client.send_websocket_message(
+            {
+                "type": "homeassistant/expose_new_entities/set",
+                "assistant": "conversation",
+                "expose_new": expose_new,
+            }
+        )
+        assert reply["success"], reply
+        save_visibility_config(tmp_path, config)
+        hidden, _ = await load_hidden_set(
+            await core.registry(),
+            await core.states(),
+            core.client,
+            await core.devices(),
+        )
+        return hidden
+
+    return resolve
+
+
+def _assist_cfg(**kw: Any) -> VisibilityConfig:
+    return _cfg(respect_assist_exposure=True, **kw)
+
+
+async def test_an_exposed_entity_shows_even_in_a_hidden_category(
+    core: Core, assist: Any
+) -> None:
+    """An explicit setting wins outright, as in Core's async_should_expose."""
+    core.entity("sensor.x", category=EntityCategory.DIAGNOSTIC)
+    async_expose_entity(core.hass, "conversation", "sensor.x", True)
+
+    assert await assist(_assist_cfg(), expose_new=True) == set()
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "device_class", "hidden"),
+    [
+        ("light.a", None, False),
+        ("sensor.random", None, True),
+        ("binary_sensor.front", "door", False),
+    ],
+    ids=["default-domain", "other-domain", "default-device-class"],
+)
+async def test_new_entities_follow_cores_default_exposure(
+    core: Core, assist: Any, entity_id: str, device_class: str | None, hidden: bool
+) -> None:
+    core.entity(entity_id, device_class=device_class)
+    # The entity writes its device class into its state, as Core's do.
+    attributes = {"device_class": device_class} if device_class else {}
+    core.hass.states.async_set(entity_id, "on", attributes)
+
+    assert (entity_id in await assist(_assist_cfg(), expose_new=True)) is hidden
+
+
+async def test_a_device_class_core_reads_from_the_state_counts(
+    core: Core, assist: Any
+) -> None:
+    core.entity("sensor.temp")
+    core.hass.states.async_set("sensor.temp", "21", {"device_class": "temperature"})
+
+    assert await assist(_assist_cfg(), expose_new=True) == set()
+
+
+async def test_a_category_entity_is_never_exposed_by_default(
+    core: Core, assist: Any
+) -> None:
+    core.entity("light.cfg", category=EntityCategory.CONFIG)
+
+    assert await assist(_assist_cfg(), expose_new=True) == {"light.cfg"}
+
+
+async def test_without_expose_new_an_unconfigured_entity_is_hidden(
+    core: Core, assist: Any
+) -> None:
+    core.entity("light.a")
+
+    assert await assist(_assist_cfg(), expose_new=False) == {"light.a"}
+
+
+async def test_an_allowlist_match_overrides_assist_exposure(
+    core: Core, assist: Any
+) -> None:
+    core.entity("sensor.allowed", category=EntityCategory.DIAGNOSTIC)
+    core.entity("sensor.not_allowed")
+    for entity_id in ("sensor.allowed", "sensor.not_allowed"):
+        async_expose_entity(core.hass, "conversation", entity_id, False)
+    config = VisibilityConfig(
         enabled=True,
         exclude_categories=["diagnostic"],
         allow_entity_ids=["sensor.allowed"],
         respect_assist_exposure=True,
     )
-    hidden, warnings = hidden_entity_ids(
-        reg,
-        cfg,
-        None,
-        {"sensor.allowed": False, "sensor.not_allowed": False},
-        False,
-    )
-    assert hidden == {"sensor.not_allowed"}
-    assert warnings == []
 
-
-def test_empty_registry_with_area_allowlist_degrades_open_not_blank():
-    # Fail-open guard: registry success but empty + an area/label allowlist would
-    # otherwise hide every states-only candidate (the fail-closed blank the design
-    # forbids). The registry-derived allow dimensions degrade to open and warn.
-    reg = {"success": True, "result": []}
-    states = [
-        {"entity_id": "light.a", "attributes": {}},
-        {"entity_id": "sensor.b", "attributes": {}},
-    ]
-    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
-    hidden, warnings = hidden_entity_ids(reg, cfg, states)
-    assert hidden == set()  # not blanked
-    assert any("registry returned no entries" in w for w in warnings)
-
-
-def test_empty_registry_area_allowlist_degrades_to_assist_filter():
-    """A dropped registry allowlist no longer overrides the broad Assist filter."""
-    reg = {"success": True, "result": []}
-    states = [
-        {"entity_id": "sensor.exposed", "attributes": {}},
-        {"entity_id": "sensor.hidden", "attributes": {}},
-    ]
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        allow_areas=["kitchen"],
-        respect_assist_exposure=True,
-    )
-    hidden, warnings = hidden_entity_ids(
-        reg,
-        cfg,
-        states,
-        {"sensor.exposed": True},
-        True,
-    )
-    assert hidden == {"sensor.hidden"}
-    assert any("registry returned no entries" in w for w in warnings)
-
-
-def test_empty_registry_allowlist_still_honors_allow_entity_ids():
-    # allow_entity_ids is registry-independent, so it keeps restricting even when
-    # the area dimension degraded: only the explicitly allowed id survives.
-    reg = {"success": True, "result": []}
-    states = [
-        {"entity_id": "light.a", "attributes": {}},
-        {"entity_id": "sensor.b", "attributes": {}},
-    ]
-    cfg = VisibilityConfig(
-        enabled=True,
-        exclude_categories=[],
-        allow_areas=["kitchen"],
-        allow_entity_ids=["light.a"],
-    )
-    hidden, _ = hidden_entity_ids(reg, cfg, states)
-    assert hidden == {"sensor.b"}
-
-
-# --- Assist-exposure dimension (respect_assist_exposure) ---
-
-
-def _assist_cfg(**kw):
-    return VisibilityConfig(
-        enabled=True, exclude_categories=[], respect_assist_exposure=True, **kw
-    )
-
-
-def test_assist_explicit_override_false_hides():
-    reg = _reg({"entity_id": "light.a"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {"light.a": False}, True)
-    assert hidden == {"light.a"}
-
-
-def test_assist_explicit_override_true_shows_even_diagnostic():
-    # Override wins outright, even over entity_category (matches async_should_expose).
-    reg = _reg({"entity_id": "sensor.x", "entity_category": "diagnostic"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {"sensor.x": True}, True)
-    assert hidden == set()
-
-
-def test_assist_default_exposed_domain_shown():
-    reg = _reg({"entity_id": "light.a"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
-    assert hidden == set()  # light is a default-exposed domain
-
-
-def test_assist_non_default_domain_hidden():
-    reg = _reg({"entity_id": "sensor.random"})  # sensor, no device_class
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
-    assert hidden == {"sensor.random"}
-
-
-def test_assist_binary_sensor_device_class_shown():
-    # B1 regression: binary_sensor is NOT a default domain, but device_class door
-    # IS a default-exposed device class - without the device-class set this would
-    # be wrongly hidden.
-    reg = _reg({"entity_id": "binary_sensor.front", "device_class": "door"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
-    assert hidden == set()
-
-
-def test_assist_sensor_device_class_from_state_attr():
-    # device_class absent from registry but present in state attributes (HA reads
-    # it from the live entity) still counts.
-    reg = _reg({"entity_id": "sensor.temp"})
-    states = _states(
-        {"entity_id": "sensor.temp", "attributes": {"device_class": "temperature"}}
-    )
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), states, {}, True)
-    assert hidden == set()
-
-
-def test_assist_entity_category_blocks_default():
-    # B2 regression: a default-domain entity with entity_category is not exposed.
-    reg = _reg({"entity_id": "light.cfg", "entity_category": "config"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
-    assert hidden == {"light.cfg"}
-
-
-def test_assist_expose_new_off_hides_unconfigured():
-    reg = _reg({"entity_id": "light.a"})
-    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, False)
-    assert hidden == {"light.a"}
-
-
-def test_assist_missing_data_warns_and_skips():
-    # respect_assist_exposure on but the seam could not supply data (None):
-    # dimension is skipped (not fail-closed) and a warning surfaces.
-    reg = _reg({"entity_id": "light.a"})
-    hidden, warnings = hidden_entity_ids(reg, _assist_cfg(), None, None, False)
-    assert hidden == set()
-    assert any("Assist exposure data was unavailable" in w for w in warnings)
+    assert await assist(config, expose_new=False) == {"sensor.not_allowed"}

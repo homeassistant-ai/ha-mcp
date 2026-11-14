@@ -19,6 +19,7 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -59,6 +60,12 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import compact_service_result, project_entity_record
+from .service_response import (
+    COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
+    legacy_call,
+    note_rejected_response,
+    split_return_response_envelope,
+)
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import (
     _SERVICE_TO_STATE,
@@ -71,9 +78,8 @@ from .ws_waiters import wait_for_state_change
 # The ha_mcp_tools/call_service WS command: the first WRITE capability (Phase 3,
 # issue #1813). When the component advertises ``call_service`` the consumer routes a
 # single service call through this one in-process frame, which fires exactly one
-# ``async_call`` and returns the REAL pre->post transition, replacing the legacy
-# REST POST + hardcoded ``_SERVICE_TO_STATE`` guess + WS-subscribe verification.
-# Named once so the routing helper and its tests agree on the wire string.
+# ``async_call`` and returns the REAL pre->post transition, replacing the legacy REST
+# POST + ``_SERVICE_TO_STATE`` guess + WS-subscribe verification. Named once for tests.
 WS_CALL_SERVICE = "ha_mcp_tools/call_service"
 
 
@@ -643,31 +649,9 @@ _NON_STATE_CHANGING_DOMAINS = {
     "system_log",
 }
 
-#: Emitted when a ``return_response=true`` reply is not HA's
-#: ``{"changed_states": [...], "service_response": ...}`` envelope. Without it an
-#: empty ``result`` reads as an affirmative "no entity states changed" rather than
-#: "the records could not be separated out". Module-level so the tests that
-#: pin the behaviour assert against this exact string instead of a prose fragment
-#: that goes tautologically green when the wording is edited.
-_NON_ENVELOPE_WARNING = (
-    "Home Assistant's return_response reply did not match the expected "
-    "{changed_states, service_response} envelope, so no changed-state records "
-    "could be separated from the response data. An empty 'result' here does NOT "
-    "mean nothing changed — the whole reply is reported under 'service_response'."
-)
-
-#: Emitted when the component served a ``return_response`` call but returned no
-#: ``service_response`` key. The component only sets that key for a non-null
-#: response, so an absent key is ambiguous server-side: the service may genuinely
-#: have returned nothing, or the component may have discarded the response on its
-#: dispatched-but-unconfirmed path. Only raised alongside ``partial`` — the case
-#: where the discard is actually possible — so a plain null response stays quiet.
-_COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
-    "The service was dispatched but its confirmation did not arrive, and no "
-    "response data came back with it. A null 'service_response' here does NOT "
-    "prove the service returned nothing — the response may have been produced "
-    "and lost with the confirmation. Re-read state to confirm the outcome."
-)
+#: How long a single service call waits for its target to confirm the change,
+#: on the component path and the legacy one alike.
+CONFIRMATION_TIMEOUT_S = 10.0
 
 # ``_SERVICE_TO_STATE`` (the service -> expected primary-state map) is the single
 # source of truth in ``util_helpers`` — imported above and shared with the bulk
@@ -860,7 +844,7 @@ class ServiceTools(EventCallMixin):
         }
         if return_response:
             response["service_response"] = None
-            response["warnings"].append(_COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
+            response["warnings"].append(COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
         return response
 
     async def _validate_entity_before_wait(self, entity_id: str | None) -> str | None:
@@ -948,7 +932,7 @@ class ServiceTools(EventCallMixin):
                 entity_id,
                 expected_state=expected,
                 initial_state=initial_state,
-                timeout=10.0,
+                timeout=CONFIRMATION_TIMEOUT_S,
             )
             if new_state:
                 response["verified_state"] = new_state.get("state")
@@ -1005,54 +989,6 @@ class ServiceTools(EventCallMixin):
         return isinstance(current, dict) and current.get("state") == "unavailable"
 
     @staticmethod
-    def _split_return_response_envelope(
-        result: Any, *, return_response: bool
-    ) -> tuple[Any, Any, bool, list[str]]:
-        """Split HA's reply into (changed states, response, present, warnings).
-
-        HA answers ``return_response=true`` with an envelope
-        ``{"changed_states": [...], "service_response": ...}``. The response data
-        belongs at the top level of ha_call_service's reply exactly ONCE — the
-        placement the component path (``_build_component_call_response``) already
-        uses — so it is peeled off here, BEFORE projection, leaving only the
-        changed states to project into ``result``. Returning it in both places
-        shipped it twice, byte-identical, doubling its token cost (issue #2085).
-
-        A legitimately null ``service_response`` is still reported as present
-        (``True``) so the caller emits the key.
-
-        With ``return_response`` false there is no envelope to split: HA returns a
-        plain changed-states list, so it passes through untouched and no
-        ``service_response`` key is emitted (``present`` False). That is the
-        overwhelming majority of calls.
-
-        Anything else means a non-conforming responder (HA core always sends both
-        keys, with a list) — in practice ``_request``'s ``{}`` for a non-JSON reply
-        such as a reverse proxy's redirect. Every such shape takes ONE path: the whole
-        reply becomes the response data, ``result`` stays empty, and a warning
-        says so. Uniformity is the point — peeling a recognised key out of an
-        unrecognised envelope would silently discard whatever else it carried,
-        and an empty ``result`` would otherwise read as an affirmative "no entity
-        states changed". A caller that asked for response data must never get back
-        neither the data nor an explanation.
-        """
-        if not return_response:
-            return result, None, False, []
-        if (
-            isinstance(result, dict)
-            and "service_response" in result
-            and isinstance(result.get("changed_states"), list)
-        ):
-            return result["changed_states"], result["service_response"], True, []
-        # Any other shape is non-conforming. Hand the WHOLE reply back as the
-        # response data rather than guessing which part is which: splitting one
-        # recognised key out of an unrecognised envelope discards the rest (a
-        # non-list ``changed_states`` would vanish entirely) and would make the
-        # warning's "the whole reply is reported under 'service_response'" a lie.
-        # Projecting nothing into ``result`` keeps the records from shipping twice.
-        return [], result, True, [_NON_ENVELOPE_WARNING]
-
-    @staticmethod
     def _project_service_result(
         result: list[dict[str, Any]],
         *,
@@ -1068,7 +1004,7 @@ class ServiceTools(EventCallMixin):
         - ``verbose=True``: bypass every transformation; return ``result`` as-is.
           (``result`` here is always changed-state records, never an envelope:
           the legacy path splits the envelope off before calling this — see
-          ``_split_return_response_envelope`` — and the component path passes
+          ``split_return_response_envelope`` — and the component path passes
           transition ``new_state``s, which are never enveloped to begin with.)
         - Explicit ``fields`` or ``attribute_keys``: apply per-record projection
           via ``project_entity_record`` to every record. No compaction; this is
@@ -1129,7 +1065,9 @@ class ServiceTools(EventCallMixin):
         # Check if this is a timeout - for service calls, timeouts typically
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
-        if isinstance(error.__cause__, httpx.TimeoutException):
+        if isinstance(
+            error.__cause__, (httpx.TimeoutException, HomeAssistantCommandTimeout)
+        ):
             return self._build_timeout_response(
                 domain, service, entity_id, data, return_response=return_response
             )
@@ -1610,6 +1548,16 @@ class ServiceTools(EventCallMixin):
             if isinstance(transition, dict)
             and isinstance(transition.get("new_state"), dict)
         ]
+        # A call asking for a response also lists every state written under its
+        # context, as Core's REST call does; a target's confirmed state wins.
+        changed = component_result.get("changed_states")
+        if isinstance(changed, list):
+            targets = {state.get("entity_id") for state in new_states}
+            new_states = [
+                state
+                for state in changed
+                if isinstance(state, dict) and state.get("entity_id") not in targets
+            ] + new_states
         projected_result, projection_warnings = self._project_service_result(
             new_states,
             entity_id=entity_id,
@@ -1630,7 +1578,7 @@ class ServiceTools(EventCallMixin):
             response.setdefault("warnings", []).extend(projection_warnings)
         if return_response:
             # Emit the key whenever it was requested, even for a null response —
-            # the legacy path does the same (``_split_return_response_envelope``),
+            # the legacy path does the same (``split_return_response_envelope``),
             # and gating on ``is not None`` made the two paths answer the same
             # call with different shapes. The component only sets the key for a
             # non-null response, so a null one arrives as an absent key here.
@@ -1639,11 +1587,14 @@ class ServiceTools(EventCallMixin):
             # one the component produced and dropped with the confirmation on its
             # dispatched-unconfirmed path. Only the latter is possible when
             # ``partial``, so warn there rather than on every null.
-            if "service_response" not in component_result and component_result.get(
+            rejected = component_result.get("response_error")
+            if isinstance(rejected, dict):
+                note_rejected_response(response, rejected)
+            elif "service_response" not in component_result and component_result.get(
                 "partial"
             ):
                 response.setdefault("warnings", []).append(
-                    _COMPONENT_RESPONSE_UNCONFIRMED_WARNING
+                    COMPONENT_RESPONSE_UNCONFIRMED_WARNING
                 )
         if should_wait:
             if component_result.get("partial"):
@@ -1679,16 +1630,17 @@ class ServiceTools(EventCallMixin):
         fields: list[str] | None,
         attribute_keys: list[str] | None,
     ) -> dict[str, Any] | None:
-        """Route a confirmable single call through the component; ``None`` → do legacy.
+        """Route a confirmable single call, or any call asking for a response,
+        through the component; ``None`` → do legacy.
 
-        The component route is taken ONLY when confirming a single entity
-        (``should_wait``). The capability's entire value is the real confirmed
-        pre->post transition; for a non-confirmed call (``wait=False``, no / multi
-        entity, or a non-state-changing domain) the component returns
-        ``transitions=[]`` → ``result:[]``, silently dropping the changed-states body
-        the legacy REST POST returns (e.g. a scene's member states). For those the
-        legacy single POST costs the same one round-trip and is strictly richer, so
-        this returns ``None`` and the caller stays on legacy.
+        A call that asks for a response always takes the component: only the
+        component lists the states such a call changed. Otherwise the route is
+        taken only when confirming a single entity (``should_wait``): the
+        component's value there is the confirmed pre->post transition, while for a
+        non-confirmed call (``wait=False``, no / multi entity, or a
+        non-state-changing domain) it returns ``transitions=[]`` and the legacy
+        REST POST, which lists the changed states (e.g. a scene's members), is
+        richer at the same one round-trip.
 
         Returns a FINAL ``ha_call_service`` response when the component served the
         call: the mapped transition, or — on a post-send timeout / transport drop
@@ -1697,26 +1649,27 @@ class ServiceTools(EventCallMixin):
         when the component was not used or provably never dispatched, so the caller
         runs the legacy REST path as a safe first fire.
 
-        ``verbose`` routes to legacy too: it promises the FULL propagation chain
-        (every downstream changed state), which the component path cannot deliver — it
-        returns only the confirmation targets' ``new_state``s — so the richer legacy
-        POST serves it instead.
+        ``verbose`` routes to legacy too unless the call asks for a response: it
+        promises every downstream changed state, which the component lists only
+        for such a call, beside its confirmation targets' ``new_state``s.
         """
         # A comma-separated entity_id ("light.a,light.b") is a valid multi-target the
         # compaction path expands, but the component confirms one LITERAL entity_id: it
         # would wait for the nonexistent literal "light.a,light.b" and report a false
         # ``partial`` with an empty result even though HA changed both real entities.
-        # Treat a comma as the multi-target signal → legacy REST POST (parity with the
-        # verbose / non-confirmed early-outs above, which the component cannot serve).
-        if not should_wait or verbose or (entity_id and "," in entity_id):
+        # Treat a comma as the multi-target signal: no confirmation target, and
+        # legacy REST POST unless the call asks for a response.
+        confirm = should_wait and not (entity_id and "," in entity_id)
+        if not return_response and (not confirm or verbose):
             return None
+        should_wait = bool(confirm)
         component_result = await self._call_service_via_component(
             domain=domain,
             service=service,
             service_data=service_data,
-            entity_ids=[entity_id] if entity_id else [],
-            wait=True,
-            timeout=10.0,
+            entity_ids=[entity_id] if should_wait and entity_id else [],
+            wait=should_wait,
+            timeout=CONFIRMATION_TIMEOUT_S,
             return_response=return_response,
         )
         if isinstance(component_result, _AmbiguousDispatch):
@@ -1793,7 +1746,11 @@ class ServiceTools(EventCallMixin):
             Field(
                 description=(
                     "If True, the service's response data is returned once, as the "
-                    "top-level 'service_response' key — never nested inside 'result'."
+                    "top-level 'service_response' key — never nested inside 'result'. "
+                    "If Home Assistant rejects the response after the service ran, "
+                    "the call still succeeds, with 'response_error' and a warning not "
+                    "to call it again. The states such a call changed are listed only "
+                    "with the ha_mcp_tools component; without it a warning says so."
                 ),
             ),
         ] = False,
@@ -1804,10 +1761,10 @@ class ServiceTools(EventCallMixin):
                     "If True (default), wait for the entity state to change "
                     "before returning. Applies only to state-changing services "
                     "called with a single entity_id. A comma-separated "
-                    "multi-target does not get confirmed by this: it falls "
-                    "through to a legacy path that polls for the literal "
-                    "composite entity_id and times out after 10s. Set "
-                    "wait=False for multi-target calls."
+                    "multi-target does not get confirmed by this: without "
+                    "return_response it falls through to a legacy path that "
+                    "polls for the literal composite entity_id and times out "
+                    "after 10s. Set wait=False for multi-target calls."
                 ),
             ),
         ] = True,
@@ -1936,9 +1893,10 @@ class ServiceTools(EventCallMixin):
             # Only for state-changing services with an entity_id set, not for
             # trigger/reload/fire-and-forget services or services without entities.
             # A comma-separated multi-target entity_id is not excluded here — it
-            # still falls through to the legacy path, which polls for the literal
-            # composite entity_id and times out after 10s (see the wait Field
-            # description and _maybe_component_call_service).
+            # still falls through to the legacy path (unless the call asks for a
+            # response), which polls for the literal composite entity_id and times
+            # out after 10s (see the wait Field description and
+            # _maybe_component_call_service).
             # This server-side decision (D6) also chooses whether to hand the
             # component wait+entity_ids: a non-state-changing call passes wait
             # implicitly false and no confirmation targets.
@@ -1949,9 +1907,10 @@ class ServiceTools(EventCallMixin):
                 and domain not in _NON_STATE_CHANGING_DOMAINS
             )
 
-            # Route a confirmable single call through the component capability (D8);
-            # a returned response means it served the call, None means fall through to
-            # the legacy REST path below (a safe first fire, D9 at-most-once).
+            # Route a confirmable single call, or one asking for a response, through
+            # the component capability (D8); a returned response means it served the
+            # call, None means fall through to the legacy path below (a safe first
+            # fire, D9 at-most-once).
             component_response = await self._maybe_component_call_service(
                 domain=domain,
                 service=service,
@@ -1979,15 +1938,15 @@ class ServiceTools(EventCallMixin):
             if should_wait:
                 initial_state = await self._validate_entity_before_wait(entity_id)
 
-            result = await self._client.call_service(
-                domain, service, service_data, return_response=return_response_bool
+            result, rejected, ws_warnings = await legacy_call(
+                self._client, domain, service, service_data, return_response_bool
             )
 
             # Peel the return_response envelope apart BEFORE projection so the
             # response data is emitted once, top-level, and only the changed
             # states reach ``result`` (issue #2085).
             result, service_response, has_response_envelope, envelope_warnings = (
-                self._split_return_response_envelope(
+                split_return_response_envelope(
                     result, return_response=return_response_bool
                 )
             )
@@ -2009,12 +1968,13 @@ class ServiceTools(EventCallMixin):
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            call_warnings = [*projection_warnings, *envelope_warnings]
+            call_warnings = [*projection_warnings, *envelope_warnings, *ws_warnings]
             if call_warnings:
                 response.setdefault("warnings", []).extend(call_warnings)
 
             if has_response_envelope:
                 response["service_response"] = service_response
+            note_rejected_response(response, rejected)
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:

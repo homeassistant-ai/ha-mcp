@@ -22,6 +22,8 @@ from ha_mcp.tools.automation_registry_details import (
 from ha_mcp.tools.component_automation import automation_lookup
 from ha_mcp.tools.tools_traces import TraceTools
 
+from ._core_setup import set_up_domain as _setup
+
 _TRIGGER = {"platform": "state", "entity_id": "light.trigger"}
 _ACTION = [{"event": "trace_test"}]
 
@@ -44,11 +46,6 @@ async def _diagnose(
     result = await TraceTools(client).ha_get_automation_traces(entity_id=entity_id)
     diagnostics: dict[str, Any] = result["diagnostics"]
     return diagnostics, list(result.get("warnings", []))
-
-
-async def _setup(hass: HomeAssistant, component: str, config: Any) -> None:
-    assert await async_setup_component(hass, component, {component: config})
-    await hass.async_block_till_done()
 
 
 @pytest.fixture(autouse=True)

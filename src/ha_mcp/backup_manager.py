@@ -561,21 +561,21 @@ _SNAPSHOT_SKIP: Any = object()
 async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
     """Keep backup locks/pins until executor I/O settles, even after cancellation."""
     worker = asyncio.create_task(asyncio.to_thread(operation, *args))
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        # Cancelling the await cannot stop its executor thread. Releasing the
-        # caller's lock now would let another capture reserve the same filename.
-        while not worker.done():
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                continue  # Repeated cancellation must not release the lock early.
-            except Exception:  # noqa: BLE001
-                break  # Log the worker failure below; preserve cancellation.
-        if not worker.cancelled() and (err := worker.exception()) is not None:
-            logger.warning("Backup I/O failed after cancellation", exc_info=err)
-        raise
+    cancelled: asyncio.CancelledError | None = None
+    # Cancelling the await cannot stop its executor thread, and releasing the
+    # caller's lock early would let another capture reserve the same filename.
+    # asyncio.wait never cancels the worker and, unlike a cancelled shield on
+    # Python 3.14.0-3.14.4, leaves nothing for the loop's error handler.
+    while not worker.done():
+        try:
+            await asyncio.wait({worker})
+        except asyncio.CancelledError as err:
+            cancelled = err
+    if cancelled is None:
+        return worker.result()
+    if not worker.cancelled() and (failure := worker.exception()) is not None:
+        logger.warning("Backup I/O failed after cancellation", exc_info=failure)
+    raise cancelled
 
 
 def _require_restore_safety(path: Path) -> None:

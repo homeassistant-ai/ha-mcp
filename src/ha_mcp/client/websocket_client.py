@@ -588,9 +588,9 @@ class HomeAssistantWebSocketClient:
             # Process standard Home Assistant WebSocket response
             if response.get("type") == "result":
                 if response.get("success") is False:
-                    error_msg, error_code = _extract_ws_error(response.get("error", {}))
+                    msg, code = _extract_ws_error(err := response.get("error", {}))
                     raise HomeAssistantCommandError(
-                        f"Command failed: {error_msg}", error_code
+                        f"Command failed: {msg}", code, error=err
                     )
 
                 # Return success response according to HA WebSocket format

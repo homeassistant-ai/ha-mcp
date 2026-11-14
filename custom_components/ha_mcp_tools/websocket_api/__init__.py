@@ -220,6 +220,9 @@ the info handshake carries no capability entry:
   (``get_caller_token`` → arbitrary config-dir file/YAML writes). A confirmation
   timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
   the dispatch raises, a failure AFTER it does not (the call already landed).
+  A call asking for a response also returns ``changed_states``, every state
+  written under the call's context (Core's REST call lists the same), and a
+  response Core rejects after the service ran comes back as ``response_error``.
 * ``ha_mcp_tools/bulk_call_service`` — the BATCH write capability (D5a). One frame
   runs the D1 ``ha_mcp_tools`` domain block for EVERY operation FIRST, before any
   dispatch or listener: a batch is fail-closed — one refused op raises the whole

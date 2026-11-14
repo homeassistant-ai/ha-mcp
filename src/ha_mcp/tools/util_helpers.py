@@ -94,7 +94,7 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     {"changed_states": [...], "service_response": {...}}.
     Returns service_response if present and is a dict, otherwise the original result.
 
-    Deliberately NOT the same rule as ``ServiceTools._split_return_response_envelope``,
+    Deliberately NOT the same rule as ``service_response.split_return_response_envelope``,
     which powers ha_call_service: that one returns the response whatever its type and
     reports the whole reply only when the key is absent. The two disagree solely for a
     NON-DICT ``service_response`` (this helper hands back the envelope, the split hands

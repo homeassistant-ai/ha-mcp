@@ -1,6 +1,5 @@
 """Record shaping and pagination for ha_config_list_helpers."""
 
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
@@ -8,8 +7,6 @@ from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 from ..response_helpers import build_pagination_metadata
 from .schemas import SIMPLE_HELPER_TYPES
-
-logger = logging.getLogger(__name__)
 
 # The component reports ``secret_scrub_degraded`` when secrets.yaml exists but
 # cannot be read (its flow-helper options then went out unscrubbed).
@@ -69,9 +66,7 @@ def listed_items(listed: Any) -> list[Any]:
 def _outside_storage(rec: dict[str, Any]) -> bool:
     """A component record of a helper ``<type>/list`` does not list (a YAML
     helper, the home zone): the component sends it with a null storage id."""
-    return rec.get("kind") == "collection" and (
-        "storage_id" in rec and rec["storage_id"] is None
-    )
+    return rec.get("kind") == "collection" and rec["storage_id"] is None
 
 
 def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
@@ -88,16 +83,10 @@ def _shape_collection_helper_record(rec: dict[str, Any]) -> dict[str, Any]:
     """
     config = rec.get("config")
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
-    # Prefer the record-level ``storage_id`` (the component reads it from the
-    # real storage collection). Not every collection body carries its own
-    # ``id`` — person/zone are stored keyed by id rather than embedding it — so
-    # trusting the body's ``id`` drifts for those types. Fall back to
-    # ``object_id`` only when ``storage_id`` is absent (older component).
-    storage_id = rec.get("storage_id")
-    if storage_id is None:
-        storage_id = rec.get("object_id")
-    if storage_id is not None:
-        out["id"] = storage_id
+    # The record-level ``storage_id`` (the component reads it from the real
+    # storage collection), not the body's ``id``: not every collection body
+    # carries its own — person/zone are stored keyed by id.
+    out["id"] = rec["storage_id"]
     entity_id = rec.get("entity_id")
     if entity_id is not None:
         out["entity_id"] = entity_id
@@ -157,32 +146,7 @@ def _paginate_helpers_response(
     the page size and ``total_count`` carries the full size, matching
     ``ha_list_services``.
     """
-    helpers = response.get("helpers")
-    if not isinstance(helpers, list):
-        # Every builder owes this function a flat list; anything else is a bug in
-        # the caller (a {type}/list shape that escaped _flatten_helper_list_result).
-        # The records are still usable, so return them unpaginated rather than
-        # raising -- but say so in warnings[], not just the log: the caller is an
-        # agent that never sees server logs, and absent metadata otherwise reads
-        # as "the collection fits on one page".
-        shape = type(helpers).__name__
-        logger.warning(
-            "Cannot paginate %r listing: expected a list of helpers, got %s; "
-            "returning the envelope unpaginated",
-            response.get("helper_type"),
-            shape,
-        )
-        warning = (
-            f"Listing could not be paginated (expected a list of helpers, got "
-            f"{shape}); returned in full, without pagination metadata."
-        )
-        existing = response.get("warnings")
-        return {
-            **response,
-            "warnings": [*existing, warning]
-            if isinstance(existing, list)
-            else [warning],
-        }
+    helpers: list[Any] = response["helpers"]
     total_count = len(helpers)
     page = helpers[offset : offset + limit]
     return {
@@ -206,13 +170,9 @@ def _shape_component_helpers_response(
     ``count`` is the length of the emitted list, mirroring the legacy
     ``count == len(helpers)`` guarantee.
     """
-    raw = result.get("helpers")
-    records = raw if isinstance(raw, list) else []
     want_flow = helper_type not in SIMPLE_HELPER_TYPES
     helpers: list[dict[str, Any]] = []
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
+    for rec in result["helpers"]:
         if (rec.get("kind") == "flow") != want_flow or _outside_storage(rec):
             continue
         helpers.append(
@@ -240,10 +200,15 @@ def _component_covers(result: dict[str, Any], helper_type: str) -> bool:
     ``<type>/list`` adds more than the stored items) must NOT
     be trusted as "none exist". A response with no ``covered_types`` at all (an
     older component) is treated conservatively as covering nothing, so the
-    caller falls back rather than trusting a possibly-partial list.
+    caller falls back rather than trusting a possibly-partial list. A response
+    without a ``helpers`` list is malformed, which counts as no component.
     """
     covered = result.get("covered_types")
-    return isinstance(covered, list) and helper_type in covered
+    return (
+        isinstance(covered, list)
+        and helper_type in covered
+        and isinstance(result.get("helpers"), list)
+    )
 
 
 def _raise_flow_requires_component(helper_type: str) -> NoReturn:
@@ -305,11 +270,9 @@ async def shape_all_helpers_response(
     ``flow_types`` is Core's current set of helper flow types; one the component
     did not cover raises instead of being left out.
     """
-    raw = result.get("helpers")
-    records = raw if isinstance(raw, list) else []
     helpers: list[dict[str, Any]] = []
-    for rec in records:
-        if not isinstance(rec, dict) or _outside_storage(rec):
+    for rec in result["helpers"]:
+        if _outside_storage(rec):
             continue
         if rec.get("kind") == "flow":
             helpers.append(_shape_flow_helper_record(rec))
@@ -350,23 +313,10 @@ async def shape_all_helpers_response(
         # instead of dropping them, else an uncovered type is served stale and
         # silent during an all-types listing.
         merge_warnings.extend(legacy.get("warnings", []))
-        skipped = 0
-        for item in legacy.get("helpers", []):
-            if isinstance(item, dict):
-                row = dict(item)
-                row.setdefault("helper_type", helper_type)
-                helpers.append(row)
-            else:
-                skipped += 1
-        if skipped:
-            # This is how the unflattened person/list dict used to vanish:
-            # iterating it yielded its keys, and each failed the check here.
-            logger.warning(
-                "Dropped %d unrecognised item(s) from the %s listing while "
-                "merging all types; the merged listing is incomplete",
-                skipped,
-                helper_type,
-            )
+        for item in legacy["helpers"]:
+            row = dict(item)
+            row.setdefault("helper_type", helper_type)
+            helpers.append(row)
 
     response: dict[str, Any] = {
         "success": True,

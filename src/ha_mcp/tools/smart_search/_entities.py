@@ -15,7 +15,7 @@ from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
-from ..entity_registry_reads import _GET_ENTRIES_CHUNK_SIZE
+from ..entity_registry_reads import GET_ENTRIES_CHUNK_SIZE
 from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
@@ -203,7 +203,7 @@ class EntitySearchMixin(_SearchBase):
 
         ``config/entity_registry/list`` deliberately omits ``aliases``;
         ``get_entries`` includes them. Survivors are split into
-        ``_GET_ENTRIES_CHUNK_SIZE``-sized chunks fetched concurrently: a
+        ``GET_ENTRIES_CHUNK_SIZE``-sized chunks fetched concurrently: a
         bounded number of round-trips (one per chunk), not N+1 fan-out, and
         each response frame stays bounded regardless of instance size.
         Enrichment is best-effort per chunk — one chunk failing does not
@@ -220,8 +220,8 @@ class EntitySearchMixin(_SearchBase):
             return aliases_map, []
 
         chunks: list[list[str]] = [
-            survivor_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-            for i in range(0, len(survivor_ids), _GET_ENTRIES_CHUNK_SIZE)
+            survivor_ids[i : i + GET_ENTRIES_CHUNK_SIZE]
+            for i in range(0, len(survivor_ids), GET_ENTRIES_CHUNK_SIZE)
         ]
         responses: list[Any] = await asyncio.gather(
             *(

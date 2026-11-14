@@ -11,11 +11,6 @@ files:
 # Files written before the unit tests ran on real Home Assistant Core. They are
 # to be converted and removed from this list; never add a file to it.
 ignores:
-  - "tests/src/unit/_component_ws_fakes.py"
-  - "tests/src/unit/test_component_helper_collections.py"
-  - "tests/src/unit/test_component_template_diagnose.py"
-  - "tests/src/unit/test_component_ws_phase2_async.py"
-  - "tests/src/unit/test_component_ws_search.py"
   - "tests/src/unit/test_entity_backup.py"
   - "tests/src/unit/test_tools_entry_lifecycle.py"
   - "tests/src/unit/test_tools_resources_patch.py"

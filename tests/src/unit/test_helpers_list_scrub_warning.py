@@ -28,6 +28,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
+from ._core_setup import install_custom_helper, write_secrets
+
 _CUSTOM = "my_helper"
 _LOADER = (
     "custom_components.ha_mcp_tools.websocket_api.flow_domains.async_get_config_flows"
@@ -49,20 +51,7 @@ def custom_helper_integration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
 ) -> None:
     """A custom helper integration installed where Core's loader looks."""
-    integration = tmp_path / "extra" / "custom_components" / _CUSTOM
-    integration.mkdir(parents=True)
-    manifest = {
-        "domain": _CUSTOM,
-        "name": "My Helper",
-        "config_flow": True,
-        "integration_type": "helper",
-        "version": "1.0.0",
-        "documentation": "https://example.invalid",
-        "codeowners": [],
-        "requirements": [],
-    }
-    (integration / "manifest.json").write_text(json.dumps(manifest))
-    monkeypatch.syspath_prepend(str(tmp_path / "extra"))
+    install_custom_helper(tmp_path, monkeypatch, _CUSTOM)
 
 
 @pytest.fixture
@@ -85,7 +74,7 @@ async def tools(
 def _write_secrets(hass: HomeAssistant, world: str) -> None:
     body = {"unreadable": "key: [unclosed\n", "readable": "key: value\n"}.get(world)
     if body is not None:
-        Path(hass.config.path("secrets.yaml")).write_text(body)
+        write_secrets(hass, body)
 
 
 def _scrub_warnings(response: dict[str, object]) -> list[str]:

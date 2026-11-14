@@ -1,345 +1,189 @@
-"""Routing tests for ``ha_get_entity`` enrichment over the ``ha_mcp_tools`` gate.
+"""``ha_get_entity`` enrichment through the component, on a real ``hass``.
 
-``ha_get_entity`` serves its base registry record from the native
-``config/entity_registry/get`` (single) / ``config/entity_registry/get_entries``
-(bulk) reads. When the component advertises ``entity_enrich``, one
-``ha_mcp_tools/entity_enrich`` frame additively decorates each record with the
-resolved area/floor NAMES and label NAMES the raw registry entry lacks (it
-carries ``area_id`` / label ids). These tests pin the additive merge, that
-the enrichment keys are ABSENT on a capability miss, with a warning to install
-or update the component, and on ``unknown_command`` (which also invalidates the
-cached caps).
+The registry record comes from Core's ``config/entity_registry/get`` (one id)
+or ``get_entries`` (a list). When the component advertises ``entity_enrich``
+(with ``device_registry_child_semantics``), one ``ha_mcp_tools/entity_enrich``
+frame adds the area, floor and label NAMES beside the ids the record already
+carries. Without it the record comes back as Core stores it, with no
+enrichment keys and a warning to install or update the component.
+Registries are Core's own.
 """
 
 from __future__ import annotations
 
-import math
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+import uuid
+from typing import NamedTuple
+from unittest.mock import patch
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import tools_entities
+from ha_mcp.tools.component_api import (
+    COMPONENT_VIA_HACS,
+    get_component_caps,
+    invalidate_caps,
 )
-from ha_mcp.tools import component_api, tools_entities
-from ha_mcp.tools.tools_entities import (
-    _GET_ENTRIES_CHUNK_SIZE,
-    WS_ENTITY_ENRICH,
-    fetch_entity_enrichment_via_component,
-    register_entity_tools,
-)
+from ha_mcp.tools.entity_registry_reads import GET_ENTRIES_CHUNK_SIZE
+from ha_mcp.tools.tools_entities import WS_ENTITY_ENRICH, EntityTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-)
+from ._component_frames import observed, older_component
+from ._core_setup import with_config_component
 
-_CAPS_PRE_CHILD_SEMANTICS = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["entity_enrich"],
-    "limits": {},
-}
-_CAPS_ENRICH = {
-    **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": ["entity_enrich", "device_registry_child_semantics"],
-}
-_CAPS_NONE = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": [],
-    "limits": {},
-}
+ENRICHMENT_KEYS = ("area", "floor", "label_names")
 
 
-def _raw_entry(
-    entity_id: str, *, area_id: str | None, labels: list[str]
-) -> dict[str, Any]:
-    """A raw HA extended registry entry (``config/entity_registry/get`` result)."""
-    return {
-        "entity_id": entity_id,
-        "name": None,
-        "original_name": entity_id,
-        "icon": None,
-        "area_id": area_id,
-        "disabled_by": None,
-        "hidden_by": None,
-        "aliases": [],
-        "labels": labels,
-        "categories": {},
-        "device_class": None,
-        "original_device_class": None,
-        "options": {},
-        "platform": "hue",
-        "device_id": "dev-1",
-        "config_entry_id": "cfg-1",
-        "unique_id": f"uid-{entity_id}",
-    }
+class Lamp(NamedTuple):
+    entity_id: str
+    area_id: str
+    label_id: str
+    area: str
+    floor: str
+    label: str
 
 
-def _enrichment(entity_id: str) -> dict[str, Any]:
-    return {"area": "Kitchen", "floor": "Main", "labels": ["Favorites"], "aliases": []}
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return await with_config_component(hass, component_core_client)
 
 
-class RoutingClient:
-    """Credentialed HA client spy serving the native registry reads."""
-
-    def __init__(self, entries: dict[str, dict[str, Any]]) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self._entries = dict(entries)
-        self.ws_calls: list[str] = []
-
-    async def send_websocket_message(
-        self, msg: dict[str, Any], **_: Any
-    ) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        self.ws_calls.append(msg_type)
-        if msg_type == "config/entity_registry/get":
-            eid = msg.get("entity_id")
-            if eid in self._entries:
-                return {"success": True, "result": self._entries[eid]}
-            return {"success": False, "error": {"message": "not found"}}
-        if msg_type == "config/entity_registry/get_entries":
-            ids = msg.get("entity_ids") or []
-            return {
-                "success": True,
-                "result": {e: self._entries[e] for e in ids if e in self._entries},
-            }
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
-
-
-def _build_get_entity(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_entity_tools(mcp, client)
-    return registered["ha_get_entity"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _enrich_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/entity_enrich"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_single_entity_enriched_via_component() -> None:
-    """A single-entity get gains area/floor/label_names from one enrich frame."""
-    ws = make_ws(
-        "ha_mcp_tools/entity_enrich",
-        info_result=_CAPS_ENRICH,
-        cmd_result={"entities": {"light.a": _enrichment("light.a")}},
+def _lamp(hass: HomeAssistant) -> Lamp:
+    """A lamp in an area on a floor, with one label."""
+    suffix = uuid.uuid4().hex[:8]
+    floor = fr.async_get(hass).async_create(f"Main {suffix}")
+    area = ar.async_get(hass).async_create(f"Kitchen {suffix}", floor_id=floor.floor_id)
+    label = lr.async_get(hass).async_create(f"Favorites {suffix}")
+    registry = er.async_get(hass)
+    lamp = registry.async_get_or_create("light", "test", "lamp")
+    registry.async_update_entity(
+        lamp.entity_id, area_id=area.id, labels={label.label_id}
     )
-    client = RoutingClient(
-        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
+    return Lamp(
+        lamp.entity_id, area.id, label.label_id, area.name, floor.name, label.name
     )
-    get_entity = _build_get_entity(client)
 
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity("light.a")
+
+def _plain(hass: HomeAssistant, unique_id: str = "plain") -> str:
+    return er.async_get(hass).async_get_or_create("light", "test", unique_id).entity_id
+
+
+async def test_an_entity_gets_its_area_floor_and_label_names_beside_its_ids(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    lamp = _lamp(hass)
+
+    with observed(hass, WS_ENTITY_ENRICH) as frames:
+        resp = await EntityTools(client).ha_get_entity(entity_id=lamp.entity_id)
 
     entry = resp["entity_entry"]
-    # Base fields unchanged.
-    assert entry["entity_id"] == "light.a"
-    assert entry["area_id"] == "ar1"
-    assert entry["labels"] == ["lb1"]
-    # Additive resolved-name enrichment, under non-clobbering keys.
-    assert entry["area"] == "Kitchen"
-    assert entry["floor"] == "Main"
-    assert entry["label_names"] == ["Favorites"]
-    assert len(_enrich_calls(ws)) == 1
-    assert _enrich_calls(ws)[0].kwargs["entity_ids"] == ["light.a"]
-
-
-@pytest.mark.asyncio
-async def test_bulk_entities_enriched_via_component() -> None:
-    """Each found record in a bulk get is enriched from the same enrich frame."""
-    ws = make_ws(
-        "ha_mcp_tools/entity_enrich",
-        info_result=_CAPS_ENRICH,
-        cmd_result={
-            "entities": {
-                "light.a": _enrichment("light.a"),
-                "light.b": {"area": "Den", "floor": None, "labels": [], "aliases": []},
-            }
-        },
+    assert (entry["area_id"], entry["labels"]) == (lamp.area_id, [lamp.label_id])
+    assert (entry["area"], entry["floor"], entry["label_names"]) == (
+        lamp.area,
+        lamp.floor,
+        [lamp.label],
     )
-    client = RoutingClient(
-        {
-            "light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"]),
-            "light.b": _raw_entry("light.b", area_id=None, labels=[]),
-        }
-    )
-    get_entity = _build_get_entity(client)
+    assert [frame["entity_ids"] for frame in frames] == [[lamp.entity_id]]
 
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity(["light.a", "light.b"])
+
+async def test_a_bulk_get_enriches_every_entity_from_one_frame(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    lamp = _lamp(hass)
+    plain = _plain(hass)
+
+    with observed(hass, WS_ENTITY_ENRICH) as frames:
+        resp = await EntityTools(client).ha_get_entity(
+            entity_id=[lamp.entity_id, plain]
+        )
 
     by_id = {e["entity_id"]: e for e in resp["entity_entries"]}
-    assert by_id["light.a"]["area"] == "Kitchen"
-    assert by_id["light.a"]["label_names"] == ["Favorites"]
-    assert by_id["light.b"]["area"] == "Den"
-    assert by_id["light.b"]["label_names"] == []
-    assert len(_enrich_calls(ws)) == 1
-    assert set(_enrich_calls(ws)[0].kwargs["entity_ids"]) == {"light.a", "light.b"}
-
-
-@pytest.mark.asyncio
-async def test_no_capability_leaves_base_shape() -> None:
-    """Component without entity_enrich → no enrich frame, no enrichment keys."""
-    ws = make_ws("ha_mcp_tools/entity_enrich", info_result=_CAPS_NONE)
-    client = RoutingClient(
-        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
+    assert (by_id[lamp.entity_id]["area"], by_id[lamp.entity_id]["label_names"]) == (
+        lamp.area,
+        [lamp.label],
     )
-    get_entity = _build_get_entity(client)
+    assert (by_id[plain]["area"], by_id[plain]["label_names"]) == (None, [])
+    assert [set(frame["entity_ids"]) for frame in frames] == [{lamp.entity_id, plain}]
 
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity("light.a")
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param("entity_enrich", id="no-enrich-command"),
+        # Placement from a component without it can be stale for a child device.
+        pytest.param("device_registry_child_semantics", id="no-child-semantics"),
+    ],
+)
+async def test_an_older_component_leaves_the_record_as_core_stores_it(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+) -> None:
+    older_component(monkeypatch, missing)
+    lamp = _lamp(hass)
+
+    with observed(hass, WS_ENTITY_ENRICH) as frames:
+        resp = await EntityTools(client).ha_get_entity(entity_id=lamp.entity_id)
 
     entry = resp["entity_entry"]
-    assert "area" not in entry
-    assert "floor" not in entry
-    assert "label_names" not in entry
-    assert not _enrich_calls(ws)
+    assert entry["area_id"] == lamp.area_id
+    assert not [key for key in ENRICHMENT_KEYS if key in entry]
+    assert frames == []
+    (warning,) = resp["warnings"]
+    assert "too old" in warning
+    assert COMPONENT_VIA_HACS in warning
 
 
-@pytest.mark.asyncio
-async def test_pre_child_semantics_enrichment_capability_leaves_base_shape() -> None:
-    """An old component cannot add potentially stale device-derived placement."""
-    ws = make_ws(
-        "ha_mcp_tools/entity_enrich",
-        info_result=_CAPS_PRE_CHILD_SEMANTICS,
-        cmd_result={"entities": {"light.a": _enrichment("light.a")}},
-    )
-    client = RoutingClient({"light.a": _raw_entry("light.a", area_id=None, labels=[])})
-    get_entity = _build_get_entity(client)
+async def test_a_downgraded_component_leaves_the_record_and_is_probed_again(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lamp = _lamp(hass)
+    assert await get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data[websocket_api.DOMAIN], WS_ENTITY_ENRICH)
 
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity("light.a")
+    with patch.object(tools_entities, "invalidate_caps", wraps=invalidate_caps) as drop:
+        resp = await EntityTools(client).ha_get_entity(entity_id=lamp.entity_id)
 
     entry = resp["entity_entry"]
-    assert "area" not in entry
-    assert "floor" not in entry
-    assert "label_names" not in entry
-    assert not _enrich_calls(ws)
+    assert (entry["entity_id"], entry["area_id"]) == (lamp.entity_id, lamp.area_id)
+    assert not [key for key in ENRICHMENT_KEYS if key in entry]
+    (warning,) = resp["warnings"]
+    assert COMPONENT_VIA_HACS in warning
+    drop.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_unknown_command_invalidates_and_omits_fields() -> None:
-    """unknown_command on the enrich frame → invalidate caps + fields absent."""
-    ws = make_ws(
-        "ha_mcp_tools/entity_enrich",
-        info_result=_CAPS_ENRICH,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(
-        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
-    )
-    get_entity = _build_get_entity(client)
+async def test_a_bulk_get_past_the_frame_bound_is_enriched_in_bounded_frames(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """``GET_ENTRIES_CHUNK_SIZE`` bounds one frame so a long list cannot build an
+    over-size WebSocket message; every id is still enriched exactly once."""
+    ids = [_plain(hass, f"l{i}") for i in range(GET_ENTRIES_CHUNK_SIZE + 1)]
 
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity("light.a")
+    with observed(hass, WS_ENTITY_ENRICH) as frames:
+        resp = await EntityTools(client).ha_get_entity(entity_id=ids)
 
-    entry = resp["entity_entry"]
-    assert entry["entity_id"] == "light.a"
-    assert "area" not in entry
-    # The stale positive caps entry was dropped so the next call re-probes.
-    assert client not in component_api._CAPS_CACHE
+    sent = [frame["entity_ids"] for frame in frames]
+    assert len(sent) > 1
+    assert all(len(chunk) <= GET_ENTRIES_CHUNK_SIZE for chunk in sent)
+    assert sorted(eid for chunk in sent for eid in chunk) == sorted(ids)
+    assert resp["count"] == len(ids)
+    assert all("area" in entry for entry in resp["entity_entries"])
 
 
-class _CredClient:
-    """Minimal credentialed client for the direct enrichment-fetch chunking tests."""
+async def test_a_bulk_get_within_the_frame_bound_is_one_enrichment_frame(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    ids = [_plain(hass, f"l{i}") for i in range(GET_ENTRIES_CHUNK_SIZE)]
 
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
+    with observed(hass, WS_ENTITY_ENRICH) as frames:
+        await EntityTools(client).ha_get_entity(entity_id=ids)
 
-
-def _make_enrich_recording_ws(
-    caps: dict[str, Any], recorder: list[list[str]]
-) -> AsyncMock:
-    """A WS whose enrich replies echo the requested ids; each frame is recorded."""
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            return {"success": True, "result": caps}
-        if command_type == WS_ENTITY_ENRICH:
-            ids = list(kwargs["entity_ids"])
-            recorder.append(ids)
-            return {
-                "success": True,
-                "result": {
-                    "entities": {
-                        eid: {"area": "A", "floor": None, "labels": [], "aliases": []}
-                        for eid in ids
-                    }
-                },
-            }
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-@pytest.mark.asyncio
-async def test_bulk_enrichment_is_chunked() -> None:
-    """A large bulk enrichment fans out into ``_GET_ENTRIES_CHUNK_SIZE`` chunks so a
-    big id list can't produce an over-cap WS frame; the per-chunk maps merge into
-    one (Codex P2). Mirrors the chunk bound of the sibling get_entries read."""
-    recorder: list[list[str]] = []
-    ws = _make_enrich_recording_ws(_CAPS_ENRICH, recorder)
-    client = _CredClient()
-    ids = [f"light.e{i}" for i in range(_GET_ENTRIES_CHUNK_SIZE + 1)]
-
-    with patch_ws(ws, tools_entities):
-        result = await fetch_entity_enrichment_via_component(client, ids)
-
-    assert result is not None
-    # Two bounded chunks: 500 + 1.
-    assert len(recorder) == math.ceil(len(ids) / _GET_ENTRIES_CHUNK_SIZE) == 2
-    for chunk in recorder:
-        assert len(chunk) <= _GET_ENTRIES_CHUNK_SIZE
-    # Every id fetched exactly once and present in the merged map.
-    flat = [eid for chunk in recorder for eid in chunk]
-    assert sorted(flat) == sorted(ids)
-    assert set(result) == set(ids)
-
-
-@pytest.mark.asyncio
-async def test_below_chunk_size_issues_single_enrich_frame() -> None:
-    """A bulk enrichment at the chunk size issues exactly one frame (no needless
-    fan-out for the common single-chunk case)."""
-    recorder: list[list[str]] = []
-    ws = _make_enrich_recording_ws(_CAPS_ENRICH, recorder)
-    client = _CredClient()
-    ids = [f"light.e{i}" for i in range(_GET_ENTRIES_CHUNK_SIZE)]
-
-    with patch_ws(ws, tools_entities):
-        result = await fetch_entity_enrichment_via_component(client, ids)
-
-    assert result is not None
-    assert len(recorder) == 1
-    assert recorder[0] == ids
+    assert [frame["entity_ids"] for frame in frames] == [ids]

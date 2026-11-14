@@ -457,7 +457,7 @@ class TestBulkRead:
     async def test_a_failed_lookup_keeps_another_rows_registry_error(
         self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
     ) -> None:
-        monkeypatch.setattr(entity_registry_reads, "_GET_ENTRIES_CHUNK_SIZE", 1)
+        monkeypatch.setattr(entity_registry_reads, "GET_ENTRIES_CHUNK_SIZE", 1)
         hass.states.async_set("light.porch", "on")
         _list_raises(monkeypatch, Unauthorized())
 

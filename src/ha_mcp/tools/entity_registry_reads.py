@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Bounds the per-frame size of a bulk config/entity_registry/get_entries call
 # (extended entries, ~1KB each) so a large id list can't produce an over-cap
 # WebSocket frame. Typical bulk calls fit in a single chunk (one WS message).
-_GET_ENTRIES_CHUNK_SIZE = 500
+GET_ENTRIES_CHUNK_SIZE = 500
 
 # The per-id error of an id get_entries returns no entry for.
 _NOT_IN_REGISTRY = "Entity not found"
@@ -63,8 +63,8 @@ async def get_entries_raw(
         return raw, errors
 
     chunks = [
-        entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-        for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE)
+        entity_ids[i : i + GET_ENTRIES_CHUNK_SIZE]
+        for i in range(0, len(entity_ids), GET_ENTRIES_CHUNK_SIZE)
     ]
     responses = await asyncio.gather(
         *(

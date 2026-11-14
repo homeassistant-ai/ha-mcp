@@ -1,29 +1,31 @@
-"""Unit tests for util_helpers module."""
+"""Unit tests for the shared tool helpers.
 
-from unittest.mock import AsyncMock, MagicMock
+The parsers and projections take the caller's own input. The helpers that read
+Home Assistant (log levels, repairs, entity categories) run on the server's own
+client connected to a real ``hass``, so every reply they handle is Core's.
+Integration diagnostics are in test_integration_diagnostics_fetch.py and the
+timestamp conversion in test_timezone_metadata_conversion.py.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterator
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import (
-    NON_ADMIN_TOKEN_WARNING,
-    HomeAssistantAdminRequiredError,
-    HomeAssistantAPIError,
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.coercion import parse_json_param, parse_string_list_param
 from ha_mcp.tools.config_write_helpers import apply_entity_category
-from ha_mcp.tools.diagnostics_helpers import (
-    DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS,
-    _resolve_data_path,
-    fetch_integration_diagnostics,
-    parse_diagnostics_fields,
-)
-from ha_mcp.tools.response_helpers import (
-    add_timezone_metadata,
-    build_pagination_metadata,
-    project_fields,
-)
+from ha_mcp.tools.diagnostics_helpers import parse_diagnostics_fields
+from ha_mcp.tools.response_helpers import build_pagination_metadata, project_fields
 from ha_mcp.tools.util_helpers import (
     filter_active_repairs,
     get_logger_levels,
@@ -31,6 +33,8 @@ from ha_mcp.tools.util_helpers import (
     normalize_log_level,
     project_repair_fields,
 )
+
+from ._command_faults import dropped_on, pooled_socket
 
 
 class TestIsSingleEntityTarget:
@@ -153,12 +157,12 @@ class TestParseStringListParam:
     def test_list_with_non_strings_raises_error(self):
         """List with non-string elements raises ValueError."""
         with pytest.raises(ValueError, match="must be a list of strings"):
-            parse_string_list_param([1, 2, 3])
+            parse_string_list_param([1, 2, 3])  # type: ignore[list-item]
 
     def test_mixed_list_raises_error(self):
         """Mixed list (strings and non-strings) raises ValueError."""
         with pytest.raises(ValueError, match="must be a list of strings"):
-            parse_string_list_param(["valid", 123])
+            parse_string_list_param(["valid", 123])  # type: ignore[list-item]
 
     def test_param_name_in_error(self):
         """Custom param_name appears in error messages."""
@@ -308,894 +312,297 @@ class TestNormalizeLogLevel:
         assert normalize_log_level([]) is None
 
 
+@pytest.fixture
+async def logger_client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The client on a ``hass`` whose ``logger`` answers ``logger/log_info``."""
+    assert await async_setup_component(hass, "logger", {})
+    return core_client
+
+
+@pytest.fixture
+def api_logger() -> Iterator[logging.Logger]:
+    """The Python logger Core reports for the loaded ``api`` integration."""
+    api = logging.getLogger("homeassistant.components.api")
+    level = api.level
+    yield api
+    api.setLevel(level)
+
+
 class TestGetLoggerLevels:
-    """Test get_logger_levels helper — wraps logger/log_info WS call."""
+    """get_logger_levels reads Core's ``logger/log_info``."""
 
-    @pytest.mark.asyncio
-    async def test_parses_numeric_levels_to_names_and_raws(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"domain": "mqtt", "level": 10},
-                    {"domain": "automation", "level": 20},
-                    {"domain": "ollama", "level": 40},
-                ],
-            }
+    async def test_numeric_levels_get_names_and_raws(
+        self, logger_client: HomeAssistantClient
+    ) -> None:
+        for integration, level in (("mqtt", "DEBUG"), ("ollama", "ERROR")):
+            reply = await logger_client.send_websocket_message(
+                {
+                    "type": "logger/integration_log_level",
+                    "integration": integration,
+                    "level": level,
+                    "persistence": "once",
+                }
+            )
+            assert reply["success"], reply
+
+        levels = await get_logger_levels(logger_client)
+
+        assert levels["mqtt"] == {"name": "DEBUG", "raw": 10}
+        assert levels["ollama"] == {"name": "ERROR", "raw": 40}
+
+    async def test_non_standard_level_keeps_its_raw_int(
+        self, logger_client: HomeAssistantClient, api_logger: logging.Logger
+    ) -> None:
+        api_logger.setLevel(25)
+
+        levels = await get_logger_levels(logger_client)
+
+        assert levels["api"] == {"name": "LEVEL_25", "raw": 25}
+
+    async def test_failed_command_is_an_empty_map_and_a_warning(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Without the logger integration Core does not know the command."""
+        warnings: list[str] = []
+
+        assert await get_logger_levels(core_client, warnings) == {}
+        assert warnings == ["log levels unavailable: logger/log_info failed"]
+
+    async def test_no_answer_is_an_empty_map(
+        self, logger_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lost connection degrades to an empty map instead of propagating."""
+        monkeypatch.setattr(
+            logger_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=ConnectionError("websocket gone")),
         )
-        levels = await get_logger_levels(client)
-        assert levels == {
-            "mqtt": {"name": "DEBUG", "raw": 10},
-            "automation": {"name": "INFO", "raw": 20},
-            "ollama": {"name": "ERROR", "raw": 40},
-        }
 
-    @pytest.mark.asyncio
-    async def test_string_levels_have_none_raw(self):
-        """When HA returns the level as a string already, raw is None."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [{"domain": "mqtt", "level": "warning"}],
-            }
-        )
-        assert await get_logger_levels(client) == {
-            "mqtt": {"name": "WARNING", "raw": None},
-        }
+        assert await get_logger_levels(logger_client) == {}
 
-    @pytest.mark.asyncio
-    async def test_non_standard_int_level_preserved_raw(self):
-        """Non-standard ints (e.g. 25) keep the raw int alongside a LEVEL_<n> name."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [{"domain": "weird", "level": 25}],
-            }
-        )
-        assert await get_logger_levels(client) == {
-            "weird": {"name": "LEVEL_25", "raw": 25},
-        }
 
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_ws_failure_response(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "logger not loaded"}
-        )
-        assert await get_logger_levels(client) == {}
+def _create_issue(hass: HomeAssistant, issue_id: str, **fields: Any) -> None:
+    ir.async_create_issue(
+        hass,
+        "demo",
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="demo_issue",
+        **fields,
+    )
 
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_io_exception(self):
-        """Connection/IO errors should degrade to an empty map, not propagate."""
-        client = MagicMock()
-        # ConnectionError is a subclass of OSError — the narrowed catch handles it.
-        client.send_websocket_message = AsyncMock(
-            side_effect=ConnectionError("websocket gone")
-        )
-        assert await get_logger_levels(client) == {}
 
-    @pytest.mark.asyncio
-    async def test_programming_errors_propagate(self):
-        """TypeError/KeyError (bugs in this helper) should surface, not be swallowed."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(side_effect=TypeError("bad call"))
-        with pytest.raises(TypeError):
-            await get_logger_levels(client)
-
-    @pytest.mark.asyncio
-    async def test_skips_malformed_entries(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"domain": "ok", "level": 10},
-                    {"domain": "", "level": 20},  # empty domain
-                    {"level": 30},  # missing domain
-                    "not a dict",
-                    {"domain": "bad_level", "level": None},
-                ],
-            }
-        )
-        assert await get_logger_levels(client) == {
-            "ok": {"name": "DEBUG", "raw": 10},
-        }
-
-    @pytest.mark.asyncio
-    async def test_non_list_result_returns_empty(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"unexpected": "shape"}}
-        )
-        assert await get_logger_levels(client) == {}
+async def _listed_issues(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> list[dict[str, Any]]:
+    """Core's ``repairs/list_issues`` rows."""
+    assert await async_setup_component(hass, "repairs", {})
+    reply = await client.send_websocket_message({"type": "repairs/list_issues"})
+    assert reply["success"], reply
+    issues: list[dict[str, Any]] = reply["result"]["issues"]
+    return issues
 
 
 class TestFilterActiveRepairs:
     """Default-filters user-dismissed repairs; opt-in returns the full set."""
 
-    def test_filters_ignored_by_default(self):
-        issues = [
-            {"issue_id": "a", "ignored": False},
-            {"issue_id": "b", "ignored": True},
-            {"issue_id": "c"},  # missing key — treated as not-ignored
-        ]
-        assert [r["issue_id"] for r in filter_active_repairs(issues)] == ["a", "c"]
+    async def test_dismissed_issue_is_filtered_unless_asked_for(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        _create_issue(hass, "a")
+        _create_issue(hass, "b")
+        ir.async_ignore_issue(hass, "demo", "b", True)
+        issues = await _listed_issues(hass, core_client)
 
-    def test_include_dismissed_returns_all(self):
-        issues = [
-            {"issue_id": "a", "ignored": False},
-            {"issue_id": "b", "ignored": True},
-        ]
-        out = filter_active_repairs(issues, include_dismissed=True)
-        assert [r["issue_id"] for r in out] == ["a", "b"]
+        assert [r["issue_id"] for r in filter_active_repairs(issues)] == ["a"]
+        everything = filter_active_repairs(issues, include_dismissed=True)
+        assert sorted(r["issue_id"] for r in everything) == ["a", "b"]
 
-    def test_empty_input(self):
-        assert filter_active_repairs([]) == []
-        assert filter_active_repairs([], include_dismissed=True) == []
+    async def test_no_issues(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        issues = await _listed_issues(hass, core_client)
+
+        assert filter_active_repairs(issues) == []
+        assert filter_active_repairs(issues, include_dismissed=True) == []
 
 
 class TestProjectRepairFields:
     """Projection keeps dismissal-state fields and drops verbose ones."""
 
-    def test_includes_dismissal_state_fields(self):
-        issue = {
-            "issue_id": "x",
-            "domain": "demo",
-            "severity": "warning",
-            "translation_key": "demo_issue",
-            "ignored": True,
-            "dismissed_version": "2026.4.0",
-            "is_fixable": False,
-            "breaks_in_ha_version": None,
-            "created": "2026-04-01T00:00:00+00:00",
-            "issue_domain": "automation",
-            "translation_placeholders": {"x": "y"},
-            "learn_more_url": "https://example",
-        }
+    async def test_keeps_dismissal_state_and_drops_verbose_fields(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        _create_issue(
+            hass,
+            "x",
+            issue_domain="automation",
+            learn_more_url="https://example.com",
+            translation_placeholders={"x": "y"},
+        )
+        ir.async_ignore_issue(hass, "demo", "x", True)
+        [issue] = await _listed_issues(hass, core_client)
+
         out = project_repair_fields(issue)
+
         assert out["ignored"] is True
-        assert out["dismissed_version"] == "2026.4.0"
+        assert out["dismissed_version"] is not None
+        assert out["dismissed_version"] == issue["dismissed_version"]
         assert out["is_fixable"] is False
         assert out["issue_domain"] == "automation"
         # Verbose fields dropped to keep overview payloads compact
         assert "translation_placeholders" not in out
         assert "learn_more_url" not in out
 
-    def test_missing_fields_omitted_not_none(self):
-        """Only project fields that exist on the source dict."""
-        out = project_repair_fields({"issue_id": "x", "domain": "demo"})
-        assert out == {"issue_id": "x", "domain": "demo"}
+
+@pytest.fixture
+async def kitchen(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> str:
+    """``light.kitchen`` in Core's entity registry, which ``config`` serves."""
+    assert await async_setup_component(hass, "config", {})
+    return entity_registry.async_get_or_create(
+        "light", "test", "kitchen", suggested_object_id="kitchen"
+    ).entity_id
 
 
-class TestFetchIntegrationDiagnostics:
-    """Test fetch_integration_diagnostics helper — wraps /api/diagnostics/config_entry/* REST call."""
+def _category(hass: HomeAssistant) -> str:
+    return cr.async_get(hass).async_create(scope="light", name="Test Cat").category_id
 
-    @pytest.mark.asyncio
-    async def test_happy_path_config_entry_only(self):
-        """Successful fetch returns config_entry_id + data, no error."""
-        client = MagicMock()
-        payload = {"home_assistant": {"version": "2026.5.0"}, "data": {"some": "blob"}}
-        client._request = AsyncMock(return_value=payload)
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert result == {"config_entry_id": "entry_abc", "data": payload}
-        client._request.assert_awaited_once()
-        call = client._request.await_args
-        assert call.args == ("GET", "/diagnostics/config_entry/entry_abc")
-        assert call.kwargs["timeout"] == DIAGNOSTICS_DEFAULT_TIMEOUT_SECONDS
 
-    @pytest.mark.asyncio
-    async def test_happy_path_with_device_id(self):
-        """device_id extends endpoint and is echoed in the response."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"data": {}})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", device_id="dev_xyz"
-        )
-        assert result["config_entry_id"] == "entry_abc"
-        assert result["device_id"] == "dev_xyz"
-        assert "error" not in result
-        endpoint_arg = client._request.await_args.args[1]
-        assert endpoint_arg == "/diagnostics/config_entry/entry_abc/device/dev_xyz"
+async def _apply(
+    client: HomeAssistantClient, entity_id: str, category: str, result: dict[str, Any]
+) -> None:
+    await apply_entity_category(
+        client,
+        entity_id=entity_id,
+        category=category,
+        scope="light",
+        result_dict=result,
+        entity_type="light",
+    )
 
-    @pytest.mark.asyncio
-    async def test_custom_timeout_propagates(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={})
-        await fetch_integration_diagnostics(client, "entry_abc", timeout_seconds=10.0)
-        assert client._request.await_args.kwargs["timeout"] == 10.0
 
-    @pytest.mark.asyncio
-    async def test_empty_config_entry_id_short_circuits(self):
-        client = MagicMock()
-        client._request = AsyncMock()
-        result = await fetch_integration_diagnostics(client, "")
-        assert result["config_entry_id"] == ""
-        assert "config_entry_id is required" in result["error"]
-        assert "ha_get_integration" in result["error"]
-        client._request.assert_not_awaited()
+class TestApplyEntityCategoryWriter:
+    """Writer-shape contract for ``apply_entity_category`` (#1355).
 
-    @pytest.mark.asyncio
-    async def test_none_config_entry_id_echoes_none_in_response(self):
-        """None propagates as None in the echo field — not normalised to ''.
+    A failure goes to the top-level ``warnings`` list, never the legacy
+    singular ``category_warning`` key; the tool-level shape is pinned in
+    test_helper_response_shape.py.
+    """
 
-        Tool-layer callers pass through whatever the user supplied so the
-        sub-dict reflects the actual input. Coercing to "" would mask the
-        difference between "user didn't supply an id" (None) and "user
-        supplied the empty string" — both error states, but distinguishable.
-        """
-        client = MagicMock()
-        client._request = AsyncMock()
-        result = await fetch_integration_diagnostics(client, None)
-        assert result["config_entry_id"] is None
-        assert "config_entry_id is required" in result["error"]
-        client._request.assert_not_awaited()
+    async def test_core_refusal_appends_to_warnings(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, kitchen: str
+    ) -> None:
+        result: dict[str, Any] = {}
 
-    @pytest.mark.asyncio
-    async def test_404_maps_to_unavailable_error(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not Found", status_code=404
-            )
-        )
-        result = await fetch_integration_diagnostics(client, "missing_entry")
-        assert result["config_entry_id"] == "missing_entry"
-        assert "Diagnostics not available" in result["error"]
-        assert "config entry" in result["error"]
-        assert "ha_get_integration" in result["error"]
+        await _apply(core_client, "light.unknown", _category(hass), result)
 
-    @pytest.mark.asyncio
-    async def test_404_device_scope_mentions_device_in_error(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not Found", status_code=404
-            )
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", device_id="dev_xyz"
-        )
-        assert "device" in result["error"]
+        assert any("failed to set category" in w for w in result["warnings"])
+        assert any("Entity not found" in w for w in result["warnings"])
+        assert "category_warning" not in result
+        assert "category" not in result
 
-    @pytest.mark.asyncio
-    async def test_403_names_proxy_or_ip_ban(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 403 - Forbidden", status_code=403
-            )
-        )
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "HTTP 403" in result["error"]
-        assert "http.ban" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_auth_error_maps_to_token_validity_message(self):
-        """401 = invalid token, or a non-admin one past an inconclusive probe.
-
-        Core's ``@require_admin`` raises ``Unauthorized``, which becomes a 401.
-        """
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAuthError("Invalid authentication token")
-        )
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "HTTP 401" in result["error"]
-        assert "invalid or expired" in result["error"]
-        assert "non-admin" in result["error"]
-        assert "long-lived access token" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_admin_required_names_the_unsupported_token(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAdminRequiredError(
-                "GET /api/diagnostics/config_entry/entry_abc is admin-only"
-            )
-        )
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "is admin-only" in result["error"]
-        assert NON_ADMIN_TOKEN_WARNING in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_timeout_maps_to_timeout_message_with_duration(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantConnectionError("Request timeout: read")
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", timeout_seconds=45.0
-        )
-        assert "timed out after 45.0s" in result["error"]
-        assert "ZHA" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_other_connection_error_distinct_from_timeout(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantConnectionError("HTTP error: connection refused")
-        )
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "connection failed" in result["error"]
-        assert "timed out" not in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_generic_5xx_falls_through_to_http_status_message(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 500 - Internal Server Error", status_code=500
-            )
-        )
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "HTTP 500" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_api_error_without_status_code_falls_back_to_placeholder(self):
-        """``HomeAssistantAPIError`` with ``status_code=None`` should not crash.
-
-        ``status_code`` is optional on the exception. The fallback branch must
-        emit a ``HTTP <status>`` placeholder so the response stays informative
-        even when the wrapper omits the numeric code.
-        """
-        client = MagicMock()
-        api_error = HomeAssistantAPIError("API error: unknown failure")
-        # Verify the fixture's premise — status_code unset / None falls into
-        # the generic branch, not the 404/403 specialised branches.
-        assert getattr(api_error, "status_code", None) is None
-        client._request = AsyncMock(side_effect=api_error)
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "HTTP <status>" in result["error"]
-        assert "API error: unknown failure" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_fields_projects_top_level_keys_when_data_is_dict(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={
-                "home_assistant": {"version": "2026.5.0"},
-                "custom_components": {"hacs": "1.0"},
-                "integration_manifest": {"domain": "hue"},
-                "issues": [],
-                "data": {"bridge": {"ip": "10.0.0.5"}},
-            }
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", fields=["home_assistant", "issues"]
-        )
-        assert set(result["data"].keys()) == {"home_assistant", "issues"}
-        assert result["data"]["home_assistant"] == {"version": "2026.5.0"}
-        assert "omitted_fields" not in result
-
-    @pytest.mark.asyncio
-    async def test_fields_unknown_keys_surface_via_omitted_fields(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"home_assistant": {}, "issues": []})
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["home_assistant", "made_up_key", "another_missing"],
-        )
-        assert set(result["data"].keys()) == {"home_assistant"}
-        assert result["omitted_fields"] == ["made_up_key", "another_missing"]
-
-    @pytest.mark.asyncio
-    async def test_fields_noop_when_data_is_not_dict(self):
-        """A non-dict ``data`` (string/list payload) is left untouched by fields."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value=["a", "b", "c"])
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", fields=["unused"]
-        )
-        assert result["data"] == ["a", "b", "c"]
-        assert "omitted_fields" not in result
-
-    @pytest.mark.asyncio
-    async def test_truncate_at_bytes_emits_truncated_flag_when_payload_oversize(self):
-        client = MagicMock()
-        big_payload = {"home_assistant": {"version": "1"}, "blob": "x" * 5000}
-        client._request = AsyncMock(return_value=big_payload)
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", truncate_at_bytes=200
-        )
-        assert result["truncated"] is True
-        assert result["byte_cap"] == 200
-        assert result["bytes_total"] > 200
-        assert result["available_fields"] == ["blob", "home_assistant"]
-        assert "data" not in result
-
-    @pytest.mark.asyncio
-    async def test_truncate_at_bytes_no_op_when_payload_under_cap(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"small": "ok"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", truncate_at_bytes=10_000
-        )
-        assert result["data"] == {"small": "ok"}
-        assert "truncated" not in result
-        assert "bytes_total" not in result
-
-    @pytest.mark.asyncio
-    async def test_truncate_applied_after_fields_projection(self):
-        """``fields`` runs first so ``truncate_at_bytes`` measures the projected payload."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={
-                "small": "ok",
-                "big": "x" * 5000,
-            }
-        )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["small"],
-            truncate_at_bytes=200,
-        )
-        assert "truncated" not in result
-        assert result["data"] == {"small": "ok"}
-
-    # --- Round-2 KP13 gap-tests --------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_fields_all_missing_keeps_empty_dict_and_records_all_omitted(self):
-        """All requested fields absent → ``data`` is the empty dict and every
-        requested key appears in ``omitted_fields`` (no silent fall-through to
-        the full payload)."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"home_assistant": {}, "issues": []})
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["foo", "bar", "baz"],
-        )
-        assert result["data"] == {}
-        assert result["omitted_fields"] == ["foo", "bar", "baz"]
-
-    @pytest.mark.asyncio
-    async def test_fields_dedupes_caller_supplied_duplicates_in_omitted_fields(self):
-        """``omitted_fields`` deduplicates caller-supplied repeats so the model
-        doesn't see ``["x", "x"]`` when it asked for ``fields=["x", "x"]``."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"present": 1})
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["missing", "missing", "present", "also_missing"],
-        )
-        assert result["omitted_fields"] == ["missing", "also_missing"]
-
-    @pytest.mark.asyncio
-    async def test_fields_no_op_on_error_response(self):
-        """When the fetch fails, ``fields`` must not project on a partial /
-        absent ``data`` — error responses ship without ``omitted_fields``."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not Found", status_code=404
-            )
-        )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["home_assistant", "issues"],
-        )
-        assert "error" in result
-        assert "data" not in result
-        assert "omitted_fields" not in result
-
-    @pytest.mark.asyncio
-    async def test_truncate_on_non_dict_omits_available_fields(self):
-        """Truncation on a list/string payload skips ``available_fields``
-        (it's only meaningful for dict payloads). The truncated/bytes_total/
-        byte_cap signals still fire so the model knows the cap engaged."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value=["x" * 1000 for _ in range(50)])
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", truncate_at_bytes=200
-        )
-        assert result["truncated"] is True
-        assert result["byte_cap"] == 200
-        assert result["bytes_total"] > 200
-        assert "available_fields" not in result
-        assert "data" not in result
-
-    @pytest.mark.asyncio
-    async def test_empty_body_surfaces_explicit_error(self):
-        """``_request`` returning ``None`` (empty body) ships an explicit error
-        instead of ``{"data": null}``, which would be indistinguishable from a
-        zero-payload success."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value=None)
-        result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "empty body" in result["error"]
-        assert "data" not in result
-
-    # --- Round-2 KP13 pagination — data_path / data_offset / data_limit ----
-
-    @pytest.mark.asyncio
-    async def test_data_path_resolves_into_dict_sub_tree(self):
-        """``data_path`` replaces ``data`` with the resolved sub-tree and
-        records the path."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={
-                "home_assistant": {"version": "2026.5.0"},
-                "data": {"bridge": {"ip": "10.0.0.5"}},
-            }
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="home_assistant"
-        )
-        assert result["data"] == {"version": "2026.5.0"}
-        assert result["data_path"] == "home_assistant"
-
-    @pytest.mark.asyncio
-    async def test_data_path_resolves_to_scalar(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {"version": "2026.5.0"}}
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="home_assistant.version"
-        )
-        assert result["data"] == "2026.5.0"
-        assert result["data_path"] == "home_assistant.version"
-
-    @pytest.mark.asyncio
-    async def test_data_path_resolves_to_list_without_limit_returns_full_list(self):
-        """No ``data_limit`` → return the resolved list as-is, no pagination
-        envelope."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"data": {"devices": [{"id": i} for i in range(5)]}}
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="data.devices"
-        )
-        assert result["data"] == [{"id": 0}, {"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}]
-        assert result["data_path"] == "data.devices"
-
-    @pytest.mark.asyncio
-    async def test_data_path_with_limit_returns_pagination_envelope(self):
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"data": {"devices": [{"id": i} for i in range(25)]}}
-        )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="data.devices",
-            data_limit=10,
-        )
-        assert result["data"] == {
-            "path": "data.devices",
-            "items": [{"id": i} for i in range(10)],
-            "offset": 0,
-            "limit": 10,
-            "total": 25,
-            "has_more": True,
-        }
-        assert result["data_path"] == "data.devices"
-
-    @pytest.mark.asyncio
-    async def test_data_path_pagination_offset_skips_then_has_more_false_at_end(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"items": [str(i) for i in range(25)]})
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="items",
-            data_offset=20,
-            data_limit=10,
-        )
-        page = result["data"]
-        assert page["items"] == ["20", "21", "22", "23", "24"]
-        assert page["offset"] == 20
-        assert page["limit"] == 10
-        assert page["total"] == 25
-        assert page["has_more"] is False
-
-    @pytest.mark.asyncio
-    async def test_data_path_offset_ignored_when_limit_unset(self):
-        """``data_offset`` only applies in pagination mode (when ``data_limit``
-        is also set). Without ``data_limit``, the full list is returned and a
-        ``data_pagination_warning`` is surfaced so the caller knows the offset
-        was dropped."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"items": [{"id": i} for i in range(5)]}
-        )
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="items", data_offset=2
-        )
-        assert result["data"] == [{"id": i} for i in range(5)]
-        assert "data_offset ignored" in result.get("data_pagination_warning", "")
-        assert "data_limit not set" in result["data_pagination_warning"]
-
-    @pytest.mark.asyncio
-    async def test_data_path_missing_key_surfaces_data_path_error(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"home_assistant": {}})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="data.devices"
-        )
-        assert result["data"] is None
-        assert "data_path_error" in result
-        assert "missing key 'data'" in result["data_path_error"]
-
-    @pytest.mark.asyncio
-    async def test_data_path_descent_into_non_dict_surfaces_error(self):
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"devices": ["d1", "d2"]})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="devices.0"
-        )
-        assert result["data"] is None
-        assert "data_path_error" in result
-        assert "cannot descend into list" in result["data_path_error"]
-
-    @pytest.mark.asyncio
-    async def test_data_path_empty_string_treated_as_unset(self):
-        """An empty / whitespace ``data_path`` is treated as ``None`` and does
-        not engage the resolver. Whitespace-only inputs (incl. ``""``) surface
-        a ``data_pagination_warning`` so the caller can tell their intent was
-        swallowed instead of resolving silently."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(client, "entry_abc", data_path="")
-        # Data passes through unchanged; resolver branch is skipped.
-        assert result["data"] == {"foo": "bar"}
-        assert "data_path" not in result
-        assert "data_path_error" not in result
-        # New: empty / whitespace-stripped inputs surface a warning.
-        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
-
-    @pytest.mark.asyncio
-    async def test_data_path_combined_with_fields_projection(self):
-        """``fields`` runs first, then ``data_path`` walks into the projected
-        sub-tree. A path through a dropped key surfaces as resolution error."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={
-                "home_assistant": {"version": "1"},
-                "data": {"devices": [{"id": i} for i in range(3)]},
-            }
-        )
-        # fields keeps only home_assistant, so data_path='data.devices' fails.
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            fields=["home_assistant"],
-            data_path="data.devices",
-        )
-        assert result["data"] is None
-        assert "data_path_error" in result
-        assert "missing key 'data'" in result["data_path_error"]
-
-    @pytest.mark.asyncio
-    async def test_data_path_pagination_with_truncate_preserves_envelope_metadata(
+    async def test_no_answer_appends_to_warnings(
         self,
-    ):
-        """``truncate_at_bytes`` runs last, measured on the paginated ``items``
-        list. On cap-hit with a paginated payload, the envelope's metadata
-        (``path``, ``offset``, ``limit``, ``total``, ``has_more``) is
-        preserved sans ``items`` so the caller can issue a narrower
-        follow-up; only the bulky ``items`` slice is dropped."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"items": ["x" * 200 for _ in range(20)]}
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        kitchen: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        category = _category(hass)
+        monkeypatch.setattr(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("ws disconnected")),
         )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="items",
-            data_limit=10,
-            truncate_at_bytes=500,
-        )
-        # 10 items × ~200 bytes each = ~2000 bytes serialized → exceeds cap.
-        assert result["truncated"] is True
-        assert result["byte_cap"] == 500
-        assert result["data_path"] == "items"
-        # Envelope metadata preserved without the items slice.
-        envelope = result["data"]
-        assert "items" not in envelope
-        assert envelope["path"] == "items"
-        assert envelope["offset"] == 0
-        assert envelope["limit"] == 10
-        assert envelope["total"] == 20
-        assert envelope["has_more"] is True
-        assert envelope["truncated"] is True
+        result: dict[str, Any] = {}
 
-    # --- KP13 round-3 gap tests --------------------------------------------
+        await _apply(core_client, kitchen, category, result)
 
-    @pytest.mark.asyncio
-    async def test_data_path_pagination_offset_past_total_returns_empty_page(
+        assert any("failed to set category" in w for w in result["warnings"])
+        assert any("ws disconnected" in w for w in result["warnings"])
+        assert "category_warning" not in result
+
+    async def test_success_sets_category_without_warnings(
         self,
-    ):
-        """``data_offset >= total`` yields empty items with ``has_more=False``
-        — boundary check that the slice doesn't wrap or error."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"items": [{"id": i} for i in range(5)]}
-        )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="items",
-            data_offset=10,
-            data_limit=3,
-        )
-        page = result["data"]
-        assert page["items"] == []
-        assert page["offset"] == 10
-        assert page["total"] == 5
-        assert page["has_more"] is False
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        kitchen: str,
+    ) -> None:
+        category = _category(hass)
+        result: dict[str, Any] = {}
 
-    @pytest.mark.asyncio
-    async def test_data_limit_on_non_list_resolved_value_surfaces_warning(self):
-        """``data_limit`` with a dict-resolved path can't paginate. Surface a
-        structured ``data_pagination_warning`` so the caller doesn't mistake
-        the raw value for ``page 1 of N``."""
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value={"home_assistant": {"version": "2026.5.0"}}
-        )
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="home_assistant",
-            data_limit=10,
-        )
-        assert result["data"] == {"version": "2026.5.0"}
-        assert "data_pagination_warning" in result
-        assert "not a list" in result["data_pagination_warning"]
-        assert "dict" in result["data_pagination_warning"]
+        await _apply(core_client, kitchen, category, result)
 
-    @pytest.mark.asyncio
-    async def test_data_path_resolves_to_null_emits_dedicated_error(self):
-        """A path landing on a ``None``-valued key surfaces the dedicated
-        "sub-tree not present" message rather than the generic
-        ``cannot descend into NoneType`` wording."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"home_assistant": {"version": None}})
-        result = await fetch_integration_diagnostics(
-            client,
-            "entry_abc",
-            data_path="home_assistant.version.minor",
-        )
-        assert result["data"] is None
-        assert "sub-tree not present" in result["data_path_error"]
-        assert "resolved to null" in result["data_path_error"]
+        assert result == {"category": category}
+        entry = entity_registry.async_get(kitchen)
+        assert entry is not None
+        assert entry.categories == {"light": category}
 
-    # --- KP13 round-4 gap tests --------------------------------------------
+    async def test_category_deleted_before_write_is_not_written(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        kitchen: str,
+    ) -> None:
+        """A category deleted after tool-entry validation must not be stored (#2159)."""
+        category = _category(hass)
+        cr.async_get(hass).async_delete(scope="light", category_id=category)
+        result: dict[str, Any] = {}
 
-    @pytest.mark.asyncio
-    async def test_data_offset_without_data_path_surfaces_warning(self):
-        """``data_offset > 0`` without a ``data_path`` skips the resolver
-        entirely. Surfaces a ``data_pagination_warning`` so the caller knows
-        the offset was dropped (rather than silently doing nothing)."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(client, "entry_abc", data_offset=5)
-        assert "data_pagination_warning" in result
-        assert "data_path not set" in result["data_pagination_warning"]
-        # Underlying data is unchanged — the warning is the only signal.
-        assert result["data"] == {"foo": "bar"}
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as sent:
+            await _apply(core_client, kitchen, category, result)
 
-    @pytest.mark.asyncio
-    async def test_data_path_whitespace_only_surfaces_warning(self):
-        """Whitespace-only ``data_path`` (e.g. ``"   "``) normalizes to
-        unset but surfaces a structured warning so the caller doesn't
-        mistake the silent unwind for "path applied"."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="   "
-        )
-        assert result["data"] == {"foo": "bar"}
-        assert "data_path" not in result
-        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
+        assert "category" not in result
+        assert any("no longer exists" in w for w in result["warnings"])
+        # Only the recheck ran: no entity_registry/update.
+        assert sent.await_count == 1
+        entry = entity_registry.async_get(kitchen)
+        assert entry is not None
+        assert entry.categories == {}
 
-    @pytest.mark.asyncio
-    async def test_whitespace_path_plus_offset_keeps_whitespace_warning(self):
-        """Both inputs landing together (``data_path="   "`` AND
-        ``data_offset > 0``) must not clobber the whitespace warning —
-        the whitespace input is the primary user-facing problem and the
-        ``data_offset ignored: data_path not set`` warning is its
-        downstream consequence. Guarded via the ``data_pagination_warning
-        not in result`` check on the orphan-offset elif."""
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"foo": "bar"})
-        result = await fetch_integration_diagnostics(
-            client, "entry_abc", data_path="   ", data_offset=5
-        )
-        assert "empty or whitespace-only" in result.get("data_pagination_warning", "")
-        # Specifically NOT the downstream-consequence warning.
-        assert "data_path not set" not in result["data_pagination_warning"]
+    async def test_recheck_without_answer_still_writes(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        kitchen: str,
+    ) -> None:
+        """The connection drops on the recheck; the write still goes through."""
+        category = _category(hass)
+        socket = await pooled_socket(core_client)
+        result: dict[str, Any] = {}
 
+        with dropped_on(hass, "config/category_registry/list", socket):
+            await _apply(core_client, kitchen, category, result)
 
-class TestResolveDataPath:
-    """Direct tests for the dotted-path resolver."""
+        assert result.get("category") == category
+        entry = entity_registry.async_get(kitchen)
+        assert entry is not None
+        assert entry.categories == {"light": category}
 
-    def test_resolves_single_segment(self):
-        value, err = _resolve_data_path({"a": 1, "b": 2}, "a")
-        assert value == 1
-        assert err is None
+    async def test_failure_keeps_earlier_warnings(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, kitchen: str
+    ) -> None:
+        result: dict[str, Any] = {"warnings": ["earlier note"]}
 
-    def test_resolves_multi_segment(self):
-        value, err = _resolve_data_path({"a": {"b": {"c": "deep"}}}, "a.b.c")
-        assert value == "deep"
-        assert err is None
+        await _apply(core_client, "light.unknown", _category(hass), result)
 
-    def test_resolves_to_list(self):
-        value, err = _resolve_data_path({"items": [1, 2, 3]}, "items")
-        assert value == [1, 2, 3]
-        assert err is None
-
-    def test_missing_top_level_key(self):
-        value, err = _resolve_data_path({"a": 1}, "missing")
-        assert value is None
-        assert err is not None
-        assert "missing key 'missing'" in err
-        # Available keys hint surfaces in the error to guide the caller.
-        assert "['a']" in err
-
-    def test_descent_into_non_dict_value(self):
-        value, err = _resolve_data_path({"a": "scalar"}, "a.b")
-        assert value is None
-        assert err is not None
-        assert "cannot descend into str" in err
-
-    def test_descent_into_list_value(self):
-        value, err = _resolve_data_path({"a": [1, 2]}, "a.0")
-        assert value is None
-        assert err is not None
-        assert "cannot descend into list" in err
-
-    def test_empty_path_returns_error(self):
-        value, err = _resolve_data_path({"a": 1}, "")
-        assert value is None
-        assert err == "data_path must be a non-empty dotted path"
-
-    def test_whitespace_path_returns_error(self):
-        value, err = _resolve_data_path({"a": 1}, "   ")
-        assert value is None
-        assert err == "data_path must be a non-empty dotted path"
-
-    def test_empty_segment_in_middle(self):
-        value, err = _resolve_data_path({"a": {"b": 1}}, "a..b")
-        assert value is None
-        assert err is not None
-        assert "empty segment" in err
-
-    def test_missing_key_hint_suppressed_when_no_ambiguous_sibling(self):
-        """A plain typo (e.g. ``data.versionz``) on a payload whose siblings
-        contain no literal ``.`` must not mention the dotted-key limitation
-        — otherwise the caller reads the hint as "your '.' is being
-        mis-parsed", which is misleading when no sibling has one."""
-        value, err = _resolve_data_path({"version": "1", "build": "abc"}, "versionz")
-        assert value is None
-        assert err is not None
-        assert "missing key 'versionz'" in err
-        # Hint substrings must not appear when no sibling contains '.'.
-        assert "literal '.'" not in err
-        assert "not addressable" not in err
-
-    def test_missing_key_hint_surfaces_when_ambiguous_sibling_present(self):
-        """When a sibling key actually contains a literal ``.`` (e.g.
-        ``sensor.zha_temp_42``), surface the dotted-key hint so the caller
-        sees why a plausible-looking path fails. Pins the wording so a
-        future refactor doesn't drop the substring."""
-        payload = {"sensor.zha_temp_42": 21.5, "binary_sensor.door": True}
-        value, err = _resolve_data_path(payload, "sensor")
-        assert value is None
-        assert err is not None
-        assert "missing key 'sensor'" in err
-        assert "literal '.'" in err
-        assert "not addressable" in err
+        assert result["warnings"][0] == "earlier note"
+        assert any("failed to set category" in w for w in result["warnings"])
+        assert "category_warning" not in result
 
 
 class TestParseDiagnosticsFields:
@@ -1237,334 +644,6 @@ class TestParseDiagnosticsFields:
     def test_non_string_non_list_raises(self):
         with pytest.raises(ValueError, match="must be list, string, or None"):
             parse_diagnostics_fields(42)  # type: ignore[arg-type]
-
-
-class TestApplyEntityCategoryWriter:
-    """Direct writer-shape contract for ``apply_entity_category``.
-
-    Consumer-shim tests in ``test_helper_response_shape.py`` use a
-    hand-rolled ``fake_apply``; this class drives the REAL function to
-    pin the post-#1355 shape: success populates top-level ``warnings``
-    list, never the legacy singular ``category_warning`` key. A revert
-    of the writer to ``result_dict["category_warning"] = ...`` must
-    fail one of the assertions here.
-    """
-
-    @pytest.mark.asyncio
-    async def test_failure_response_appends_to_warnings_list(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"message": "boom"}}
-        )
-        result: dict[str, object] = {}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        assert isinstance(result.get("warnings"), list)
-        assert any("failed to set category" in w for w in result["warnings"])
-        assert any("boom" in w for w in result["warnings"])
-        assert "category_warning" not in result
-        assert "category" not in result
-
-    @pytest.mark.asyncio
-    async def test_websocket_exception_appends_to_warnings_list(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws disconnected")
-        )
-        result: dict[str, object] = {}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        assert isinstance(result.get("warnings"), list)
-        assert any("failed to set category" in w for w in result["warnings"])
-        assert any("ws disconnected" in w for w in result["warnings"])
-        assert "category_warning" not in result
-
-    @pytest.mark.asyncio
-    async def test_success_does_not_create_warnings_key(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Pre-write recheck (issue #2159): category still exists.
-                {"success": True, "result": [{"category_id": "cat_test"}]},
-                {"success": True},
-            ]
-        )
-        result: dict[str, object] = {}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        assert result.get("category") == "cat_test"
-        assert "warnings" not in result
-        assert "category_warning" not in result
-
-    @pytest.mark.asyncio
-    async def test_category_deleted_before_write_skips_with_warning(self):
-        """A category deleted after tool-entry validation must not be written."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True, "result": [{"category_id": "other"}]},
-            ]
-        )
-        result: dict[str, object] = {}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        assert "category" not in result
-        assert any("no longer exists" in w for w in result["warnings"])
-        # Only the recheck lookup ran — no entity_registry/update.
-        assert client.send_websocket_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_recheck_lookup_failure_still_writes(self):
-        """A failed recheck lookup degrades to the previous write-through."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                RuntimeError("recheck lookup failed"),
-                {"success": True},
-            ]
-        )
-        result: dict[str, object] = {}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        assert result.get("category") == "cat_test"
-        assert client.send_websocket_message.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_failure_preserves_existing_warnings_entries(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"message": "boom"}}
-        )
-        result: dict[str, object] = {"warnings": ["earlier note"]}
-
-        await apply_entity_category(
-            client,
-            entity_id="light.kitchen",
-            category="cat_test",
-            scope="light",
-            result_dict=result,
-            entity_type="light",
-        )
-
-        warnings = result["warnings"]
-        assert isinstance(warnings, list)
-        assert "earlier note" in warnings
-        assert any("failed to set category" in w for w in warnings)
-        assert "category_warning" not in result
-
-
-class TestAddTimezoneMetadata:
-    """Behavioral assertions for add_timezone_metadata (issue #1199).
-
-    Pins the ``include_metadata=False`` short-circuit and the config-fetch
-    fallback so regressions fail loudly.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_config = AsyncMock(return_value={"time_zone": "America/New_York"})
-        return client
-
-    @pytest.mark.asyncio
-    async def test_default_wraps_in_data_metadata_envelope(self, mock_client):
-        """include_metadata=True (default) wraps data in {data, metadata}."""
-        data = {"success": True, "results": []}
-        result = await add_timezone_metadata(mock_client, data)
-        assert "data" in result
-        assert "metadata" in result
-        assert result["data"] == data  # converted copy, not same object
-
-    @pytest.mark.asyncio
-    async def test_include_metadata_false_returns_data_unchanged(self, mock_client):
-        """include_metadata=False bypasses wrapping — returns data object identity."""
-        data = {"success": True, "results": []}
-        result = await add_timezone_metadata(mock_client, data, include_metadata=False)
-        # Same object; no wrapping
-        assert result is data
-        assert "metadata" not in result
-        assert "data" not in result
-
-    @pytest.mark.asyncio
-    async def test_metadata_contains_ha_timezone(self, mock_client):
-        """metadata.home_assistant_timezone is populated from HA config."""
-        result = await add_timezone_metadata(mock_client, {"success": True})
-        assert result["metadata"]["home_assistant_timezone"] == "America/New_York"
-
-    @pytest.mark.asyncio
-    async def test_config_failure_falls_back_to_unknown_timezone(self):
-        """On connection-class exception the wrapper still returns with 'Unknown' timezone."""
-        client = MagicMock()
-        # Use OSError which is in the narrow exception tuple (connection-class errors).
-        client.get_config = AsyncMock(side_effect=OSError("connection refused"))
-        result = await add_timezone_metadata(client, {"success": True})
-        # Wrapper is still present; timezone is the fallback sentinel
-        assert "data" in result
-        assert result["metadata"]["home_assistant_timezone"] == "UTC"
-
-    @pytest.mark.asyncio
-    async def test_last_changed_converted_from_utc_to_local(self, mock_client):
-        """last_changed UTC timestamp is converted to America/New_York local time."""
-        data = {"last_changed": "2026-06-12T00:06:00+00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        converted = result["data"]["last_changed"]
-        # 00:06 UTC on June 12 = 20:06 EDT on June 11 (date rolls back crossing midnight)
-        assert converted == "2026-06-11T20:06:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_last_updated_and_last_reported_converted(self, mock_client):
-        """last_updated and last_reported are both converted."""
-        data = {
-            "last_updated": "2026-06-12T02:00:00+00:00",
-            "last_reported": "2026-06-12T03:00:00+00:00",
-        }
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["last_updated"] == "2026-06-11T22:00:00-04:00"
-        assert result["data"]["last_reported"] == "2026-06-11T23:00:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_logbook_when_field_converted(self, mock_client):
-        """Logbook 'when' field is converted."""
-        data = {"when": "2026-06-12T01:00:00+00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["when"] == "2026-06-11T21:00:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_last_triggered_field_converted(self, mock_client):
-        """Automation last_triggered field is converted."""
-        data = {"last_triggered": "2026-06-12T04:00:00+00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["last_triggered"] == "2026-06-12T00:00:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_naive_string_assumed_utc(self, mock_client):
-        """Naive timestamps (no offset) are treated as UTC, not system local."""
-        data = {"last_changed": "2026-06-12T06:00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        # 06:00 UTC naive -> 02:00 EDT same day
-        assert result["data"]["last_changed"] == "2026-06-12T02:00:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_nested_dict_converted(self, mock_client):
-        """Timestamps nested inside dicts are converted recursively."""
-        data = {"entity": {"last_changed": "2026-06-12T00:00:00+00:00"}}
-        result = await add_timezone_metadata(mock_client, data)
-        assert "+00:00" not in result["data"]["entity"]["last_changed"]
-
-    @pytest.mark.asyncio
-    async def test_list_of_state_objects_converted(self, mock_client):
-        """Lists of state objects have all timestamps converted."""
-        data = [
-            {"last_changed": "2026-06-12T00:06:00+00:00", "state": "heat"},
-            {"last_changed": "2026-06-12T04:01:00+00:00", "state": "off"},
-        ]
-        result = await add_timezone_metadata(mock_client, data)
-        states = result["data"]
-        assert states[0]["last_changed"] == "2026-06-11T20:06:00-04:00"
-        assert states[1]["last_changed"] == "2026-06-12T00:01:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_non_timestamp_fields_untouched(self, mock_client):
-        """Non-timestamp fields are not modified."""
-        data = {"state": "on", "entity_id": "light.kitchen"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["state"] == "on"
-        assert result["data"]["entity_id"] == "light.kitchen"
-
-    @pytest.mark.asyncio
-    async def test_malformed_timestamp_passed_through(self, mock_client):
-        """Malformed timestamp strings are passed through unchanged."""
-        data = {"last_changed": "not-a-date"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["last_changed"] == "not-a-date"
-
-    @pytest.mark.asyncio
-    async def test_dst_summer_offset(self, mock_client):
-        """Summer DST offset (EDT = UTC-4) is applied correctly."""
-        data = {"last_changed": "2026-06-12T12:00:00+00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["last_changed"] == "2026-06-12T08:00:00-04:00"
-
-    @pytest.mark.asyncio
-    async def test_dst_winter_offset(self, mock_client):
-        """Winter standard offset (EST = UTC-5) is applied correctly."""
-        data = {"last_changed": "2026-01-15T12:00:00+00:00"}
-        result = await add_timezone_metadata(mock_client, data)
-        assert result["data"]["last_changed"] == "2026-01-15T07:00:00-05:00"
-
-    @pytest.mark.asyncio
-    async def test_zone_info_not_found_falls_back_to_utc(self):
-        """ZoneInfoNotFoundError (missing tzdata) falls back to UTC gracefully."""
-        client = MagicMock()
-        client.get_config = AsyncMock(return_value={"time_zone": "Invalid/Timezone"})
-        data = {"last_changed": "2026-06-12T12:00:00+00:00"}
-        result = await add_timezone_metadata(client, data)
-        assert result["metadata"]["home_assistant_timezone"] == "UTC"
-        # Timestamp should be unchanged (already UTC)
-        assert "2026-06-12T12:00:00+00:00" in result["data"]["last_changed"]
-
-    @pytest.mark.asyncio
-    async def test_config_failure_note_indicates_no_conversion(self):
-        """On config fetch failure, metadata note says timestamps are in UTC (not converted)."""
-        client = MagicMock()
-        client.get_config = AsyncMock(side_effect=OSError("connection refused"))
-        result = await add_timezone_metadata(
-            client, {"last_changed": "2026-06-12T12:00:00+00:00"}
-        )
-        assert "UTC" in result["metadata"]["note"]
-        assert "converted" not in result["metadata"]["note"].lower()
-
-    @pytest.mark.asyncio
-    async def test_metadata_note_scoped_to_per_record_fields(self, mock_client):
-        """Metadata note accurately states only per-record fields are converted, not window boundaries."""
-        result = await add_timezone_metadata(
-            mock_client, {"last_changed": "2026-06-12T12:00:00+00:00"}
-        )
-        note = result["metadata"]["note"]
-        # Note must mention per-record fields
-        assert "last_changed" in note
-        # Note must acknowledge window/boundary fields stay UTC
-        assert "UTC" in note
 
 
 class TestProjectFieldsTypoGuard:

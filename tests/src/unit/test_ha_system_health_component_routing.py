@@ -1,529 +1,422 @@
-"""Routing tests for ``ha_get_system_health`` over the ``ha_mcp_tools`` component gate.
+"""``ha_get_system_health`` through the component's snapshot, on a real ``hass``.
 
-``ha_get_system_health`` fetched ``config_entries/get`` up to THREE separate
-times per call (once each inside ``_fetch_zwave_network``,
-``_fetch_matter_network``, and ``_fetch_dead_entities``) plus a fourth
-``repairs/list_issues`` fetch and a whole-registry ``config/entity_registry/list``
-dump for ``dead_entities`` — a TOCTOU across sections, since each fetch could see
-a different instant of the registries. When the component advertises
-``system_snapshot``, ONE ``ha_mcp_tools/system_snapshot`` read replaces all of
-that: its ``issues`` slice feeds ``_fetch_repairs``, its ``config_entries``
-slice feeds ``_fetch_zwave_network`` + ``_fetch_matter_network`` (the
-``zwave_js/network_status`` call itself is unchanged — system_snapshot doesn't
-reach into the radio integration), and its ``entities``/``states``/
-``config_entries`` slices feed ``_fetch_dead_entities``.
+Without the component, ``repairs``, ``zwave_network``, ``matter_network`` and
+``dead_entities`` each read Core on their own: ``repairs/list_issues``,
+``config_entries/get`` once for Z-Wave and once for Matter, and the states,
+the entity registry and the config entries again for dead entities, each at
+a different instant. When the component advertises ``system_snapshot``, one
+``ha_mcp_tools/system_snapshot`` read serves all four (the Z-Wave status call
+still runs). Any miss or failure of that read sends every section back to its
+own read, never some sections one way and some the other.
 
-Routing is all-or-nothing per call: a capability miss, a component command
-error/timeout, a malformed slice, OR a transport failure (both a
-``HomeAssistantConnectionError`` off the frame and the same error from
-``get_websocket_client()`` failing to establish the socket) falls back to every
-consuming section's own legacy fetch — never a partial hybrid where one section
-reads the snapshot and a sibling reads legacy data from a different instant, and
-never a WHOLE-tool failure where legacy would have degraded per-section (the
-legacy sections use a dedicated health WS + REST + the WS bridge, which
-reconnects a dropped pooled socket). These tests pin: the snapshot is fetched exactly
-once for a multi-section call and replaces every legacy fetch it covers; a
-capability miss or snapshot failure degrades ALL consuming sections back to
-legacy; ``unknown_command`` invalidates the cached caps while any other command
-error/timeout leaves them cached; and a
-still-real WS failure in a call the snapshot does NOT replace (the zwave_js
-status call) still degrades to a per-section ``{error: ...}`` sub-dict rather
-than raising or breaking sibling sections.
+Core here holds a Z-Wave and a Matter config entry, a live entity, a stale
+restored one, an orphan whose config entry is gone and a repair issue. The
+orphan and a restored, inactive issue are what Core loads from storage after
+a restart, so the registries are loaded from stored data.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from typing import Any, NamedTuple
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools import component_api, tools_system
-from ha_mcp.tools.tools_system import SystemTools
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import tools_system
+from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
+from ha_mcp.tools.tools_system import WS_SYSTEM_SNAPSHOT, SystemTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._component_frames import dropped, held, observed, older_component, pooled
 
-_CAPS_SNAPSHOT = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["system_snapshot"],
-    "limits": {},
-}
+REPAIRS = "repairs/list_issues"
+ENTRIES = "config_entries/get"
+REGISTRY = "config/entity_registry/list"
+SECTIONS = ("repairs", "zwave_network", "matter_network", "dead_entities")
+INCLUDE_ALL = ",".join(SECTIONS)
+ORPHAN = "sensor.orphan"
+# A Z-Wave status call that ran: Z-Wave JS is not set up, so Core answers it
+# with an error. "not found" would mean no Z-Wave config entry was seen.
+ZWAVE_STATUS_RAN = "Z-Wave JS integration not available or error"
 
 
-def _issue(
-    issue_id: str,
-    *,
-    domain: str = "hue",
-    dismissed_version: str | None = None,
-    active: bool = True,
-) -> dict[str, Any]:
-    """A ``system_snapshot`` ``issues`` row (the ``_overview_repairs`` shape).
+def _stored(key: str, data: dict[str, Any]) -> dict[str, Any]:
+    """A storage file at version 1.1; Core migrates it to the current one."""
+    return {"version": 1, "minor_version": 1, "key": key, "data": data}
 
-    ``active=False`` models a post-restart RESTORED placeholder: core's issue
-    registry re-adds every previously-reported non-persistent issue as
-    ``active=False`` with null severity/translation_key/is_fixable/issue_domain
-    until the owning integration re-reports it, and core's ``repairs/list_issues``
-    filters these out (``if issue.active``). The component's ``issues`` slice does
-    NOT filter, so the server must — otherwise these phantoms surface only on the
-    component path.
-    """
-    if not active:
+
+@pytest.fixture
+def load_registries() -> bool:
+    """``registries`` has Core load them, from what it stored before a restart."""
+    return False
+
+
+@pytest.fixture
+async def registries(hass: HomeAssistant, hass_storage: dict[str, Any]) -> None:
+    hass_storage[er.STORAGE_KEY] = _stored(
+        er.STORAGE_KEY,
+        {
+            "entities": [
+                {
+                    "entity_id": ORPHAN,
+                    "platform": "zwave_js",
+                    "unique_id": "zw-orphan",
+                    "config_entry_id": "removed-entry",
+                }
+            ]
+        },
+    )
+    # A non-persistent issue Core reloads as an inactive stub until its
+    # integration raises it again.
+    hass_storage[ir.STORAGE_KEY] = _stored(
+        ir.STORAGE_KEY,
+        {
+            "issues": [
+                {
+                    "created": "2026-01-01T00:00:00+00:00",
+                    "dismissed_version": None,
+                    "domain": "hue",
+                    "issue_id": "iss-restored",
+                }
+            ]
+        },
+    )
+    dr.async_setup(hass)
+    await ar.async_load(hass)
+    await cr.async_load(hass)
+    await dr.async_load(hass)
+    await er.async_load(hass)
+    await fr.async_load(hass)
+    await ir.async_load(hass)
+    await lr.async_load(hass)
+
+
+@pytest.fixture
+async def client(
+    registries: None, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    for domain in ("config", "repairs", "system_health"):
+        assert await async_setup_component(hass, domain, {})
+    return component_core_client
+
+
+class Home(NamedTuple):
+    zwave_entry: str
+    matter_entry: str
+    stale: str
+
+
+@pytest.fixture
+async def home(hass: HomeAssistant, client: HomeAssistantClient) -> Home:
+    zwave = MockConfigEntry(domain="zwave_js", title="Z-Wave JS")
+    # Neither is set up: their libraries are not installed here, and the
+    # sections read only the entries themselves (and the Z-Wave status call).
+    matter = MockConfigEntry(domain="matter", title="Matter Hub")
+    zwave.add_to_hass(hass)
+    matter.add_to_hass(hass)
+    registry = er.async_get(hass)
+    battery = registry.async_get_or_create(
+        "sensor", "zwave_js", "zw-1", config_entry=zwave
+    )
+    stale = registry.async_get_or_create(
+        "light", "matter", "matter-1", config_entry=matter
+    )
+    hass.states.async_set(battery.entity_id, "100", {"friendly_name": "Battery"})
+    # What Core writes for a registry entity no integration has set up.
+    hass.states.async_set(stale.entity_id, "unavailable", {"restored": True})
+    ir.async_create_issue(
+        hass,
+        "mqtt",
+        "iss-mqtt",
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="tk",
+    )
+    return Home(zwave.entry_id, matter.entry_id, stale.entity_id)
+
+
+class Reads(NamedTuple):
+    """What Core received meanwhile, and the REST states spy."""
+
+    frames: dict[str, list[dict[str, Any]]]
+    states: AsyncMock
+
+    def counts(self) -> dict[str, int]:
         return {
-            "issue_id": issue_id,
-            "domain": domain,
-            "severity": None,
-            "translation_key": None,
-            "translation_placeholders": {},
-            "ignored": dismissed_version is not None,
-            "dismissed_version": dismissed_version,
-            "is_fixable": None,
-            "breaks_in_ha_version": None,
-            "created": "2026-01-01T00:00:00+00:00",
-            "issue_domain": None,
-            "learn_more_url": None,
-            "active": False,
+            **{command: len(msgs) for command, msgs in self.frames.items()},
+            "get_states": self.states.await_count,
         }
-    return {
-        "issue_id": issue_id,
-        "domain": domain,
-        "severity": "warning",
-        "translation_key": "tk",
-        "translation_placeholders": {},
-        "ignored": dismissed_version is not None,
-        "dismissed_version": dismissed_version,
-        "is_fixable": True,
-        "breaks_in_ha_version": None,
-        "created": "2026-01-01T00:00:00+00:00",
-        "issue_domain": domain,
-        "learn_more_url": None,
-        "active": True,
-    }
 
 
-def _entry(
-    entry_id: str, domain: str, *, state: str = "loaded", title: str = "Title"
-) -> dict[str, Any]:
-    """A ``system_snapshot`` ``config_entries`` row (identity fields only)."""
-    return {
-        "entry_id": entry_id,
-        "domain": domain,
-        "title": title,
-        "state": state,
-        "source": "user",
-        "disabled_by": None,
-    }
+@contextmanager
+def _reads(hass: HomeAssistant, client: HomeAssistantClient) -> Iterator[Reads]:
+    with ExitStack() as stack:
+        frames = {
+            command: stack.enter_context(observed(hass, command))
+            for command in (WS_SYSTEM_SNAPSHOT, REPAIRS, ENTRIES, REGISTRY)
+        }
+        states = stack.enter_context(
+            patch.object(client, "get_states", AsyncMock(wraps=client.get_states))
+        )
+        yield Reads(frames, states)
 
 
-def _registry_row(
-    entity_id: str,
-    *,
-    config_entry_id: str | None = None,
-    platform: str = "hue",
-    disabled_by: str | None = None,
-) -> dict[str, Any]:
-    """A ``system_snapshot`` ``entities`` row (``config/entity_registry/list`` shape)."""
-    return {
-        "entity_id": entity_id,
-        "platform": platform,
-        "config_entry_id": config_entry_id,
-        "disabled_by": disabled_by,
-    }
+def _orphans(resp: dict[str, Any]) -> set[str]:
+    items = resp["dead_entities"]["config_entry_orphans"]["items"]
+    return {item["entity_id"] for item in items}
 
 
-def _state(entity_id: str, state: str = "on", **attrs: Any) -> dict[str, Any]:
-    """A ``system_snapshot`` ``states`` row (``State.as_dict()`` shape)."""
-    return {"entity_id": entity_id, "state": state, "attributes": attrs}
+def _issue_ids(resp: dict[str, Any]) -> set[str]:
+    return {issue["issue_id"] for issue in resp["repairs"]["issues"]}
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy fetches ``system_snapshot`` replaces.
-
-    Covers ``dead_entities``' three legacy sources (``get_states`` plus the
-    per-client WebSocket bridge for the entity registry and config entries).
-    """
-
-    def __init__(
-        self,
-        *,
-        states: list[dict[str, Any]] | None = None,
-        registry: list[dict[str, Any]] | None = None,
-        entries: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._states = list(states or [])
-        self._registry = list(registry or [])
-        self._entries = list(entries or [])
-        self.get_states_calls = 0
-        self.entity_registry_list_calls = 0
-        self.config_entries_get_calls = 0
-
-    async def get_states(self) -> list[dict[str, Any]]:
-        self.get_states_calls += 1
-        return list(self._states)
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/entity_registry/list":
-            self.entity_registry_list_calls += 1
-            return {"success": True, "result": list(self._registry)}
-        if msg_type == "config_entries/get":
-            self.config_entries_get_calls += 1
-            return {"success": True, "result": list(self._entries)}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+# --- the snapshot and Core's own reads agree ----------------------------------
 
 
-def _health_ws(
-    *,
-    entries: list[dict[str, Any]] | None = None,
-    repairs_issues: list[dict[str, Any]] | None = None,
-    zwave_status: dict[str, Any] | None = None,
-    zwave_status_exc: Exception | None = None,
-) -> Any:
-    """Stub for the SEPARATE ``system_health`` WS connection (repairs/zwave/matter).
-
-    Distinct from the component WS ``get_websocket_client`` resolves —
-    ``_fetch_health_info`` connects this one directly via
-    ``get_connected_ws_client``, which routing tests bypass by patching
-    ``_fetch_health_info`` itself (mirrors ``test_tools_system.py``'s
-    ``_patch_health_info_baseline``).
-    """
-    ws = MagicMock()
-    ws.disconnect = AsyncMock()
-    ws.repairs_calls = 0
-    ws.config_entries_get_calls = 0
-    ws.zwave_status_calls = 0
-
-    async def _send(command: str, **kwargs: Any) -> dict[str, Any]:
-        if command == "repairs/list_issues":
-            ws.repairs_calls += 1
-            return {"success": True, "result": {"issues": list(repairs_issues or [])}}
-        if command == "config_entries/get":
-            ws.config_entries_get_calls += 1
-            return {"success": True, "result": list(entries or [])}
-        if command == "zwave_js/network_status":
-            ws.zwave_status_calls += 1
-            if zwave_status_exc is not None:
-                raise zwave_status_exc
-            return {
-                "success": True,
-                "result": zwave_status or {"controller": {"nodes": []}},
-            }
-        raise AssertionError(f"unexpected health command {command!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-def _health_baseline(ws_client: Any) -> Any:
-    """Patch ``_fetch_health_info`` to hand back ``ws_client`` as the baseline."""
-    return patch.object(
-        SystemTools,
-        "_fetch_health_info",
-        new=AsyncMock(return_value=(ws_client, {"success": True, "health_info": {}})),
+async def test_the_snapshot_and_cores_own_reads_give_the_same_sections(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A field the snapshot carries differently from Core's own reads would
+    change these four sections for every install with the component. The
+    repairs include one with no placeholders and one Core hides because its
+    config entry is disabled."""
+    disabled = MockConfigEntry(domain="hue", disabled_by=ConfigEntryDisabler.USER)
+    disabled.add_to_hass(hass)
+    ir.async_create_issue(
+        hass,
+        "hue",
+        "iss-disabled-entry",
+        config_entry_id=disabled.entry_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="tk",
     )
+    tools = SystemTools(client)
+    with monkeypatch.context() as older:
+        older_component(older, "system_snapshot")
+        core = await tools.ha_get_system_health(include=INCLUDE_ALL)
+    invalidate_caps(client)
 
+    with observed(hass, WS_SYSTEM_SNAPSHOT) as frames:
+        snapshot = await tools.ha_get_system_health(include=INCLUDE_ALL)
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _snapshot_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/system_snapshot"
-    ]
-
-
-_INCLUDE_ALL = "repairs,zwave_network,matter_network,dead_entities"
-
-
-@pytest.mark.asyncio
-async def test_snapshot_fetched_once_for_multi_section_call() -> None:
-    """One snapshot read serves repairs + zwave + matter + dead_entities; every
-    legacy fetch it replaces never runs."""
-    snapshot_result = {
-        "config_entries": [
-            _entry("cfg-zwave", "zwave_js"),
-            _entry("cfg-matter", "matter", title="Matter Hub"),
-        ],
-        "issues": [_issue("iss-1")],
-        "entities": [
-            _registry_row("sensor.orphan", config_entry_id="cfg-gone"),
-            _registry_row("sensor.alive", config_entry_id="cfg-zwave"),
-        ],
-        "states": [_state("sensor.orphan"), _state("sensor.alive")],
+    assert len(frames) == 1
+    assert snapshot["repairs"] == core["repairs"]
+    assert {key: snapshot[key] for key in SECTIONS} == {
+        key: core[key] for key in SECTIONS
     }
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_result=snapshot_result,
+    assert _issue_ids(snapshot) == {"iss-mqtt"}
+    assert _orphans(snapshot) == {ORPHAN}
+    stale_items = snapshot["dead_entities"]["stale_restored"]["items"]
+    assert {item["entity_id"] for item in stale_items} == {home.stale}
+    assert snapshot["matter_network"]["config_entry_id"] == home.matter_entry
+    assert snapshot["zwave_network"]["error"].startswith(ZWAVE_STATUS_RAN)
+
+
+async def test_dismissed_repairs_from_the_snapshot_match_cores_list(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir.async_create_issue(
+        hass,
+        "hue",
+        "iss-dismissed",
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="tk",
     )
-    health_ws = _health_ws(
-        zwave_status={"controller": {"name": "Z-Stick", "nodes": []}}
-    )
-    client = RoutingClient()
+    ir.async_ignore_issue(hass, "hue", "iss-dismissed", True)
+    tools = SystemTools(client)
+    with monkeypatch.context() as older:
+        older_component(older, "system_snapshot")
+        core = await tools.ha_get_system_health(
+            include="repairs", include_dismissed_repairs=True
+        )
+    invalidate_caps(client)
 
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
+    with observed(hass, REPAIRS) as listed:
+        snapshot = await tools.ha_get_system_health(
+            include="repairs", include_dismissed_repairs=True
+        )
 
-    assert len(_snapshot_calls(ws)) == 1
+    assert snapshot["repairs"] == core["repairs"]
+    assert _issue_ids(snapshot) == {"iss-mqtt", "iss-dismissed"}
+    assert snapshot["repairs"]["count"] == 2
+    assert "dismissed_count" not in snapshot["repairs"]
+    assert listed == []
 
-    # Every legacy fetch the snapshot replaces never ran.
-    assert health_ws.repairs_calls == 0
-    assert health_ws.config_entries_get_calls == 0
-    assert client.get_states_calls == 0
-    assert client.entity_registry_list_calls == 0
-    assert client.config_entries_get_calls == 0
-    # The zwave_js status call itself is NOT replaced by the snapshot.
-    assert health_ws.zwave_status_calls == 1
 
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-    assert resp["zwave_network"]["controller"]["name"] == "Z-Stick"
+# --- routing -----------------------------------------------------------------
+
+
+async def test_one_snapshot_replaces_every_read_it_covers(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    """The Z-Wave status call is not part of the snapshot and still runs; its
+    error stays in its own section beside the snapshot-served ones."""
+    with _reads(hass, client) as reads:
+        resp = await SystemTools(client).ha_get_system_health(include=INCLUDE_ALL)
+
+    assert reads.counts() == {
+        WS_SYSTEM_SNAPSHOT: 1,
+        REPAIRS: 0,
+        ENTRIES: 0,
+        REGISTRY: 0,
+        "get_states": 0,
+    }
+    assert resp["zwave_network"]["error"].startswith(ZWAVE_STATUS_RAN)
+    assert _issue_ids(resp) == {"iss-mqtt"}
     assert resp["matter_network"] == {
-        "config_entry_id": "cfg-matter",
-        "state": "loaded",
+        "config_entry_id": home.matter_entry,
+        "state": "not_loaded",
         "title": "Matter Hub",
     }
-    orphan_ids = {
-        i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
-    }
-    assert orphan_ids == {"sensor.orphan"}
+    assert _orphans(resp) == {ORPHAN}
 
 
-@pytest.mark.asyncio
-async def test_single_section_call_requests_only_needed_slices() -> None:
-    """A repairs-only call doesn't ask the component for entities/states."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_result={
-            "config_entries": [],
-            "issues": [_issue("iss-1")],
-            "entities": [],
-            "states": [],
-        },
-    )
-    health_ws = _health_ws()
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
+async def test_a_repairs_only_call_asks_the_snapshot_for_issues_only(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    with observed(hass, WS_SYSTEM_SNAPSHOT) as frames:
         resp = await SystemTools(client).ha_get_system_health(include="repairs")
 
-    calls = _snapshot_calls(ws)
-    assert len(calls) == 1
-    assert calls[0].kwargs == {
-        "include_issues": True,
-        "include_config_entries": False,
-        "include_entities": False,
-        "include_states": False,
+    flags = (
+        "include_issues",
+        "include_config_entries",
+        "include_entities",
+        "include_states",
+    )
+    assert [{flag: frame[flag] for flag in flags} for frame in frames] == [
+        {
+            "include_issues": True,
+            "include_config_entries": False,
+            "include_entities": False,
+            "include_states": False,
+        }
+    ]
+    assert _issue_ids(resp) == {"iss-mqtt"}
+
+
+async def test_without_the_snapshot_each_section_reads_core_itself(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Z-Wave and Matter each read the config entries, dead entities a third
+    time: the reads the snapshot collapses."""
+    older_component(monkeypatch, "system_snapshot")
+
+    with _reads(hass, client) as reads:
+        resp = await SystemTools(client).ha_get_system_health(include=INCLUDE_ALL)
+
+    assert reads.counts() == {
+        WS_SYSTEM_SNAPSHOT: 0,
+        REPAIRS: 1,
+        ENTRIES: 3,
+        REGISTRY: 1,
+        "get_states": 1,
     }
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
+    assert _issue_ids(resp) == {"iss-mqtt"}
+    assert resp["matter_network"]["config_entry_id"] == home.matter_entry
+    assert _orphans(resp) == {ORPHAN}
 
 
-@pytest.mark.asyncio
-async def test_capability_miss_falls_back_to_legacy_per_section() -> None:
-    """An old component (info unknown_command) never sends system_snapshot;
-    every section runs its own legacy fetch."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    entries = [_entry("cfg-zwave", "zwave_js"), _entry("cfg-matter", "matter")]
-    health_ws = _health_ws(
-        entries=entries,
-        repairs_issues=[_issue("iss-1")],
-        zwave_status={"controller": {"nodes": []}},
-    )
-    client = RoutingClient(
-        states=[_state("sensor.orphan")],
-        registry=[_registry_row("sensor.orphan", config_entry_id="cfg-gone")],
-        entries=entries,
-    )
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include=_INCLUDE_ALL)
-
-    assert not _snapshot_calls(ws)
-    assert health_ws.repairs_calls == 1
-    # Both zwave_network and matter_network independently resolve their own
-    # config_entries/get in the legacy path (the TOCTOU the snapshot fixes).
-    assert health_ws.config_entries_get_calls == 2
-    assert client.get_states_calls == 1
-    assert client.entity_registry_list_calls == 1
-    assert client.config_entries_get_calls == 1
-
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-    assert resp["matter_network"]["config_entry_id"] == "cfg-matter"
-    orphan_ids = {
-        i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
-    }
-    assert orphan_ids == {"sensor.orphan"}
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_on_snapshot_invalidates_caps_and_falls_back() -> None:
-    """unknown_command on system_snapshot -> invalidate caps + legacy per-section."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    health_ws = _health_ws(
-        entries=[_entry("cfg-zwave", "zwave_js")],
-        repairs_issues=[],
-        zwave_status={"controller": {"nodes": []}},
-    )
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(
-            include="repairs,zwave_network"
-        )
-
-    assert health_ws.repairs_calls == 1
-    assert health_ws.config_entries_get_calls == 1
-    assert resp["zwave_network"]["controller"] == {"nodes": []}
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_non_unknown_snapshot_error_falls_back_without_invalidating_caps() -> (
-    None
-):
-    """A snapshot command timeout falls back to legacy WITHOUT invalidating
-    caps — the capability is still advertised, only this one frame failed."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include="repairs")
-
-    assert health_ws.repairs_calls == 1
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_malformed_snapshot_slice_falls_back_to_legacy() -> None:
-    """A snapshot reply missing an expected slice key (shape drift) is treated
-    as untrustworthy as a WHOLE: every consuming section falls back to legacy
-    rather than trusting a partially-shaped payload."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_result={
-            "config_entries": [],
-            # "issues" key missing entirely — malformed.
-            "entities": [],
-            "states": [],
-        },
-    )
-    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include="repairs")
-
-    assert health_ws.repairs_calls == 1
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-
-
-@pytest.mark.asyncio
-async def test_section_error_still_degrades_to_error_subdict() -> None:
-    """Even with a successful snapshot, a real failure in a call the snapshot
-    does NOT replace (zwave_js/network_status) still degrades to a per-section
-    error sub-dict instead of raising — and sibling sections are unaffected."""
-    snapshot_result = {
-        "config_entries": [_entry("cfg-zwave", "zwave_js")],
-        "issues": [_issue("iss-1")],
-        "entities": [],
-        "states": [],
-    }
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_result=snapshot_result,
-    )
-    health_ws = _health_ws(zwave_status_exc=RuntimeError("boom"))
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(
-            include="repairs,zwave_network"
-        )
-
-    assert "error" in resp["zwave_network"]
-    assert "boom" in resp["zwave_network"]["error"]
-    # The sibling repairs section, served from the same snapshot, is unaffected.
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-
-
-@pytest.mark.asyncio
-async def test_snapshot_connection_error_falls_back_to_legacy() -> None:
-    """A ``HomeAssistantConnectionError`` on the snapshot frame degrades to the
-    per-section legacy fetches rather than failing the WHOLE tool: the legacy
-    sections run on a dedicated health WS + REST + the WS bridge, which
-    reconnects a dropped pooled socket, so they still serve their data."""
-    ws = make_ws(
-        "ha_mcp_tools/system_snapshot",
-        info_result=_CAPS_SNAPSHOT,
-        cmd_exc=HomeAssistantConnectionError("connection lost"),
-    )
-    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_system), _health_baseline(health_ws):
-        resp = await SystemTools(client).ha_get_system_health(include="repairs")
-
-    assert health_ws.repairs_calls == 1
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-    # A transient connection error is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_snapshot_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` after caps
-    are cached degrades to the per-section legacy fetches, not a whole-tool error."""
-    caps_ws = make_ws("ha_mcp_tools/system_snapshot", info_result=_CAPS_SNAPSHOT)
-    health_ws = _health_ws(repairs_issues=[_issue("iss-1")])
-    client = RoutingClient()
+async def test_a_downgraded_component_sends_every_section_to_core(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data[websocket_api.DOMAIN], WS_SYSTEM_SNAPSHOT)
 
     with (
-        patch_ws_establish_failure(
-            caps_ws,
-            tools_system,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ),
-        _health_baseline(health_ws),
+        patch.object(tools_system, "invalidate_caps", wraps=invalidate_caps) as drop,
+        observed(hass, REPAIRS) as repairs,
+        observed(hass, ENTRIES) as entries,
+    ):
+        resp = await SystemTools(client).ha_get_system_health(
+            include="repairs,zwave_network"
+        )
+
+    assert (len(repairs), len(entries)) == (1, 1)
+    assert _issue_ids(resp) == {"iss-mqtt"}
+    assert resp["zwave_network"]["error"].startswith(ZWAVE_STATUS_RAN)
+    drop.assert_called_once_with(client)
+
+
+async def test_an_unanswered_snapshot_sends_repairs_to_core_and_keeps_the_component(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with (
+        patch.object(tools_system, "invalidate_caps", wraps=invalidate_caps) as drop,
+        observed(hass, REPAIRS) as repairs,
+    ):
+        async with held(hass, WS_SYSTEM_SNAPSHOT, monkeypatch):
+            resp = await SystemTools(client).ha_get_system_health(include="repairs")
+
+    assert len(repairs) == 1
+    assert _issue_ids(resp) == {"iss-mqtt"}
+    drop.assert_not_called()
+
+
+async def test_a_snapshot_whose_socket_drops_sends_repairs_to_core(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    """Repairs have their own health connection, so a dropped pooled socket
+    costs the snapshot, not the section."""
+    assert await get_component_caps(client) is not None
+    socket = await pooled(client)
+
+    with (
+        patch.object(tools_system, "invalidate_caps", wraps=invalidate_caps) as drop,
+        observed(hass, REPAIRS) as repairs,
+        dropped(hass, WS_SYSTEM_SNAPSHOT, socket),
     ):
         resp = await SystemTools(client).ha_get_system_health(include="repairs")
 
-    assert health_ws.repairs_calls == 1
-    assert resp["repairs"]["issues"] == [_issue("iss-1")]
-    assert client in component_api._CAPS_CACHE
+    assert len(repairs) == 1
+    assert _issue_ids(resp) == {"iss-mqtt"}
+    drop.assert_not_called()
+
+
+async def test_a_snapshot_with_no_socket_sends_repairs_to_core(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    with (
+        patch.object(tools_system, "invalidate_caps", wraps=invalidate_caps) as drop,
+        patch.object(
+            tools_system,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("Failed to connect")),
+        ),
+        observed(hass, REPAIRS) as repairs,
+    ):
+        resp = await SystemTools(client).ha_get_system_health(include="repairs")
+
+    assert len(repairs) == 1
+    assert _issue_ids(resp) == {"iss-mqtt"}
+    drop.assert_not_called()
