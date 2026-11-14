@@ -19,9 +19,13 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
+    clearable_value,
+    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
+    refuse_blank_name,
     register_tool_methods,
     validate_identifier_not_empty,
 )
@@ -182,13 +186,19 @@ class CategoryTools:
     @log_tool_usage
     async def ha_config_set_category(
         self,
-        name: Annotated[str, Field(description="Display name for the category")],
         scope: Annotated[
             str,
             Field(
                 description="Domain scope for the category (e.g., 'automation', 'script', 'scene', 'helpers').",
             ),
         ],
+        name: Annotated[
+            str | None,
+            Field(
+                description="Display name. Required to create; omit on update to keep it.",
+                default=None,
+            ),
+        ] = None,
         category_id: Annotated[
             str | None,
             Field(
@@ -199,7 +209,7 @@ class CategoryTools:
         icon: Annotated[
             str | None,
             Field(
-                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+                description="Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
                 default=None,
             ),
         ] = None,
@@ -214,9 +224,9 @@ class CategoryTools:
         specific to a single domain scope.
 
         EXAMPLES:
-        - Create automation category: ha_config_set_category("Lighting", scope="automation")
-        - Create with icon: ha_config_set_category("Security", scope="automation", icon="mdi:shield")
-        - Update category: ha_config_set_category("Updated Name", scope="automation", category_id="my_category_id")
+        - Create automation category: ha_config_set_category(scope="automation", name="Lighting")
+        - Create with icon: ha_config_set_category(scope="automation", name="Security", icon="mdi:shield")
+        - Update category: ha_config_set_category(scope="automation", category_id="my_category_id", name="Updated Name")
 
         After creating a category, use ha_set_entity(categories={"automation": "category_id"}) to assign it.
         """
@@ -234,19 +244,21 @@ class CategoryTools:
                     ],
                     context={"action": "set", "scope": scope, "name": name},
                 )
+            refuse_blank_name(
+                name, {"action": "set", "scope": scope, "category_id": category_id}
+            )
             action = "update" if category_id else "create"
 
             message: dict[str, Any] = {
                 "type": f"config/category_registry/{action}",
                 "scope": scope,
-                "name": name,
             }
-
             if action == "update":
                 message["category_id"] = category_id
-
+            if name is not None:
+                message["name"] = name
             if icon is not None:
-                message["icon"] = icon
+                message["icon"] = clearable_value(icon, "icon")
 
             result = await self._client.send_websocket_message(message)
 
@@ -258,36 +270,38 @@ class CategoryTools:
                     "category_id": category_data.get("category_id"),
                     "category_data": category_data,
                     "scope": scope,
-                    "message": f"Successfully {action_past} category: {name}",
+                    "message": f"Successfully {action_past} category: {category_data.get('name')}",
                 }
-            else:
-                error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str or "doesn't exist" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Category not found: {category_id}",
-                            context={
-                                "name": name,
-                                "scope": scope,
-                                "category_id": category_id,
-                            },
-                            suggestions=[
-                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
-                            ],
-                        )
-                    )
+            context = {"name": name, "scope": scope, "category_id": category_id}
+            # Core answers an unknown id with the generic ``invalid_info`` code, so
+            # its exact message is what tells it apart from a refused name (which
+            # quotes the caller's name and could contain any text).
+            reason = core_error_message(result.get("error", ""))
+            if reason == "Category ID doesn't exist":
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to {action} category: {result.get('error', 'Unknown error')}",
-                        context={
-                            "name": name,
-                            "scope": scope,
-                            "category_id": category_id,
-                        },
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Category {category_id!r} not found in scope {scope!r}: {reason}",
+                        context={**context, "ha_error_code": result.get("error_code")},
+                        suggestions=[
+                            f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            "Check the scope: a category exists only in the scope it was created in",
+                        ],
                     )
                 )
+            suggestions = [
+                f"Use ha_config_get_category('{scope}') to see the existing categories and their IDs"
+            ]
+            if action == "create" and name is None:
+                suggestions.insert(
+                    0, "Pass name to create a category, or category_id to update one"
+                )
+            raise_core_refusal(
+                f"Failed to {action} category",
+                result,
+                context=context,
+                suggestions=suggestions,
+            )
 
         except ToolError:
             raise
@@ -340,16 +354,17 @@ class CategoryTools:
         """
         Delete a Home Assistant category.
 
-        Removes the category from the category registry for the given scope.
-        This will also remove the category assignment from all entities in that scope.
+        Removes the category from the category registry for the given scope, and
+        from every entity in that scope that had it. The auto-backup of this call
+        restores the category itself, under a new id, not the entities that had it.
+
+        To move one entity to another category or out of its category and keep the
+        category, use ha_set_entity(categories=...) instead.
 
         EXAMPLES:
         - Delete category: ha_config_remove_category("automation", "my_category_id")
 
         Use ha_config_get_category() to find category IDs.
-
-        **WARNING:** Deleting a category will remove it from all assigned entities.
-        This action cannot be undone.
         """
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.
@@ -376,26 +391,23 @@ class CategoryTools:
                     "scope": scope,
                     "message": f"Successfully deleted category: {category_id}",
                 }
-            else:
-                error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str or "doesn't exist" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Category not found: {category_id}",
-                            context={"category_id": category_id, "scope": scope},
-                            suggestions=[
-                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
-                            ],
-                        )
-                    )
+            context = {"category_id": category_id, "scope": scope}
+            # Same exact-text test as the set tool: ``invalid_info`` is generic.
+            if (
+                core_error_message(result.get("error", ""))
+                == "Category ID doesn't exist"
+            ):
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to delete category: {result.get('error', 'Unknown error')}",
-                        context={"category_id": category_id, "scope": scope},
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Category not found: {category_id}",
+                        context={**context, "ha_error_code": result.get("error_code")},
+                        suggestions=[
+                            f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                        ],
                     )
                 )
+            raise_core_refusal("Failed to delete category", result, context=context)
 
         except ToolError:
             raise

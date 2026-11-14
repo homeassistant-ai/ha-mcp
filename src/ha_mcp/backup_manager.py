@@ -104,6 +104,14 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
+from .backup_registry_items import REGISTRY_ITEM_DOMAINS as _REGISTRY_ITEM_DOMAINS
+from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
+from .backup_registry_items import fetch_category as _fetch_category
+from .backup_registry_items import fetch_label as _fetch_label
+from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
+from .backup_registry_items import restore_category as _restore_category
+from .backup_registry_items import restore_label as _restore_label
+from .backup_registry_items import restored_item as _restored_item
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -1689,6 +1697,20 @@ class BackupManager:
             return todo_current_key(target, data["config"])
         return target
 
+    async def _registry_item_current(
+        self, domain: str, entity_id: str, config: dict[str, Any], current: Any
+    ) -> Any:
+        """The live label, category, area or floor, as a diff compares it."""
+        if current is None:
+            # A restored item can carry another id.
+            return await _restored_item(self._client, domain, entity_id, config)
+        if isinstance(current, dict):
+            # A restore cannot set the timestamps either, so an item that came
+            # back under its own id differs in them by nature.
+            keep = {k: v for k, v in config.items() if k in _REGISTRY_READONLY_KEYS}
+            return {**current, **keep}
+        return current
+
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity."""
         data = await asyncio.to_thread(self.read_snapshot, name)
@@ -1713,6 +1735,10 @@ class BackupManager:
             live = await _dashboard_resource_like(self._client, data["config"])
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
+        elif domain in _REGISTRY_ITEM_DOMAINS and isinstance(data["config"], dict):
+            current = await self._registry_item_current(
+                domain, data["entity_id"], data["config"], current
+            )
         if (
             isinstance(current, dict)
             and isinstance(data["config"], dict)
@@ -2204,10 +2230,11 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
     return await _ws_send(client, {"type": "lovelace/resources/create", **payload})
 
 
-# Labels — config/label_registry/{list,update}
+# Registry read-only fields
 #
-# Registry ``/update`` commands refuse the ``created_at``/``modified_at`` their
-# lists return, which snapshots keep; every registry restore strips them.
+# Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
+# ``modified_at`` their lists return, which snapshots keep; every registry
+# restore strips them.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
@@ -2215,77 +2242,10 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """Return ``config`` with read-only registry fields removed.
 
     ``extra`` names per-registry id keys (``label_id``, ...) the update command
-    takes separately and refuses inside the payload body.
+    takes separately (``/create`` has no id) and both refuse inside the payload body.
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}
-
-
-async def _fetch_label(client: Any, entity_id: str) -> Any:
-    # Route the capture through the component's ``registries`` capability when
-    # available (one in-process read of the label registry) instead of dumping
-    # the whole registry via WS. Lazy import to avoid the backup_manager →
-    # tools → backup_manager cycle (same pattern as ``_fetch_device``). ``None``
-    # from the helper means "component unavailable"; fall back to the full list.
-    from .tools.component_registries import fetch_registries_via_component
-
-    component_result = await fetch_registries_via_component(client, ["label"])
-    if component_result is not None:
-        items = component_result.get("labels") or []
-    else:
-        items = _require_list(
-            await _ws_send(client, {"type": "config/label_registry/list"}),
-            "config/label_registry/list",
-        )
-    for item in items:
-        if item.get("label_id") == entity_id:
-            return item
-    return None
-
-
-async def _restore_label(client: Any, entity_id: str, config: Any) -> Any:
-    payload = _strip_readonly(config, "label_id")
-    payload["type"] = "config/label_registry/update"
-    payload["label_id"] = entity_id
-    return await _ws_send(client, payload)
-
-
-# Categories — config/category_registry/{list,update}
-
-
-async def _fetch_category(client: Any, entity_id: str) -> Any:
-    scope, _, cat_id = entity_id.partition(":")
-    if not cat_id:
-        return None
-    # Same component-first routing as ``_fetch_label``; categories are scoped,
-    # so the requested scope rides ``category_scopes``.
-    from .tools.component_registries import fetch_registries_via_component
-
-    component_result = await fetch_registries_via_component(
-        client, ["category"], category_scopes=[scope]
-    )
-    if component_result is not None:
-        items = (component_result.get("categories") or {}).get(scope, [])
-    else:
-        items = _require_list(
-            await _ws_send(
-                client, {"type": "config/category_registry/list", "scope": scope}
-            ),
-            "config/category_registry/list",
-        )
-    for item in items:
-        if item.get("category_id") == cat_id:
-            return {"scope": scope, **item}
-    return None
-
-
-async def _restore_category(client: Any, entity_id: str, config: Any) -> Any:
-    scope, _, cat_id = entity_id.partition(":")
-    payload = _strip_readonly(config, "category_id", "scope")
-    payload["type"] = "config/category_registry/update"
-    payload["scope"] = scope or config.get("scope")
-    payload["category_id"] = cat_id
-    return await _ws_send(client, payload)
 
 
 # Groups — group.set service. Fetch via state API.
@@ -2315,58 +2275,6 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
         service_data["entities"] = config["entities"]
     group_set = {"type": "call_service", "domain": "group", "service": "set"}
     return await _ws_send(client, {**group_set, "service_data": service_data})
-
-
-# Areas / floors — config/area_registry/{list,update}, config/floor_registry/{list,update}
-
-
-async def _fetch_area_or_floor(client: Any, entity_id: str) -> Any:
-    kind, _, real_id = entity_id.partition(":")
-    if not real_id:
-        return None
-    # Same component-first routing as ``_fetch_label`` / ``_fetch_category``.
-    from .tools.component_registries import fetch_registries_via_component
-
-    if kind == "area":
-        component_result = await fetch_registries_via_component(client, ["area"])
-        if component_result is not None:
-            items = component_result.get("areas") or []
-        else:
-            items = _require_list(
-                await _ws_send(client, {"type": "config/area_registry/list"}),
-                "config/area_registry/list",
-            )
-        for item in items:
-            if item.get("area_id") == real_id:
-                return {"kind": "area", **item}
-    elif kind == "floor":
-        component_result = await fetch_registries_via_component(client, ["floor"])
-        if component_result is not None:
-            items = component_result.get("floors") or []
-        else:
-            items = _require_list(
-                await _ws_send(client, {"type": "config/floor_registry/list"}),
-                "config/floor_registry/list",
-            )
-        for item in items:
-            if item.get("floor_id") == real_id:
-                return {"kind": "floor", **item}
-    return None
-
-
-async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any:
-    kind, _, real_id = entity_id.partition(":")
-    payload = _strip_readonly(config, "kind", "area_id", "floor_id")
-    if kind == "area":
-        payload["type"] = "config/area_registry/update"
-        payload["area_id"] = real_id
-    elif kind == "floor":
-        payload["type"] = "config/floor_registry/update"
-        payload["floor_id"] = real_id
-    else:
-        raise ValueError(f"Unknown area/floor kind: {kind!r}")
-    async with registry_update_lock(kind, real_id):
-        return await _ws_send(client, payload)
 
 
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates

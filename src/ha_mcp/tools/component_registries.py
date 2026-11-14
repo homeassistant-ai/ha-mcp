@@ -4,9 +4,9 @@ Several read paths pull an entire HA registry and filter client-side for a
 handful of entries: ``ha_list_floors_areas`` (two CONCURRENT but independent
 ``config/area_registry/list`` / ``config/floor_registry/list`` calls — a
 TOCTOU window where a registry change between the two reads can misclassify
-an area as orphaned/unassigned) and the auto-backup capture reads for label /
-category / area / floor (``backup_manager.py``, one whole-registry dump per
-captured entity). When the component advertises the ``registries``
+an area as orphaned/unassigned) and the auto-backup reads for label /
+category / area / floor (``backup_registry_items.py``: capture, restore and diff
+each read the registry). When the component advertises the ``registries``
 capability, all of that becomes ONE in-process read: ``ha_mcp_tools/registries``
 returns exactly the requested registry kinds (``area`` / ``floor`` / ``label``
 / ``category``) as their FULL-FIELD ``config/<x>_registry/list``-shaped rows —

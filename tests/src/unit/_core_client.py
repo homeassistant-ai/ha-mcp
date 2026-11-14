@@ -15,8 +15,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from homeassistant.core import HomeAssistant
 
+    from ha_mcp.backup_manager import BackupManager
     from ha_mcp.client.rest_client import HomeAssistantClient
 
 
@@ -97,6 +100,28 @@ async def component_core_client(
 
     websocket_api.async_register_commands(hass)
     return core_client
+
+
+@pytest.fixture
+async def backup_manager(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+) -> BackupManager:
+    """The auto-backup manager of ``core_client``, unthrottled, writing under
+    ``tmp_path``, on a ``hass`` with Core's ``config`` commands."""
+    from types import SimpleNamespace
+
+    from homeassistant.setup import async_setup_component
+
+    from ha_mcp.backup_manager import get_backup_manager
+
+    assert await async_setup_component(hass, "config", {})
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+        auto_backup_dir=str(tmp_path),
+    )
+    return get_backup_manager(core_client, settings)
 
 
 @pytest.fixture

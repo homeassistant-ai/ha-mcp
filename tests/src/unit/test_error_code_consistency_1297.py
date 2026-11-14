@@ -248,13 +248,13 @@ class TestDeviceLookupMissingReturnsResourceNotFound:
 # ---------------------------------------------------------------------------
 # Mutation paths — KP13 #1397 review item 4: set / remove on missing registry
 # id should classify as RESOURCE_NOT_FOUND, not the generic SERVICE_CALL_FAILED.
-# Per-site WS "not found" substring match (HA Core surfaces it consistently in
-# the WS-response error string).
+# The label and category removes are tested on real Core in
+# test_label_category_tools_on_core.py.
 # ---------------------------------------------------------------------------
 
 
 class TestLabelMutationRoutesNotFoundToResourceNotFound:
-    """Label set-update / remove with a non-existent ``label_id`` must surface
+    """Label set-update with a non-existent ``label_id`` must surface
     ``RESOURCE_NOT_FOUND``, mirroring the GET-path classification.
     """
 
@@ -281,86 +281,6 @@ class TestLabelMutationRoutesNotFoundToResourceNotFound:
         assert any(
             "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
         )
-
-    async def test_remove_with_missing_label_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Label not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_label(label_id="missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
-        )
-
-
-class TestCategoryMutationRoutesNotFoundToResourceNotFound:
-    """Category set-update / remove with a non-existent ``category_id`` must
-    surface ``RESOURCE_NOT_FOUND``.
-    """
-
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_categories import CategoryTools
-
-        return CategoryTools(mock_ws_client)
-
-    async def test_set_update_with_missing_category_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_category(
-                name="X", scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_remove_with_missing_category_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_category(
-                scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_remove_with_doesnt_exist_phrasing(self, tools, mock_ws_client):
-        """HA Core's category-registry remove path surfaces the not-found case
-        with the phrasing ``"Category ID doesn't exist"`` rather than the more
-        common ``"not found"`` (observed live in PR #1397 CI on commit 70b9edf).
-        The substring check must accept both phrasings.
-        """
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category ID doesn't exist",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_category(
-                scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------

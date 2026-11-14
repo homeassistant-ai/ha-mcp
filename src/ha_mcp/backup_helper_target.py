@@ -18,6 +18,7 @@ from typing import Any, NoReturn
 from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
+from .backup_registry_items import REGISTRY_ITEM_DOMAINS
 from .backup_todo import safety_target as todo_safety_target
 
 
@@ -184,6 +185,15 @@ def note_no_safety_backup(
             f"No safety backup was taken: {domain.removeprefix('helper_')} "
             f"{stored} no longer exists, "
             "so this restore overwrites none of its state."
+        ]
+        return
+    if domain in REGISTRY_ITEM_DOMAINS:
+        # These ids never change on a rename, so a missing id means the item was
+        # deleted; the restore creates it again, or finds the one an earlier
+        # restore created.
+        outcome["warnings"] = [
+            f"No safety backup was taken: {target} no longer exists, so this "
+            "restore overwrites none of its state."
         ]
         return
     outcome["warnings"] = [
