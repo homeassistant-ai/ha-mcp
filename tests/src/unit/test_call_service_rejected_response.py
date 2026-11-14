@@ -157,3 +157,34 @@ async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
 
     assert error_of(exc)["code"] == "VALIDATION_FAILED"
     assert calls == []
+
+
+async def test_a_rejected_response_inside_the_service_is_its_failure(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A handler whose own service call gets a rejected response stops there:
+    the outer call failed, it did not run with a rejected response."""
+    finished: list[ServiceCall] = []
+
+    async def _bad(call: ServiceCall) -> ServiceResponse:
+        return None
+
+    async def _outer(call: ServiceCall) -> ServiceResponse:
+        await hass.services.async_call(
+            "counter", "bad", blocking=True, return_response=True
+        )
+        finished.append(call)
+        return {}
+
+    for service, handler in (("bad", _bad), ("outer", _outer)):
+        hass.services.async_register(
+            "counter", service, handler, supports_response=SupportsResponse.OPTIONAL
+        )
+
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(
+            component_core_client, DeviceControlTools(component_core_client)
+        ).ha_call_service(domain="counter", service="outer", return_response=True)
+
+    assert finished == []
+    assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]

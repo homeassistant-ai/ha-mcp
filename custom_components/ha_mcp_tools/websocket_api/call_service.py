@@ -427,7 +427,11 @@ async def _dispatch(
             getattr(err, "translation_domain", None),
             getattr(err, "translation_key", None),
         )
-        rejected = isinstance(err, HomeAssistantError) and key == _RESPONSE_REJECTED
+        rejected = (
+            isinstance(err, HomeAssistantError)
+            and key == _RESPONSE_REJECTED
+            and _raised_by_async_call(err)
+        )
         # Core checks the service schema before the handler runs.
         if isinstance(err, vol.Invalid) or not (rejected or return_response):
             raise
@@ -436,6 +440,14 @@ async def _dispatch(
             error["failed"] = True
         return None, error
     return response, None
+
+
+def _raised_by_async_call(err: BaseException) -> bool:
+    """Whether ``err`` came from the awaited ``async_call`` itself, where Core
+    checks the response after the service returned, and not from a service the
+    handler called (whose rejected response aborts the handler)."""
+    tb = err.__traceback__
+    return tb is not None and tb.tb_next is not None and tb.tb_next.tb_next is None
 
 
 def _build_call_service_result(
