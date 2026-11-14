@@ -165,6 +165,8 @@ def _health_ws(
                 "success": True,
                 "result": zwave_status or {"controller": {"nodes": []}},
             }
+        if command == "matter/network_topology":
+            raise HomeAssistantCommandError("Command failed: Unknown command.")
         raise AssertionError(f"unexpected health command {command!r}")
 
     ws.send_command = AsyncMock(side_effect=_send)
@@ -241,7 +243,10 @@ async def test_snapshot_fetched_once_for_multi_section_call() -> None:
 
     assert resp["zwave_network"]["controller"]["name"] == "Z-Stick"
     matter = resp["matter_network"]
-    assert (matter["config_entry_id"], matter["title"]) == ("cfg-matter", "Matter Hub")
+    assert (matter["config_entry"]["entry_id"], matter["config_entry"]["title"]) == (
+        "cfg-matter",
+        "Matter Hub",
+    )
     orphan_ids = {
         i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
     }
@@ -309,7 +314,7 @@ async def test_capability_miss_falls_back_to_legacy_per_section() -> None:
     assert client.entity_registry_list_calls == 1
     assert client.config_entries_get_calls == 1
 
-    assert resp["matter_network"]["config_entry_id"] == "cfg-matter"
+    assert resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"
     orphan_ids = {
         i["entity_id"] for i in resp["dead_entities"]["config_entry_orphans"]["items"]
     }
@@ -370,8 +375,7 @@ async def test_malformed_snapshot_slice_falls_back_to_legacy() -> None:
         info_result=_CAPS_SNAPSHOT,
         cmd_result={
             "config_entries": [],
-            # "issues" key missing entirely — malformed.
-            "entities": [],
+            # "entities" key missing entirely — malformed.
             "states": [],
         },
     )
@@ -415,7 +419,7 @@ async def test_section_error_still_degrades_to_error_subdict() -> None:
     assert "error" in resp["zwave_network"]
     assert "boom" in resp["zwave_network"]["error"]
     # The sibling matter section, served from the same snapshot, is unaffected.
-    assert resp["matter_network"]["config_entry_id"] == "cfg-matter"
+    assert resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"
 
 
 @pytest.mark.asyncio

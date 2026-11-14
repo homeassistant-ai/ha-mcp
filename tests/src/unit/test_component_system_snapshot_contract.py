@@ -231,4 +231,4 @@ async def test_component_and_legacy_paths_agree(
     assert orphan_ids == {"sensor.orphan"}
     assert stale_ids == {"light.stale"}
     assert component_resp["zwave_network"]["nodes"] == []
-    assert component_resp["matter_network"]["config_entry_id"] == "cfg-matter"
+    assert component_resp["matter_network"]["config_entry"]["entry_id"] == "cfg-matter"

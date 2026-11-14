@@ -85,15 +85,15 @@ def _build_system_snapshot_slices(
     """Adapt the component's bare ``system_snapshot`` slices into the envelope
     shape the section helpers unwrap. Returns ``None`` (⇒ every consuming
     section falls back to its legacy fetch) when the payload isn't
-    trustworthy: not a dict, or any of the four expected keys
-    (``config_entries`` / ``issues`` / ``entities`` / ``states``) missing or
-    not a list. All four are always present per the component's contract
-    (a disabled section is an empty list, never a missing key), so a missing
-    key here means the response is malformed, not merely disabled.
+    trustworthy: not a dict, or any of the three slices read here
+    (``config_entries`` / ``entities`` / ``states``) missing or not a list.
+    They are always present per the component's contract (a disabled section
+    is an empty list, never a missing key), so a missing key here means the
+    response is malformed, not merely disabled.
     """
     if not isinstance(result, dict):
         return None
-    for key in ("config_entries", "issues", "entities", "states"):
+    for key in ("config_entries", "entities", "states"):
         if not isinstance(result.get(key), list):
             return None
     return _SystemSnapshotSlices(
@@ -462,9 +462,9 @@ class SystemTools:
                     "connection, controller and node status); "
                     "'thread_network' (the Thread datasets Home Assistant knows, "
                     "and its OTBR border routers; no network keys); "
-                    "'matter_network' (what the Matter panel shows: the config "
-                    "entry, device_count, offline_count and the network topology, "
-                    "nodes and connections capped at 50 each); "
+                    "'matter_network' (what the Matter panel reads: Core's Matter "
+                    "config entry and network topology, nodes and connections "
+                    "capped at 50 each); "
                     "'supervisor' (Supervisor installs: resolution info with the "
                     "unhealthy and unsupported reasons, and the Core and "
                     "Supervisor container stats); 'integration_startup' (each "
@@ -479,9 +479,7 @@ class SystemTools:
                     "entries HA restored on startup that the loaded integration no "
                     "longer provides, each with entity_id + platform for cleanup "
                     "via ha_remove_entity; unknown-state entities and "
-                    "merely-offline devices are excluded). Integration "
-                    "diagnostics are in ha_get_integration(include_diagnostics=True) "
-                    "and themes in ha_manage_theme(action='list')."
+                    "merely-offline devices are excluded)."
                 )
             ),
         ] = None,
@@ -505,6 +503,13 @@ class SystemTools:
         the background are awaited up to a deadline; one still running shows as
         pending, with a warning. Optional sections are selected with `include`.
 
+        Not for one integration's diagnostics: use
+        ha_get_integration(include_diagnostics=True). Not for themes: use
+        ha_manage_theme(action='list'). Not for a single device's radio state:
+        use ha_get_device. Use this tool for the state of the whole
+        installation: health checks, repairs, radio networks, Supervisor,
+        startup times and the configuration check.
+
         The result may include ``ha_mcp_update`` ``{current, latest,
         update_available}``. When update_available is true, tell the user a newer
         ha-mcp release is available (with ``python_required``, give ``upgrade_command``).
@@ -516,8 +521,8 @@ class SystemTools:
         includes = self._parse_includes(include)
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
-        # Sections that require the system_health WebSocket connection; the
-        # REST-based sections (config_check, supervisor, dead_entities) do not.
+        # Sections that require the system_health WebSocket connection;
+        # config_check, supervisor and dead_entities do not.
         ws_backed = {
             "repairs",
             "zha_network",
@@ -540,9 +545,9 @@ class SystemTools:
                 # conditions (connect failure / timeout / WS error), so this
                 # catch cannot swallow an unrelated ToolError.
                 #
-                # Degrade gracefully ONLY when the caller asked for a REST-based
-                # section (config_check / supervisor / dead_entities) that can
-                # still be served without the WebSocket. config_check is the
+                # Degrade gracefully ONLY when the caller asked for a section
+                # (config_check / supervisor / dead_entities) that can still be
+                # served without the health WebSocket. config_check is the
                 # pure-REST replacement for the removed ha_check_config tool, so
                 # it must not depend on the health WebSocket (the
                 # system_health/info read can take up to HEALTH_DEADLINE_SECONDS
@@ -565,7 +570,7 @@ class SystemTools:
                     "message": "System health baseline unavailable.",
                     "warnings": [
                         "system_health baseline unavailable; "
-                        "returning REST-based sections only."
+                        "returning only the sections that do not need it."
                     ],
                 }
 
@@ -597,7 +602,7 @@ class SystemTools:
                 # Give each requested WS-backed section a machine-readable error
                 # sub-dict under its own key (same shape the section carries when
                 # the baseline is up but the fetch fails), plus a summary
-                # warning, then skip them so the REST sections below still run.
+                # warning, then skip them so the other sections below still run.
                 self._stub_ws_unavailable(
                     result,
                     includes,
@@ -1062,31 +1067,21 @@ class SystemTools:
         repairs: dict[str, Any] = {"issues": [], "count": 0}
         try:
             repairs_result = await ws_client.send_command("repairs/list_issues")
-            if repairs_result.get("success"):
-                all_issues = repairs_result.get("result", {}).get("issues", [])
-                visible_issues = filter_active_repairs(
-                    all_issues, include_dismissed=include_dismissed
-                )
-                repairs = {
-                    "issues": visible_issues,
-                    "count": len(visible_issues),
-                }
-                if dismissed_count := len(all_issues) - len(visible_issues):
-                    repairs["dismissed_count"] = dismissed_count
-                if issue_warnings := [
-                    *await add_repair_texts(self._client, visible_issues),
-                    *await add_repair_data(ws_client, visible_issues),
-                ]:
-                    repairs["_warnings"] = issue_warnings
-            else:
-                err = repairs_result.get("error") or {}
-                err_msg = (
-                    err.get("message") if isinstance(err, dict) else str(err)
-                ) or "unknown error"
-                logger.warning(
-                    "repairs/list_issues returned success=false: %s", err_msg
-                )
-                repairs["error"] = f"Repairs data not available: {err_msg}"
+            all_issues = (repairs_result.get("result") or {}).get("issues", [])
+            visible_issues = filter_active_repairs(
+                all_issues, include_dismissed=include_dismissed
+            )
+            repairs = {
+                "issues": visible_issues,
+                "count": len(visible_issues),
+            }
+            if dismissed_count := len(all_issues) - len(visible_issues):
+                repairs["dismissed_count"] = dismissed_count
+            if issue_warnings := [
+                *await add_repair_texts(self._client, visible_issues),
+                *await add_repair_data(ws_client, visible_issues),
+            ]:
+                repairs["_warnings"] = issue_warnings
         except Exception as e:  # noqa: BLE001
             reraise_if_fatal(e)
             logger.warning("Failed to fetch repairs: %s", e)
@@ -1177,12 +1172,16 @@ class SystemTools:
             zwave_entry_id = None
             if entries_result.get("success"):
                 for entry in entries_result.get("result", []):
-                    if entry.get("domain") == "zwave_js":
+                    if (
+                        entry.get("domain") == "zwave_js"
+                        and entry.get("disabled_by") is None
+                        and entry.get("source") != "ignore"
+                    ):
                         zwave_entry_id = entry.get("entry_id")
                         break
 
             if not zwave_entry_id:
-                zwave_network["error"] = "Z-Wave JS integration not found"
+                zwave_network["error"] = "No enabled Z-Wave JS config entry found"
                 return zwave_network
 
             # Get network status (controller info)
@@ -1223,13 +1222,10 @@ class SystemTools:
         ``datasets_error``. ``otbr/info`` gives one row per OpenThread Border
         Router, forwarded without its ``active_dataset_tlvs``, which holds the
         network key. Core refuses ``otbr/info`` when no OTBR is loaded, and the
-        refusal surfaces as ``error``.
+        refusal lands in ``border_routers_error``. ``error`` means the whole
+        section failed.
         """
-        thread_network: dict[str, Any] = {
-            "datasets": [],
-            "border_routers": [],
-            "count": 0,
-        }
+        thread_network: dict[str, Any] = {"datasets": [], "border_routers": []}
         try:
             try:
                 datasets_result = await ws_client.send_command("thread/list_datasets")
@@ -1238,30 +1234,24 @@ class SystemTools:
                 )
             except HomeAssistantCommandError as e:
                 thread_network["datasets_error"] = f"Thread datasets not available: {e}"
-            info_result = await ws_client.send_command("otbr/info")
-            if info_result.get("success"):
-                routers = (info_result.get("result") or {}).values()
+            try:
+                info_result = await ws_client.send_command("otbr/info")
                 thread_network["border_routers"] = [
                     {k: v for k, v in info.items() if k != "active_dataset_tlvs"}
-                    for info in routers
+                    for info in (info_result.get("result") or {}).values()
                 ]
-                thread_network["count"] = len(thread_network["border_routers"])
-            else:
-                err = info_result.get("error") or {}
-                err_msg = (
-                    err.get("message") if isinstance(err, dict) else str(err)
-                ) or "unknown error"
-                thread_network["error"] = (
-                    f"OTBR border routers not available: {err_msg}"
+            except HomeAssistantCommandError as e:
+                thread_network["border_routers_error"] = (
+                    f"OTBR border routers not available: {e}"
                 )
-        except HomeAssistantCommandError as e:
-            thread_network["error"] = f"OTBR border routers not available: {e}"
         except Exception as e:  # noqa: BLE001
             reraise_if_fatal(e)
             logger.warning("Failed to fetch Thread network data: %s", e)
             thread_network["error"] = (
                 f"Thread/OTBR integration not available or error: {e}"
             )
+        thread_network["dataset_count"] = len(thread_network["datasets"])
+        thread_network["border_router_count"] = len(thread_network["border_routers"])
         return thread_network
 
     @staticmethod

@@ -9,12 +9,20 @@ dialog, the Integration startup dialog and the Matter panel read.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from .flow_translations import configured_language, fetch_flow_strings, flow_text
+
+logger = logging.getLogger(__name__)
 
 # Core sets no overall limit on pending system health checks; its reachability
 # checks give up after 5 seconds.
@@ -230,8 +238,7 @@ async def read_integration_startup(ws_client: Any, client: Any) -> dict[str, Any
     name, as the Integration startup dialog shows it."""
     try:
         reply = await ws_client.send_command("integration/setup_info")
-    except Exception as exc:  # noqa: BLE001
-        reraise_if_fatal(exc)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         return {"error": f"Integration startup times not available: {exc}"}
     setups = sorted(
         reply.get("result") or [],
@@ -263,7 +270,7 @@ async def read_supervisor(client: Any) -> dict[str, Any]:
 
     try:
         config = await client.get_config()
-    except Exception as exc:  # noqa: BLE001
+    except HomeAssistantError as exc:
         reraise_if_fatal(exc)
         return {"error": f"Supervisor data not available: {exc}"}
     if "hassio" not in (config.get("components") or []):
@@ -286,14 +293,15 @@ async def read_supervisor(client: Any) -> dict[str, Any]:
 async def read_matter_network(
     ws_client: Any, prefetched_entries: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """What the Matter panel reports: the Matter config entry, its device
-    count, how many of those devices are offline, and Core's
-    ``matter/network_topology``.
+    """What the Matter panel reads: Core's Matter config entry and its
+    ``matter/network_topology``, each as Core serves it.
 
     The entry is the first enabled one that is not ignored, as on the panel.
     ``prefetched_entries`` (the component's ``config_entries`` slice in the
     ``{success, result}`` envelope) skips the ``config_entries/get`` call.
-    Nodes and connections are each capped at ``MATTER_TOPOLOGY_LIMIT``.
+    Only ``nodes`` and ``connections`` are replaced, each capped at
+    ``MATTER_TOPOLOGY_LIMIT``, with ``node_count`` and ``connection_count``
+    giving the full sizes.
     """
     try:
         entries = (
@@ -303,6 +311,7 @@ async def read_matter_network(
         )
     except Exception as exc:  # noqa: BLE001
         reraise_if_fatal(exc)
+        logger.warning("Failed to fetch Matter network data: %s", exc)
         return {"error": f"Matter integration not available or error: {exc}"}
     entry = next(
         (
@@ -315,58 +324,25 @@ async def read_matter_network(
         None,
     )
     if entry is None:
-        return {"error": "Matter integration not found"}
-    section: dict[str, Any] = {
-        "config_entry_id": entry.get("entry_id"),
-        "state": entry.get("state"),
-        "title": entry.get("title"),
-    }
+        return {"error": "No enabled Matter config entry found"}
+    section: dict[str, Any] = {"config_entry": entry}
     if entry.get("state") != "loaded":
         return section
-    devices: Any
-    topology: Any
-    devices, topology = await asyncio.gather(
-        ws_client.send_command("config/device_registry/list"),
-        ws_client.send_command("matter/network_topology"),
-        return_exceptions=True,
-    )
-    warnings = []
-    device_ids: set[str] | None = None
-    if isinstance(devices, BaseException):
-        reraise_if_fatal(devices)
-        warnings.append(f"Matter device count not available: {devices}")
-    else:
-        device_ids = {
-            d["id"]
-            for d in devices.get("result") or []
-            if entry.get("entry_id") in (d.get("config_entries") or [])
-        }
-        section["device_count"] = len(device_ids)
-    if isinstance(topology, BaseException):
-        reraise_if_fatal(topology)
-        section["topology"] = {
-            "error": f"Matter network topology not available: {topology}"
-        }
-    else:
-        graph = topology.get("result") or {}
-        nodes = graph.get("nodes") or []
-        connections = graph.get("connections") or []
-        if device_ids is not None:
-            section["offline_count"] = sum(
-                1
-                for node in nodes
-                if node.get("ha_device_id") in device_ids
-                and node.get("available") is False
-            )
-        section["topology"] = {
-            "collected_at": graph.get("collected_at"),
-            "node_count": len(nodes),
-            "connection_count": len(connections),
-            "nodes": nodes[:MATTER_TOPOLOGY_LIMIT],
-            "connections": connections[:MATTER_TOPOLOGY_LIMIT],
-        }
-        if max(len(nodes), len(connections)) > MATTER_TOPOLOGY_LIMIT:
-            section["topology"]["truncated"] = True
-    if warnings:
-        section["_warnings"] = warnings
+    try:
+        reply = await ws_client.send_command("matter/network_topology")
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        section["topology"] = {"error": f"Matter network topology not available: {exc}"}
+        return section
+    graph = reply.get("result") or {}
+    nodes = graph.get("nodes") or []
+    connections = graph.get("connections") or []
+    section["topology"] = {
+        **graph,
+        "nodes": nodes[:MATTER_TOPOLOGY_LIMIT],
+        "connections": connections[:MATTER_TOPOLOGY_LIMIT],
+        "node_count": len(nodes),
+        "connection_count": len(connections),
+    }
+    if max(len(nodes), len(connections)) > MATTER_TOPOLOGY_LIMIT:
+        section["topology"]["truncated"] = True
     return section

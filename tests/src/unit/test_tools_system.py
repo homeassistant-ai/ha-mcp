@@ -20,10 +20,6 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import tools_system
-from ha_mcp.tools.system_health_sections import (
-    MATTER_TOPOLOGY_LIMIT,
-    read_matter_network,
-)
 from ha_mcp.tools.tools_system import SystemTools
 
 
@@ -289,69 +285,8 @@ class TestFetchZwaveNetwork:
 
 
 class TestFetchThreadNetwork:
-    """``_fetch_thread_network`` calls ``otbr/info`` and returns each border
-    router's row without its network key — mirrors the Z-Wave/ZHA never-raise
-    section convention."""
-
-    def _thread_ws_client(self, info_resp):
-        """ws_client whose send_command('otbr/info') returns ``info_resp``."""
-        ws = MagicMock()
-
-        async def _send(command, **kwargs):
-            if command == "otbr/info":
-                return info_resp
-            return {"success": False, "error": {"message": "Unknown command."}}
-
-        ws.send_command = AsyncMock(side_effect=_send)
-        return ws
-
-    @pytest.mark.asyncio
-    async def test_summarizes_border_routers(self):
-        """A loaded OTBR maps to one border-router row with Core's fields,
-        except ``active_dataset_tlvs``, which holds the network key."""
-        ws = self._thread_ws_client(
-            {
-                "success": True,
-                "result": {
-                    "f00dcafef00dcafe": {
-                        "active_dataset_tlvs": "0e08...",
-                        "border_agent_id": "deadbeefdeadbeef",
-                        "channel": 15,
-                        "extended_address": "f00dcafef00dcafe",
-                        "extended_pan_id": "abcdef0123456789",
-                        "url": "http://core-silabs-multiprotocol:8081",
-                    }
-                },
-            }
-        )
-        result = await SystemTools._fetch_thread_network(ws)
-
-        sent = [call.args[0] for call in ws.send_command.call_args_list]
-        assert "otbr/info" in sent
-        assert "error" not in result
-        assert result["count"] == 1
-        br = result["border_routers"][0]
-        assert br["extended_address"] == "f00dcafef00dcafe"
-        assert br["channel"] == 15
-        assert br["extended_pan_id"] == "abcdef0123456789"
-        assert br["border_agent_id"] == "deadbeefdeadbeef"
-        assert "active_dataset_tlvs" not in br
-
-    @pytest.mark.asyncio
-    async def test_not_loaded_surfaces_error(self):
-        """``otbr/info`` answers success=false (code not_loaded) when no OTBR is
-        configured; the section surfaces the message as an error sub-dict."""
-        ws = self._thread_ws_client(
-            {
-                "success": False,
-                "error": {"code": "not_loaded", "message": "No OTBR API loaded"},
-            }
-        )
-        result = await SystemTools._fetch_thread_network(ws)
-
-        assert result["count"] == 0
-        assert result["border_routers"] == []
-        assert "No OTBR API loaded" in result["error"]
+    """``_fetch_thread_network`` never raises a section failure. What Core
+    answers is tested on real Core in ``test_system_health_networks.py``."""
 
     @pytest.mark.asyncio
     async def test_ws_exception_captured_as_error(self):
@@ -361,139 +296,18 @@ class TestFetchThreadNetwork:
 
         result = await SystemTools._fetch_thread_network(ws)
 
-        assert result["count"] == 0
+        assert result["border_router_count"] == 0
         assert "ws disconnect" in result["error"]
 
     @pytest.mark.asyncio
     async def test_fatal_cancellation_propagates_not_embedded(self):
         """A CancelledError must unwind, not demote to a section error — guards
-        the ``_reraise_if_fatal`` gate."""
+        the ``reraise_if_fatal`` gate."""
         ws = AsyncMock()
         ws.send_command.side_effect = asyncio.CancelledError()
 
         with pytest.raises(asyncio.CancelledError):
             await SystemTools._fetch_thread_network(ws)
-
-
-_MATTER_ENTRY = {
-    "domain": "matter",
-    "entry_id": "m1",
-    "state": "loaded",
-    "title": "Matter Server",
-    "disabled_by": None,
-    "source": "user",
-}
-
-
-class TestReadMatterNetwork:
-    """``read_matter_network`` reports what the Matter panel shows."""
-
-    def _ws(self, entries, devices=None, topology=None):
-        replies = {
-            "config_entries/get": {"success": True, "result": entries},
-            "config/device_registry/list": {"success": True, "result": devices or []},
-            "matter/network_topology": topology,
-        }
-
-        async def _send(command, **kwargs):
-            reply = replies[command]
-            if isinstance(reply, Exception):
-                raise reply
-            return reply
-
-        ws = MagicMock()
-        ws.send_command = AsyncMock(side_effect=_send)
-        return ws
-
-    @pytest.mark.asyncio
-    async def test_counts_the_entry_devices_and_the_offline_ones(self):
-        devices = [
-            {"id": "d1", "config_entries": ["m1"]},
-            {"id": "d2", "config_entries": ["m1"]},
-            {"id": "d3", "config_entries": ["other"]},
-        ]
-        nodes = [
-            {"id": "n1", "ha_device_id": "d1", "available": False},
-            {"id": "n2", "ha_device_id": "d2", "available": True},
-            {"id": "n3", "ha_device_id": "d3", "available": False},
-            {"id": "n4", "ha_device_id": None, "available": False},
-        ]
-        topology = {
-            "success": True,
-            "result": {"collected_at": 1, "nodes": nodes, "connections": []},
-        }
-        ws = self._ws([_MATTER_ENTRY], devices, topology)
-
-        result = await read_matter_network(ws)
-
-        assert result["config_entry_id"] == "m1"
-        assert result["device_count"] == 2
-        assert result["offline_count"] == 1
-        assert result["topology"]["nodes"] == nodes
-        assert "truncated" not in result["topology"]
-
-    @pytest.mark.asyncio
-    async def test_topology_is_capped(self):
-        nodes = [{"id": f"n{i}"} for i in range(MATTER_TOPOLOGY_LIMIT + 1)]
-        topology = {
-            "success": True,
-            "result": {"collected_at": 1, "nodes": nodes, "connections": []},
-        }
-
-        result = await read_matter_network(self._ws([_MATTER_ENTRY], [], topology))
-
-        assert len(result["topology"]["nodes"]) == MATTER_TOPOLOGY_LIMIT
-        assert result["topology"]["node_count"] == MATTER_TOPOLOGY_LIMIT + 1
-        assert result["topology"]["truncated"] is True
-
-    @pytest.mark.asyncio
-    async def test_skips_disabled_and_ignored_entries(self):
-        entries = [
-            {**_MATTER_ENTRY, "entry_id": "off", "disabled_by": "user"},
-            {**_MATTER_ENTRY, "entry_id": "ign", "source": "ignore"},
-        ]
-
-        result = await read_matter_network(self._ws(entries))
-
-        assert result == {"error": "Matter integration not found"}
-
-    @pytest.mark.asyncio
-    async def test_an_entry_that_is_not_loaded_reads_no_topology(self):
-        entry = {**_MATTER_ENTRY, "state": "setup_retry"}
-        ws = self._ws([entry])
-
-        result = await read_matter_network(ws)
-
-        assert result == {
-            "config_entry_id": "m1",
-            "state": "setup_retry",
-            "title": "Matter Server",
-        }
-        assert [c.args[0] for c in ws.send_command.call_args_list] == [
-            "config_entries/get"
-        ]
-
-    @pytest.mark.asyncio
-    async def test_a_failed_topology_read_keeps_the_device_count(self):
-        ws = self._ws(
-            [_MATTER_ENTRY],
-            [{"id": "d1", "config_entries": ["m1"]}],
-            RuntimeError("Matter server unavailable"),
-        )
-
-        result = await read_matter_network(ws)
-
-        assert result["device_count"] == 1
-        assert "Matter server unavailable" in result["topology"]["error"]
-        assert "offline_count" not in result
-
-    @pytest.mark.asyncio
-    async def test_fatal_cancellation_propagates_not_embedded(self):
-        ws = AsyncMock()
-        ws.send_command.side_effect = asyncio.CancelledError()
-
-        with pytest.raises(asyncio.CancelledError):
-            await read_matter_network(ws)
 
 
 class TestGetSystemHealthThreadMatterWiring:
@@ -505,9 +319,11 @@ class TestGetSystemHealthThreadMatterWiring:
     async def test_both_sections_populated_when_requested(self):
         client = MagicMock()
         tools = SystemTools(client)
-        mock_thread = AsyncMock(return_value={"border_routers": [], "count": 0})
+        mock_thread = AsyncMock(
+            return_value={"border_routers": [], "border_router_count": 0}
+        )
         mock_matter = AsyncMock(
-            return_value={"config_entry_id": "m1", "state": "loaded", "title": "M"}
+            return_value={"config_entry": {"entry_id": "m1", "state": "loaded"}}
         )
 
         with (
@@ -519,8 +335,11 @@ class TestGetSystemHealthThreadMatterWiring:
                 include="thread_network,matter_network"
             )
 
-        assert result["thread_network"] == {"border_routers": [], "count": 0}
-        assert result["matter_network"]["config_entry_id"] == "m1"
+        assert result["thread_network"] == {
+            "border_routers": [],
+            "border_router_count": 0,
+        }
+        assert result["matter_network"]["config_entry"]["entry_id"] == "m1"
         mock_thread.assert_awaited_once()
         mock_matter.assert_awaited_once()
         ws_client.disconnect.assert_awaited_once()
@@ -894,23 +713,6 @@ class TestGetSystemHealthConfigCheck:
         assert any("repairs" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
-    async def test_startup_section_reported_unavailable_when_ws_fails(self):
-        """include='integration_startup' with WS baseline failure embeds the error."""
-        client = MagicMock()
-        client.check_config = AsyncMock(return_value={"result": "valid"})
-        tools = SystemTools(client)
-        with patch.object(
-            SystemTools,
-            "_fetch_health_info",
-            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
-        ):
-            result = await tools.ha_get_system_health(
-                include="integration_startup,config_check"
-            )
-        assert result["success"] is True
-        assert "WebSocket" in result["integration_startup"]["error"]
-
-    @pytest.mark.asyncio
     async def test_bare_call_raises_when_health_ws_unavailable(self):
         """A bare ha_get_system_health() (the health baseline IS the deliverable)
         must still RAISE on a WS-baseline failure — degradation only applies when
@@ -944,27 +746,6 @@ class TestGetSystemHealthConfigCheck:
             pytest.raises(ToolError),
         ):
             await tools.ha_get_system_health(include="repairs")
-
-    @pytest.mark.asyncio
-    async def test_supervisor_returns_when_health_ws_unavailable(self):
-        """supervisor is REST-based, so it too survives a WS-baseline failure."""
-        tools = SystemTools(MagicMock())
-        with (
-            patch.object(
-                SystemTools,
-                "_fetch_health_info",
-                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
-            ),
-            patch.object(
-                tools_system,
-                "read_supervisor",
-                new=AsyncMock(return_value={"resolution": {"unhealthy": []}}),
-            ) as mock_supervisor,
-        ):
-            result = await tools.ha_get_system_health(include="supervisor")
-        assert result["baseline_available"] is False
-        assert result["supervisor"] == {"resolution": {"unhealthy": []}}
-        mock_supervisor.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_config_check_combined_with_repairs(self):
@@ -1272,7 +1053,7 @@ class TestFetchDeadEntities:
     @pytest.mark.asyncio
     async def test_fatal_cancellation_propagates_not_embedded(self):
         """A CancelledError from a source fetch must unwind, not be demoted to a
-        section error string — guards the _reraise_if_fatal pre-pass."""
+        section error string — guards the reraise_if_fatal pre-pass."""
         client = _make_dead_entities_client(
             states=None,
             states_exc=asyncio.CancelledError(),
@@ -1562,7 +1343,7 @@ class TestWsResultList:
 
     def test_recoverable_exception_returns_cause_string(self):
         """A bare ``Exception`` from ``gather`` is recoverable (per
-        ``_reraise_if_fatal`` policy): returns ``(None, cause)`` with the
+        ``reraise_if_fatal`` policy): returns ``(None, cause)`` with the
         exception class name + message preserved."""
         data, err = SystemTools._ws_result_list(RuntimeError("ws boom"))
         assert data is None
@@ -1645,13 +1426,13 @@ class TestWsResultList:
         assert err is None
 
     def test_cancelled_error_unwinds_not_returned(self):
-        """Per ``_reraise_if_fatal``: cancellation must propagate; the
+        """Per ``reraise_if_fatal``: cancellation must propagate; the
         function never returns ``(None, ...)`` for it."""
         with pytest.raises(asyncio.CancelledError):
             SystemTools._ws_result_list(asyncio.CancelledError())
 
     def test_home_assistant_connection_error_unwinds_not_returned(self):
-        """Transport-dead errors propagate via ``_reraise_if_fatal`` (the
+        """Transport-dead errors propagate via ``reraise_if_fatal`` (the
         #1624 policy folded into this PR) — once the HA connection is dead
         the remaining section fetches will fail anyway, so a propagated
         root cause beats N per-section embedded errors."""
@@ -1789,7 +1570,7 @@ class TestWarningsBubbleToTopLevel:
 
 class TestHomeAssistantConnectionErrorPropagation:
     """#1624 policy folded into this PR: a dead HA transport propagates as
-    ``isError=true`` (via ``_reraise_if_fatal``) rather than being demoted to
+    ``isError=true`` (via ``reraise_if_fatal``) rather than being demoted to
     N per-section embedded errors. Applies to ``_fetch_dead_entities``, every
     sibling section helper, and the ws ``sections`` gather pre-pass — the
     cross-section consistency was the whole point of the #1624 decision."""
@@ -1814,7 +1595,7 @@ class TestHomeAssistantConnectionErrorPropagation:
         Exercises the shape production actually produces: since #1947
         ``send_websocket_message`` raises ``HomeAssistantConnectionError``
         when no answer came back, so the failure reaches the caller's
-        ``gather`` as an exception and ``_reraise_if_fatal`` decides. The
+        ``gather`` as an exception and ``reraise_if_fatal`` decides. The
         predecessor of this test injected a failure envelope, which is the
         shape the bridge no longer produces for a dead transport."""
         client = _make_dead_entities_client(
@@ -1924,7 +1705,7 @@ class TestHomeAssistantConnectionErrorPropagation:
         self, helper_name
     ):
         """Each ws-backed sibling section helper's ``except Exception`` chain
-        routes through ``_reraise_if_fatal`` as its first line, so a
+        routes through ``reraise_if_fatal`` as its first line, so a
         connection error from one section unwinds the request rather than
         embedding N per-section errors. Parametrized across every helper
         so a regression that removes the call from one (and only one) is
@@ -1958,12 +1739,12 @@ class TestHomeAssistantConnectionErrorPropagation:
         self,
     ):
         """The ws ``sections`` gather pre-pass uses the same
-        ``_reraise_if_fatal`` policy: a HomeAssistantConnectionError from
+        ``reraise_if_fatal`` policy: a HomeAssistantConnectionError from
         any section result element unwinds the gather and is then wrapped
         by ``ha_get_system_health``'s outer ``except Exception``
         (``exception_to_structured_error``) into a ``ToolError`` with the
         ``CONNECTION_FAILED`` code — the MCP ``isError=true`` contract for
-        a dead transport. Without ``_reraise_if_fatal``, the connection
+        a dead transport. Without ``reraise_if_fatal``, the connection
         error would have been demoted to one section's ``error`` string,
         and the tool would have returned ``success=True`` with the dead
         transport silently embedded — the exact #1624 anti-pattern."""

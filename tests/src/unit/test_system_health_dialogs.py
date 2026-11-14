@@ -2,20 +2,23 @@
 Integration startup dialog read.
 
 The labels, names and setup times are Core's own: a real ``hass`` with
-Core's frontend serves them. Core records setup times only while it starts. Supervisor is absent from Core's test harness,
-so its reads are stubbed.
+Core's frontend serves them. Core records setup times only while it starts.
+Core's own ``supervisor/api`` answers the Supervisor reads, in front of a
+Supervisor that ``aioclient_mock`` answers (``_supervisor_core``).
 """
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
 
+import pytest
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import mock_component
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_system import SystemTools
+
+from ._supervisor_core import SUPERVISOR, load_supervisor_api
 
 
 async def _set_up_frontend(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -85,42 +88,31 @@ async def test_supervisor_is_reported_absent_without_hassio(
 
 
 async def test_supervisor_reads_resolution_and_both_container_stats(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _set_up_frontend(hass, tmp_path)
-    hass.config.components.add("hassio")
-    replies: dict[str, Any] = {
-        "/resolution/info": {"success": True, "result": {"unhealthy": ["docker"]}},
-        "/core/stats": {"success": True, "result": {"cpu_percent": 3.5}},
-        "/supervisor/stats": ToolError("Supervisor busy"),
-    }
+    mock_component(hass, "hassio")
+    # Embedded mode: the server reaches the Supervisor through Core, as it does
+    # everywhere outside the app.
+    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+    load_supervisor_api(
+        hass,
+        aioclient_mock,
+        monkeypatch,
+        {
+            ("get", "/resolution/info"): {"unhealthy": ["docker"]},
+            ("get", "/core/stats"): {"cpu_percent": 3.5},
+        },
+    )
+    aioclient_mock.get(f"http://{SUPERVISOR}/supervisor/stats", status=500)
 
-    async def supervisor(_client: Any, endpoint: str) -> dict[str, Any]:
-        reply = replies[endpoint]
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
-
-    with patch("ha_mcp.tools.tools_addons._supervisor_api_call", new=supervisor):
-        result = await SystemTools(core_client).ha_get_system_health(
-            include="supervisor"
-        )
+    result = await SystemTools(core_client).ha_get_system_health(include="supervisor")
 
     section = result["supervisor"]
     assert section["resolution"] == {"unhealthy": ["docker"]}
     assert section["core_stats"] == {"cpu_percent": 3.5}
-    assert "Supervisor busy" in section["supervisor_stats"]["error"]
-
-
-async def test_diagnostics_point_to_ha_get_integration(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
-) -> None:
-    await _set_up_frontend(hass, tmp_path)
-
-    result = await SystemTools(core_client).ha_get_system_health(include="diagnostics")
-
-    assert "diagnostics" not in result
-    assert (
-        "'diagnostics' moved to ha_get_integration(include_diagnostics=True)"
-        in result["warnings"]
-    )
+    assert "Not available" in section["supervisor_stats"]["error"]

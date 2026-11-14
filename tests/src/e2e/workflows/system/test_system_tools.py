@@ -21,6 +21,7 @@ import pytest
 from ha_mcp.tools import system_restart
 
 from ...utilities.assertions import (
+    MCPAssertions,
     extract_error_message,
     parse_mcp_result,
     safe_call_tool,
@@ -666,11 +667,10 @@ class TestSystemTools:
         Supervisor runs only on a Supervisor install, so on other backends the
         section reports its absence.
         """
-        result = await mcp_client.call_tool(
-            "ha_get_system_health", {"include": "integration_startup,supervisor"}
-        )
-        data = parse_mcp_result(result)
-        assert data.get("success"), extract_error_message(data)
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_get_system_health", {"include": "integration_startup,supervisor"}
+            )
 
         health_info = data["health_info"]
         assert health_info["lovelace"]["name"] == "Dashboards"

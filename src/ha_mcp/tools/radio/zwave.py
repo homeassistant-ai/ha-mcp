@@ -33,7 +33,7 @@ from .base import (
     ws_call,
 )
 
-# Cap surfaced node summaries (mirrors ha_get_system_health's zwave_network).
+# Cap surfaced node summaries (the same cap as ha_get_system_health's zwave_network).
 _NODE_LIMIT = 50
 
 # Pre-shared credential forms that make active inclusion non-interactive (no S2

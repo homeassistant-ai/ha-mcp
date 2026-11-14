@@ -1,11 +1,11 @@
-"""Home Assistant's own strings for flows, repairs and service descriptions.
+"""Home Assistant's own strings for flows, repairs, system health and names.
 
 ``frontend/get_translations`` returns an integration's ``strings.json`` for one
 top-level category, flattened by Core to ``component.<domain>.<category>.<...>``
 keys (``homeassistant.helpers.translation.recursive_flatten``). These are the
-texts the UI shows for a flow's fields, errors and abort reasons, and for a
-repair's title and description, so the tools read them from Core instead of
-keeping their own wording.
+texts the UI shows for a flow's fields, errors and abort reasons, a repair's
+title and description, a system health key's label and an integration's name,
+so the tools read them from Core instead of keeping their own wording.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ async def fetch_flow_strings(
     """One ``frontend/get_translations`` read; ``None`` if it failed.
 
     ``category`` is a top-level ``strings.json`` key (``config``, ``options``,
-    ``config_subentries``, ``issues``) and ``domain`` one integration or several.
+    ``config_subentries``, ``issues``, ``system_health``, ``title``) and ``domain`` one integration or several.
     ``None`` (no answer, or an error answer) is kept apart from ``{}`` (Core
     ships no strings) so a caller can say so.
     """

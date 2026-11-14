@@ -1,4 +1,5 @@
-"""The Thread/OTBR handler behind ``ha_manage_radio`` on real Home Assistant Core.
+"""The Thread/OTBR handler behind ``ha_manage_radio``, and the ``thread_network``
+section of ``ha_get_system_health``, on real Home Assistant Core.
 
 Core's own ``thread`` and ``otbr`` integrations run here and answer every
 ``thread/*`` and ``otbr/*`` command. Only the border router itself is replaced,
@@ -26,6 +27,7 @@ from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_radio import RadioTools
+from ha_mcp.tools.tools_system import SystemTools
 
 from ._client_spies import sent_messages
 
@@ -363,3 +365,45 @@ async def test_unknown_action_lists_supported(
 
     assert "network_status" in str(exc.value)
     sent.assert_not_called()
+
+
+async def _thread_network(hass: HomeAssistant, client: HomeAssistantClient) -> Any:
+    assert await async_setup_component(hass, "system_health", {})
+    result = await SystemTools(client).ha_get_system_health(include="thread_network")
+    return result["thread_network"]
+
+
+async def test_system_health_lists_datasets_and_routers_without_the_network_key(
+    hass: HomeAssistant, core_client: HomeAssistantClient, otbr_entry_id: str
+) -> None:
+    section = await _thread_network(hass, core_client)
+
+    assert not {"error", "datasets_error", "border_routers_error"} & set(section)
+    assert (section["dataset_count"], section["border_router_count"]) == (2, 1)
+    assert all({"preferred", "source"} <= set(d) for d in section["datasets"])
+    router = section["border_routers"][0]
+    assert router["extended_address"] == EXTENDED_ADDRESS.hex()
+    assert router["url"] == OTBR_URL
+    assert "active_dataset_tlvs" not in router
+
+
+async def test_system_health_keeps_the_datasets_when_no_otbr_is_loaded(
+    hass: HomeAssistant, core_client: HomeAssistantClient, dataset_store: DatasetStore
+) -> None:
+    section = await _thread_network(hass, core_client)
+
+    assert "error" not in section
+    assert section["dataset_count"] == 2
+    assert (section["border_routers"], section["border_router_count"]) == ([], 0)
+    assert "OTBR border routers not available" in section["border_routers_error"]
+
+
+async def test_system_health_reports_both_refusals_without_thread(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    section = await _thread_network(hass, core_client)
+
+    assert "error" not in section
+    assert (section["dataset_count"], section["border_router_count"]) == (0, 0)
+    assert "Thread datasets not available" in section["datasets_error"]
+    assert "OTBR border routers not available" in section["border_routers_error"]
