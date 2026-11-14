@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.config_helpers.registry import _NAME_CHECK_SKIPPED
+from ha_mcp.tools.config_helpers.registry import NAME_CHECK_SKIPPED_WARNING
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 from ._command_faults import dropped_on, pooled_socket
@@ -45,7 +45,7 @@ async def test_a_dropped_name_check_still_creates_the_helper(
 
     assert result["success"] is True
     assert result["action"] == "create"
-    assert _NAME_CHECK_SKIPPED in result["warnings"]
+    assert NAME_CHECK_SKIPPED_WARNING in result["warnings"]
     assert any(
         "input_boolean/list failed; skipped the name check" in r.getMessage()
         for r in caplog.records
