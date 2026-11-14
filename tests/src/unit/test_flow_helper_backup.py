@@ -453,8 +453,22 @@ async def test_entities_renamed_before_a_later_one_fails_are_reported(
     """A meter whose entry held a second entity is recreated with only its
     own sensor; the outcome still names the first entity's restore when the
     second is never found."""
-    # The second entity never appears, so the restore waits out the whole window.
-    monkeypatch.setattr(backup_entity_ids, "RECREATED_ENTITY_WAIT_S", 0.3)
+    # The second entity never appears, so the restore waits out the whole
+    # window. The window is three polls, not a span of real time, so a slow
+    # answer from Core for the first entity cannot use it up.
+    polls: list[float] = []
+
+    async def poll_sleep(delay: float) -> None:
+        polls.append(delay)
+        if len(polls) > 3:
+            raise TimeoutError
+        await asyncio.sleep(delay)
+
+    monkeypatch.setattr(
+        backup_entity_ids,
+        "asyncio",
+        SimpleNamespace(sleep=poll_sleep, timeout=lambda _delay: asyncio.timeout(None)),
+    )
     entry = await _meter(hass)
     entity_registry.async_get_or_create(
         "sensor", _METER, f"{entry.entry_id}_peak", config_entry=entry

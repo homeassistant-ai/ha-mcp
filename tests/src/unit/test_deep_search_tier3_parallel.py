@@ -986,7 +986,7 @@ class TestTimeoutClassification:
 
         mock_client._request = AsyncMock(side_effect=_slow_per_id)
 
-        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             (
                 matches,
                 skipped_count,
@@ -1035,7 +1035,7 @@ class TestTimeoutClassification:
 
         mock_client.get_script_config = AsyncMock(side_effect=_slow_script)
 
-        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             (
                 _matches,
                 _skipped_count,
@@ -1087,7 +1087,7 @@ class TestTimeoutClassification:
 
         mock_client._request = AsyncMock(side_effect=_slow_per_id)
 
-        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             result = await smart_tools.deep_search(
                 query="anything",
                 search_types=["automation"],
@@ -1173,7 +1173,7 @@ class TestSceneTimeoutClassification:
 
         mock_client.get_scene_config = AsyncMock(side_effect=_slow_scene)
 
-        with patch("ha_mcp.tools.smart_search._scenes.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             (
                 results,
                 failed_count,
@@ -1218,7 +1218,7 @@ class TestSceneTimeoutClassification:
 
         mock_client.get_scene_config = AsyncMock(side_effect=_slow_scene)
 
-        with patch("ha_mcp.tools.smart_search._scenes.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             result = await smart_tools.deep_search(
                 query="anything",
                 search_types=["scene"],
@@ -1672,7 +1672,7 @@ class TestFailedSampleThroughDeepSearch:
 
         mock_client._request = AsyncMock(side_effect=_per_id_mixed)
 
-        with patch("ha_mcp.tools.smart_search._deep.INDIVIDUAL_CONFIG_TIMEOUT", 0.05):
+        with patch.object(smart_tools, "config_timeout", 0.05):
             (
                 _matches,
                 _skipped_count,

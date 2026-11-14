@@ -42,6 +42,10 @@ UNREADABLE_SCRIPTS = "s0:\n  alias: !secret nope\n  sequence: []\n"
 UNSERIALIZABLE_A1 = "- id: a1\n  alias: A1\n  description: !!binary aGk=\n"
 # The registry lookup that resolves a script's storage key before its fetch.
 REGISTRY_GET = "config/entity_registry/get"
+# Each fetch waits for Core's real answer, however long the machine takes to
+# give it: a fetch that runs out of time is reported as a timeout, not as the
+# answer a test sets up. The tests that report a timeout cause it themselves.
+NO_FETCH_TIMEOUT = 600.0
 
 
 @pytest.fixture
@@ -51,7 +55,7 @@ async def config_views(hass: HomeAssistant) -> None:
 
 @pytest.fixture
 def search(config_views: None, core_client: HomeAssistantClient) -> SmartSearchTools:
-    return SmartSearchTools(client=core_client)
+    return SmartSearchTools(client=core_client, config_timeout=NO_FETCH_TIMEOUT)
 
 
 async def _yaml_automations(hass: HomeAssistant, count: int) -> None:
@@ -131,7 +135,11 @@ async def test_exhausted_budget_names_the_unscanned_configs_and_their_setting(
     # starts, 1 before the first batch, 2 before the second. A 1.5 s budget
     # runs out between the two, so exactly the second batch is left.
     ticks = itertools.count()
-    search = SmartSearchTools(client=core_client, clock=lambda: float(next(ticks)))
+    search = SmartSearchTools(
+        client=core_client,
+        clock=lambda: float(next(ticks)),
+        config_timeout=NO_FETCH_TIMEOUT,
+    )
 
     reason = await _reason(search, noun, config_time_budget=1.5)
 
@@ -155,7 +163,11 @@ async def test_budget_exhaustion_and_failed_fetches_are_counted_apart(
     # The same clock as the budget test above: the first batch is fetched
     # (and fails), the budget runs out before the second.
     ticks = itertools.count()
-    search = SmartSearchTools(client=core_client, clock=lambda: float(next(ticks)))
+    search = SmartSearchTools(
+        client=core_client,
+        clock=lambda: float(next(ticks)),
+        config_timeout=NO_FETCH_TIMEOUT,
+    )
 
     reason = await _reason(search, "automation", config_time_budget=1.5)
 
