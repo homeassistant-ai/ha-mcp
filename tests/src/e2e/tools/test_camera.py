@@ -27,6 +27,12 @@ INFO_TEXT_RE = re.compile(
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}"
 )
 
+# Image entities are labelled "Image" rather than "Camera snapshot".
+IMAGE_INFO_TEXT_RE = re.compile(
+    r"Image \((JPEG|PNG|GIF), \d+x\d+\)\. Retrieved: "
+    r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}"
+)
+
 
 def _blocks_of_type(result, block_type: str) -> list:
     """Content blocks of a raw CallToolResult matching *block_type*."""
@@ -60,8 +66,47 @@ class TestCameraToolsE2E:
             await mcp.call_tool_failure(
                 "ha_get_camera_image",
                 {"entity_id": "light.kitchen"},
-                expected_error="not a camera entity",
+                expected_error="not a camera or image entity",
             )
+
+    @pytest.mark.asyncio
+    async def test_image_entity_rejects_dimensions(self, mcp_client):
+        """width/height are refused for image.* entities before any request."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_camera_image",
+                {"entity_id": "image.anything", "width": 320, "height": 240},
+                expected_error="apply only to camera entities",
+            )
+
+    @pytest.mark.asyncio
+    async def test_unknown_image_entity_reports_not_found(self, mcp_client):
+        """An image.* entity Home Assistant does not know maps to a not-found error."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_get_camera_image",
+                {"entity_id": "image.does_not_exist_e2e"},
+                expected_error="not found",
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_image_entity_returns_image(self, mcp_client):
+        """The seeded kitchen_sink image entity is served through Core's image proxy.
+
+        kitchen_sink (loaded by the E2E configuration) ships a real image
+        entity serving a PNG, so this exercises the genuine ``image_proxy``
+        route end to end.
+        """
+        result = await mcp_client.call_tool(
+            "ha_get_camera_image", {"entity_id": "image.qr_code"}
+        )
+
+        assert [block.type for block in result.content] == ["text", "image"]
+        assert re.fullmatch(IMAGE_INFO_TEXT_RE, result.content[0].text), (
+            f"Unexpected info text format: {result.content[0].text!r}"
+        )
+        assert result.content[1].data, "Image data should not be empty"
+        assert result.content[1].mime_type == "image/png"
 
     @pytest.mark.asyncio
     async def test_get_camera_image_returns_image_and_info(self, mcp_client):
