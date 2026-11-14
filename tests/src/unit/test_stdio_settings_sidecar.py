@@ -331,7 +331,7 @@ def _fake_opener(
 
 
 def _fake_listener(port: int) -> MagicMock:
-    """Stand-in for the socket ``_bind_listener`` returns."""
+    """Stand-in for the socket ``bind_listener`` returns."""
     sock = MagicMock()
     sock.getsockname.return_value = ("127.0.0.1", port)
     return sock
@@ -1340,7 +1340,7 @@ class TestRunMainWiring:
         )
         listener = _fake_listener(54321)
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: listener
+            sidecar, "bind_listener", lambda preferred, source: listener
         )
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
@@ -1412,7 +1412,7 @@ class TestRunMainWiring:
             lambda: SimpleNamespace(sidecar_pin_port=0),
         )
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+            sidecar, "bind_listener", lambda preferred, source: _fake_listener(54321)
         )
 
         class FakeServer:
@@ -1504,7 +1504,7 @@ class TestRunMainWiring:
             requested.append(preferred)
             return _fake_listener(preferred or 49999)
 
-        monkeypatch.setattr(sidecar, "_bind_listener", _fake_bind)
+        monkeypatch.setattr(sidecar, "bind_listener", _fake_bind)
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
         assert sidecar.run_main() == 0
@@ -1530,7 +1530,7 @@ class TestRunMainWiring:
             json.dumps({"port": 54321, "secret_path": "/private_persisted"})
         )
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(49999)
+            sidecar, "bind_listener", lambda preferred, source: _fake_listener(49999)
         )
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
@@ -1565,7 +1565,7 @@ class TestRunMainWiring:
         def _fail_bind(preferred: int, source: str) -> MagicMock:
             raise OSError("no ports available")
 
-        monkeypatch.setattr(sidecar, "_bind_listener", _fail_bind)
+        monkeypatch.setattr(sidecar, "bind_listener", _fail_bind)
         self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
         assert sidecar.run_main() != 0
@@ -1589,7 +1589,7 @@ class TestRunMainWiring:
             lambda: SimpleNamespace(sidecar_pin_port=0),
         )
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+            sidecar, "bind_listener", lambda preferred, source: _fake_listener(54321)
         )
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
@@ -1622,7 +1622,7 @@ class TestRunMainWiring:
             requested.append(preferred)
             return _fake_listener(preferred)
 
-        monkeypatch.setattr(sidecar, "_bind_listener", _fake_bind)
+        monkeypatch.setattr(sidecar, "bind_listener", _fake_bind)
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
         assert sidecar.run_main() == 0
@@ -1643,7 +1643,7 @@ class TestRunMainWiring:
         )
         (tmp_data_dir / "ui.state").write_text("not json {{{")
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+            sidecar, "bind_listener", lambda preferred, source: _fake_listener(54321)
         )
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
@@ -2065,7 +2065,7 @@ class TestDiscoverabilityFlow:
             lambda: SimpleNamespace(sidecar_pin_port=0),
         )
         monkeypatch.setattr(
-            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(41234)
+            sidecar, "bind_listener", lambda preferred, source: _fake_listener(41234)
         )
 
         captured: dict[str, object] = {}

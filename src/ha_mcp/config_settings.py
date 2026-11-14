@@ -910,4 +910,4 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     """Get application settings."""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

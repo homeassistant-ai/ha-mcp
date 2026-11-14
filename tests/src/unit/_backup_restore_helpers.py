@@ -21,7 +21,7 @@ from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 def _backup_settings() -> Settings:
     """Keep tool access independent of the developer's env and dotenv files."""
     return Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         ENABLE_SNAPSHOT_ACTIONS=True,
         BACKUP_READ_ONLY=False,
         READ_ONLY_MODE=False,

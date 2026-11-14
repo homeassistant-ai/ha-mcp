@@ -1,6 +1,6 @@
 """Unit tests for sidecar port acquisition (#1587, #2131).
 
-Covers ``_bind_listener(preferred, source)`` — ephemeral default,
+Covers ``bind_listener(preferred, source)`` — ephemeral default,
 preferred-port success, busy fallback with an accurate busy signal on
 every platform — and the lenient ``sidecar_pin_port`` Settings validator.
 """
@@ -23,12 +23,12 @@ pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 class TestBindListener:
     def test_ephemeral_when_no_preference(self) -> None:
-        with contextlib.closing(sidecar._bind_listener(0, "Remembered")) as sock:
+        with contextlib.closing(sidecar.bind_listener(0, "Remembered")) as sock:
             assert 0 < sock.getsockname()[1] <= 65535
 
     def test_binds_preferred_port_when_available(self) -> None:
         preferred = _a_free_port()
-        with contextlib.closing(sidecar._bind_listener(preferred, "Pinned")) as sock:
+        with contextlib.closing(sidecar.bind_listener(preferred, "Pinned")) as sock:
             assert sock.getsockname()[1] == preferred
 
     def test_falls_back_to_ephemeral_when_preferred_busy(
@@ -49,7 +49,7 @@ class TestBindListener:
             with (
                 caplog.at_level("WARNING"),
                 contextlib.closing(
-                    sidecar._bind_listener(busy_port, "Remembered")
+                    sidecar.bind_listener(busy_port, "Remembered")
                 ) as sock,
             ):
                 got = sock.getsockname()[1]
@@ -81,7 +81,7 @@ class TestBindListener:
             busy_port = busy.getsockname()[1]
 
             with contextlib.closing(
-                sidecar._bind_listener(busy_port, "Remembered")
+                sidecar.bind_listener(busy_port, "Remembered")
             ) as sock:
                 assert sock.getsockname()[1] != busy_port
 
