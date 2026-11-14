@@ -19,7 +19,6 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -64,7 +63,6 @@ from .service_response import (
     COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
     RESPONSE_CALL_FAILED_HINT,
     SERVICE_FAILED_AFTER_DISPATCH_HINT,
-    STATES_NOT_LISTED_WARNING,
     note_rejected_response,
     split_return_response_envelope,
 )
@@ -1067,9 +1065,7 @@ class ServiceTools(EventCallMixin):
         # Check if this is a timeout - for service calls, timeouts typically
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
-        if isinstance(
-            error.__cause__, (httpx.TimeoutException, HomeAssistantCommandTimeout)
-        ):
+        if isinstance(error.__cause__, httpx.TimeoutException):
             return self._build_timeout_response(
                 domain, service, entity_id, data, return_response=return_response
             )
@@ -1084,10 +1080,6 @@ class ServiceTools(EventCallMixin):
             suggestions=_build_service_suggestions(domain, service, entity_id),
         )
         return None  # unreachable: exception_to_structured_error always raises
-
-    def _websocket_route_warnings(self) -> list[str]:
-        """A non-administrator's call goes over WebSocket, which lists no states."""
-        return [STATES_NOT_LISTED_WARNING] if self._client.admin_route_refused else []
 
     @staticmethod
     def _raise_unexpected_call_service_error(
@@ -1985,11 +1977,7 @@ class ServiceTools(EventCallMixin):
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            call_warnings = [
-                *projection_warnings,
-                *envelope_warnings,
-                *self._websocket_route_warnings(),
-            ]
+            call_warnings = [*projection_warnings, *envelope_warnings]
             if call_warnings:
                 response.setdefault("warnings", []).extend(call_warnings)
 
