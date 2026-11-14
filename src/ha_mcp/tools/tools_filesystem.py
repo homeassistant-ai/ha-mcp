@@ -57,42 +57,13 @@ CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 EDIT_FILE_SERVICE = "edit_file"
 
-# Minimum version of the ha_mcp_tools custom component that this ha-mcp
-# release expects. Bumps in lockstep with ``manifest.json`` whenever a
-# server-side behavior change requires it. Older components (no
-# ``version`` in the get_caller_token response, or a version below this)
-# get an actionable "update via HACS" error.
-# 0.8.0: ``ha_config_set_yaml`` now depends on the component's
-# ``themes/*.yaml`` yaml_path scope; a <0.8.0 component reaches the old
-# handler and rejects ``themes/<name>.yaml`` with a misleading "not
-# allowed" message instead of this actionable update prompt.
-# 0.9.0: the file tools accept absolute HAOS sibling-volume paths (/share,
-# /media, /ssl, /backup — issue #1586). A <0.9.0 component's allowlist
-# normalizer rejects every absolute path, so adding a volume would silently
-# do nothing; the version gate surfaces an actionable "update" prompt instead.
-# 0.10.0: legacy-backup restore + whole-file YAML replace add new component
-# services (``replace_file``, ``list_legacy_backups``, ``read_legacy_backup``)
-# and a ``yaml_path`` arg on ``read_file``. A <0.10.0 component lacks these
-# services; the gate surfaces an actionable "update" instead of a raw
-# "service not found".
-# 0.11.0: the confirm-flow + diff work (#1720) adds ``require_confirm`` /
-# ``confirm_token`` args to ``edit_yaml_config`` and ``diff`` / ``written``
-# response fields. The server always sends ``require_confirm`` (from
-# ENABLE_YAML_EDIT_CONFIRM, default on); a <0.11.0 component's strict
-# (PREVENT_EXTRA) schema rejects the unknown arg with a raw voluptuous
-# error — the gate surfaces an actionable "update" prompt instead.
-# 1.2.0: the YAML fragment read (#1788, PR #1882) needs two component
-# behaviours that a component reports no differently from a missing key.
-# ``list_files`` honours the configured packages folder, so ha_config_get_yaml's
-# glob/discovery would otherwise come back "Path not allowed" instead of
-# enumerating packages; and ``include_parsed`` on ``read_file`` is a new arg
-# that an older strict (PREVENT_EXTRA) schema rejects with a raw voluptuous
-# error. The gate turns both into the actionable "update" prompt. The floor is
-# 1.2.0, not the 1.1.0 that was current when #1882 landed: #1882 added these
-# behaviours under an *un-bumped* 1.1.0 component, so 1.1.0 splits into builds
-# with and without them and cannot distinguish the two (#1946). 1.2.0 is the
-# first component version cut after #1882, hence the first that guarantees both.
-MIN_COMPONENT_VERSION = "1.2.0"
+# The ha_mcp_tools component version the file and YAML tools need: this
+# release's own. The component and the server ship in lockstep, so
+# semantic-release stamps this with each release (``version_variables`` in
+# ``pyproject.toml``), beside the component's own version. An older component
+# (a lower version, or no ``version`` in the get_caller_token response) gets
+# an actionable "update" error.
+MIN_COMPONENT_VERSION = "9.2.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -113,15 +84,6 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 # when a client is garbage-collected (avoids id() reuse if a freed client's
 # address gets recycled before the unauthorized-retry fires).
 _CALLER_TOKEN_CACHE: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
-# Component version as reported by the REST bootstrap, keyed like the token
-# cache. Populated in ``_fetch_caller_token``, which already parses and
-# validates it. Feature-scoped version gates read this rather than the
-# WebSocket capability handshake: caps come back ``None`` for a transport
-# blip just as they do for an old component, so gating on them would report
-# a momentary socket drop as "your component is too old".
-_COMPONENT_VERSION_CACHE: weakref.WeakKeyDictionary[Any, str] = (
-    weakref.WeakKeyDictionary()
-)
 _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
@@ -134,8 +96,8 @@ _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
 # self-heal without a server restart.
 _LIVE_TOOLS_PROBE_TTL_S = 30.0
 # ``(verdict, monotonic_time)`` per client, keyed exactly like
-# ``_CALLER_TOKEN_CACHE`` / ``_COMPONENT_VERSION_CACHE`` above so the entry
-# self-evicts with the client and multi-client setups stay separate.
+# ``_CALLER_TOKEN_CACHE`` above so the entry self-evicts with the client and
+# multi-client setups stay separate.
 _LIVE_TOOLS_PROBE_CACHE: weakref.WeakKeyDictionary[Any, tuple[bool, float]] = (
     weakref.WeakKeyDictionary()
 )
@@ -253,13 +215,9 @@ async def _fetch_caller_token(client: Any) -> str:
     2. Domain present but no ``get_caller_token`` — pre-0.5.0 components
        don't ship the bootstrap service. Surface an actionable "update"
        error instead of letting HA return an opaque 400 to the caller.
-    3. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
-       present, the response now carries the component's manifest
-       version. ha-mcp releases that depend on newer custom-component
-       behavior (e.g. a new accepted yaml_path key, a new schema field)
-       bump ``MIN_COMPONENT_VERSION`` together with the manifest, and
-       this check rejects 0.5.0+ components that are still behind that
-       bar with the same actionable update prompt.
+    3. ``MIN_COMPONENT_VERSION`` — the response carries the component's
+       manifest version, and a component older than this release is
+       rejected with the same actionable update prompt.
 
     Components that pre-date the version-reporting field (returned no
     ``version`` in the response) are treated as "too old" for the same
@@ -336,7 +294,6 @@ async def _fetch_caller_token(client: Any) -> str:
     if parsed < _version_tuple(MIN_COMPONENT_VERSION):
         _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token
-    _COMPONENT_VERSION_CACHE[client] = version
     return token
 
 
@@ -439,12 +396,10 @@ async def _is_mcp_tools_available(client: Any) -> bool:
 def _assert_caps_version_ok(caps: ComponentCaps) -> None:
     """Reject a caps-present component below ``MIN_COMPONENT_VERSION``.
 
-    ``get_component_caps`` only returns caps for a component new enough to
-    answer ``ha_mcp_tools/info`` (shipped in 1.1.0, already past the 0.11.0
-    floor), so this is a defensive belt mirroring the authoritative gate in
-    ``_fetch_caller_token`` and never fires in practice. An empty / unparseable
-    ``component_version`` (never emitted by a real caps-present component) is
-    left to that downstream token-fetch gate rather than rejected here.
+    Mirrors the authoritative gate in ``_fetch_caller_token`` for a caller that
+    already holds the caps. An empty / unparseable ``component_version`` (never
+    emitted by a real caps-present component) is left to that downstream
+    token-fetch gate rather than rejected here.
     """
     try:
         parsed = _version_tuple(caps.component_version)

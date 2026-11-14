@@ -708,26 +708,6 @@ async def test_preview_only_call_skips_auto_backup(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _patch_reported_version(monkeypatch, client, version: str | None):
-    """Pin the component version the REST bootstrap is deemed to have reported.
-
-    The gate reads the bootstrap cache rather than the WebSocket capability
-    handshake, so this stubs the bootstrap and seeds the cache. ``None`` means
-    the bootstrap produced no usable version at all.
-    """
-    from ha_mcp.tools import tools_filesystem as fsmod
-    from ha_mcp.tools import yaml_extra_keys
-
-    async def _ensure(_client, **_kwargs):
-        return "token"
-
-    monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
-    monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
-    fsmod._COMPONENT_VERSION_CACHE.pop(client, None)
-    if version is not None:
-        fsmod._COMPONENT_VERSION_CACHE[client] = version
-
-
 @pytest.mark.parametrize(
     "raw,expected",
     [
@@ -775,7 +755,6 @@ async def test_extra_keys_sent_when_configured(monkeypatch):
     monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", " alert2, foo ,alert2")
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
     fn, client = await _make_tool()
-    _patch_reported_version(monkeypatch, client, "1.2.4")
     # yaml_path is one of the operator's own extra keys, so this also covers
     # the server's pre-dispatch guards not rejecting a non-built-in key.
     await fn(
@@ -789,54 +768,3 @@ async def test_extra_keys_sent_when_configured(monkeypatch):
     assert payloads
     assert payloads[0]["extra_allowed_keys"] == ["alert2", "foo"]
     assert payloads[0]["yaml_path"] == "alert2"
-
-
-@pytest.mark.parametrize("reported", ["1.2.3", "not.a.version", None])
-async def test_extra_keys_rejected_on_old_component(monkeypatch, reported):
-    """Server ahead of component: fail with an actionable update prompt
-    rather than letting the component's strict schema reject the whole
-    call with an opaque "extra keys not allowed". An unreportable version
-    fails closed for the same reason."""
-    from ha_mcp import config as ha_mcp_config
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
-    monkeypatch.setattr(ha_mcp_config, "_settings", None)
-    fn, client = await _make_tool()
-    _patch_reported_version(monkeypatch, client, reported)
-    with pytest.raises(ToolError) as excinfo:
-        await fn(
-            file="configuration.yaml",
-            yaml_path="sensor",
-            action="add",
-            content="- platform: template",
-        )
-
-    message = str(excinfo.value)
-    assert "1.2.4" in message
-    # Never dispatched – the guard fires before the service call.
-    assert _dispatch_call_count(client) == 0
-
-
-async def test_no_version_gate_when_extra_keys_unset(monkeypatch):
-    """The gate must not run at all for the default configuration, which is
-    the overwhelmingly common case - including on a component too old to
-    support extra keys, which must keep working exactly as before."""
-    from ha_mcp import config as ha_mcp_config
-
-    monkeypatch.delenv("HA_MCP_EXTRA_YAML_KEYS", raising=False)
-    monkeypatch.setattr(ha_mcp_config, "_settings", None)
-
-    fn, client = await _make_tool()
-    _patch_reported_version(monkeypatch, client, "1.2.3")
-
-    await fn(
-        file="configuration.yaml",
-        yaml_path="sensor",
-        action="add",
-        content="- platform: template",
-    )
-
-    payloads = _dispatch_payloads(client)
-    assert payloads
-    assert "extra_allowed_keys" not in payloads[0]

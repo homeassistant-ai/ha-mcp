@@ -2234,8 +2234,7 @@ class TestYamlHandler:
         await bm._restore_yaml(
             _StubClient(), "configuration.yaml::rest", "resource: http://a\n"
         )
-        service, data = calls[0]
-        assert service == "edit_yaml_config"
+        (data,) = [d for s, d in calls if s == "edit_yaml_config"]
         assert data["file"] == "configuration.yaml"
         assert data["yaml_path"] == "rest"
         assert data["action"] == "replace"
@@ -2270,40 +2269,10 @@ class TestYamlHandler:
         client = _StubClient()
         _ensure = AsyncMock(return_value="token")
         monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
-        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
-        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.4"
 
         await bm._restore_yaml(client, "packages/alerts.yaml::alert2", "defaults: {}\n")
         data = next(d for s, d in calls if s == "edit_yaml_config")
         assert data["extra_allowed_keys"] == ["alert2"]
-
-    async def test_restore_blocks_on_component_too_old(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A component predating extra_allowed_keys must produce the same
-        actionable update prompt as the write path, not the opaque
-        "extra keys not allowed" schema rejection from Home Assistant."""
-        from ha_mcp import config as ha_mcp_config
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-        from ha_mcp.tools import tools_filesystem as fsmod
-
-        monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
-        monkeypatch.setattr(ha_mcp_config, "_settings", None)
-        calls: list[Any] = []
-        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
-
-        client = _StubClient()
-        _ensure = AsyncMock(return_value="token")
-        monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
-        monkeypatch.setattr(yaml_extra_keys, "_ensure_caller_token", _ensure)
-        fsmod._COMPONENT_VERSION_CACHE[client] = "1.2.3"
-
-        with pytest.raises(ToolError) as excinfo:
-            await bm._restore_yaml(
-                client, "packages/alerts.yaml::alert2", "defaults: {}\n"
-            )
-        assert "1.2.4" in str(excinfo.value)
-        assert not calls
 
     async def test_restore_omits_extra_keys_when_unset(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2339,7 +2308,7 @@ class TestYamlHandler:
         await bm._restore_yaml(
             _StubClient(), "packages/weird::name.yaml::rest", "resource: x\n"
         )
-        _, data = calls[0]
+        (data,) = [d for s, d in calls if s == "edit_yaml_config"]
         assert data["file"] == "packages/weird::name.yaml"
         assert data["yaml_path"] == "rest"
 

@@ -2412,12 +2412,6 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.
-    # ``yaml_path`` is a backward-compatible read_file enhancement, so it is
-    # NOT gated by MIN_COMPONENT_VERSION: a component too old to support it
-    # returns no ``subtree`` (or rejects the key), and capture degrades to a
-    # logged skip — the yaml edit still works, it just isn't snapshotted. The
-    # add-on always ships the matching component, so this only affects a
-    # mismatched standalone install.
     return result.get("subtree")
 
 
@@ -2437,10 +2431,7 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     from .config import get_global_settings
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
-    from .tools.yaml_extra_keys import (
-        assert_extra_yaml_keys_supported,
-        effective_extra_yaml_write_keys,
-    )
+    from .tools.yaml_extra_keys import effective_extra_yaml_write_keys
 
     # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
     # containing "::" still restores to the right file and key.
@@ -2455,10 +2446,6 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     }
     extra_keys = await effective_extra_yaml_write_keys(client, get_global_settings())
     if extra_keys:
-        # Same version gate as the write path: without it a component that
-        # predates the field rejects the whole restore call over an option
-        # the snapshot being restored may not even use.
-        await assert_extra_yaml_keys_supported(client, extra_keys)
         service_data["extra_allowed_keys"] = extra_keys
     result = await call_mcp_tools_service(
         client,

@@ -40,10 +40,7 @@ from .tool_hints import write_hints
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import _assert_mcp_tools_available, call_mcp_tools_service
 from .util_helpers import unwrap_service_response
-from .yaml_extra_keys import (
-    assert_extra_yaml_keys_supported,
-    effective_extra_yaml_write_keys,
-)
+from .yaml_extra_keys import effective_extra_yaml_write_keys
 
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most
@@ -443,7 +440,6 @@ class YamlConfigTools:
             await _assert_mcp_tools_available(self._client)
 
             extra_keys = await effective_extra_yaml_write_keys(self._client, settings)
-            await assert_extra_yaml_keys_supported(self._client, extra_keys)
 
             # Build service data
             service_data: dict[str, Any] = {

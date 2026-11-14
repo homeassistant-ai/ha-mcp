@@ -13,6 +13,7 @@ from ha_mcp.config import reset_global_settings
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
+    MIN_COMPONENT_VERSION,
     _is_mcp_tools_available,
     is_filesystem_tools_enabled,
 )
@@ -187,7 +188,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
     (issue #1813 P5 item 1c)."""
 
     @staticmethod
-    def _caps(version: str = "1.2.0", tools_services: bool | None = None):
+    def _caps(version: str = MIN_COMPONENT_VERSION, tools_services: bool | None = None):
         from ha_mcp.tools.component_api import ComponentCaps
 
         return ComponentCaps(
@@ -207,7 +208,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         client = AsyncMock()
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("1.2.0")),
+            AsyncMock(return_value=self._caps()),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
@@ -248,7 +249,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         with (
             patch(
                 "ha_mcp.tools.tools_filesystem.get_component_caps",
-                AsyncMock(return_value=self._caps("2.1.0", tools_services=False)),
+                AsyncMock(return_value=self._caps(tools_services=False)),
             ),
             pytest.raises(ToolError) as exc,
         ):
@@ -275,7 +276,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         )
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=False)),
+            AsyncMock(return_value=self._caps(tools_services=False)),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
@@ -296,7 +297,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         )
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
@@ -315,7 +316,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         with (
             patch(
                 "ha_mcp.tools.tools_filesystem.get_component_caps",
-                AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+                AsyncMock(return_value=self._caps(tools_services=True)),
             ),
             pytest.raises(ToolError) as exc,
         ):
@@ -346,7 +347,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         )
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)
             clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S / 2
@@ -376,7 +377,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         with (
             patch(
                 "ha_mcp.tools.tools_filesystem.get_component_caps",
-                AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+                AsyncMock(return_value=self._caps(tools_services=True)),
             ),
             pytest.raises(ToolError),
         ):
@@ -385,7 +386,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S + 1
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
@@ -421,7 +422,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
 
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             first = asyncio.create_task(_assert_mcp_tools_available(client))
             # Resumes only once the first caller is parked mid-probe. Bounded so
@@ -472,7 +473,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
 
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)  # prime the memo
             primed["done"] = True
@@ -514,7 +515,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         client.get_services = AsyncMock(return_value=[])
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
-            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            AsyncMock(return_value=self._caps(tools_services=True)),
         ):
             with pytest.raises(ToolError):
                 await _assert_mcp_tools_available(client)
@@ -955,7 +956,7 @@ class TestEmbeddedDirectBlueprintReadStaysOffTheFilesystemTools:
             {
                 "result": {
                     "schema_version": 1,
-                    "component_version": "2.1.2",
+                    "component_version": MIN_COMPONENT_VERSION,
                     "capabilities": ["blueprint_get", "blueprint_text"],
                     "limits": {},
                     "tools_services": False,
