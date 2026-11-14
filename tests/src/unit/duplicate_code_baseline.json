@@ -270,10 +270,8 @@
     "tests/src/unit/test_ha_get_zone_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_list_services_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_manage_blueprints_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_ha_remove_device_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_system_health_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_list_tools_pagination.py::_clear_caps_cache",
-    "tests/src/unit/test_radio_zigbee_component_routing.py::_clear_caps_cache"
+    "tests/src/unit/test_list_tools_pagination.py::_clear_caps_cache"
   ],
   "53d660951f36": [
     "tests/src/unit/test_settings_ui.py::_reset_data_dir_cache",
@@ -511,10 +509,6 @@
   "a1cb99adf0fd": [
     "tests/src/e2e/workflows/filesystem/conftest.py::mcp_client_fs",
     "tests/src/e2e/workflows/services/test_ha_mcp_tools_refusal.py::mcp_client_for_refusal"
-  ],
-  "a4ab857982a4": [
-    "tests/src/unit/test_dashboard_screenshot.py::TestCapture.test_attack_vector_paths_rejected",
-    "tests/src/unit/test_dashboard_screenshot.py::TestCapture.test_root_or_empty_path_rejected"
   ],
   "a4b437f4c1c5": [
     "custom_components/ha_mcp_tools/dependency_diagnostics.py::_exception_text",
