@@ -1,60 +1,100 @@
-"""The component's flow helpers are the helper flows the running Core lists."""
+"""The component's flow helpers are the helper flows the running Core lists.
+
+The ``helpers_list`` and ``search`` commands run on a real ``hass`` with the
+component's commands registered; Core's loader answers the helper flow read
+itself (this file switches off the conftest's stand-in for it), a custom helper
+integration is a real ``manifest.json`` the loader finds, and ``secrets.yaml``
+is a real file in the test's own config directory.
+"""
+
+from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import MappingProxyType
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from ha_mcp.tools.search import component as search_component
-
-from ._component_routing_helpers import patch_ws
-from .test_component_search_visibility_contract import _real_search_ws
-from .test_component_ws_search import (
-    FakeConfig,
-    FakeConfigEntry,
-    FakeHass,
-    empty_view,  # noqa: F401 - pytest fixture
-    wsapi,
+from custom_components.ha_mcp_tools.websocket_api import flow_domains
+from custom_components.ha_mcp_tools.websocket_api.flow_domains import (
+    HELPER_FLOWS_DEGRADED_WARNING,
 )
-from .test_ha_search_component_routing import RoutingClient, _build_ha_search
+from custom_components.ha_mcp_tools.websocket_api.secrets import (
+    SCRUB_DEGRADED_MATCH_WARNING,
+    SCRUB_DEGRADED_WARNING,
+)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools
 
-pytestmark = pytest.mark.usefixtures("empty_view")
+from ._component_core import ws_result
+from ._core_setup import install_custom_helper, write_secrets
+from ._search_tool import _setup_visibility_disabled
 
+_CUSTOM = "my_helper"
 _MARKER = "flowdomainoption5521"
 _CORE_MARKER = "coreoverrideoption7713"
 _UNREADABLE_SECRETS = "key: [unclosed\n"
 
 
-def _search(entry: FakeConfigEntry, query: str, **extra: object) -> dict:
-    return wsapi._do_search(
-        FakeHass(config_entries=[entry]),
-        {"query": query, "search_types": ["helper"], "include_config": True},
-        **extra,
+@pytest.fixture
+def _core_helper_flows() -> None:
+    """Core's loader answers the component's helper flow read itself."""
+
+
+@pytest.fixture
+def custom_helper_integration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
+) -> None:
+    """A custom helper integration installed where Core's loader looks."""
+    install_custom_helper(tmp_path, monkeypatch, _CUSTOM)
+
+
+def _entry(hass: HomeAssistant, domain: str, **kwargs: Any) -> MockConfigEntry:
+    entry = MockConfigEntry(domain=domain, **kwargs)
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _write_secrets(hass: HomeAssistant, text: str) -> None:
+    await hass.async_add_executor_job(write_secrets, hass, text)
+
+
+async def _helpers_list(ws: MockHAClientWebSocket, **params: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(ws, "ha_mcp_tools/helpers_list", **params)
+    return result
+
+
+async def _search(ws: MockHAClientWebSocket, **params: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(ws, "ha_mcp_tools/search", **params)
+    return result
+
+
+async def _helper_search(
+    ws: MockHAClientWebSocket, query: str, **params: Any
+) -> dict[str, Any]:
+    return await _search(
+        ws, query=query, search_types=["helper"], include_config=True, **params
     )
 
 
-def _flow(res: dict) -> list[dict]:
+def _flow(res: dict[str, Any]) -> list[dict[str, Any]]:
     return [h for h in res["helpers"] if h["kind"] == "flow"]
 
 
-def _hass(tmp_path: Path, entries: list[FakeConfigEntry] | None = None) -> FakeHass:
-    hass = FakeHass(config_entries=entries or [])
-    hass.config = FakeConfig(tmp_path)
-    return hass
+@pytest.mark.parametrize(("domain", "listed"), [("otp", True), ("bayesian", False)])
+async def test_listing_covers_the_helpers_core_lists(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, domain: str, listed: bool
+) -> None:
+    _entry(hass, domain, title="Helper")
 
+    res = await _helpers_list(component_ws)
 
-def _loader(monkeypatch: pytest.MonkeyPatch, flows: set[str]) -> AsyncMock:
-    loader = AsyncMock(return_value=flows)
-    monkeypatch.setattr(wsapi, "async_get_config_flows", loader)
-    return loader
-
-
-@pytest.mark.parametrize("domain,listed", [("otp", True), ("bayesian", False)])
-def test_listing_covers_the_helpers_core_lists(domain: str, listed: bool) -> None:
-    entry = FakeConfigEntry(domain, title="Helper", entry_id="e1")
-    res = wsapi._do_helpers_list(FakeHass(config_entries=[entry]), {})
     flow = _flow(res)
     assert bool(flow) is listed
     if listed:
@@ -62,140 +102,136 @@ def test_listing_covers_the_helpers_core_lists(domain: str, listed: bool) -> Non
     assert (domain in res["covered_types"]) is listed
 
 
-@pytest.mark.parametrize("domain,listed", [("otp", True), ("bayesian", False)])
-def test_search_indexes_only_the_helpers_core_lists(domain: str, listed: bool) -> None:
+@pytest.mark.parametrize(("domain", "listed"), [("otp", True), ("bayesian", False)])
+async def test_search_indexes_only_the_helpers_core_lists(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, domain: str, listed: bool
+) -> None:
     """A Core helper (otp) is searched with its options; an entry outside Core's
     helper list (bayesian) reaches neither the results nor the options."""
-    entry = FakeConfigEntry(
-        domain, title="Sun Helper", options={"note": _MARKER}, entry_id="e1"
-    )
-    res = _search(entry, "sun helper")
+    _entry(hass, domain, title="Sun Helper", options={"note": _MARKER})
+
+    res = await _helper_search(component_ws, "sun helper")
+
     assert bool(_flow(res)) is listed
     assert (_MARKER in json.dumps(res)) is listed
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_integration")
 @pytest.mark.parametrize(
-    "prep,msg",
-    [
-        ("_helpers_list_prep", {}),
-        ("_search_prep", {"search_types": ["helper"]}),
-        ("_search_prep", {}),
-    ],
+    "search_types", [["helper"], None], ids=["helper-search", "default-search"]
 )
-async def test_custom_helper_integrations_reach_listing_and_search(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
+async def test_custom_helper_integrations_reach_search(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    search_types: list[str] | None,
 ) -> None:
-    """Both commands' pre-steps take Core's helper flows, custom helper
-    integrations included, and mark only the custom-only domains for withheld
-    options."""
-    loader = _loader(monkeypatch, {"template", "my_helper"})
-    hass = _hass(tmp_path)
-    extra = await getattr(wsapi, prep)(hass, msg)
-    loader.assert_awaited_once_with(hass, "helper")
-    assert extra["flow_domains"] == frozenset({"template", "my_helper"})
-    # template is in Core's own list, so a custom override of it is not withheld.
-    assert extra["custom_domains"] == frozenset({"my_helper"})
+    """Search takes Core's helper flows, custom helper integrations included,
+    and withholds the options of the custom-only domain alone."""
+    _entry(hass, _CUSTOM, title="Sun Custom", options={"api_key": _MARKER})
+    _entry(hass, "template", title="Sun Template", options={"k": _CORE_MARKER})
+    params: dict[str, Any] = {"query": "sun", "include_config": True}
+    if search_types is not None:
+        params["search_types"] = search_types
+
+    res = await _search(component_ws, **params)
+
+    flow = {h["helper_type"]: h for h in _flow(res)}
+    assert flow[_CUSTOM]["options_withheld"] == "custom_integration"
+    # template is in Core's own list, so its options are kept.
+    assert "options_withheld" not in flow["template"]
+    assert _MARKER not in json.dumps(res)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prep,msg",
+    ("command", "params"),
     [
-        ("_helpers_list_prep", {"include_flow_helpers": False}),
-        ("_search_prep", {"search_types": ["automation"]}),
+        ("ha_mcp_tools/helpers_list", {"include_flow_helpers": False}),
+        ("ha_mcp_tools/search", {"query": "sun", "search_types": ["automation"]}),
     ],
+    ids=["listing-without-flow-helpers", "search-without-helpers"],
 )
 async def test_requests_without_flow_helpers_do_not_wait_on_the_loader(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prep: str, msg: dict
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    params: dict[str, Any],
 ) -> None:
-    loader = _loader(monkeypatch, set())
-    extra = await getattr(wsapi, prep)(_hass(tmp_path), msg)
-    assert "flow_domains" not in extra
+    loader = AsyncMock(wraps=flow_domains.async_get_config_flows)
+    monkeypatch.setattr(flow_domains, "async_get_config_flows", loader)
+
+    await ws_result(component_ws, command, **params)
+
     loader.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_a_failed_loader_read_lists_core_helpers_and_says_so(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A loader failure must not fail the command (the server would report the
-    component as missing); it falls back to Core's own list, withholds nothing
-    custom, and reports the gap."""
+    component as missing); it falls back to Core's own list and reports the gap.
+    Core's loader cannot be made to fail while it still answers the server."""
     monkeypatch.setattr(
-        wsapi, "async_get_config_flows", AsyncMock(side_effect=RuntimeError("boom"))
+        flow_domains,
+        "async_get_config_flows",
+        AsyncMock(side_effect=OSError("custom_components unreadable")),
     )
-    entry = FakeConfigEntry("template", title="Sun Helper", options={"k": 1})
-    hass = _hass(tmp_path, [entry])
-    extra = await wsapi._helpers_list_prep(hass, {})
-    assert extra["flow_domains"] == wsapi.FLOW_HELPER_DOMAINS
-    assert extra["custom_domains"] == frozenset()
-    listing = wsapi._do_helpers_list(hass, {}, **extra)
+    _entry(hass, "template", title="Sun Helper", options={"k": 1})
+
+    listing = await _helpers_list(component_ws)
+    found = await _search(component_ws, query="sun helper", search_types=["helper"])
+
     assert [h["helper_type"] for h in _flow(listing)] == ["template"]
     assert listing["helper_flows_degraded"] is True
-    msg = {"search_types": ["helper"], "query": "sun helper"}
-    found = wsapi._do_search(hass, msg, **await wsapi._search_prep(hass, msg))
-    assert wsapi.HELPER_FLOWS_DEGRADED_WARNING in found["warnings"]
+    assert HELPER_FLOWS_DEGRADED_WARNING in found["warnings"]
 
 
-@pytest.mark.asyncio
-async def test_helpers_list_withholds_only_custom_only_options(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.usefixtures("custom_helper_integration")
+async def test_listing_one_custom_helper_type_withholds_its_options(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """Through the real pre-step: a custom-only helper is listed without its
-    options and marked as withheld, while a Core helper domain keeps them even if
-    a custom integration overrides it."""
-    _loader(monkeypatch, {"template", "my_helper"})
-    hass = _hass(
-        tmp_path,
-        [
-            FakeConfigEntry("template", options={"k": _CORE_MARKER}, entry_id="e1"),
-            FakeConfigEntry("my_helper", options={"api_key": _MARKER}, entry_id="e2"),
-        ],
-    )
-    extra = await wsapi._helpers_list_prep(hass, {})
-    res = wsapi._do_helpers_list(hass, {}, **extra)
-    flow = {h["helper_type"]: h for h in _flow(res)}
-    assert flow["template"]["options"] == {"k": _CORE_MARKER}
-    assert "options_withheld" not in flow["template"]
-    assert flow["my_helper"]["options"] is None
-    assert flow["my_helper"]["options_withheld"] == "custom_integration"
-    assert "my_helper" in res["covered_types"]
-    assert _MARKER not in json.dumps(res)
-    only = wsapi._do_helpers_list(hass, {"helper_types": ["my_helper"]}, **extra)
-    assert [h["helper_type"] for h in _flow(only)] == ["my_helper"]
+    """A listing filtered to the custom-only type still lists it, and its
+    options appear nowhere in the reply."""
+    _entry(hass, _CUSTOM, options={"api_key": _MARKER})
+    _entry(hass, "template", options={"k": _CORE_MARKER})
+
+    only = await _helpers_list(component_ws, helper_types=[_CUSTOM])
+
+    assert [h["helper_type"] for h in _flow(only)] == [_CUSTOM]
+    assert _CUSTOM in only["covered_types"]
+    assert _MARKER not in json.dumps(only)
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_integration")
 async def test_search_matches_custom_only_helpers_on_title_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    _loader(monkeypatch, {"template", "my_helper"})
-    entry = FakeConfigEntry(
-        "my_helper", title="Custom Helper", options={"api_key": _MARKER}
-    )
-    hass = _hass(tmp_path, [entry])
-    msg = {"search_types": ["helper"], "include_config": True}
-    extra = await wsapi._search_prep(hass, msg)
-    by_title = wsapi._do_search(hass, {**msg, "query": "custom helper"}, **extra)
+    _entry(hass, _CUSTOM, title="Custom Helper", options={"api_key": _MARKER})
+
+    by_title = await _helper_search(component_ws, "custom helper")
+    by_option = await _helper_search(component_ws, _MARKER)
+
     (record,) = _flow(by_title)
-    assert (record["helper_type"], record["options"]) == ("my_helper", None)
+    assert (record["helper_type"], record["options"]) == (_CUSTOM, None)
     assert record["options_withheld"] == "custom_integration"
     assert _MARKER not in json.dumps(by_title)
-    by_option = wsapi._do_search(hass, {**msg, "query": _MARKER}, **extra)
     assert _flow(by_option) == []
 
 
-def test_search_scrubs_resolved_secrets_from_flow_helper_options() -> None:
-    entry = FakeConfigEntry(
+async def test_search_scrubs_resolved_secrets_from_flow_helper_options(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    await _write_secrets(hass, "camera_url: sekret\n")
+    _entry(
+        hass,
         "template",
         title="Sun Helper",
-        options=MappingProxyType(
-            {"state": "{{ 1 }}", "nested": MappingProxyType({"url": "sekret"})}
-        ),
-        entry_id="e1",
+        options={"state": "{{ 1 }}", "nested": {"url": "sekret"}},
     )
-    res = _search(entry, "sun helper", secret_values=frozenset({"sekret"}))
+
+    res = await _helper_search(component_ws, "sun helper")
+
     assert _flow(res)[0]["options"] == {
         "state": "{{ 1 }}",
         "nested": {"url": "**redacted**"},
@@ -203,59 +239,58 @@ def test_search_scrubs_resolved_secrets_from_flow_helper_options() -> None:
 
 
 @pytest.mark.parametrize(
-    "degraded,include_config,warning",
+    ("secrets", "include_config", "warning"),
     [
-        (True, True, "SCRUB_DEGRADED_WARNING"),
-        (True, False, "SCRUB_DEGRADED_MATCH_WARNING"),
-        (False, True, None),
+        (_UNREADABLE_SECRETS, True, SCRUB_DEGRADED_WARNING),
+        (_UNREADABLE_SECRETS, False, SCRUB_DEGRADED_MATCH_WARNING),
+        ("key: value\n", True, None),
     ],
+    ids=["unreadable-with-config", "unreadable-match-only", "readable"],
 )
-def test_search_warns_when_options_were_handled_without_the_scrub(
-    degraded: bool, include_config: bool, warning: str | None
+async def test_search_warns_when_options_were_handled_without_the_scrub(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    secrets: str,
+    include_config: bool,
+    warning: str | None,
 ) -> None:
     """Emitted options and the match corpus both go unscrubbed when secrets.yaml
     is unreadable; each case gets its own warning."""
-    entry = FakeConfigEntry("template", title="Sun Helper", entry_id="e1")
-    res = wsapi._do_search(
-        FakeHass(config_entries=[entry]),
-        {
-            "query": "sun helper",
-            "search_types": ["helper"],
-            "include_config": include_config,
-        },
-        secret_scrub_degraded=degraded,
+    await _write_secrets(hass, secrets)
+    _entry(hass, "template", title="Sun Helper")
+
+    res = await _search(
+        component_ws,
+        query="sun helper",
+        search_types=["helper"],
+        include_config=include_config,
     )
-    expected = [getattr(wsapi, warning)] if warning else []
-    assert res.get("warnings", []) == expected
+
+    assert res.get("warnings", []) == ([warning] if warning else [])
 
 
-@pytest.mark.asyncio
-async def test_helper_search_prep_reports_an_unreadable_secrets_file(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "secrets.yaml").write_text(_UNREADABLE_SECRETS, encoding="utf-8")
-    extra = await wsapi._search_prep(_hass(tmp_path), {"search_types": ["helper"]})
-    assert extra["secret_scrub_degraded"] is True
-
-
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_integration")
 async def test_ha_search_shows_the_scrub_warning_and_the_withheld_marker(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End to end through ha_search: the component's warning and the
     options_withheld marker survive the server's response shaping."""
-    _loader(monkeypatch, {"template", "my_helper"})
-    (tmp_path / "secrets.yaml").write_text(_UNREADABLE_SECRETS, encoding="utf-8")
-    hass = _hass(
-        tmp_path,
-        [FakeConfigEntry("my_helper", title="Sun Helper", options={"k": _MARKER})],
+    assert await async_setup_component(hass, "config", {})
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    await _write_secrets(hass, _UNREADABLE_SECRETS)
+    _entry(hass, _CUSTOM, title="Sun Helper", options={"k": _MARKER})
+    tools = SearchTools(
+        component_core_client, SmartSearchTools(client=component_core_client)
     )
-    ha_search = _build_ha_search(RoutingClient())
-    with patch_ws(_real_search_ws(hass), search_component):
-        resp = await ha_search(
-            query="sun helper", search_types=["helper"], include_config=True
-        )
-    assert wsapi.SCRUB_DEGRADED_WARNING in resp["warnings"]
+
+    resp = await tools.ha_search(
+        query="sun helper", search_types=["helper"], include_config=True
+    )
+
+    assert SCRUB_DEGRADED_WARNING in resp["warnings"]
     (record,) = resp["helpers"]
     assert record["options_withheld"] == "custom_integration"
     assert record["config"] is None

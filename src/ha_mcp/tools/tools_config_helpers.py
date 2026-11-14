@@ -486,8 +486,12 @@ class HelperConfigTools:
                 invalidate_caps(self._client)
             logger.warning("ha_mcp_tools/helpers_list (all) failed: %r", exc)
             return None
+        result = raw.get("result") or {}
+        if not isinstance(result.get("helpers"), list):
+            # A malformed reply counts as no component.
+            return None
         return await shape_all_helpers_response(
-            raw.get("result") or {},
+            result,
             self._legacy_helper_list,
             flow_types=await helper_flow_types(self._client, refresh=True),
         )

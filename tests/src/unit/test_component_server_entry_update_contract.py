@@ -1,20 +1,10 @@
-"""Unit + contract tests for the ``server_entry_update`` WRITE capability.
+"""The component's ``server_entry_update`` write on a real ``hass``.
 
-The write counterpart of ``server_entry`` (issue #1813 Phase 3): the component
-applies a ``pip_spec`` delta to its OWN server config entry via
-``hass.config_entries.async_update_entry`` DIRECTLY, DEFERRED on a hass-level
-background task so the WS response flushes before the resulting self-reload tears
-the serving thread down. These pin the load-bearing behaviours:
-
-* the merged options preserve every existing key (URL/secret overrides included);
-* ``async_update_entry`` is NOT called synchronously — the prep returns first, and
-  only the deferred task applies it (the deferred-reload crux);
-* a no-op (merged == current) returns ``unchanged`` and schedules nothing;
-* a missing server entry / an empty delta raises ``HomeAssistantError`` (→ the
-  server's command-error fallback to its legacy options-flow submit).
-
-Imports the Fake* fixtures + the stub-installing ``wsapi`` handle through
-``test_component_ws_search`` (mirrors ``test_component_ws_phase2_async``).
+The component applies a ``pip_spec`` change to its own server config entry
+through Core's ``async_update_entry``, deferred on a background task so the
+WebSocket answer reaches the server before the reload it triggers tears the
+server down. The entry is a ``MockConfigEntry`` server row in Core's config
+entries; the frames go over Core's WebSocket API.
 """
 
 from __future__ import annotations
@@ -22,388 +12,218 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-import voluptuous as vol
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from .test_component_ws_search import (
-    FakeConfigEntry,
-    FakeHass,
-    _FakeConnection,
-    _FakeWSApi,
-    _Unauthorized,
-    wsapi,
+from custom_components.ha_mcp_tools.const import DEFAULT_PIP_SPEC, DOMAIN
+from custom_components.ha_mcp_tools.websocket_api import system
+from custom_components.ha_mcp_tools.websocket_api.constants import (
+    SERVER_ENTRY_UPDATE_MAX_PIP_SPEC,
 )
 
+from ._component_core import ws_call, ws_result
+from ._server_entry import add_server_entry
 
-class _RecordingConfigEntries:
-    """``hass.config_entries`` fake: enumerates entries + records update writes."""
-
-    def __init__(self, entries: list[Any]) -> None:
-        self._entries = list(entries)
-        self.update_calls: list[tuple[Any, dict[str, Any] | None]] = []
-
-    def async_entries(self) -> list[Any]:
-        return list(self._entries)
-
-    def async_update_entry(
-        self, entry: Any, *, options: Any = None, **_kw: Any
-    ) -> bool:
-        self.update_calls.append(
-            (entry, dict(options) if options is not None else None)
-        )
-        if options is not None:
-            entry.options = dict(options)
-        return True
+_WS = "ha_mcp_tools/server_entry_update"
 
 
-class _BgHass:
-    """Minimal hass whose ``async_create_background_task`` CAPTURES the coroutine.
-
-    Capturing (rather than scheduling) lets a test assert the deferred
-    ``async_update_entry`` has NOT run right after the prep returns, then drive it
-    explicitly by awaiting the captured coroutine — proving the deferral.
-    """
-
-    def __init__(self, entries: list[Any]) -> None:
-        self.config_entries = _RecordingConfigEntries(entries)
-        self.data: dict[str, Any] = {}
-        self.scheduled: list[Any] = []
-
-    def async_create_background_task(self, coro: Any, name: str | None = None) -> Any:
-        self.scheduled.append(coro)
-        return coro
+async def _update(ws: MockHAClientWebSocket, **frame: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(ws, _WS, **frame)
+    return result
 
 
-def _server_entry(
-    *, options: dict[str, Any] | None = None, entry_id: str = "srv1"
-) -> FakeConfigEntry:
-    return FakeConfigEntry(
-        domain="ha_mcp_tools",
-        data={"entry_type": "server", "webhook_id": "secret-xyz"},
-        options=options or {},
-        entry_id=entry_id,
+async def _applied(hass: HomeAssistant) -> None:
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+async def test_the_change_lands_after_the_answer_and_keeps_every_other_option(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """The answer comes back before the entry changes; then the other options,
+    a server_url override among them, are kept."""
+    entry = add_server_entry(
+        hass,
+        options={"channel": "stable", "pip_spec": "", "server_url": "http://ha:8123"},
     )
 
+    result = await _update(component_ws, pip_spec="ha-mcp==2.0.0")
+    before = dict(entry.options)
+    await _applied(hass)
 
-@pytest.fixture(autouse=True)
-def _fast_flush(monkeypatch: Any) -> None:
-    """Collapse the flush delay so awaiting the deferred task is instant."""
-    monkeypatch.setattr(wsapi, "SERVER_ENTRY_UPDATE_FLUSH_DELAY_S", 0)
-
-
-@pytest.mark.asyncio
-async def test_prep_schedules_merged_update_preserving_other_keys() -> None:
-    """A pip_spec delta schedules async_update_entry with the MERGED options (the
-    server_url override preserved), returns scheduled:True, and does NOT call
-    async_update_entry synchronously."""
-    entry = _server_entry(
-        options={
-            "channel": "stable",
-            "pip_spec": "",
-            "server_url": "http://ha.local:8123",
-        }
-    )
-    hass = _BgHass([entry])
-    frame = {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"}
-
-    extra = await wsapi._server_entry_update_prep(hass, frame)
-    result = wsapi._do_server_entry_update(hass, frame, **extra)
-
-    # Pure formatter returns exactly the prep's envelope.
-    assert result is extra["result"]
     assert result["scheduled"] is True
-    assert result["entry_id"] == "srv1"
-    assert result["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert result["previous"] == {"pip_spec": ""}
-    # Deferred-reload crux: NOT applied synchronously.
-    assert hass.config_entries.update_calls == []
-    assert len(hass.scheduled) == 1
-
-    # Drive the deferred task: now the merged options are applied, other keys kept.
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    assert len(hass.config_entries.update_calls) == 1
-    _applied_entry, applied_options = hass.config_entries.update_calls[0]
-    assert applied_options == {
+    assert result["entry_id"] == entry.entry_id
+    assert (result["applying"], result["previous"]) == (
+        {"pip_spec": "ha-mcp==2.0.0"},
+        {"pip_spec": ""},
+    )
+    assert before["pip_spec"] == ""
+    assert dict(entry.options) == {
         "channel": "stable",
         "pip_spec": "ha-mcp==2.0.0",
-        "server_url": "http://ha.local:8123",
+        "server_url": "http://ha:8123",
     }
 
 
-@pytest.mark.asyncio
-async def test_apply_time_merge_preserves_concurrent_change() -> None:
-    """TOCTOU: the delta is merged against the LIVE ``entry.options`` at APPLY time,
-    so a concurrent change to a DIFFERENT key AFTER prep (but before the deferred
-    task runs) survives — it is NOT clobbered by a prep-time options snapshot."""
-    entry = _server_entry(options={"pip_spec": ""})
-    hass = _BgHass([entry])
+async def test_a_change_made_while_the_write_waits_survives_it(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """The change merges into the options as they are when it applies, not a
+    snapshot from the frame."""
+    entry = add_server_entry(hass, options={"pip_spec": ""})
 
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==2.0.0"}
+    await _update(component_ws, pip_spec="ha-mcp==2.0.0")
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "server_url": "http://changed:8123"}
     )
-    assert extra["result"]["scheduled"] is True
-    # A concurrent options write lands in the flush window, adding a key the delta
-    # never touched (e.g. the options flow rewriting the server_url override).
-    entry.options = {**entry.options, "server_url": "http://changed:8123"}
+    await _applied(hass)
 
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    # The concurrently-added key survived the merge; the delta still applied. A
-    # prep-time snapshot would have dropped ``server_url``.
-    assert applied == {
+    assert dict(entry.options) == {
         "pip_spec": "ha-mcp==2.0.0",
         "server_url": "http://changed:8123",
     }
 
 
-@pytest.mark.asyncio
-async def test_prep_noop_returns_unchanged_without_scheduling() -> None:
-    """Setting pip_spec to its current value is a no-op: unchanged, nothing
-    scheduled, async_update_entry never called."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "ha-mcp==1.0.0"}
-    )
-    result = extra["result"]
-    assert result["scheduled"] is False
-    assert result["unchanged"] is True
-    # The retired channel option is not reported back.
-    assert result["previous"] == {"pip_spec": "ha-mcp==1.0.0"}
-    assert hass.scheduled == []
-    assert hass.config_entries.update_calls == []
+@pytest.fixture
+def no_flush_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deferred write runs at once; its deferral is the test above's."""
+    monkeypatch.setattr(system, "SERVER_ENTRY_UPDATE_FLUSH_DELAY_S", 0)
 
 
-@pytest.mark.asyncio
-async def test_prep_no_server_entry_raises() -> None:
-    """No server config entry → HomeAssistantError (server maps it to a
-    command-error fallback)."""
-    tools = FakeConfigEntry(
-        domain="ha_mcp_tools", data={"entry_type": "tools"}, entry_id="tools1"
-    )
-    hass = _BgHass([tools])
-    with pytest.raises(HomeAssistantError):
-        await wsapi._server_entry_update_prep(
-            hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
-        )
-    assert hass.scheduled == []
+@pytest.mark.usefixtures("no_flush_delay")
+@pytest.mark.parametrize(
+    ("stored", "sent", "stored_after"),
+    [
+        # A value of its own replaces the override.
+        (
+            {"channel": "dev", "pip_spec": "ha-mcp==1.0.0"},
+            "ha-mcp==2.0.0",
+            "ha-mcp==2.0.0",
+        ),
+        # Blank, or the bare distribution, means "no override": the paired
+        # server stays in force.
+        ({"channel": "dev", "pip_spec": "ha-mcp==1.0.0"}, "", ""),
+        ({"channel": "dev", "pip_spec": "ha-mcp==1.0.0"}, "   ", ""),
+        ({"channel": "dev", "pip_spec": "ha-mcp==1.0.0"}, DEFAULT_PIP_SPEC, ""),
+        # Clearing an override the entry never had still writes the key.
+        ({"channel": "dev"}, "", ""),
+    ],
+    ids=["new-value", "clear", "whitespace", "bare-distribution", "clear-absent"],
+)
+async def test_a_pip_spec_is_stored_as_the_options_flow_would_store_it(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    stored: dict[str, str],
+    sent: str,
+    stored_after: str,
+) -> None:
+    entry = add_server_entry(hass, options=stored)
+
+    result = await _update(component_ws, pip_spec=sent)
+    await _applied(hass)
+
+    assert result["scheduled"] is True
+    assert result["applying"] == {"pip_spec": stored_after}
+    assert dict(entry.options) == {**stored, "pip_spec": stored_after}
 
 
-@pytest.mark.asyncio
-async def test_prep_requires_pip_spec() -> None:
-    """A frame without pip_spec raises (defence-in-depth over the server)."""
-    hass = _BgHass([_server_entry(options={"channel": "stable"})])
+@pytest.mark.usefixtures("no_flush_delay")
+@pytest.mark.parametrize(
+    ("stored", "sent"),
+    [("ha-mcp==1.0.0", "ha-mcp==1.0.0"), ("", DEFAULT_PIP_SPEC)],
+    ids=["same-value", "normalizes-to-stored"],
+)
+async def test_a_pip_spec_already_in_force_changes_nothing(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    stored: str,
+    sent: str,
+) -> None:
+    """Nothing is written, so nothing reloads; the retired channel option is
+    not reported back."""
+    entry = add_server_entry(hass, options={"channel": "dev", "pip_spec": stored})
+    before = entry.modified_at
 
-    with pytest.raises(HomeAssistantError):
-        await wsapi._server_entry_update_prep(
-            hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE}
-        )
-    assert hass.scheduled == []
+    result = await _update(component_ws, pip_spec=sent)
+    await _applied(hass)
 
-
-@pytest.mark.asyncio
-async def test_prep_refuses_a_channel_only_frame_with_the_hacs_hint() -> None:
-    """Servers before the paired-release change send ``channel`` alone for
-    ``update_source(channel=...)``. Each component release now pins its server,
-    so the frame is refused with where development builds come from instead."""
-    hass = _BgHass([_server_entry(options={"channel": "stable"})])
-
-    with pytest.raises(HomeAssistantError, match="Pre-release"):
-        await wsapi._server_entry_update_prep(
-            hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "dev"}
-        )
-    assert hass.scheduled == []
-
-
-@pytest.mark.asyncio
-async def test_prep_ignores_channel_beside_pip_spec() -> None:
-    """A frame from an older server carrying both fields applies pip_spec only;
-    the channel option is retired and never written."""
-    entry = _server_entry(options={"pip_spec": ""})
-    hass = _BgHass([entry])
-
-    extra = await wsapi._server_entry_update_prep(
-        hass,
-        {
-            "type": wsapi.WS_SERVER_ENTRY_UPDATE,
-            "channel": "dev",
-            "pip_spec": "ha-mcp==2.0.0",
-        },
-    )
-    assert extra["result"]["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert await hass.scheduled[0] is None
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"pip_spec": "ha-mcp==2.0.0"}
+    assert (result["scheduled"], result["unchanged"]) == (False, True)
+    assert result["previous"] == {"pip_spec": stored}
+    assert entry.modified_at == before
 
 
-@pytest.mark.asyncio
-async def test_prep_clearing_pip_spec_from_absent_schedules() -> None:
-    """An empty-string pip_spec on an entry that never had the key is a structural
-    change (clear the override) — it schedules rather than short-circuiting."""
-    entry = _server_entry(options={"channel": "dev"})
-    hass = _BgHass([entry])
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": ""}
-    )
-    assert extra["result"]["scheduled"] is True
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": ""}
+@pytest.mark.usefixtures("no_flush_delay")
+async def test_a_channel_beside_a_pip_spec_is_ignored(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """An older server sends both; the channel option is retired."""
+    entry = add_server_entry(hass, options={"pip_spec": ""})
+
+    result = await _update(component_ws, channel="dev", pip_spec="ha-mcp==2.0.0")
+    await _applied(hass)
+
+    assert result["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
+    assert dict(entry.options) == {"pip_spec": "ha-mcp==2.0.0"}
 
 
-@pytest.mark.asyncio
-async def test_prep_clearing_existing_pip_spec_override_schedules() -> None:
-    """Clearing an EXISTING pip_spec override to "" is a real change — it schedules
-    and persists "" (no override)."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": ""}
-    )
-    assert extra["result"]["scheduled"] is True
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": ""}
+@pytest.mark.parametrize(
+    "frame",
+    [{"channel": "dev"}, {"channel": "stable"}, {}],
+    ids=["dev", "stable", "empty"],
+)
+async def test_a_frame_without_a_pip_spec_is_refused_with_where_builds_come_from(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, frame: dict[str, str]
+) -> None:
+    """Each component release pins its server, so a channel choice is refused
+    with where development builds come from."""
+    entry = add_server_entry(hass, options={"channel": "stable"})
+
+    reply = await ws_call(component_ws, _WS, **frame)
+    await _applied(hass)
+
+    assert reply["success"] is False
+    assert "Pre-release" in reply["error"]["message"]
+    assert dict(entry.options) == {"channel": "stable"}
 
 
-@pytest.mark.asyncio
-async def test_prep_normalizes_whitespace_pip_spec_to_empty() -> None:
-    """A whitespace-only pip_spec means "no override" — it normalizes to "" (matches
-    the options flow's _normalize) so the paired server stays in force, and both
-    the applied options AND the response envelope reflect the collapsed value."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-    extra = await wsapi._server_entry_update_prep(
-        hass, {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "   "}
-    )
-    assert extra["result"]["scheduled"] is True
-    assert extra["result"]["applying"] == {"pip_spec": ""}
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": ""}
+async def test_without_a_server_entry_the_update_is_refused(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    MockConfigEntry(domain=DOMAIN, data={"entry_type": "tools"}).add_to_hass(hass)
+
+    reply = await ws_call(component_ws, _WS, pip_spec="ha-mcp==2.0.0")
+
+    assert reply["success"] is False
+    assert reply["error"]["code"] != "invalid_format"
 
 
-@pytest.mark.asyncio
-async def test_prep_normalizes_default_dist_pip_spec_to_empty() -> None:
-    """pip_spec == DEFAULT_PIP_SPEC (the unpinned dist) means "no override" — it
-    persists as "" rather than a verbatim value that would read as an intentional
-    override of the paired server."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": "ha-mcp==1.0.0"})
-    hass = _BgHass([entry])
-    extra = await wsapi._server_entry_update_prep(
-        hass,
-        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": wsapi.DEFAULT_PIP_SPEC},
-    )
-    assert extra["result"]["applying"] == {"pip_spec": ""}
-    assert await hass.scheduled[0] is None  # drive the deferred task (returns None)
-    _entry, applied = hass.config_entries.update_calls[0]
-    assert applied == {"channel": "dev", "pip_spec": ""}
+@pytest.mark.parametrize(
+    "frame",
+    [
+        {"channel": "nightly"},
+        {"pip_spec": "a\nb"},
+        {"pip_spec": "x" * (SERVER_ENTRY_UPDATE_MAX_PIP_SPEC + 1)},
+        {"bogus": "x"},
+    ],
+    ids=["unknown-channel", "multiline", "overlong", "extra-key"],
+)
+async def test_a_malformed_update_is_refused_before_it_runs(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, frame: dict[str, str]
+) -> None:
+    add_server_entry(hass, options={"pip_spec": ""})
+
+    reply = await ws_call(component_ws, _WS, **frame)
+
+    assert reply["error"]["code"] == "invalid_format"
 
 
-@pytest.mark.asyncio
-async def test_prep_pip_spec_normalizing_to_stored_value_is_noop() -> None:
-    """A pip_spec that NORMALIZES to the currently-stored value is unchanged, not a
-    spurious schedule — the no-op check sees the post-normalization delta."""
-    entry = _server_entry(options={"channel": "dev", "pip_spec": ""})
-    hass = _BgHass([entry])
-    extra = await wsapi._server_entry_update_prep(
-        hass,
-        {"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": wsapi.DEFAULT_PIP_SPEC},
-    )
-    result = extra["result"]
-    assert result["scheduled"] is False
-    assert result["unchanged"] is True
-    assert hass.scheduled == []
-    assert hass.config_entries.update_calls == []
+async def test_only_an_admin_may_update_the_server_entry(
+    hass: HomeAssistant, component_ws_read_only: MockHAClientWebSocket
+) -> None:
+    entry = add_server_entry(hass, options={"pip_spec": ""})
 
+    reply = await ws_call(component_ws_read_only, _WS, pip_spec="ha-mcp==2.0.0")
+    await _applied(hass)
 
-# =============================================================================
-# admin gate (the registered handler, through _build_handler's @require_admin)
-# =============================================================================
-class TestServerEntryUpdateAdminGate:
-    """The registered ``server_entry_update`` handler is admin-gated.
-
-    The prep tests above drive ``_server_entry_update_prep`` DIRECTLY, bypassing the
-    ``_build_handler`` decorator stack (``@require_admin`` over ``@async_response``).
-    This registers the real handler through a functional ``websocket_api`` fake and
-    asserts a non-admin / no-user connection is rejected BEFORE the prep runs — the
-    admin-gate coverage the ``test_component_ws_search`` registration drift note
-    points here for.
-    """
-
-    def _handler(self, monkeypatch: Any) -> Any:
-        fake = _FakeWSApi()
-        monkeypatch.setattr(wsapi, "websocket_api", fake)
-        wsapi.async_register_commands(FakeHass())
-        return fake.registered[wsapi.WS_SERVER_ENTRY_UPDATE]
-
-    def test_non_admin_rejected(self, monkeypatch: Any) -> None:
-        handler = self._handler(monkeypatch)
-        conn = _FakeConnection(is_admin=False)
-        with pytest.raises(_Unauthorized):
-            handler(FakeHass(), conn, {"id": 1, "type": wsapi.WS_SERVER_ENTRY_UPDATE})
-
-    def test_no_user_rejected(self, monkeypatch: Any) -> None:
-        handler = self._handler(monkeypatch)
-        conn = _FakeConnection(has_user=False)
-        with pytest.raises(_Unauthorized):
-            handler(FakeHass(), conn, {"id": 2, "type": wsapi.WS_SERVER_ENTRY_UPDATE})
-
-
-# =============================================================================
-# schema (real voluptuous)
-# =============================================================================
-class TestServerEntryUpdateSchema:
-    def test_accepts_channel_and_pip_spec(self, monkeypatch: Any) -> None:
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        out = schema(
-            {
-                "type": wsapi.WS_SERVER_ENTRY_UPDATE,
-                "channel": "dev",
-                "pip_spec": "ha-mcp==1.0.0",
-            }
-        )
-        assert out["channel"] == "dev"
-        assert out["pip_spec"] == "ha-mcp==1.0.0"
-
-    def test_accepts_stable_channel(self, monkeypatch: Any) -> None:
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        out = schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "stable"})
-        assert out["channel"] == "stable"
-
-    def test_rejects_bogus_channel(self, monkeypatch: Any) -> None:
-        # channel is gated to the known set (defence-in-depth over the server's own
-        # validation) — a bogus channel is rejected by the schema itself.
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(vol.Invalid):
-            schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "channel": "nightly"})
-
-    def test_type_only_validates_prep_enforces_at_least_one(
-        self, monkeypatch: Any
-    ) -> None:
-        # The schema alone permits neither field (voluptuous cannot express
-        # "at least one of"); the prep is what rejects an empty delta.
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        out = schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE})
-        assert out == {"type": wsapi.WS_SERVER_ENTRY_UPDATE}
-
-    def test_rejects_multiline_pip_spec(self, monkeypatch: Any) -> None:
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(vol.Invalid):
-            schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "pip_spec": "a\nb"})
-
-    def test_rejects_overlong_pip_spec(self, monkeypatch: Any) -> None:
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(vol.Invalid):
-            schema(
-                {
-                    "type": wsapi.WS_SERVER_ENTRY_UPDATE,
-                    "pip_spec": "x" * (wsapi.SERVER_ENTRY_UPDATE_MAX_PIP_SPEC + 1),
-                }
-            )
-
-    def test_rejects_extra_keys(self, monkeypatch: Any) -> None:
-        schema = vol.Schema(wsapi._server_entry_update_schema())
-        with pytest.raises(vol.Invalid):
-            schema({"type": wsapi.WS_SERVER_ENTRY_UPDATE, "bogus": "x"})
+    assert reply["error"]["code"] == "unauthorized"
+    assert dict(entry.options) == {"pip_spec": ""}

@@ -1,1000 +1,737 @@
-"""Routing tests for ``ha_config_list_helpers`` over the ``ha_mcp_tools`` gate.
+"""Routing of ``ha_config_list_helpers`` over the ``ha_mcp_tools`` component.
 
-When the component advertises the ``helpers_list`` capability,
-``ha_config_list_helpers`` serves the whole listing from one
-``ha_mcp_tools/helpers_list`` WebSocket call and skips the legacy
-``{helper_type}/list`` fetch entirely. The component-served records ship the
-issue #1794 stale-id fix additively: each keeps the legacy storage ``id`` and
-gains the current ``entity_id`` + display ``name`` from the entity registry.
+When the component advertises ``helpers_list``, one ``ha_mcp_tools/helpers_list``
+command serves the listing and the ``{helper_type}/list`` read is skipped. Each
+record keeps its storage ``id`` and gains the current ``entity_id`` and display
+``name`` from the entity registry (#1794). A storage type falls back to
+``{helper_type}/list``: silently when the component no longer knows the command
+or did not enumerate the type, with a warning when its command fails, times out
+or cannot be sent. A flow type (``template``, ...) and ``helper_type="all"`` have
+no such list, so every component miss is a ``COMPONENT_NOT_INSTALLED`` error.
 
-These tests pin that fast path, the record shape (storage id preserved, current
-entity_id/name added), envelope parity with the legacy path, and the
-error-taxonomy fallbacks (silent on ``unknown_command``; legacy + ``warnings[]``
-on any other command error; legacy pin when the component has no WS surface).
-
-Flow-based helper types (``template``, ``group``, ...) have no legacy
-``{type}/list`` command, so they are served exclusively through the component:
-the tests pin the flow happy path (``entry_id`` + current name + ``options``
-records) and that any missing/failed component path raises a hard
-``COMPONENT_NOT_INSTALLED`` error — never a legacy fallback, never a silent
-empty list.
-
-The component reports ``covered_types`` (the types a response authoritatively
-enumerated). A requested type outside that list (e.g. ``tag``, which has no
-state entity for the component's scan) — or a response with no ``covered_types``
-at all (older component) — is treated as a component miss: storage types fall
-back to the legacy ``{type}/list`` path, flow types raise.
-
-The WS client is an ``AsyncMock`` whose ``send_command`` dispatches on the
-command type. The HA client is a spy that tallies the legacy ``{type}/list``
-fetch so a test can assert it never ran on the component path.
+The server's own client runs on a real ``hass``. Helpers are created through
+Core's own commands, flow helpers are ``MockConfigEntry`` rows, and Core answers
+both the component's command and the legacy list. A spy on the pooled socket
+records which of them the tool sent.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+import uuid
+from typing import Any, NamedTuple
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools import websocket_api as component_ws_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import component_api, helper_flows, tools_config_helpers
-from ha_mcp.tools.config_helpers import registry as helper_registry
-from ha_mcp.tools.config_helpers.listing import _shape_collection_helper_record
-from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
-from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
+from ha_mcp.tools.component_api import invalidate_caps
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._client_spies import sent_commands
 from ._core_helper_flows import CORE_HELPER_FLOWS
+from ._routing_core import (
+    held_command,
+    list_helpers,
+    pooled_socket,
+    sent_frames,
+    sent_types,
+    setup_every_simple_type,
+    setup_storage_booleans,
+)
+from ._tool_errors import error_body, error_of
 
-# person is the one storage type whose {type}/list does not return a flat list:
-# HA's PersonStorageCollectionWebsocket overrides the base ws_list_item to send
-# {"storage": [...], "config": [...]} — the UI-created persons and the
-# YAML-configured ones. Every consumer here goes through
-# _flatten_helper_list_result, which merges the two into one record list.
-_PERSON_SPLIT_RESULT: dict[str, Any] = {
-    "storage": [{"id": "p1", "name": "Alice"}],
-    "config": [{"id": "p2", "name": "Bob"}],
-}
-
-# One collection helper renamed after creation: storage name "Old Name",
-# current registry display name "New Name", entity_id input_boolean.foo — the
-# exact #1794 shape (legacy list would emit only the storage id + stale name).
-_LEGACY_ITEMS = [{"id": "abc123", "name": "Old Name", "icon": "mdi:flash"}]
-
-# Entity-registry entry the legacy path joins onto ``_LEGACY_ITEMS`` (#1794):
-# unique_id ``abc123`` on platform ``input_boolean`` currently lives at
-# ``input_boolean.foo`` with display name "New Name". Enriching the legacy list
-# with this yields the same record the component path emits, so the two paths
-# stay parity-equal instead of the legacy body degrading on an unhandled read.
-_LEGACY_REGISTRY = [
-    {
-        "entity_id": "input_boolean.foo",
-        "unique_id": "abc123",
-        "platform": "input_boolean",
-        "name": "New Name",
-        "original_name": "Old Name",
-    }
-]
-
-_CAPS_HELPERS = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["helpers_list"],
-    "limits": {},
-}
+HELPERS_LIST = "ha_mcp_tools/helpers_list"
 
 
-def _component_helpers_result() -> dict[str, Any]:
-    return {
-        "helpers": [
-            {
-                "helper_type": "input_boolean",
-                "object_id": "abc123",
-                "entity_id": "input_boolean.foo",
-                "name": "New Name",
-                "kind": "collection",
-                "config": {"id": "abc123", "name": "Old Name", "icon": "mdi:flash"},
-            }
-        ],
-        "count": 1,
-        "covered_types": ["input_boolean"],
-    }
+class Renamed(NamedTuple):
+    storage_id: str
+    entity_id: str
+    old_name: str
+    new_name: str
 
 
-def _component_flow_result() -> dict[str, Any]:
-    return {
-        "helpers": [
-            {
-                "helper_type": "template",
-                "entry_id": "cfgentry123",
-                "entity_id": "sensor.templated",
-                "name": "Templated Sensor",
-                "kind": "flow",
-                "options": {"state": "{{ 1 + 1 }}"},
-            }
-        ],
-        "count": 1,
-        "covered_types": ["template"],
-    }
+@pytest.fixture
+async def core(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Core's registry API and storage input_booleans, without the component."""
+    await setup_storage_booleans(hass)
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies every legacy ``{type}/list`` fetch."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.list_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type", "")
-        # The legacy body joins the entity registry (#1794); serve it, but don't
-        # tally it as a {type}/list fetch — the counter tracks the helper-list
-        # round-trip the routing assertions care about.
-        if msg_type == "config/entity_registry/list":
-            return {"success": True, "result": [dict(e) for e in _LEGACY_REGISTRY]}
-        self.list_calls += 1
-        if msg_type == "input_boolean/list":
-            return {"success": True, "result": [dict(i) for i in _LEGACY_ITEMS]}
-        if msg_type == "tag/list":
-            return {"success": True, "result": [{"id": "tag-42", "name": "Front Door"}]}
-        if msg_type == "person/list":
-            return {"success": True, "result": dict(_PERSON_SPLIT_RESULT)}
-        return {"success": False, "error": "unexpected list type"}
+@pytest.fixture
+async def client(
+    core: None, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return component_core_client
 
 
-class RegistryFailingClient(RoutingClient):
-    """Legacy ``{type}/list`` works, but the entity-registry read fails, so
-    ``_enrich_helpers_with_current_registry`` degrades open with a warning."""
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "config/entity_registry/list":
-            return {"success": False, "error": "registry unavailable"}
-        return await super().send_websocket_message(msg)
-
-
-def _build_list_helpers(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_config_helper_tools(mcp, client)
-    return registered["ha_config_list_helpers"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    """Isolate the module-global caps cache between tests."""
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _helpers_calls(ws: AsyncMock) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/helpers_list"
-    ]
-
-
-def _info_calls(ws: AsyncMock) -> list[Any]:
-    return [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_component_fast_path_skips_legacy_and_probes_caps_once() -> None:
-    """Component serves the listing: no legacy fetch, and info probed once."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_helpers_result(),
+async def _renamed_boolean(hass: HomeAssistant, client: HomeAssistantClient) -> Renamed:
+    """An input_boolean created as one name whose entity was renamed since."""
+    suffix = uuid.uuid4().hex[:8]
+    old_name, new_name = f"Old Name {suffix}", f"New Name {suffix}"
+    created = await client.send_websocket_message(
+        {"type": "input_boolean/create", "name": old_name, "icon": "mdi:flash"}
     )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
-        resp2 = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    assert resp["helper_type"] == "input_boolean"
-    assert resp["count"] == 1
-    assert resp2["count"] == 1
-    # The legacy {type}/list fetch is never issued on the component path.
-    assert client.list_calls == 0
-    # Exactly one component helpers_list command per call, one cached info probe.
-    assert len(_helpers_calls(ws)) == 2
-    assert len(_info_calls(ws)) == 1
-    # The command carries only the requested collection type, no flow helpers.
-    first_helpers_call = _helpers_calls(ws)[0]
-    assert first_helpers_call.kwargs["helper_types"] == ["input_boolean"]
-    assert first_helpers_call.kwargs["include_flow_helpers"] is False
-
-
-@pytest.mark.asyncio
-async def test_rename_case_record_keeps_storage_id_and_adds_entity_id_name() -> None:
-    """#1794 shape: storage id kept, current entity_id + name added additively."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_helpers_result(),
+    storage_id = created["result"]["id"]
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "input_boolean", "input_boolean", storage_id
     )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
+    assert entity_id is not None
+    registry.async_update_entity(entity_id, name=new_name)
+    await hass.async_block_till_done()
+    return Renamed(storage_id, entity_id, old_name, new_name)
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
+
+def _template_helper(hass: HomeAssistant) -> tuple[MockConfigEntry, str]:
+    """A template sensor helper: its config entry and its entity's id."""
+    entry = MockConfigEntry(
+        domain="template", title="Templated", options={"state": "{{ 1 + 1 }}"}
+    )
+    entry.add_to_hass(hass)
+    entity = er.async_get(hass).async_get_or_create(
+        "sensor", "template", f"templated_{entry.entry_id}", config_entry=entry
+    )
+    er.async_get(hass).async_update_entity(entity.entity_id, name="Templated Sensor")
+    return entry, entity.entity_id
+
+
+async def _rejected(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
+    with pytest.raises(ToolError) as exc:
+        await list_helpers(client, **kwargs)
+    return error_body(exc)
+
+
+def _legacy_warning(response: dict[str, Any]) -> bool:
+    return any("served via legacy path" in w for w in response.get("warnings", []))
+
+
+async def _register_failing_helpers_list(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The component with a ``helpers_list`` whose handler raises: Core answers
+    the command with an error."""
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise HomeAssistantError("helpers_list failed")
+
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api._do_helpers_list", fail
+    )
+    component_ws_api.async_register_commands(hass)
+
+
+async def _register_helpers_list_without_coverage(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The component as an older build answered: no ``covered_types``."""
+
+    def older(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"helpers": [], "count": 0}
+
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api._do_helpers_list", older
+    )
+    component_ws_api.async_register_commands(hass)
+
+
+# --- storage types served by the component -------------------------------------
+
+
+async def test_the_component_serves_a_storage_type_and_is_probed_once(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    await _renamed_boolean(hass, client)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        first = await list_helpers(client, helper_type="input_boolean")
+        second = await list_helpers(client, helper_type="input_boolean")
+
+    assert (first["success"], first["helper_type"]) == (True, "input_boolean")
+    assert first["count"] == second["count"] == 1
+    types = sent_types(sent)
+    assert "input_boolean/list" not in types
+    assert types.count("ha_mcp_tools/info") == 1
+    frames = sent_frames(sent, HELPERS_LIST)
+    assert len(frames) == 2
+    assert frames[0]["helper_types"] == ["input_boolean"]
+    assert frames[0]["include_flow_helpers"] is False
+
+
+async def test_a_renamed_helper_keeps_its_storage_id_and_shows_its_current_name(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    renamed = await _renamed_boolean(hass, client)
+
+    resp = await list_helpers(client, helper_type="input_boolean")
 
     (record,) = resp["helpers"]
-    # Legacy keys keep their legacy meanings: id is the storage id, type-specific
-    # keys survive.
-    assert record["id"] == "abc123"
+    assert record["id"] == renamed.storage_id
     assert record["icon"] == "mdi:flash"
-    # Added: current entity_id, and name reflects the current display name
-    # (overriding the stale creation-time "Old Name").
-    assert record["entity_id"] == "input_boolean.foo"
-    assert record["name"] == "New Name"
+    assert record["entity_id"] == renamed.entity_id
+    assert record["name"] == renamed.new_name
 
 
-@pytest.mark.asyncio
-async def test_component_and_legacy_envelope_parity() -> None:
-    """Both serving paths return the same top-level envelope keys."""
-    ws_component = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_helpers_result(),
-    )
-    with patch_ws(ws_component, tools_config_helpers):
-        component = await _build_list_helpers(RoutingClient())(
-            helper_type="input_boolean"
-        )
+async def test_the_component_and_the_legacy_list_return_the_same_envelope(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _renamed_boolean(hass, client)
+    component = await list_helpers(client, helper_type="input_boolean")
+    # Without the command Core answers unknown_command: the legacy list serves.
+    monkeypatch.delitem(hass.data["websocket_api"], HELPERS_LIST)
 
-    # info → unknown_command yields no caps, so this run takes the legacy path.
-    ws_legacy = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    with patch_ws(ws_legacy, tools_config_helpers):
-        legacy = await _build_list_helpers(RoutingClient())(helper_type="input_boolean")
+    legacy = await list_helpers(client, helper_type="input_boolean")
 
-    assert set(component.keys()) == set(legacy.keys())
+    assert set(component) == set(legacy)
     assert component["success"] == legacy["success"] is True
     assert component["helper_type"] == legacy["helper_type"] == "input_boolean"
     assert component["count"] == legacy["count"] == 1
-    # Neither happy path emits a fallback warning.
     assert "warnings" not in component
     assert "warnings" not in legacy
 
 
-@pytest.mark.asyncio
-async def test_unknown_command_falls_back_silently() -> None:
-    """unknown_command on the helpers_list call → legacy path, no warning."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: gone", "unknown_command"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    # Legacy inventory served the request.
-    assert client.list_calls == 1
-    assert resp["count"] == 1
-    # Silent fallback: no component-failure warning.
-    assert not any("served via legacy path" in w for w in resp.get("warnings", []))
-
-
-@pytest.mark.asyncio
-async def test_raised_command_falls_back_with_warning() -> None:
-    """A non-unknown command error → legacy path AND a warnings[] entry."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    assert client.list_calls == 1
-    assert any("served via legacy path" in w for w in resp["warnings"])
-    # The fallback record is registry-joined like the inline path (issue #1945):
-    # a renamed helper carries its current entity_id and display name, not the
-    # stale storage values.
-    record = resp["helpers"][0]
-    assert record["entity_id"] == "input_boolean.foo"
-    assert record["name"] == "New Name"
-    assert record["original_name"] == "Old Name"
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_storage_type_falls_back_with_warning() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) → for a STORAGE type, legacy ``{type}/list`` AND a ``warnings[]``
-    entry, not a propagated error, when the legacy read still answers. On a dead
-    socket the legacy read fails too (see the dead-socket test below)."""
-    caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        tools_config_helpers,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        resp = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    assert client.list_calls == 1
-    assert any("served via legacy path" in w for w in resp["warnings"])
-    # The transport-failure fallback joins the registry too (issue #1945): the
-    # same _legacy_helper_list serves both this branch and the command-error one.
-    record = resp["helpers"][0]
-    assert record["entity_id"] == "input_boolean.foo"
-    assert record["name"] == "New Name"
-    assert record["original_name"] == "Old Name"
-
-
-class DeadBridgeClient(RoutingClient):
-    """The legacy list rides the same dead socket, so the bridge raises too."""
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        raise HomeAssistantConnectionError(
-            "Failed to connect to Home Assistant WebSocket"
-        )
-
-
-@pytest.mark.asyncio
-async def test_storage_type_with_a_dead_socket_is_a_structured_error() -> None:
-    """The component read and its legacy fallback both fail to connect: the
-    tool reports a structured connection error, not a raw exception."""
-    caps_ws = make_ws("ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS)
-    list_helpers = _build_list_helpers(DeadBridgeClient())
+async def test_a_component_without_the_command_falls_back_silently(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A component downgraded since the capability probe: Core answers
+    unknown_command, the cached capabilities are dropped and the legacy list
+    serves without a warning."""
+    await _renamed_boolean(hass, client)
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], HELPERS_LIST)
+    socket = await pooled_socket(client)
 
     with (
-        patch_ws_establish_failure(
-            caps_ws,
-            tools_config_helpers,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ),
-        pytest.raises(ToolError) as excinfo,
+        sent_commands(socket) as sent,
+        patch.object(
+            tools_config_helpers, "invalidate_caps", wraps=invalidate_caps
+        ) as invalidate,
     ):
-        await list_helpers(helper_type="input_boolean")
+        resp = await list_helpers(client, helper_type="input_boolean")
 
-    payload = json.loads(str(excinfo.value))
-    assert payload["error"]["code"] == "CONNECTION_FAILED"
-    assert payload["helper_type"] == "input_boolean"
+    assert resp["success"] is True
+    assert resp["count"] == 1
+    assert sent_types(sent).count("input_boolean/list") == 1
+    assert not _legacy_warning(resp)
+    invalidate.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_raised_command_fallback_flattens_the_person_split_shape() -> None:
-    """The component-error fallback flattens person/list like the inline body.
+async def test_a_failing_component_command_falls_back_with_a_warning(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback record joins the registry like the inline legacy body
+    (#1945): a renamed helper shows its current entity_id and name."""
+    await _register_failing_helpers_list(hass, monkeypatch)
+    renamed = await _renamed_boolean(hass, core_client)
+    socket = await pooled_socket(core_client)
 
-    person is the only storage type whose {type}/list returns a dict rather than
-    a list. Unflattened it reaches the caller as the raw {"storage", "config"}
-    dict: ``count`` becomes 2 (the key count, not the record count), the
-    pagination slice cannot page a dict so the envelope loses its metadata, and
-    the all-types merge iterates the two keys as strings and drops every person
-    record. The other fallback tests all drive flat-shape types, so this shape
-    only breaks here.
-    """
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(core_client, helper_type="input_boolean")
+
+    assert resp["success"] is True
+    assert sent_types(sent).count("input_boolean/list") == 1
+    assert _legacy_warning(resp)
+    (record,) = resp["helpers"]
+    assert record["entity_id"] == renamed.entity_id
+    assert record["name"] == renamed.new_name
+    assert record["original_name"] == renamed.old_name
+
+
+async def test_an_unreachable_component_socket_falls_back_with_a_warning(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The socket for the component read cannot be opened after the probe;
+    the legacy list still answers, and joins the registry too (#1945)."""
+    renamed = await _renamed_boolean(hass, client)
+    assert await component_api.get_component_caps(client) is not None
+    socket = await pooled_socket(client)
+
+    with (
+        patch.object(
+            tools_config_helpers,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        sent_commands(socket) as sent,
+    ):
+        resp = await list_helpers(client, helper_type="input_boolean")
+
+    assert resp["success"] is True
+    assert sent_types(sent).count("input_boolean/list") == 1
+    assert _legacy_warning(resp)
+    (record,) = resp["helpers"]
+    assert (record["entity_id"], record["name"], record["original_name"]) == (
+        renamed.entity_id,
+        renamed.new_name,
+        renamed.old_name,
     )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="person")
 
-    assert client.list_calls == 1
-    assert any("served via legacy path" in w for w in resp["warnings"])
-    # Both halves of the split shape, merged into one flat record list.
-    assert [h["id"] for h in resp["helpers"]] == ["p1", "p2"]
-    assert resp["count"] == 2
-    # The slice ran: a dict would have been returned unpaginated, without these.
-    assert resp["total_count"] == 2
+async def test_a_dead_socket_is_a_structured_connection_error(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component read and its legacy fallback both get no answer."""
+    await _renamed_boolean(hass, client)
+    assert await component_api.get_component_caps(client) is not None
+
+    with (
+        patch.object(
+            tools_config_helpers,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        patch.object(
+            client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+    ):
+        body = await _rejected(client, helper_type="input_boolean")
+
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+    assert body["helper_type"] == "input_boolean"
+
+
+async def test_a_timed_out_component_command_falls_back_with_a_warning(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    await _renamed_boolean(hass, client)
+    socket = await pooled_socket(client)
+
+    async with held_command(hass, client, HELPERS_LIST):
+        with sent_commands(socket) as sent:
+            resp = await list_helpers(client, helper_type="input_boolean")
+
+    assert resp["success"] is True
+    assert sent_types(sent).count("input_boolean/list") == 1
+    assert _legacy_warning(resp)
+
+
+async def test_the_person_fallback_flattens_storage_and_yaml_persons(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``person/list`` answers ``{"storage": [...], "config": [...]}``; the
+    fallback lists both halves as records and paginates them."""
+    assert await async_setup_component(
+        hass, "person", {"person": [{"id": "bob", "name": "Bob"}]}
+    )
+    created = await core_client.send_websocket_message(
+        {"type": "person/create", "name": "Alice"}
+    )
+    await _register_failing_helpers_list(hass, monkeypatch)
+
+    resp = await list_helpers(core_client, helper_type="person")
+
+    assert _legacy_warning(resp)
+    assert sorted(h["id"] for h in resp["helpers"]) == sorted(
+        [created["result"]["id"], "bob"]
+    )
+    assert resp["count"] == resp["total_count"] == 2
     assert resp["has_more"] is False
     assert resp["next_offset"] is None
 
 
-@pytest.mark.asyncio
-async def test_all_types_merge_surfaces_legacy_enrichment_warning() -> None:
-    """all-types: an uncovered type served via legacy whose registry read fails
-    surfaces the stale-join warning instead of dropping it (issue #1945).
+async def test_without_the_component_the_legacy_list_serves(
+    hass: HomeAssistant, core: None, core_client: HomeAssistantClient
+) -> None:
+    await _renamed_boolean(hass, core_client)
+    socket = await pooled_socket(core_client)
 
-    The component covers every type except ``tag``, so the merge falls to
-    ``_legacy_helper_list("tag")``; its registry read then fails, and the
-    degrade-open warning must reach the merged response rather than vanish.
-    """
-    covered = sorted((SIMPLE_HELPER_TYPES - {"tag"}) | CORE_HELPER_FLOWS)
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result={"helpers": [], "count": 0, "covered_types": covered},
-    )
-    client = RegistryFailingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="all")
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(core_client, helper_type="input_boolean")
 
     assert resp["success"] is True
-    assert helper_registry._REGISTRY_JOIN_STALE_WARNING in resp.get("warnings", [])
-
-
-@pytest.mark.asyncio
-async def test_capsless_component_pins_legacy_path() -> None:
-    """Old component (info unknown_command) → legacy path, helpers_list never sent."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    assert client.list_calls == 1
     assert resp["count"] == 1
-    # The component listing command must never be attempted without the capability.
-    assert not _helpers_calls(ws)
-    assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+    types = sent_types(sent)
+    assert types.count("input_boolean/list") == 1
+    assert HELPERS_LIST not in types
+    assert not _legacy_warning(resp)
 
 
-@pytest.mark.asyncio
-async def test_flow_records_are_dropped_from_component_output() -> None:
-    """A flow-helper record must not surface in this collection-only tool."""
-    mixed = {
-        "helpers": [
-            _component_helpers_result()["helpers"][0],
-            {
-                "helper_type": "template",
-                "entry_id": "e1",
-                "entity_id": "sensor.templated",
-                "name": "Templated",
-                "kind": "flow",
-                "options": {"state": "{{ 1 }}"},
-            },
-        ],
-        "count": 2,
-        "covered_types": ["input_boolean"],
-    }
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=mixed
-    )
-    client = _build_list_helpers(RoutingClient())
+async def test_a_flow_helper_never_shows_in_a_storage_type_listing(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    renamed = await _renamed_boolean(hass, client)
+    _template_helper(hass)
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await client(helper_type="input_boolean")
+    resp = await list_helpers(client, helper_type="input_boolean")
 
-    assert resp["count"] == 1
     (record,) = resp["helpers"]
-    assert record["id"] == "abc123"
+    assert record["id"] == renamed.storage_id
     assert "entry_id" not in record
     assert "options" not in record
 
 
-@pytest.mark.asyncio
-async def test_flow_type_served_only_by_component() -> None:
-    """A flow type is served through the component: entry_id + name + options."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_flow_result(),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
+async def test_a_storage_type_the_component_did_not_enumerate_is_listed_by_core(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component cannot enumerate tags; its empty answer is not taken as
+    "no tags", and the legacy list serves without a warning."""
+    assert await async_setup_component(hass, "tag", {})
+    await client.send_websocket_message({"type": "tag/create", "tag_id": "tag-42"})
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="template")
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(client, helper_type="tag")
 
-    assert resp["success"] is True
-    assert resp["helper_type"] == "template"
-    assert resp["count"] == 1
-    (record,) = resp["helpers"]
-    assert record["helper_type"] == "template"
-    assert record["entry_id"] == "cfgentry123"
-    assert record["entity_id"] == "sensor.templated"
-    assert record["name"] == "Templated Sensor"
-    assert record["options"] == {"state": "{{ 1 + 1 }}"}
-    # No storage id (flow helpers have none) and never any legacy fetch.
-    assert "id" not in record
-    assert client.list_calls == 0
-    # The component command requests flow helpers for this type.
-    (call,) = _helpers_calls(ws)
-    assert call.kwargs["helper_types"] == ["template"]
-    assert call.kwargs["include_flow_helpers"] is True
-
-
-@pytest.mark.asyncio
-async def test_flow_type_capsless_raises_component_required() -> None:
-    """Flow type without a component surface → hard error, no legacy, no empty."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="template")
-
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert "flow-based" in str(excinfo.value)
-    # Never falls back to the legacy path and never issues the component command.
-    assert client.list_calls == 0
-    assert not _helpers_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_flow_type_component_error_raises_no_legacy_fallback() -> None:
-    """A component handler error on a flow type → same hard error, no legacy."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="template")
-
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    # The legacy path cannot serve flow helpers, so it must not be attempted.
-    assert client.list_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_flow_type_unknown_command_raises_component_required() -> None:
-    """A downgraded component (unknown_command) on a flow type → same hard error."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: gone", "unknown_command"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="template")
-
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert client.list_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_uncovered_storage_type_falls_back_to_legacy() -> None:
-    """A storage type absent from covered_types (tag) → legacy serves it."""
-    # The component ran but its from-states scan can't see tags, so tag is not
-    # in covered_types even though the command succeeded with an empty list.
-    result = {"helpers": [], "count": 0, "covered_types": ["zone", "person"]}
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="tag")
-
-    # The component was consulted exactly once, then legacy tag/list served.
-    assert len(_helpers_calls(ws)) == 1
-    assert client.list_calls == 1
+    types = sent_types(sent)
+    assert types.count(HELPERS_LIST) == 1
+    assert types.count("tag/list") == 1
     assert resp["helper_type"] == "tag"
-    assert resp["count"] == 1
-    assert resp["helpers"][0]["id"] == "tag-42"
-    # Silent fallback: no component-failure warning.
-    assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+    assert [h["id"] for h in resp["helpers"]] == ["tag-42"]
+    assert not _legacy_warning(resp)
 
 
-@pytest.mark.asyncio
-async def test_missing_covered_types_falls_back_to_legacy() -> None:
-    """An older component with no covered_types → conservative legacy fallback."""
-    result = {
-        "helpers": _component_helpers_result()["helpers"],
-        "count": 1,
-    }  # no covered_types key
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
+async def test_an_answer_without_covered_types_is_not_trusted_for_a_storage_type(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _register_helpers_list_without_coverage(hass, monkeypatch)
+    renamed = await _renamed_boolean(hass, core_client)
+    socket = await pooled_socket(core_client)
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(core_client, helper_type="input_boolean")
 
-    # Component consulted once, but its list isn't trusted → legacy serves.
-    assert len(_helpers_calls(ws)) == 1
-    assert client.list_calls == 1
-    assert resp["count"] == 1
-    assert resp["helpers"][0]["id"] == "abc123"
+    types = sent_types(sent)
+    assert types.count(HELPERS_LIST) == 1
+    assert types.count("input_boolean/list") == 1
+    assert [h["id"] for h in resp["helpers"]] == [renamed.storage_id]
 
 
-@pytest.mark.asyncio
-async def test_storage_command_timeout_falls_back_with_warning() -> None:
-    """A storage-type component WS timeout → legacy path AND a warnings[] entry."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="input_boolean")
-
-    assert resp["success"] is True
-    assert client.list_calls == 1
-    assert any("served via legacy path" in w for w in resp["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_flow_command_timeout_raises_component_required() -> None:
-    """A flow-type component WS timeout → hard component-required error, no legacy."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="template")
-
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert client.list_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_flow_type_missing_covered_types_raises_component_required() -> None:
-    """Flow type + response with no covered_types → component-required, not empty.
-
-    A flow type is always covered when the component enumerated it; a response
-    that omits covered_types can't be trusted as "no such helpers", and there is
-    no legacy path for flow types, so the tool raises rather than returning an
-    empty list.
-    """
-    result = {"helpers": [], "count": 0}  # no covered_types key
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="template")
-
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert client.list_calls == 0
-
-
-def test_collection_record_prefers_storage_id_over_object_id() -> None:
-    """``_shape_collection_helper_record`` consumes the authoritative storage_id.
-
-    person/zone bodies don't carry their own ``id``; the component reads it from
-    the real storage collection as ``storage_id``, which must win over both the
-    (absent) body ``id`` and the record-level ``object_id``.
-    """
-    rec = {
-        "helper_type": "person",
-        "storage_id": "person.abc",
-        "object_id": "derived_from_entity",
-        "entity_id": "person.alice",
-        "name": "Alice",
-        "kind": "collection",
-        "config": {"name": "Alice", "user_id": "u1"},  # no ``id`` in the body
-    }
-    out = _shape_collection_helper_record(rec)
-    assert out["id"] == "person.abc"
-    assert out["entity_id"] == "person.alice"
-    assert out["name"] == "Alice"
-    assert out["user_id"] == "u1"
-
-
-def test_collection_record_falls_back_to_object_id_without_storage_id() -> None:
-    """Older component (no storage_id) still keys ``id`` off ``object_id``."""
-    rec = {
-        "helper_type": "input_boolean",
-        "object_id": "guest_mode",
-        "entity_id": "input_boolean.guest_mode",
-        "name": "Guest",
-        "kind": "collection",
-        "config": {"name": "Guest"},
-    }
-    out = _shape_collection_helper_record(rec)
-    assert out["id"] == "guest_mode"
-
-
-# --- all-types (helper_type="all") bulk mode -------------------------------------
-
-
-def _component_all_result() -> dict[str, Any]:
-    """Merged component output: one collection helper + one flow helper.
-
-    ``covered_types`` mirrors the real component: every simple type EXCEPT
-    ``person`` and ``tag`` (whose ``<type>/list`` adds more than the stored
-    items) plus the FULL flow universe (``covered |= FLOW_HELPER_DOMAINS``
-    component-side — not just types with instances). So only those two fall
-    back to the legacy per-type list, and no flow type triggers the
-    incomplete-coverage hard error.
-    """
-    return {
-        "helpers": [
-            {
-                "helper_type": "input_boolean",
-                "object_id": "abc123",
-                "entity_id": "input_boolean.foo",
-                "name": "New Name",
-                "kind": "collection",
-                "storage_id": "abc123",
-                "config": {"id": "abc123", "name": "Old Name", "icon": "mdi:flash"},
-            },
-            {
-                "helper_type": "template",
-                "entry_id": "cfgentry123",
-                "entity_id": "sensor.templated",
-                "name": "Templated Sensor",
-                "kind": "flow",
-                "options": {"state": "{{ 1 + 1 }}"},
-            },
-        ],
-        "count": 2,
-        "covered_types": sorted(
-            (SIMPLE_HELPER_TYPES - {"person", "tag"}) | CORE_HELPER_FLOWS
-        ),
-    }
-
-
-@pytest.mark.asyncio
-async def test_all_types_via_component_returns_merged_listing() -> None:
-    """helper_type='all' merges component records + legacy person/tag lists."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_all_result(),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type="all")
-
-    assert resp["success"] is True
-    assert resp["helper_type"] == "all"
-    # Collection + flow (component) + person x2 + tag (legacy fallbacks).
-    assert resp["count"] == 5
-    by_type = {h.get("helper_type"): h for h in resp["helpers"]}
-    assert set(by_type) == {"input_boolean", "template", "person", "tag"}
-    # Collection record: #1794 shape preserved and self-describes its type.
-    assert by_type["input_boolean"]["id"] == "abc123"
-    assert by_type["input_boolean"]["entity_id"] == "input_boolean.foo"
-    assert by_type["input_boolean"]["name"] == "New Name"
-    # Flow record: entry_id + options carried through.
-    assert by_type["template"]["entry_id"] == "cfgentry123"
-    assert by_type["template"]["options"] == {"state": "{{ 1 + 1 }}"}
-    # Person and tag came from the legacy fallback (the uncovered simple types).
-    assert by_type["tag"]["id"] == "tag-42"
-    assert client.list_calls == 2
-    # The component command requests all types (no helper_types filter).
-    (call,) = _helpers_calls(ws)
-    assert "helper_types" not in call.kwargs
-    assert call.kwargs["include_flow_helpers"] is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("helper_type", ["input_boolean", "all"])
-async def test_yaml_helper_is_not_listed_as_a_stored_helper(helper_type: str) -> None:
-    """input_boolean/list lists stored helpers only. A YAML-defined one, which
-    the component sends with a null storage id and its state attributes, must
-    not appear as though those attributes were its stored config."""
-    result = _component_all_result()
-    result["helpers"].append(
+async def test_a_renamed_zone_is_listed_by_its_storage_id(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component's object id follows the entity_id; the record's ``id``
+    must stay the storage id an update needs."""
+    assert await async_setup_component(hass, "zone", {})
+    created = await client.send_websocket_message(
         {
-            "helper_type": "input_boolean",
-            "object_id": "yaml_flag",
-            "entity_id": "input_boolean.yaml_flag",
-            "name": "YAML Flag",
-            "kind": "collection",
-            "storage_id": None,
-            "config": {"friendly_name": "YAML Flag", "editable": False},
+            "type": "zone/create",
+            "name": f"Office {uuid.uuid4().hex[:8]}",
+            "latitude": 52.0,
+            "longitude": 4.0,
+            "radius": 100,
         }
     )
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    storage_id = created["result"]["id"]
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("zone", "zone", storage_id)
+    assert entity_id is not None
+    registry.async_update_entity(
+        entity_id, new_entity_id=f"zone.workplace_{storage_id}"
     )
-    list_helpers = _build_list_helpers(RoutingClient())
+    await hass.async_block_till_done()
 
-    with patch_ws(ws, tools_config_helpers):
-        resp = await list_helpers(helper_type=helper_type)
+    resp = await list_helpers(client, helper_type="zone")
 
-    listed = {h.get("entity_id") for h in resp["helpers"]}
-    assert "input_boolean.foo" in listed
-    assert "input_boolean.yaml_flag" not in listed
+    (record,) = resp["helpers"]
+    assert record["id"] == storage_id
+    assert record["entity_id"] == f"zone.workplace_{storage_id}"
 
 
-@pytest.mark.asyncio
-async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
+# --- flow types: the component or an error --------------------------------------
+
+
+async def test_a_flow_type_is_served_by_the_component(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    entry, entity_id = _template_helper(hass)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(client, helper_type="template")
+
+    assert (resp["success"], resp["helper_type"], resp["count"]) == (
+        True,
+        "template",
+        1,
+    )
+    (record,) = resp["helpers"]
+    assert record["helper_type"] == "template"
+    assert record["entry_id"] == entry.entry_id
+    assert record["entity_id"] == entity_id
+    assert record["name"] == "Templated Sensor"
+    assert record["options"] == {"state": "{{ 1 + 1 }}"}
+    assert "id" not in record
+    assert "template/list" not in sent_types(sent)
+    (frame,) = sent_frames(sent, HELPERS_LIST)
+    assert frame["helper_types"] == ["template"]
+    assert frame["include_flow_helpers"] is True
+
+
+async def test_a_flow_type_without_the_component_is_an_error(
+    hass: HomeAssistant, core: None, core_client: HomeAssistantClient
+) -> None:
+    _template_helper(hass)
+    socket = await pooled_socket(core_client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(core_client, helper_type="template")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "flow-based" in body["error"]["message"]
+    assert not {HELPERS_LIST, "template/list"} & set(sent_types(sent))
+
+
+async def test_a_flow_type_whose_component_command_fails_is_an_error(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A helper flow Core lists but the component did not cover (an older
-    component without custom helpers) -> hard error, not a partial listing."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
-    )
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_all_result(),
-    )
-    list_helpers = _build_list_helpers(RoutingClient())
+    await _register_failing_helpers_list(hass, monkeypatch)
+    _template_helper(hass)
+    socket = await pooled_socket(core_client)
 
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="all")
+    with sent_commands(socket) as sent:
+        body = await _rejected(core_client, helper_type="template")
 
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert "my_custom_helper" in str(excinfo.value)
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "template/list" not in sent_types(sent)
 
 
-@pytest.mark.asyncio
-async def test_all_types_reads_the_helper_flows_afresh(
+async def test_a_flow_type_on_a_component_without_the_command_is_an_error(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _template_helper(hass)
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], HELPERS_LIST)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(client, helper_type="template")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "template/list" not in sent_types(sent)
+
+
+async def test_a_flow_type_whose_component_command_times_out_is_an_error(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    _template_helper(hass)
+    socket = await pooled_socket(client)
+
+    async with held_command(hass, client, HELPERS_LIST):
+        with sent_commands(socket) as sent:
+            body = await _rejected(client, helper_type="template")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "template/list" not in sent_types(sent)
+
+
+async def test_a_flow_type_answer_without_covered_types_is_an_error(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A helper integration uninstalled since the cached read is not reported
-    as missing from the component's listing."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(side_effect=[CORE_HELPER_FLOWS | {"gone_helper"}, CORE_HELPER_FLOWS]),
-    )
-    client = RoutingClient()
-    await helper_flows.helper_flow_types(client)
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_all_result(),
-    )
-    with patch_ws(ws, tools_config_helpers):
-        resp = await _build_list_helpers(client)(helper_type="all")
-    assert resp["success"] is True
+    """An empty answer that does not say it enumerated the type is not "no
+    such helpers", and a flow type has no list to fall back to."""
+    await _register_helpers_list_without_coverage(hass, monkeypatch)
+    _template_helper(hass)
+    socket = await pooled_socket(core_client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(core_client, helper_type="template")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "template/list" not in sent_types(sent)
 
 
-@pytest.mark.asyncio
-async def test_all_types_with_an_unreadable_helper_flow_list_is_a_structured_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The fresh helper-flow read that checks the component's coverage fails:
-    a structured connection error, not a raw exception or a partial listing."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(side_effect=HomeAssistantConnectionError("flow_handlers down")),
-    )
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_result=_component_all_result(),
-    )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
-
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="all")
-
-    payload = json.loads(str(excinfo.value))
-    assert payload["error"]["code"] == "CONNECTION_FAILED"
-    assert payload["helper_type"] == "all"
-    assert client.list_calls == 0
-
-
-@pytest.mark.asyncio
 async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An installed component whose loader read failed is not told to update."""
     monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
+        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
         AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
     )
-    result = _component_all_result() | {"helper_flows_degraded": True}
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list", info_result=_CAPS_HELPERS, cmd_result=result
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api.flow_domains"
+        ".async_get_config_flows",
+        AsyncMock(side_effect=HomeAssistantError("loader failed")),
     )
-    list_helpers = _build_list_helpers(RoutingClient())
 
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="my_custom_helper")
+    with pytest.raises(ToolError) as exc:
+        await list_helpers(client, helper_type="my_custom_helper")
 
-    error = json.loads(str(excinfo.value))["error"]
+    error = error_of(exc)
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "loader" in error["message"]
     assert "my_custom_helper" in error["message"]
 
 
-@pytest.mark.asyncio
-async def test_all_types_without_component_raises_component_required() -> None:
-    """helper_type='all' with no component surface → hard COMPONENT_NOT_INSTALLED."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
+# --- helper_type="all" -----------------------------------------------------------
+
+
+async def test_all_types_merges_the_component_listing_with_persons_and_tags(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component enumerates storage and flow helpers; persons and tags,
+    which it cannot enumerate, come from their own lists."""
+    await setup_every_simple_type(hass)
+    renamed = await _renamed_boolean(hass, client)
+    entry, _ = _template_helper(hass)
+    await client.send_websocket_message({"type": "person/create", "name": "Alice"})
+    await client.send_websocket_message({"type": "tag/create", "tag_id": "tag-42"})
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await list_helpers(client, helper_type="all")
+
+    assert (resp["success"], resp["helper_type"], resp["count"]) == (True, "all", 4)
+    by_type = {h.get("helper_type"): h for h in resp["helpers"]}
+    assert set(by_type) == {"input_boolean", "template", "person", "tag"}
+    assert (by_type["input_boolean"]["id"], by_type["input_boolean"]["name"]) == (
+        renamed.storage_id,
+        renamed.new_name,
     )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
+    assert by_type["input_boolean"]["entity_id"] == renamed.entity_id
+    assert by_type["template"]["entry_id"] == entry.entry_id
+    assert by_type["template"]["options"] == {"state": "{{ 1 + 1 }}"}
+    assert by_type["person"]["name"] == "Alice"
+    assert by_type["tag"]["id"] == "tag-42"
+    types = sent_types(sent)
+    assert (types.count("person/list"), types.count("tag/list")) == (1, 1)
+    (frame,) = sent_frames(sent, HELPERS_LIST)
+    assert "helper_types" not in frame
+    assert frame["include_flow_helpers"] is True
 
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="all")
 
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    # Never falls back to any legacy list and never issues the component command.
-    assert client.list_calls == 0
-    assert not _helpers_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_all_types_component_error_raises_component_required() -> None:
-    """A component handler error on helper_type='all' → same hard error, no legacy."""
-    ws = make_ws(
-        "ha_mcp_tools/helpers_list",
-        info_result=_CAPS_HELPERS,
-        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
+@pytest.mark.parametrize("helper_type", ["input_boolean", "all"])
+async def test_a_yaml_helper_is_not_listed_as_a_stored_helper(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    helper_type: str,
+) -> None:
+    """``input_boolean/list`` lists stored helpers only; a YAML one must not
+    appear as though its state attributes were its stored config."""
+    client = component_core_client
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"yaml_flag": {"name": "YAML Flag"}}}
     )
-    client = RoutingClient()
-    list_helpers = _build_list_helpers(client)
+    await setup_every_simple_type(hass)
+    renamed = await _renamed_boolean(hass, client)
+    assert hass.states.get("input_boolean.yaml_flag") is not None
 
-    with patch_ws(ws, tools_config_helpers), pytest.raises(ToolError) as excinfo:
-        await list_helpers(helper_type="all")
+    resp = await list_helpers(client, helper_type=helper_type)
 
-    assert json.loads(str(excinfo.value))["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    # No legacy all-types path exists, so nothing is served from legacy.
-    assert client.list_calls == 0
+    listed = {h.get("entity_id") for h in resp["helpers"]}
+    assert renamed.entity_id in listed
+    assert "input_boolean.yaml_flag" not in listed
+
+
+async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Core lists a helper flow the component did not cover: an error, not a
+    partial listing."""
+    await setup_every_simple_type(hass)
+    monkeypatch.setattr(
+        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
+        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
+    )
+
+    body = await _rejected(client, helper_type="all")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert "my_custom_helper" in body["error"]["message"]
+
+
+async def test_all_types_reads_the_helper_flows_afresh(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A helper integration uninstalled since the cached read is not reported
+    as missing from the component's listing."""
+    await setup_every_simple_type(hass)
+    monkeypatch.setattr(
+        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
+        AsyncMock(side_effect=[CORE_HELPER_FLOWS | {"gone_helper"}, CORE_HELPER_FLOWS]),
+    )
+    assert "gone_helper" in await helper_flows.helper_flow_types(client)
+
+    resp = await list_helpers(client, helper_type="all")
+
+    assert resp["success"] is True
+
+
+async def test_all_types_with_an_unreadable_helper_flow_list_is_a_connection_error(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await setup_every_simple_type(hass)
+    monkeypatch.setattr(
+        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
+        AsyncMock(side_effect=HomeAssistantConnectionError("flow_handlers down")),
+    )
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(client, helper_type="all")
+
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+    assert body["helper_type"] == "all"
+    assert not [t for t in sent_types(sent) if t.endswith("/list")]
+
+
+async def test_all_types_surfaces_a_failed_registry_join_as_a_warning(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A type served by its own list joins the registry (#1945); when that
+    read fails (here Core has no registry API), the merged listing says so."""
+    await setup_every_simple_type(hass)
+    await component_core_client.send_websocket_message(
+        {"type": "tag/create", "tag_id": "tag-42"}
+    )
+
+    resp = await list_helpers(component_core_client, helper_type="all")
+
+    assert resp["success"] is True
+    assert any("entity registry" in w for w in resp.get("warnings", []))
+
+
+async def test_all_types_without_the_component_is_an_error(
+    hass: HomeAssistant, core: None, core_client: HomeAssistantClient
+) -> None:
+    await setup_every_simple_type(hass)
+    socket = await pooled_socket(core_client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(core_client, helper_type="all")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    types = sent_types(sent)
+    assert HELPERS_LIST not in types
+    assert not [t for t in types if t.endswith("/list")]
+
+
+async def test_all_types_whose_component_command_fails_is_an_error(
+    hass: HomeAssistant,
+    core: None,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await setup_every_simple_type(hass)
+    await _register_failing_helpers_list(hass, monkeypatch)
+    socket = await pooled_socket(core_client)
+
+    with sent_commands(socket) as sent:
+        body = await _rejected(core_client, helper_type="all")
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert not [t for t in sent_types(sent) if t.endswith("/list")]

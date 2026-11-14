@@ -82,12 +82,12 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
     "this request (an allow_entity_ids list, if set, still applies) so the filter "
     "does not blank every entity."
 )
-_DEVICE_REGISTRY_CONFLICT_WARNING = (
+DEVICE_REGISTRY_CONFLICT_WARNING = (
     "Entity visibility filter is enabled with an area/label dimension but the "
     "device registry contained conflicting identities; ambiguous device-derived "
     "placement and labels were excluded."
 )
-_DEVICE_REGISTRY_INVALID_AREA_WARNING = (
+DEVICE_REGISTRY_INVALID_AREA_WARNING = (
     "Entity visibility filter is enabled with an area dimension but the device "
     "registry contained invalid area relationships; affected device-derived "
     "placement was excluded."
@@ -182,8 +182,8 @@ def _handle_device_registry_conflicts(
     if not conflicting_device_ids or not area_or_label_dimension_active:
         return
     if strict:
-        raise VisibilityDataUnavailable(_DEVICE_REGISTRY_CONFLICT_WARNING)
-    warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
+        raise VisibilityDataUnavailable(DEVICE_REGISTRY_CONFLICT_WARNING)
+    warnings.append(DEVICE_REGISTRY_CONFLICT_WARNING)
 
 
 def _handle_invalid_device_area_evidence(
@@ -197,8 +197,8 @@ def _handle_invalid_device_area_evidence(
     if not invalid_area_ids or not area_dimension_active:
         return
     if strict:
-        raise VisibilityDataUnavailable(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
-    warnings.append(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
+        raise VisibilityDataUnavailable(DEVICE_REGISTRY_INVALID_AREA_WARNING)
+    warnings.append(DEVICE_REGISTRY_INVALID_AREA_WARNING)
 
 
 def _is_assist_exposed(

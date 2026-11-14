@@ -6,7 +6,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from ..const import DOMAIN
@@ -142,6 +143,12 @@ async def _call_service_prep(
         evt, captured, unsub = _register_transition_waiter(
             hass, set(confirmable_entity_ids), expected_by_entity
         )
+    changed: list[Any] = []
+    unsub_changed = (
+        _track_changed_states(hass, msg.get("ha_mcp_context"), changed)
+        if return_response
+        else None
+    )
 
     # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
     # Everything after ``dispatched = True`` is inside this ONE try so no post-dispatch
@@ -151,13 +158,8 @@ async def _call_service_prep(
     dispatched = False
     result: dict[str, Any]
     try:
-        response = await hass.services.async_call(
-            domain,
-            service,
-            dict(service_data),
-            blocking=True,
-            return_response=return_response,
-            context=msg.get("ha_mcp_context"),
+        response, response_error = await _dispatch(
+            hass, domain, service, dict(service_data), return_response, msg
         )
         dispatched = True
         # ``evt`` is None when nothing was worth waiting on (should_confirm was
@@ -180,6 +182,10 @@ async def _call_service_prep(
             return_response=return_response,
             response=response,
         )
+        if response_error is not None:
+            result["response_error"] = response_error
+        if return_response:
+            result["changed_states"] = changed
     except Exception:
         # PRE-confirmation ``async_call`` failure (never dispatched) → re-raise so the
         # server maps it (D7/D9 MID-dispatch residual). Any POST-dispatch failure →
@@ -196,7 +202,21 @@ async def _call_service_prep(
     finally:
         if unsub is not None:
             unsub()
+        if unsub_changed is not None:
+            unsub_changed()
     return {"result": result}
+
+
+def _track_changed_states(hass: HomeAssistant, context: Any, changed: list[Any]) -> Any:
+    """Collect the states the call changes, as Core's REST service call lists
+    them: every new state written under the call's context."""
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        if event.context == context and (state := event.data["new_state"]):
+            changed.append(_state_as_dict(state))
+
+    return hass.bus.async_listen(EVENT_STATE_CHANGED, _record)
 
 
 def _confirmable_entity_ids(entity_ids: list[str], pre: Mapping[str, Any]) -> list[str]:
@@ -368,6 +388,39 @@ async def _await_confirmation(
         await asyncio.wait_for(evt.wait(), timeout)
     except TimeoutError:
         pass  # partial confirmation, not a failure (D4)
+
+
+# The (translation_domain, translation_key) Core raises when a requested
+# response is not a mapping, checked only after the service ran
+# (``ServiceRegistry.async_call``), so the write has landed; the key's spelling
+# is Core's.
+_RESPONSE_REJECTED = ("homeassistant", "service_reponse_invalid")
+
+
+async def _dispatch(
+    hass: HomeAssistant,
+    domain: str,
+    service: str,
+    service_data: dict[str, Any],
+    return_response: bool,
+    msg: dict[str, Any],
+) -> tuple[Any, dict[str, Any] | None]:
+    """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
+    the service ran and Core rejected its response."""
+    try:
+        response = await hass.services.async_call(
+            domain,
+            service,
+            service_data,
+            blocking=True,
+            return_response=return_response,
+            context=msg.get("ha_mcp_context"),
+        )
+    except HomeAssistantError as err:
+        if (err.translation_domain, err.translation_key) != _RESPONSE_REJECTED:
+            raise
+        return None, {"translation_key": err.translation_key, "message": str(err)}
+    return response, None
 
 
 def _build_call_service_result(

@@ -1,665 +1,464 @@
-"""Routing tests for ``ha_get_device`` over the ``ha_mcp_tools`` component gate.
+"""Routing of ``ha_get_device`` over the ``ha_mcp_tools`` component.
 
-``ha_get_device`` pulled the ENTIRE device registry AND the entire entity registry
-for a single lookup. When the component advertises ``device_get`` / ``device_list``,
-a single lookup fetches just the target device and its entities in ONE
-``ha_mcp_tools/device_get(include_entities=True)`` frame, an ``entity_id`` lookup
-resolves the device via a single native ``config/entity_registry/get``, and a list
-read comes from ``ha_mcp_tools/device_list`` — none of these dumps a whole
-registry. Full-detail LIST mode is the only path that still reads the whole entity
-registry (one dump beats N per-device joins). These tests pin that: the
-component-served single lookup never sends ``config/device_registry/list`` NOR
-``config/entity_registry/list``, list mode uses ``device_list``, a summary list
-skips the entity fetch, and every backend degradation (no caps, ``unknown_command``
-→ invalidate + fall back, an additive-param-blind component that omits the entities
-half) still returns the byte-identical legacy result.
+A single lookup used to read the whole device registry and the whole entity
+registry. When the component advertises ``device_get`` / ``device_list`` (with
+child-device semantics), a lookup reads one ``device_get(include_entities)``
+frame, an ``entity_id`` lookup first asks Core's ``config/entity_registry/get``
+for that one entity, and a list read is one ``device_list`` frame. Every miss of
+the component (no capability, a command it no longer knows, a timeout, a socket
+that cannot be opened, an older build without the entities half) falls back to
+the legacy registry lists for the same result.
+
+The server's own client runs on a real ``hass`` whose registries hold the
+devices; Core answers the component's commands and the legacy reads. A spy on
+the pooled socket records which of them the tool sent.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import MagicMock
+from typing import Any, NamedTuple, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools import websocket_api as component_ws_api
+from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import component_api, component_devices
-from ha_mcp.tools.tools_registry import (
-    _resolve_device_id_for_entity,
-    register_registry_tools,
-)
+from ha_mcp.tools.tools_registry import RegistryTools
 from ha_mcp.utils.device_registry_semantics import EFFECTIVE_AREA_MARKER
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
+from ._client_spies import sent_commands
+from ._routing_core import (
+    held_command,
+    invalidations,
+    pooled_socket,
+    sent_frames,
+    sent_types,
 )
+from ._tool_errors import error_of
 
-_CAPS_PRE_CHILD_SEMANTICS = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["device_get", "device_list"],
-    "limits": {},
-}
-_CAPS_DEVICES = {
-    **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": [
-        "device_get",
-        "device_list",
-        "device_registry_child_semantics",
-    ],
-}
+DEVICE_GET = "ha_mcp_tools/device_get"
+DEVICE_LIST = "ha_mcp_tools/device_list"
+DEVICE_DUMP = "config/device_registry/list"
+ENTITY_DUMP = "config/entity_registry/list"
+ENTITY_GET = "config/entity_registry/get"
 
 
-def _raw_device(device_id: str, **overrides: Any) -> dict[str, Any]:
-    """A ``config/device_registry/list`` element (also the ``device_get`` body)."""
-    base: dict[str, Any] = {
-        "id": device_id,
-        "name": f"Device {device_id}",
-        "name_by_user": None,
-        "area_id": None,
-        "labels": [],
-        "manufacturer": "Acme",
-        "model": "M1",
-        "sw_version": None,
-        "hw_version": None,
-        "serial_number": None,
-        "via_device_id": None,
-        "disabled_by": None,
-        "config_entries": ["cfg-1"],
-        "config_entry_id": "cfg-1",
-        "connections": [],
-        # A non-radio integration so the single-device enrichers (zha/zwave/matter)
-        # do not fire — those dedicated paths are out of the device_get seam.
-        "identifiers": [["hue", "0xAABB"]],
-    }
-    base.update(overrides)
-    return base
+class Device(NamedTuple):
+    device_id: str
+    entity_id: str
 
 
-def _entity_row(entity_id: str, device_id: str) -> dict[str, Any]:
-    return {
-        "entity_id": entity_id,
-        "device_id": device_id,
-        "platform": "zha",
-        "name": None,
-        "original_name": entity_id,
-    }
+@pytest.fixture
+def entry(hass: HomeAssistant) -> MockConfigEntry:
+    """A non-radio integration, so no zha / zwave / matter enrichment runs."""
+    config_entry = MockConfigEntry(domain="hue")
+    config_entry.add_to_hass(hass)
+    return config_entry
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy registry-list fetches."""
-
-    def __init__(
-        self,
-        devices: list[dict[str, Any]] | None = None,
-        entities: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._devices = list(devices or [])
-        self._entities = list(entities or [])
-        self.device_list_calls = 0
-        self.entity_list_calls = 0
-        self.entity_get_calls = 0
-
-    async def get_config(self) -> dict[str, Any]:
-        return {"time_zone": "UTC"}
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config_entries/get":
-            return {"success": True, "result": [{"entry_id": "cfg-1", "domain": "hue"}]}
-        if msg_type == "config/device_registry/list":
-            self.device_list_calls += 1
-            return {"success": True, "result": list(self._devices)}
-        if msg_type == "config/entity_registry/list":
-            self.entity_list_calls += 1
-            return {"success": True, "result": list(self._entities)}
-        if msg_type == "config/entity_registry/get":
-            # Single native entity read (entity_id -> device_id); no dump.
-            self.entity_get_calls += 1
-            row = next(
-                (
-                    e
-                    for e in self._entities
-                    if e.get("entity_id") == msg.get("entity_id")
-                ),
-                None,
-            )
-            if row is None:
-                return {"success": False, "error": "not found"}
-            return {"success": True, "result": row}
-        if msg_type == "config/device_registry/list_linked_devices":
-            return {"success": True, "result": {"linked_devices": []}}
-        if msg_type == "config/device_registry/list_composite_splits":
-            return {"success": True, "result": {}}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
-
-
-def _build_get_device(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_registry_tools(mcp, client)
-    return registered["ha_get_device"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _device_get_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/device_get"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_single_lookup_served_by_component() -> None:
-    """A device_id lookup fetches the device AND its entities in one
-    device_get(include_entities) frame; NEITHER registry is dumped."""
-    dev = _raw_device("dev-1", name_by_user="Kitchen")
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={
-            "device": dev,
-            "entities": [_entity_row("sensor.kitchen", "dev-1")],
-        },
+def _device(
+    hass: HomeAssistant, entry: MockConfigEntry, key: str, **update: Any
+) -> Device:
+    """A device of ``entry`` with one sensor entity."""
+    devices = dr.async_get(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("hue", key)},
+        name=f"Device {key}",
+        manufacturer="Acme",
+        model="M1",
     )
-    client = RoutingClient()
-    get_device = _build_get_device(client)
+    if update:
+        devices.async_update_device(device.id, **update)
+    sensor = er.async_get(hass).async_get_or_create(
+        "sensor", "hue", f"{key}-sensor", config_entry=entry, device_id=device.id
+    )
+    return Device(device.id, sensor.entity_id)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="dev-1")
+
+@pytest.fixture
+async def registries(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Core's registry API (the legacy reads)."""
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+async def client(
+    registries: None, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return component_core_client
+
+
+async def _get(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
+    return cast("dict[str, Any]", await RegistryTools(client).ha_get_device(**kwargs))
+
+
+async def test_a_single_lookup_is_one_device_get_frame_and_no_registry_dump(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    kitchen = _device(hass, entry, "dev-1", name_by_user="Kitchen")
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await _get(client, device_id=kitchen.device_id)
 
     assert resp["success"] is True
-    assert resp["device"]["id"] == "dev-1"
+    assert resp["device"]["id"] == kitchen.device_id
     # Core's row passes through: the user's name next to the integration's.
     assert resp["device"]["name_by_user"] == "Kitchen"
     assert resp["device"]["name"] == "Device dev-1"
-    # The device came from the component; the legacy device dump never ran.
-    assert client.device_list_calls == 0
-    assert len(_device_get_calls(ws)) == 1
-    assert _device_get_calls(ws)[0].kwargs["device_id"] == "dev-1"
-    # include_entities was requested so the entities ride the same frame.
-    assert _device_get_calls(ws)[0].kwargs["include_entities"] is True
-    # The device's entity list came from the join — the whole entity registry
-    # was never dumped.
     assert resp["entity_count"] == 1
-    assert resp["device"]["entities"][0]["entity_id"] == "sensor.kitchen"
-    assert client.entity_list_calls == 0
+    assert resp["device"]["entities"][0]["entity_id"] == kitchen.entity_id
+    types = sent_types(sent)
+    assert DEVICE_DUMP not in types
+    assert ENTITY_DUMP not in types
+    (frame,) = sent_frames(sent, DEVICE_GET)
+    assert frame == {"device_id": kitchen.device_id, "include_entities": True}
 
 
-@pytest.mark.asyncio
-async def test_child_component_result_preserves_effective_area_and_ownership() -> None:
-    child = _raw_device(
-        "child-1",
-        parent_device_id="parent-1",
-        area_id=None,
-        config_entries=None,
-        config_entry_id="cfg-child",
+async def test_a_child_device_keeps_its_parents_area_as_its_effective_area(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    office = ar.async_get(hass).async_create("Office")
+    parent = _device(hass, entry, "parent-1", area_id=office.id)
+    devices = dr.async_get(hass)
+    child = devices.async_get_or_create_child(
+        config_entry_id=entry.entry_id,
+        identifiers={("hue", "child-1")},
+        parent_device_id=parent.device_id,
     )
-    child.pop("config_entries")
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={
-            "device": child,
-            "entities": [_entity_row("switch.child", "child-1")],
-            "effective_area_id": "office",
-        },
-    )
-    client = RoutingClient()
-    get_device = _build_get_device(client)
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="child-1")
+    with sent_commands(socket) as sent:
+        resp = await _get(client, device_id=child.id)
 
-    assert resp["device"]["effective_area_id"] == "office"
-    assert resp["device"]["area_id"] is None
-    assert resp["device"]["config_entry_id"] == "cfg-child"
-    assert resp["device"]["parent_device_id"] == "parent-1"
-    assert "config_entries" not in resp["device"]
-    assert EFFECTIVE_AREA_MARKER not in resp["device"]
-    assert client.device_list_calls == 0
+    device = resp["device"]
+    assert device["effective_area_id"] == office.id
+    assert device["area_id"] is None
+    assert device["parent_device_id"] == parent.device_id
+    assert EFFECTIVE_AREA_MARKER not in device
+    assert DEVICE_DUMP not in sent_types(sent)
 
 
-@pytest.mark.asyncio
-async def test_entity_id_lookup_resolves_then_device_get() -> None:
-    """entity_id mode resolves the device via a single native
-    config/entity_registry/get, then reads the device (and its entities) via
-    device_get — no whole device- OR entity-registry dump."""
-    dev = _raw_device("dev-1")
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": dev, "entities": [_entity_row("light.lr", "dev-1")]},
-    )
-    client = RoutingClient(entities=[_entity_row("light.lr", "dev-1")])
-    get_device = _build_get_device(client)
+async def test_an_entity_lookup_reads_that_entity_then_one_device_get(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    lamp = _device(hass, entry, "dev-1")
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device(entity_id="light.lr")
+    with sent_commands(socket) as sent:
+        resp = await _get(client, entity_id=lamp.entity_id)
 
     assert resp["success"] is True
-    assert resp["device"]["id"] == "dev-1"
+    assert resp["device"]["id"] == lamp.device_id
     assert resp["queried_by"] == "entity_id"
-    # Device resolved via one targeted entity read; no registry was dumped.
-    assert client.entity_get_calls == 1
-    assert client.device_list_calls == 0
-    assert client.entity_list_calls == 0
-    assert len(_device_get_calls(ws)) == 1
+    types = sent_types(sent)
+    assert types.count(ENTITY_GET) == 1
+    assert types.count(DEVICE_GET) == 1
+    assert DEVICE_DUMP not in types
+    assert ENTITY_DUMP not in types
 
 
-@pytest.mark.asyncio
-async def test_missing_device_via_component_raises_not_found() -> None:
-    """A component-reported missing device falls back to the LEGACY device list for
-    the not-found error's valid ids (device_get authoritatively said None)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": None, "entities": []},
+async def test_a_device_the_component_does_not_have_is_not_found(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    """The not-found error lists valid ids, read from the legacy device list."""
+    other = _device(hass, entry, "other")
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent, pytest.raises(ToolError) as exc:
+        await _get(client, device_id="ghost")
+
+    error = error_of(exc)
+    assert error["code"] == "RESOURCE_NOT_FOUND"
+    assert other.device_id in str(exc.value)
+    assert sent_types(sent).count(DEVICE_DUMP) == 1
+
+
+async def test_an_older_component_without_the_entities_half_falls_back(
+    hass: HomeAssistant,
+    registries: None,
+    core_client: HomeAssistantClient,
+    entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A device_get from before ``include_entities`` answers the device alone;
+    the lookup reads both legacy registries rather than report no entities."""
+    device_registry = dr.async_get(hass)
+
+    def device_get_without_entities(
+        hass: HomeAssistant, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        device = device_registry.async_get(params["device_id"])
+        return {"device": device.dict_repr if device is not None else None}
+
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api._do_device_get",
+        device_get_without_entities,
     )
-    client = RoutingClient(devices=[_raw_device("other")])
-    get_device = _build_get_device(client)
+    component_ws_api.async_register_commands(hass)
+    sensor = _device(hass, entry, "dev-1")
+    socket = await pooled_socket(core_client)
 
-    with patch_ws(ws, component_devices), pytest.raises(ToolError) as excinfo:
-        await get_device(device_id="ghost")
+    with sent_commands(socket) as sent:
+        resp = await _get(core_client, device_id=sensor.device_id)
 
-    assert "Device not found" in str(excinfo.value) or "RESOURCE_NOT_FOUND" in str(
-        excinfo.value
-    )
-    # The legacy device list served the not-found error's valid ids.
-    assert client.device_list_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_entities_half_absent_falls_back_to_legacy() -> None:
-    """A device_get-capable component that omits the additive entities half (an
-    older build predating include_entities) degrades the WHOLE single lookup to
-    the legacy registries rather than reporting a device with zero entities."""
-    dev = _raw_device("dev-1")
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"device": dev},  # no entities key
-    )
-    client = RoutingClient(
-        devices=[_raw_device("dev-1")],
-        entities=[_entity_row("sensor.x", "dev-1")],
-    )
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="dev-1")
-
-    assert resp["device"]["id"] == "dev-1"
-    # Both registries were read from the legacy path so the entity list survives.
-    assert client.device_list_calls == 1
-    assert client.entity_list_calls == 1
+    assert resp["device"]["id"] == sensor.device_id
     assert resp["entity_count"] == 1
+    types = sent_types(sent)
+    assert (types.count(DEVICE_DUMP), types.count(ENTITY_DUMP)) == (1, 1)
 
 
-@pytest.mark.asyncio
-async def test_summary_list_uses_device_list_and_skips_entities() -> None:
-    """A summary list read is served by device_list and skips the entity registry
-    entirely (nothing in a summary list needs it)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"devices": [_raw_device("d1"), _raw_device("d2")]},
-    )
-    client = RoutingClient()
-    get_device = _build_get_device(client)
+async def test_a_summary_list_is_one_device_list_frame_without_entities(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    _device(hass, entry, "d1")
+    _device(hass, entry, "d2")
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device()
+    with sent_commands(socket) as sent:
+        resp = await _get(client)
 
     assert resp["success"] is True
     assert resp["total_devices"] == 2
-    assert client.device_list_calls == 0
-    assert client.entity_list_calls == 0
+    types = sent_types(sent)
+    assert types.count(DEVICE_LIST) == 1
+    assert DEVICE_DUMP not in types
+    assert ENTITY_DUMP not in types
 
 
-@pytest.mark.asyncio
-async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
-    """The old ``device_list`` capability cannot authorize child-aware results.
-
-    The component and server update independently. A pre-fix component can
-    advertise ``device_list`` while omitting Core 2026.9 child devices, so the
-    server must use Core's authoritative legacy registry list until the component
-    advertises the additive child-device semantic capability.
-    """
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_result=_CAPS_PRE_CHILD_SEMANTICS,
-        cmd_result={"devices": [_raw_device("parent-1")]},
+async def test_a_component_without_child_semantics_is_not_trusted_for_a_list(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older component advertises ``device_list`` but may leave out child
+    devices, so the server reads Core's device list until the component
+    advertises the child-device capability."""
+    monkeypatch.setattr(
+        system,
+        "CAPABILITIES",
+        [
+            cap
+            for cap in system.CAPABILITIES
+            if cap != "device_registry_child_semantics"
+        ],
     )
-    client = RoutingClient(
-        devices=[
-            _raw_device("parent-1", area_id="office"),
-            _raw_device("child-1", parent_device_id="parent-1"),
-        ]
+    parent = _device(hass, entry, "parent-1")
+    child = dr.async_get(hass).async_get_or_create_child(
+        config_entry_id=entry.entry_id,
+        identifiers={("hue", "child-1")},
+        parent_device_id=parent.device_id,
     )
-    get_device = _build_get_device(client)
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device()
+    with sent_commands(socket) as sent:
+        resp = await _get(client)
 
-    assert {row["id"] for row in resp["devices"]} == {
-        "parent-1",
-        "child-1",
-    }
-    assert client.device_list_calls == 1
-    assert not any(
-        call.args[0] == "ha_mcp_tools/device_list"
-        for call in ws.send_command.call_args_list
+    assert {row["id"] for row in resp["devices"]} == {parent.device_id, child.id}
+    types = sent_types(sent)
+    assert types.count(DEVICE_DUMP) == 1
+    assert DEVICE_LIST not in types
+
+
+async def test_the_area_filter_matches_a_child_through_its_parents_area(
+    hass: HomeAssistant,
+    registries: None,
+    core_client: HomeAssistantClient,
+    entry: MockConfigEntry,
+) -> None:
+    areas = ar.async_get(hass)
+    office, garage = areas.async_create("Office"), areas.async_create("Garage")
+    parent = _device(hass, entry, "parent-1", area_id=office.id)
+    child = dr.async_get(hass).async_get_or_create_child(
+        config_entry_id=entry.entry_id,
+        identifiers={("hue", "child-1")},
+        parent_device_id=parent.device_id,
     )
+    _device(hass, entry, "other", area_id=garage.id)
+
+    resp = await _get(core_client, area_id=office.id)
+
+    assert {row["id"] for row in resp["devices"]} == {parent.device_id, child.id}
 
 
-@pytest.mark.asyncio
-async def test_area_filter_matches_child_through_parent_effective_area() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        devices=[
-            _raw_device("parent-1", area_id="office"),
-            _raw_device("child-1", area_id=None, parent_device_id="parent-1"),
-            _raw_device("other", area_id="garage"),
-        ]
-    )
-    get_device = _build_get_device(client)
+async def test_without_the_component_the_legacy_registries_serve_a_lookup(
+    hass: HomeAssistant,
+    registries: None,
+    core_client: HomeAssistantClient,
+    entry: MockConfigEntry,
+) -> None:
+    sensor = _device(hass, entry, "dev-1")
+    socket = await pooled_socket(core_client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device(area_id="office")
+    with sent_commands(socket) as sent:
+        resp = await _get(core_client, device_id=sensor.device_id)
 
-    assert {row["id"] for row in resp["devices"]} == {
-        "parent-1",
-        "child-1",
-    }
+    assert resp["device"]["id"] == sensor.device_id
+    types = sent_types(sent)
+    assert types.count(DEVICE_DUMP) == 1
+    assert DEVICE_GET not in types
 
 
-@pytest.mark.asyncio
-async def test_capsless_component_uses_legacy_registries() -> None:
-    """Old component (info unknown_command) → legacy device + entity registry."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        devices=[_raw_device("dev-1")],
-        entities=[_entity_row("sensor.x", "dev-1")],
-    )
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="dev-1")
-
-    assert resp["device"]["id"] == "dev-1"
-    # Both registries came from the legacy WS path.
-    assert client.device_list_calls == 1
-    assert not _device_get_calls(ws)
+# --- the entity_id -> device_id read ------------------------------------------------
 
 
-class _ResolveStubClient:
-    """Minimal client for ``_resolve_device_id_for_entity``: a controllable
-    ``config/entity_registry/get`` reply plus a legacy entity-registry list."""
+async def test_an_entity_core_does_not_know_is_not_found_without_a_dump(
+    client: HomeAssistantClient,
+) -> None:
+    """Core's ``not_found`` answer is authoritative (#1813 F3)."""
+    socket = await pooled_socket(client)
 
-    def __init__(
-        self,
-        get_response: dict[str, Any],
-        entities: list[dict[str, Any]] | None = None,
-        list_response: dict[str, Any] | None = None,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._get_response = get_response
-        self._entities = list(entities or [])
-        # When set, the legacy list read returns this instead of a success dump —
-        # lets a test simulate the fallback list ALSO failing.
-        self._list_response = list_response
-        self.entity_list_calls = 0
+    with sent_commands(socket) as sent, pytest.raises(ToolError) as exc:
+        await _get(client, entity_id="sensor.ghost")
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/entity_registry/get":
-            return self._get_response
-        if msg_type == "config/entity_registry/list":
-            self.entity_list_calls += 1
-            if self._list_response is not None:
-                return self._list_response
-            return {"success": True, "result": list(self._entities)}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+    assert error_of(exc)["code"] == "ENTITY_NOT_FOUND"
+    assert "sensor.ghost" in str(exc.value)
+    assert ENTITY_DUMP not in sent_types(sent)
 
 
-@pytest.mark.asyncio
-async def test_resolve_success_returns_device_id_no_dump() -> None:
-    """A successful targeted read returns the device_id without a registry dump."""
-    client = _ResolveStubClient({"success": True, "result": {"device_id": "dev-9"}})
-    assert await _resolve_device_id_for_entity(client, "light.x") == "dev-9"
-    assert client.entity_list_calls == 0
+async def test_a_refused_entity_read_falls_back_to_the_registry_list(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal other than ``not_found`` is no verdict on the entity: the
+    whole registry is read so a real entity is not reported missing (#1813 F3)."""
+    lamp = _device(hass, entry, "dev-1")
+    monkeypatch.delitem(hass.data["websocket_api"], ENTITY_GET)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await _get(client, entity_id=lamp.entity_id)
+
+    assert resp["device"]["id"] == lamp.device_id
+    assert sent_types(sent).count(ENTITY_DUMP) == 1
 
 
-@pytest.mark.asyncio
-async def test_resolve_not_found_code_raises_without_legacy_dump() -> None:
-    """HA's authoritative ``not_found`` code raises ENTITY_NOT_FOUND directly — no
-    wasteful whole-registry fallback (issue #1813 F3)."""
-    client = _ResolveStubClient(
-        {"success": False, "error_code": "not_found", "error": "Entity not found"}
-    )
-    with pytest.raises(ToolError) as excinfo:
-        await _resolve_device_id_for_entity(client, "sensor.ghost")
-    assert "sensor.ghost" in str(excinfo.value)
-    assert client.entity_list_calls == 0
+async def test_a_refused_entity_read_and_registry_list_is_a_service_error(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Without Core's registry API both reads are refused; a real entity must
+    not be reported as ENTITY_NOT_FOUND (Codex P2)."""
+    with pytest.raises(ToolError) as exc:
+        await _get(core_client, entity_id="light.lr")
+
+    assert error_of(exc)["code"] == "SERVICE_CALL_FAILED"
 
 
-@pytest.mark.asyncio
-async def test_resolve_transient_failure_falls_back_to_legacy() -> None:
-    """A failure WITHOUT the ``not_found`` code is a transient WS hiccup, not HA's
-    'unknown entity' verdict: fall back to the legacy whole-registry read so a real
-    entity is not misreported as nonexistent (issue #1813 F3)."""
-    client = _ResolveStubClient(
-        {"success": False, "error": "WebSocket request failed"},
-        entities=[{"entity_id": "light.lr", "device_id": "dev-1"}],
-    )
-    assert await _resolve_device_id_for_entity(client, "light.lr") == "dev-1"
-    assert client.entity_list_calls == 1
+# --- component failures --------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_resolve_double_transient_failure_raises_service_error() -> None:
-    """When BOTH the targeted read and the legacy fallback list fail transiently, a
-    real entity must NOT be misreported as ENTITY_NOT_FOUND: the fallback uses a
-    strict list read, so the second failure surfaces as SERVICE_CALL_FAILED (Codex
-    P2)."""
-    client = _ResolveStubClient(
-        {"success": False, "error": "WebSocket request failed"},
-        list_response={"success": False, "error": "registry unavailable"},
-    )
-    with pytest.raises(ToolError) as excinfo:
-        await _resolve_device_id_for_entity(client, "light.lr")
-    msg = str(excinfo.value)
-    assert "SERVICE_CALL_FAILED" in msg
-    assert "ENTITY_NOT_FOUND" not in msg
-    # The fallback list was attempted (and its failure is what surfaced).
-    assert client.entity_list_calls == 1
+async def test_a_component_without_device_get_is_invalidated_and_falls_back(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor = _device(hass, entry, "dev-1")
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], DEVICE_GET)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent, invalidations(component_devices) as invalidate:
+        resp = await _get(client, device_id=sensor.device_id)
+
+    assert resp["device"]["id"] == sensor.device_id
+    assert sent_types(sent).count(DEVICE_DUMP) == 1
+    invalidate.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_unknown_command_falls_back_and_invalidates_caps() -> None:
-    """unknown_command on device_get → invalidate caps + legacy full list."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(
-        devices=[_raw_device("dev-1")],
-        entities=[_entity_row("sensor.x", "dev-1")],
-    )
-    get_device = _build_get_device(client)
+async def test_a_timed_out_device_get_falls_back_and_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    """Only this frame failed; the capability is still advertised (#1813 T1)."""
+    sensor = _device(hass, entry, "dev-1")
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="dev-1")
+    async with held_command(hass, client, DEVICE_GET):
+        with (
+            sent_commands(socket) as sent,
+            invalidations(component_devices) as invalidate,
+        ):
+            resp = await _get(client, device_id=sensor.device_id)
 
-    assert resp["device"]["id"] == "dev-1"
-    # The component command was tried, failed unknown_command → legacy full list.
-    assert client.device_list_calls == 1
-    # Caps were invalidated (dropped from the cache) so the next call re-probes.
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
-    """A non-unknown device_get error (a command timeout) falls back to the legacy
-    registries for the byte-identical result WITHOUT invalidating caps — the
-    capability is still advertised, only this one frame failed (issue #1813 T1)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient(
-        devices=[_raw_device("dev-1")],
-        entities=[_entity_row("sensor.x", "dev-1")],
-    )
-    get_device = _build_get_device(client)
-
-    with patch_ws(ws, component_devices):
-        resp = await get_device(device_id="dev-1")
-
-    # The legacy registries served the byte-identical device + entity list.
-    assert resp["device"]["id"] == "dev-1"
-    assert client.device_list_calls == 1
-    assert client.entity_list_calls == 1
+    assert resp["device"]["id"] == sensor.device_id
     assert resp["entity_count"] == 1
-    # Caps stay cached: a transient failure is not a downgrade, so the next call
-    # still routes through the component instead of re-probing.
-    assert client in component_api._CAPS_CACHE
+    types = sent_types(sent)
+    assert (types.count(DEVICE_DUMP), types.count(ENTITY_DUMP)) == (1, 1)
+    invalidate.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_without_invalidating_caps() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) falls back to the legacy registries for the byte-identical result
-    WITHOUT invalidating caps. The legacy device/entity reads ride the
-    WS bridge, so they do not die identically on a pooled-WS drop."""
-    caps_ws = make_ws("ha_mcp_tools/device_get", info_result=_CAPS_DEVICES)
-    client = RoutingClient(
-        devices=[_raw_device("dev-1")],
-        entities=[_entity_row("sensor.x", "dev-1")],
-    )
-    get_device = _build_get_device(client)
+async def test_an_unreachable_component_socket_falls_back_and_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    """The legacy reads ride the WebSocket bridge, not the component's socket."""
+    sensor = _device(hass, entry, "dev-1")
+    assert await component_api.get_component_caps(client) is not None
+    socket = await pooled_socket(client)
 
-    with patch_ws_establish_failure(
-        caps_ws,
-        component_devices,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
+    with (
+        patch.object(
+            component_devices,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        sent_commands(socket) as sent,
+        invalidations(component_devices) as invalidate,
     ):
-        resp = await get_device(device_id="dev-1")
+        resp = await _get(client, device_id=sensor.device_id)
 
-    assert resp["device"]["id"] == "dev-1"
-    assert client.device_list_calls == 1
-    assert client.entity_list_calls == 1
+    assert resp["device"]["id"] == sensor.device_id
     assert resp["entity_count"] == 1
-    assert client in component_api._CAPS_CACHE
+    types = sent_types(sent)
+    assert (types.count(DEVICE_DUMP), types.count(ENTITY_DUMP)) == (1, 1)
+    invalidate.assert_not_called()
 
 
-# --- device seam error taxonomy (direct fetch_* calls; issue #1813 T2 / T4) ----
-# The consumer routing tests above cover device_get through ``ha_get_device``;
-# these pin the ``component_devices`` seam functions directly, mirroring the
-# device_get taxonomy for ``device_list`` and the device_get shape guard.
+async def test_a_component_without_device_list_is_invalidated_and_falls_back(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The list read follows device_get's downgrade branch (#1813 T2)."""
+    _device(hass, entry, "d1")
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], DEVICE_LIST)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent, invalidations(component_devices) as invalidate:
+        resp = await _get(client)
+
+    assert resp["total_devices"] == 1
+    assert sent_types(sent).count(DEVICE_DUMP) == 1
+    invalidate.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_device_list_unknown_command_invalidates_caps() -> None:
-    """unknown_command on device_list → invalidate caps, return None (→ legacy),
-    mirroring device_get's downgrade branch (issue #1813 T2)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient()
+async def test_a_timed_out_device_list_falls_back_and_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    _device(hass, entry, "d1")
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_devices):
-        assert await component_devices.fetch_device_list_via_component(client) is None
-    assert client not in component_api._CAPS_CACHE
+    async with held_command(hass, client, DEVICE_LIST):
+        with (
+            sent_commands(socket) as sent,
+            invalidations(component_devices) as invalidate,
+        ):
+            resp = await _get(client)
 
-
-@pytest.mark.asyncio
-async def test_device_list_non_unknown_error_keeps_caps() -> None:
-    """A non-unknown device_list error (timeout) → None (→ legacy) WITHOUT
-    invalidating the still-advertised capability (issue #1813 T2)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_result=_CAPS_DEVICES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient()
-
-    with patch_ws(ws, component_devices):
-        assert await component_devices.fetch_device_list_via_component(client) is None
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_device_list_malformed_shape_falls_back() -> None:
-    """A device_list reply whose ``devices`` is not a list (shape drift) → None so
-    the caller reads the legacy registry instead of trusting it (issue #1813 T2)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_list",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"devices": "not-a-list"},
-    )
-    client = RoutingClient()
-
-    with patch_ws(ws, component_devices):
-        assert await component_devices.fetch_device_list_via_component(client) is None
-
-
-@pytest.mark.asyncio
-async def test_device_get_missing_device_key_falls_back() -> None:
-    """A device_get reply with NO ``device`` key (shape drift) → None, so the single
-    lookup degrades to the legacy registries rather than trusting the payload. This
-    is distinct from ``{"device": None}``, the component's authoritative 'no such
-    device' verdict (issue #1813 T4)."""
-    ws = make_ws(
-        "ha_mcp_tools/device_get",
-        info_result=_CAPS_DEVICES,
-        cmd_result={"entities": []},  # "device" key absent
-    )
-    client = RoutingClient()
-
-    with patch_ws(ws, component_devices):
-        assert (
-            await component_devices.fetch_device_via_component(client, "dev-1") is None
-        )
+    assert resp["total_devices"] == 1
+    assert sent_types(sent).count(DEVICE_DUMP) == 1
+    invalidate.assert_not_called()

@@ -62,7 +62,7 @@ from .entity_param_parsing import (
     _parse_string_list_field,
 )
 from .entity_registry_reads import (
-    _GET_ENTRIES_CHUNK_SIZE,
+    GET_ENTRIES_CHUNK_SIZE,
     NotInRegistry,
     _extract_ws_error,
     get_entries_raw,
@@ -127,7 +127,7 @@ async def fetch_entity_enrichment_via_component(
     caps), or when the command fails, gets no answer, loses its connection or
     answers with a malformed result: the rows then stay as Core serves them.
 
-    The ids are split into ``_GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
+    The ids are split into ``GET_ENTRIES_CHUNK_SIZE`` chunks (the same bound the
     sibling ``config/entity_registry/get_entries`` read uses) so a large bulk
     request cannot produce an over-cap WebSocket frame.
     """
@@ -144,8 +144,8 @@ async def fetch_entity_enrichment_via_component(
             token=client.token,
             verify_ssl=getattr(client, "verify_ssl", None),
         )
-        for i in range(0, len(entity_ids), _GET_ENTRIES_CHUNK_SIZE):
-            chunk = entity_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
+        for i in range(0, len(entity_ids), GET_ENTRIES_CHUNK_SIZE):
+            chunk = entity_ids[i : i + GET_ENTRIES_CHUNK_SIZE]
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
             result = raw.get("result")
             entities = result.get("entities") if isinstance(result, dict) else None

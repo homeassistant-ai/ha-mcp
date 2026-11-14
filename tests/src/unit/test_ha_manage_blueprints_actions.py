@@ -2,8 +2,7 @@
 
 The consolidated tool answers five actions over the same WebSocket client, so
 these tests drive a spy whose ``send_websocket_message`` dispatches on the
-frame ``type`` (the pattern from
-``test_ha_manage_blueprints_component_routing.py``) and pin what the tool sends
+frame ``type`` and pin what the tool sends
 and what it raises:
 
 - the ``confirm=True`` gate on ``delete`` and its existence pre-check,

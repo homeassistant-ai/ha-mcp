@@ -364,41 +364,16 @@ async def _find_collision_in_flow_helpers(
     return None
 
 
-def _flatten_helper_list_result(result: Any) -> list[Any]:
-    """Flatten a {type}/list WS response into a flat list of helper dicts.
+def _flatten_helper_list_result(result: dict[str, Any]) -> list[Any]:
+    """The records of a ``{type}/list`` reply; a refused reply has none.
 
-    Handles the person/list shape ({"storage": [...], "config": [...]}) and
-    the standard list shape ([...]). An unrecognised shape yields an empty
-    list, which downstream is indistinguishable from a helper type that has no
-    entries, so it is logged rather than dropped in silence.
+    person/list answers ``{"storage": [...], "config": [...]}`` (UI-created and
+    YAML persons); every other type answers the list itself.
     """
-    if isinstance(result, dict):
-        inner = result.get("result", [])
-        if isinstance(inner, dict):
-            items: list[Any] = []
-            matched = False
-            for key in ("storage", "config"):
-                sub = inner.get(key)
-                if isinstance(sub, list):
-                    matched = True
-                    items.extend(sub)
-            if not matched:
-                logger.warning(
-                    "Helper listing has neither a 'storage' nor a 'config' list "
-                    "(keys: %s); treating it as empty",
-                    sorted(inner),
-                )
-            return items
-        if isinstance(inner, list):
-            return inner
-    if isinstance(result, list):
-        return result
-    logger.warning(
-        "Cannot flatten a helper listing: expected a list or a storage/config "
-        "split, got %s; treating it as empty",
-        type(result).__name__,
-    )
-    return []
+    inner = result.get("result", [])
+    if isinstance(inner, dict):
+        return [*inner["storage"], *inner["config"]]
+    return list(inner)
 
 
 async def _find_collision_in_simple_helpers(
@@ -408,9 +383,10 @@ async def _find_collision_in_simple_helpers(
     Core's ``{type}/list``."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except HomeAssistantAPIError, ConnectionError, TimeoutError:
+    except (HomeAssistantAPIError, ConnectionError, TimeoutError) as exc:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
+        logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
         return None
     for item in _flatten_helper_list_result(result):
         if not isinstance(item, dict):

@@ -1,100 +1,84 @@
-"""Unit tests for the component-side ``ha_mcp_tools/call_event`` command.
+"""The component's ``ha_mcp_tools/call_event`` command on a real ``hass``.
 
-The command fires the event on Core's own bus in-process and returns the
-event's context plus the listener counts read in the same synchronous pass, so
-the server's ``ha_call_event`` needs no separate ``GET /api/events`` before a
-fire. These tests pin what the component owns: the bus call it makes, the
-context it forwards, and the counts it reports.
-
-Split out of ``test_component_ws_phase2_async.py``, which is over the
-module-size ratchet's limit and cannot grow.
+The command fires the event on Core's own bus and returns the event's context
+plus the listener counts read in the same synchronous pass, so the server's
+``ha_call_event`` needs no separate ``GET /api/events`` before a fire. The
+listeners are Core's, registered with ``hass.bus.async_listen``.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from homeassistant.const import MATCH_ALL
+from homeassistant.core import Event, HomeAssistant, callback
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from ._component_ws_api import wsapi
-
-
-class _CallEventBus:
-    def __init__(self):
-        self.fired = []
-        self.listeners = {}
-
-    def async_fire(self, event_type, event_data, context):
-        self.fired.append((event_type, event_data, context))
-        # A one-shot listener unregisters while the event is dispatched. The
-        # counts describe the audience the event was delivered to, so reading
-        # them after the fire would lose this listener.
-        self.listeners.clear()
-
-    def async_listeners(self):
-        return dict(self.listeners)
+from ._component_core import ws_result
 
 
-class _SelfRemovingListenerBus(_CallEventBus):
-    """A bus whose listener unsubscribes as the event dispatches."""
-
-    def async_fire(self, event_type, event_data, context):
-        super().async_fire(event_type, event_data, context)
-        self.listeners = {}
+def _wildcards(hass: HomeAssistant) -> int:
+    return hass.bus.async_listeners().get(MATCH_ALL, 0)
 
 
-class _CallEventHass:
-    def __init__(self, bus):
-        self.bus = bus
+async def test_a_fire_returns_the_events_context_and_its_audience(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    fired: list[Event] = []
+
+    @callback
+    def record(event: Event) -> None:
+        fired.append(event)
+
+    hass.bus.async_listen("my_event", record)
+    hass.bus.async_listen("my_event", callback(lambda event: None))
+    hass.bus.async_listen(MATCH_ALL, callback(lambda event: None))
+    wildcards = _wildcards(hass)
+
+    result = await ws_result(
+        component_ws,
+        "ha_mcp_tools/call_event",
+        event_type="my_event",
+        event_data={"key": "value"},
+    )
+    await hass.async_block_till_done()
+
+    (event,) = fired
+    assert event.data == {"key": "value"}
+    assert result["event_type"] == "my_event"
+    assert result["context"]["id"] == event.context.id
+    assert (result["listener_count"], result["wildcard_listener_count"]) == (
+        2,
+        wildcards,
+    )
 
 
-class TestCallEventCommand:
-    def test_counts_are_read_before_the_fire(self):
-        """A listener that removes itself on dispatch still counts as listening."""
-        hass = _CallEventHass(_SelfRemovingListenerBus())
-        hass.bus.listeners = {"my_event": 2, "*": 1}
+async def test_a_listener_that_removes_itself_on_the_fire_still_counts(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """The counts describe the audience the event reached."""
+    heard: list[Event] = []
 
-        result = wsapi._do_call_event(
-            hass,
-            {
-                "event_type": "my_event",
-                "ha_mcp_context": SimpleNamespace(as_dict=lambda: {"id": "ctx"}),
-            },
-        )
+    @callback
+    def hear(event: Event) -> None:
+        heard.append(event)
 
-        assert result["listener_count"] == 2
-        assert result["wildcard_listener_count"] == 1
+    hass.bus.async_listen_once("my_event", hear)
+    hass.bus.async_listen("my_event", callback(lambda event: None))
 
-    def test_fires_and_returns_context_and_counts(self):
-        hass = _CallEventHass(_CallEventBus())
-        hass.bus.listeners = {"my_event": 2, "*": 1}
-        context = SimpleNamespace(as_dict=lambda: {"id": "ctx-1"})
+    result = await ws_result(
+        component_ws, "ha_mcp_tools/call_event", event_type="my_event"
+    )
+    await hass.async_block_till_done()
 
-        result = wsapi._do_call_event(
-            hass,
-            {
-                "event_type": "my_event",
-                "event_data": {"key": "value"},
-                "ha_mcp_context": context,
-            },
-        )
+    assert len(heard) == 1
+    assert result["listener_count"] == 2
 
-        assert result == {
-            "event_type": "my_event",
-            "context": {"id": "ctx-1"},
-            "listener_count": 2,
-            "wildcard_listener_count": 1,
-        }
-        assert hass.bus.fired == [("my_event", {"key": "value"}, context)]
 
-    def test_missing_counts_are_zero(self):
-        hass = _CallEventHass(_CallEventBus())
+async def test_an_event_nobody_listens_to_has_no_audience(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    result = await ws_result(
+        component_ws, "ha_mcp_tools/call_event", event_type="new_event"
+    )
 
-        result = wsapi._do_call_event(
-            hass,
-            {
-                "event_type": "new_event",
-                "ha_mcp_context": SimpleNamespace(as_dict=lambda: {"id": "ctx-2"}),
-            },
-        )
-
-        assert result["listener_count"] == 0
-        assert result["wildcard_listener_count"] == 0
+    assert result["listener_count"] == 0
+    assert result["wildcard_listener_count"] == _wildcards(hass)

@@ -1,401 +1,228 @@
-"""Routing tests for ``ha_get_state`` over the ``ha_mcp_tools`` component gate.
+"""``ha_get_state`` reads every id in one component frame, or falls back to REST.
 
-A bulk ``ha_get_state`` fans out to one REST GET per id today. When the component
-advertises the ``states`` capability, both single- and bulk-mode calls resolve
-every id from one ``ha_mcp_tools/states`` frame (``State.as_dict()`` per hit) and
-skip the per-id REST fetch entirely. These tests pin that shared fast path, the
-``MAX_ENTITIES`` cap (enforced regardless of backend), the missing-id error
-contract (ENTITY_NOT_FOUND with the response-level ``ha_search()`` suggestion in
-bulk; a raised ENTITY_NOT_FOUND in single mode), and the error-taxonomy
-fallbacks (silent legacy fallback on ``unknown_command`` and other command
-errors; legacy when the component has no ``states`` capability).
-
-The WS client is an ``AsyncMock`` whose ``send_command`` dispatches on the
-command type; the HA client is a spy that tallies the legacy ``get_entity_state``
-fetches so a test can assert they never ran on the component path.
+With the component's ``states`` command, single and bulk reads resolve every id
+from one ``ha_mcp_tools/states`` frame and never GET ``/api/states/<id>``.
+Without it, or when the frame fails, each id is read over REST, silently: the
+REST answer is the same state. States are Core's, set with
+``hass.states.async_set``.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools import component_api
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
 from ha_mcp.tools.search import state as search_state
-from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.tools_search import SearchTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._command_faults import dropped_on, pooled_socket, received, unanswered
+from ._search_tool import search_tools_on
+from ._tool_errors import error_of
 
-_CAPS_STATES = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["states"],
-    "limits": {},
-}
-
-
-def _as_dict(entity_id: str, state: str, friendly: str) -> dict[str, Any]:
-    """A REST-shaped ``State.as_dict()`` body (what the component returns per hit)."""
-    return {
-        "entity_id": entity_id,
-        "state": state,
-        "attributes": {"friendly_name": friendly},
-        "last_changed": "2026-07-16T00:00:00+00:00",
-        "last_updated": "2026-07-16T00:00:00+00:00",
-        "context": {"id": "01ABC", "parent_id": None, "user_id": None},
-    }
-
-
-_LEGACY_STATES = {
-    "light.a": _as_dict("light.a", "on", "A"),
-    "sensor.b": _as_dict("sensor.b", "21", "B"),
-}
-
-
-def _component_states_result(
-    found: dict[str, dict[str, Any]], missing: list[str]
-) -> dict[str, Any]:
-    return {"states": dict(found), "missing": list(missing)}
-
-
-class RoutingClient:
-    """Credentialed HA client spy: tallies every legacy ``get_entity_state`` fetch."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.get_state_calls = 0
-
-    async def get_config(self) -> dict[str, Any]:
-        return {"time_zone": "UTC"}
-
-    async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
-        self.get_state_calls += 1
-        if entity_id in _LEGACY_STATES:
-            return dict(_LEGACY_STATES[entity_id])
-        raise HomeAssistantAPIError(
-            f"API error: 404 - Entity {entity_id} not found", status_code=404
-        )
-
-
-def _build_get_state(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_search_tools(mcp, client, smart_tools=SmartSearchTools(client=client))
-    return registered["ha_get_state"]
+STATES = "ha_mcp_tools/states"
 
 
 @pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+def _states(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.a", "on", {"friendly_name": "A"})
+    hass.states.async_set("sensor.b", "21", {"friendly_name": "B"})
 
 
-def _states_calls(ws: AsyncMock) -> list[Any]:
-    return [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/states"
-    ]
+def _tools(
+    client: HomeAssistantClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> SearchTools:
+    return search_tools_on(client, tmp_path, monkeypatch)
 
 
-@pytest.mark.asyncio
-async def test_bulk_served_by_component_with_missing_contract() -> None:
-    """Bulk call: hits from the component, a missing id lands in errors with the
-    response-level ha_search suggestion; the legacy REST fetch never runs."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_result=_component_states_result(
-            {k: _LEGACY_STATES[k] for k in ("light.a", "sensor.b")},
-            ["light.ghost"],
-        ),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
+@contextmanager
+def _rest_reads(client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    with patch.object(client, "get_entity_state", wraps=client.get_entity_state) as spy:
+        yield spy
 
-    with patch_ws(ws, search_state):
-        resp = await get_state(["light.a", "sensor.b", "light.ghost"])
+
+async def test_a_bulk_read_is_one_component_frame_with_missing_ids_named(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
+
+    with (
+        received(hass, STATES) as seen,
+        _rest_reads(component_core_client) as rest,
+    ):
+        resp = await tools.ha_get_state(
+            entity_id=["light.a", "sensor.b", "light.ghost"]
+        )
 
     data = resp["data"]
-    assert data["success"] is True
     assert set(data["states"]) == {"light.a", "sensor.b"}
     assert data["states"]["light.a"]["state"] == "on"
-    assert data["error_count"] == 1
-    assert data["errors"][0]["entity_id"] == "light.ghost"
-    assert data["errors"][0]["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert [(e["entity_id"], e["error"]["code"]) for e in data["errors"]] == [
+        ("light.ghost", "ENTITY_NOT_FOUND")
+    ]
     assert any("ha_search()" in s for s in data["suggestions"])
     assert data["partial"] is True
-    # One component frame, one cached info probe, zero legacy REST GETs.
-    assert len(_states_calls(ws)) == 1
-    assert client.get_state_calls == 0
-    assert _states_calls(ws)[0].kwargs["entity_ids"] == [
-        "light.a",
-        "sensor.b",
-        "light.ghost",
+    assert [msg["entity_ids"] for msg in seen[STATES]] == [
+        ["light.a", "sensor.b", "light.ghost"]
     ]
+    rest.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_single_entity_served_by_component() -> None:
-    """A single string entity_id routes through the same component read."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_result=_component_states_result({"light.a": _LEGACY_STATES["light.a"]}, []),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
-
-    with patch_ws(ws, search_state):
-        resp = await get_state("light.a")
-
-    assert resp["data"]["entity_id"] == "light.a"
-    assert resp["data"]["state"] == "on"
-    assert len(_states_calls(ws)) == 1
-    assert client.get_state_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_single_missing_via_component_raises_not_found() -> None:
-    """A component-reported missing id raises the same ENTITY_NOT_FOUND (with its
-    ha_search suggestion) the legacy single-entity 404 raises."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_result=_component_states_result({}, ["light.ghost"]),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
-
-    with patch_ws(ws, search_state), pytest.raises(ToolError) as excinfo:
-        await get_state("light.ghost")
-
-    msg = str(excinfo.value)
-    assert "ENTITY_NOT_FOUND" in msg
-    assert "ha_search" in msg
-    # The component authoritatively reported it missing — no legacy REST GET.
-    assert client.get_state_calls == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "cmd_result",
-    [{"states": ["not", "a", "dict"], "missing": []}, ["not", "a", "dict"]],
-    ids=["states-not-dict", "result-not-dict"],
-)
-async def test_malformed_states_payload_falls_back_to_legacy(
-    cmd_result: Any, caplog: pytest.LogCaptureFixture
+async def test_a_single_read_is_the_same_component_frame(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A component payload whose ``states`` (or whole ``result``) is not a dict
-    (shape drift) is a None miss → legacy per-id REST fetch serves the read
-    (issue #1813 T3), and the operator log names the drift."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_result=cmd_result,
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
 
-    with patch_ws(ws, search_state):
-        resp = await get_state("light.a")
+    with (
+        received(hass, STATES) as seen,
+        _rest_reads(component_core_client) as rest,
+    ):
+        resp = await tools.ha_get_state(entity_id="light.a")
 
-    assert resp["data"]["entity_id"] == "light.a"
-    assert resp["data"]["state"] == "on"
-    # The component was tried once, but its malformed shape routed to legacy REST.
-    assert len(_states_calls(ws)) == 1
-    assert client.get_state_calls == 1
-    assert "warnings" not in resp
-    assert any(
-        r.levelname == "WARNING" and "malformed payload" in r.getMessage()
-        for r in caplog.records
-    )
+    assert (resp["data"]["entity_id"], resp["data"]["state"]) == ("light.a", "on")
+    assert len(seen[STATES]) == 1
+    rest.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_max_entities_enforced_regardless_of_backend() -> None:
-    """Over-limit bulk call is rejected before any backend is touched."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_result=_component_states_result({}, []),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
-    too_many = [f"light.l{i}" for i in range(101)]
+async def test_a_single_id_the_component_reports_missing_is_not_found(
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same ENTITY_NOT_FOUND, with its ha_search hint, as a REST 404."""
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
 
-    with patch_ws(ws, search_state), pytest.raises(ToolError) as excinfo:
-        await get_state(too_many)
+    with _rest_reads(component_core_client) as rest, pytest.raises(ToolError) as exc:
+        await tools.ha_get_state(entity_id="light.ghost")
 
-    assert "exceeds maximum of 100" in str(excinfo.value)
-    # Neither the component nor the legacy path is consulted.
-    assert not _states_calls(ws)
-    assert client.get_state_calls == 0
+    assert error_of(exc)["code"] == "ENTITY_NOT_FOUND"
+    assert "ha_search" in str(exc.value)
+    rest.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_capsless_component_uses_legacy_per_id() -> None:
-    """Old component (info unknown_command) → legacy per-id REST fetch."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
+async def test_more_than_100_ids_are_refused_before_any_read(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
 
-    with patch_ws(ws, search_state):
-        resp = await get_state(["light.a", "sensor.b"])
+    with (
+        received(hass, STATES) as seen,
+        _rest_reads(component_core_client) as rest,
+        pytest.raises(ToolError, match="exceeds maximum of 100"),
+    ):
+        await tools.ha_get_state(entity_id=[f"light.l{i}" for i in range(101)])
+
+    assert seen[STATES] == []
+    rest.assert_not_awaited()
+
+
+async def test_without_the_component_each_id_is_read_over_rest(
+    core_client: HomeAssistantClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tools = _tools(core_client, tmp_path, monkeypatch)
+
+    with _rest_reads(core_client) as rest:
+        resp = await tools.ha_get_state(entity_id=["light.a", "sensor.b"])
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
-    assert not _states_calls(ws)
-    assert client.get_state_calls == 2
+    assert rest.await_count == 2
     assert "warnings" not in resp["data"]
     assert "warnings" not in resp
 
 
-@pytest.mark.asyncio
-async def test_unknown_command_falls_back_to_legacy_silently(
+async def test_a_downgraded_component_falls_back_silently_and_is_dropped(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """unknown_command on the states call → invalidate caps + silent legacy fetch."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
+    assert await get_component_caps(component_core_client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], STATES)
 
-    with patch_ws(ws, search_state):
-        resp = await get_state(["light.a"])
+    with (
+        patch.object(search_state, "invalidate_caps", wraps=invalidate_caps) as drop,
+        _rest_reads(component_core_client) as rest,
+    ):
+        resp = await tools.ha_get_state(entity_id=["light.a"])
 
     assert resp["data"]["states"]["light.a"]["state"] == "on"
-    assert client.get_state_calls == 1
+    assert rest.await_count == 1
     assert "warnings" not in resp["data"]
     assert "warnings" not in resp
-    # The caps were invalidated, so the timezone wrapper probes info again.
-    info_calls = [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
-    ]
-    assert len(info_calls) == 2
+    drop.assert_called_once_with(component_core_client)
     assert not any("states failed" in r.getMessage() for r in caplog.records)
 
 
-@pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy_silently(
+async def test_a_frame_core_never_answers_falls_back_and_keeps_the_component(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A non-unknown command error / timeout → silent legacy fetch (no warning)."""
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
+    """A timeout is no downgrade: REST serves, the capabilities stay, the log
+    says the frame failed."""
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
 
-    with patch_ws(ws, search_state):
-        resp = await get_state(["light.a", "sensor.b"])
-
-    assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
-    assert client.get_state_calls == 2
-    assert "warnings" not in resp["data"]
-    assert "warnings" not in resp
-    # A timeout keeps the cached caps (one info probe) and logs as a command failure.
-    info_calls = [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
-    ]
-    assert len(info_calls) == 1
-    assert any(
-        r.levelname == "WARNING" and "states failed" in r.getMessage()
-        for r in caplog.records
-    )
-
-
-@pytest.mark.asyncio
-async def test_ws_connection_error_falls_back_to_legacy_rest(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A WS transport failure on the component read falls back to the REST legacy
-    path — a SEPARATE transport — instead of surfacing a spurious connection error.
-
-    ``ha_get_state``'s legacy read is REST ``get_entity_state`` (not the WebSocket
-    the search/overview legacy paths share), so an install whose REST API still
-    works must keep getting its state when only the component WS is down (Codex P2).
-    """
-    ws = make_ws(
-        "ha_mcp_tools/states",
-        info_result=_CAPS_STATES,
-        cmd_exc=HomeAssistantConnectionError("WebSocket not authenticated"),
-    )
-    client = RoutingClient()
-    get_state = _build_get_state(client)
-
-    with patch_ws(ws, search_state):
-        resp = await get_state(["light.a", "sensor.b"])
-
-    # The connection error was caught → both ids served from the REST legacy path.
-    assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
-    assert client.get_state_calls == 2
-    assert "warnings" not in resp["data"]
-    assert "warnings" not in resp
-    # The component was tried exactly once before falling back.
-    assert len(_states_calls(ws)) == 1
-    assert any(
-        r.levelname == "WARNING" and "connection error" in r.getMessage()
-        for r in caplog.records
-    )
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy_rest(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A failed (re)connect in ``get_websocket_client()`` (a
-    ``HomeAssistantConnectionError``, #1947) also falls back to the REST legacy
-    path instead of surfacing a spurious connection error."""
-    caps_ws = make_ws("ha_mcp_tools/states", info_result=_CAPS_STATES)
-    client = RoutingClient()
-    get_state = _build_get_state(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        search_state,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
+    with (
+        patch.object(search_state, "invalidate_caps", wraps=invalidate_caps) as drop,
+        _rest_reads(component_core_client) as rest,
     ):
-        resp = await get_state(["light.a", "sensor.b"])
+        async with unanswered(hass, STATES, monkeypatch):
+            resp = await tools.ha_get_state(entity_id=["light.a", "sensor.b"])
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
-    assert client.get_state_calls == 2
-    assert "warnings" not in resp["data"]
+    assert rest.await_count == 2
+    assert "warnings" not in resp
+    drop.assert_not_called()
+    assert any(
+        r.levelno == logging.WARNING and "states failed" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+async def test_a_dropped_socket_falls_back_to_rest(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """REST is a separate transport: an install whose WebSocket dropped still
+    gets its states instead of a connection error."""
+    tools = _tools(component_core_client, tmp_path, monkeypatch)
+    assert await get_component_caps(component_core_client) is not None
+    socket = await pooled_socket(component_core_client)
+
+    with (
+        dropped_on(hass, STATES, socket),
+        _rest_reads(component_core_client) as rest,
+    ):
+        resp = await tools.ha_get_state(entity_id=["light.a", "sensor.b"])
+
+    assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
+    assert rest.await_count == 2
     assert "warnings" not in resp
     assert any(
-        r.levelname == "WARNING" and "connection error" in r.getMessage()
+        r.levelno == logging.WARNING and "connection error" in r.getMessage()
         for r in caplog.records
     )

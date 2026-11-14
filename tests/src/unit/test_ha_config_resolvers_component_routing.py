@@ -1,403 +1,289 @@
-"""Routing tests for the entity_lookup component consumer.
+"""Routing of the scene entity resolver over the component's ``entity_lookup``.
 
-A set/remove/post-write consumer pays for a whole-collection fetch to answer
-a single question, and routes through the ``ha_mcp_tools`` component when it
-advertises the capability:
+Removing a scene needs its entity_id, which Core derives from the scene's name,
+not from its storage key. The legacy resolve lists the whole entity registry
+(with one retry); with the component one ``entity_lookup`` frame answers. An
+empty answer right after a write can be Core's registration lag (#1168), so it
+is rechecked once; an empty recheck falls back to ``scene.<key>``, and a
+recheck that gets no answer falls to the legacy resolve instead of guessing.
+Every miss of the component (no capability, a command it no longer knows, a
+timeout, a socket that cannot be opened) runs the legacy resolve. Reading a
+scene never asks the component (the config-get invariant).
 
-- ``ConfigSceneTools._resolve_scene_entity_id`` (unique_id -> entity_id) dumps the
-  ENTIRE entity registry with a 0.2 s sleep + retry; the component path is one
-  ``entity_lookup`` frame on a hit, and ONE recheck frame after a single sleep on
-  an empty result (post-upsert registration lag still applies to an in-process
-  read). An AUTHORITATIVE empty recheck falls to the naive fallback; a recheck
-  that itself returns ``None`` (component went unavailable mid-retry) drops to the
-  legacy registry list+retry instead of trusting the empty and guessing.
-
-These pin the standard component-routing taxonomy: component
-preferred, capability-miss -> legacy, ``unknown_command`` -> invalidate caps +
-legacy, non-unknown command error -> legacy WITHOUT invalidating, AND a
-transport failure -> legacy: both a
-``HomeAssistantConnectionError`` off the frame AND the same error from
-``get_websocket_client()`` failing to establish the socket fall back rather than
-propagate. The scene resolver's legacy scan rides the ``send_websocket_message``
-bridge (with a naive ``scene.{id}`` fallback), so an escaping error would abort a
-landed write / a delete the legacy path would have completed. Plus the GET-path
-invariant: with ``allow_component`` unset
-(the config-get default) the resolvers never touch the component even with the
-capability advertised, and a component HIT takes NO ``asyncio.sleep`` (only an
-empty scene result pays the one lag-absorbing recheck sleep).
-
-The WS client is the shared ``make_ws`` dispatcher; the HA client is a spy that
-tallies every legacy fetch so "the legacy dump never ran" is a real assertion.
+The server's own client runs on a real ``hass``: the scene lives in Core's
+``scenes.yaml`` and Core removes it. The tool waits for the entity it resolved
+to disappear, so the entity_id whose state it polls is the one it resolved. A
+spy on the pooled socket records the frames it sent.
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections import Counter
-from typing import Any
-from unittest.mock import AsyncMock
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from itertools import count
+from typing import Any, NamedTuple
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
+from custom_components.ha_mcp_tools import websocket_api as component_ws_api
+from custom_components.ha_mcp_tools.websocket_api import system
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import component_api, component_config_reads
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
+from ._client_spies import sent_commands
+from ._config_dir_yaml import setup_scenes
+from ._routing_core import (
+    held_command,
+    invalidations,
+    pooled_socket,
+    sent_frames,
+    sent_types,
 )
 
-_CAPS_ENTITY_LOOKUP = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["entity_lookup"],
-    "limits": {},
-}
-
-# A component that answers ``info`` but does not advertise ``entity_lookup``
-# (only the unrelated ``search``) — the caps-miss branch.
-_CAPS_OTHER = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["search"],
-    "limits": {},
-}
+LOOKUP = "ha_mcp_tools/entity_lookup"
+ENTITY_DUMP = "config/entity_registry/list"
+SCENE_ID = "night_light_led_desk_strip"
+# Core names the entity after the scene's name, not its storage key.
+ENTITY_ID = "scene.led_desk_strip_night_light"
+NAIVE_ID = f"scene.{SCENE_ID}"
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies every legacy fetch the consumers make."""
+class Removed(NamedTuple):
+    lookups: list[dict[str, Any]]
+    dumps: int
+    polled: list[str]
 
-    def __init__(
-        self,
-        *,
-        registry_list: list[dict[str, Any]] | None = None,
-        states: list[dict[str, Any]] | None = None,
-        services: list[dict[str, Any]] | None = None,
+
+@pytest.fixture
+async def scene(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """The scene in ``scenes.yaml``, switching an input_boolean."""
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    await setup_scenes(
+        hass,
+        [
+            {
+                "id": SCENE_ID,
+                "name": "LED Desk Strip Night Light",
+                "entities": {"input_boolean.tv": "on"},
+            }
+        ],
+    )
+    assert er.async_get(hass).async_get_entity_id("scene", "homeassistant", SCENE_ID)
+
+
+@pytest.fixture
+def client(
+    hass: HomeAssistant, scene: None, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    component_ws_api.async_register_commands(hass)
+    return core_client
+
+
+def _move_unique_id(hass: HomeAssistant, unique_id: str) -> None:
+    """Point the scene's registry entry at ``unique_id``: the entry for the
+    storage key is not (or, restored, is again) in the registry."""
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("scene", "homeassistant", SCENE_ID)
+    entity_id = entity_id or registry.async_get_entity_id(
+        "scene", "homeassistant", "registering"
+    )
+    assert entity_id is not None
+    registry.async_update_entity(entity_id, new_unique_id=unique_id)
+
+
+@contextmanager
+def _before_each_lookup(
+    hass: HomeAssistant, before: Callable[[int], None]
+) -> Iterator[None]:
+    """Run ``before(n)`` as Core receives the n-th entity_lookup, then let the
+    component answer it."""
+    core_handler, schema = hass.data[websocket_api.DOMAIN][LOOKUP]
+    calls = count()
+
+    @callback
+    def observe(
+        core: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
     ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self._registry_list = list(registry_list or [])
-        self.ws_types: Counter[str] = Counter()
-        self.get_states = AsyncMock(return_value=list(states or []))
-        self.get_services = AsyncMock(return_value=list(services or []))
+        before(next(calls))
+        core_handler(core, connection, msg)
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type", "")
-        self.ws_types[msg_type] += 1
-        if msg_type == "config/entity_registry/list":
-            return {"success": True, "result": list(self._registry_list)}
-        return {"success": False}
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+    websocket_api.async_register_command(hass, LOOKUP, observe, schema)
     yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
 
 
-def _lookup_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/entity_lookup"
-    ]
-
-
-def _lookup_seq_ws(match_seq: list[list[dict[str, Any]]]) -> AsyncMock:
-    """WS serving the caps ``info`` probe + a scripted ``entity_lookup`` sequence.
-
-    The i-th ``entity_lookup`` frame returns ``{"matches": match_seq[i]}`` (the
-    last element repeats if more frames arrive), so a lag scenario — first frame
-    empty, recheck frame populated — can be pinned. ``make_ws`` serves a single
-    fixed result and cannot express that.
-    """
-    ws = AsyncMock()
-    idx = {"n": 0}
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            return {"success": True, "result": _CAPS_ENTITY_LOOKUP}
-        if command_type == "ha_mcp_tools/entity_lookup":
-            i = min(idx["n"], len(match_seq) - 1)
-            idx["n"] += 1
-            return {"success": True, "result": {"matches": match_seq[i]}}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-# =============================================================================
-# Scene resolver — _resolve_scene_entity_id
-# =============================================================================
-class TestSceneResolverRouting:
-    @pytest.mark.asyncio
-    async def test_component_preferred_no_dump_no_sleep(self, monkeypatch) -> None:
-        """entity_lookup serves the resolve in one frame; the legacy registry dump
-        never runs and NO ``asyncio.sleep`` is taken (in-process read is
-        authoritative on return)."""
-        sleep_mock = AsyncMock()
-        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={
-                "matches": [
-                    {"entity_id": "scene.led_desk_strip_night_light"},
-                ]
-            },
+async def _remove(hass: HomeAssistant, client: HomeAssistantClient) -> Removed:
+    socket = await pooled_socket(client)
+    with (
+        sent_commands(socket) as sent,
+        patch.object(
+            client, "get_entity_state", AsyncMock(wraps=client.get_entity_state)
+        ) as states,
+    ):
+        resp = await ConfigSceneTools(client).ha_config_remove_scene(
+            scene_id=SCENE_ID, wait=True
         )
-        # A registry dump that WOULD resolve differently, to prove it is not read.
-        client = RoutingClient(registry_list=[])
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "night_light_led_desk_strip", allow_component=True
-            )
-        assert entity_id == "scene.led_desk_strip_night_light"
-        assert client.ws_types["config/entity_registry/list"] == 0
-        assert len(_lookup_calls(ws)) == 1
-        assert _lookup_calls(ws)[0].kwargs == {
-            "unique_id": "night_light_led_desk_strip",
-            "domain": "scene",
-        }
-        assert sleep_mock.await_count == 0
+    assert resp["success"] is True
+    # Core reloads its scenes after the delete; let that finish too.
+    await hass.async_block_till_done()
+    return Removed(
+        sent_frames(sent, LOOKUP),
+        sent_types(sent).count(ENTITY_DUMP),
+        [str(call.args[0]) for call in states.call_args_list],
+    )
 
-    @pytest.mark.asyncio
-    async def test_component_empty_then_populated_rechecks_once(
-        self, monkeypatch
-    ) -> None:
-        """Post-upsert registration lag (#1168): the first entity_lookup is empty,
-        the recheck after ONE ``_RESOLVE_RETRY_DELAY`` sleep sees the freshly
-        registered scene → the real entity_id, not the naive fallback. Two frames,
-        exactly one sleep, no legacy dump."""
-        sleep_mock = AsyncMock()
-        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
-        ws = _lookup_seq_ws([[], [{"entity_id": "scene.led_desk_strip_night_light"}]])
-        client = RoutingClient()
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "night_light_led_desk_strip", allow_component=True
-            )
-        assert entity_id == "scene.led_desk_strip_night_light"
-        assert len(_lookup_calls(ws)) == 2
-        assert sleep_mock.await_count == 1
-        assert sleep_mock.await_args.args == (ConfigSceneTools._RESOLVE_RETRY_DELAY,)
-        assert client.ws_types["config/entity_registry/list"] == 0
 
-    @pytest.mark.asyncio
-    async def test_component_empty_twice_falls_back_to_naive(self, monkeypatch) -> None:
-        """Empty on BOTH the first lookup and the recheck ⇒ the authoritative
-        naive ``scene.{scene_id}`` fallback, after exactly one recheck sleep and
-        still no legacy registry dump."""
-        sleep_mock = AsyncMock()
-        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={"matches": []},
-        )
-        client = RoutingClient()
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 0
-        assert len(_lookup_calls(ws)) == 2
-        assert sleep_mock.await_count == 1
+async def test_one_component_frame_resolves_the_scene_without_a_registry_dump(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """A hit is not rechecked, so no settle delay is paid for it."""
+    removed = await _remove(hass, client)
 
-    @pytest.mark.asyncio
-    async def test_component_empty_then_recheck_none_falls_back_to_legacy(
-        self, monkeypatch
-    ) -> None:
-        """First lookup empty, then the recheck itself comes back unavailable
-        (``None`` — the component errored/downgraded mid-retry) ⇒ the first empty
-        is NOT authoritative, so resolution drops to the legacy registry list+retry
-        (which resolves the scene) rather than the naive ``scene.{scene_id}``
-        guess. Two component frames, one recheck sleep, and the legacy dump runs."""
-        sleep_mock = AsyncMock()
-        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+    assert removed.lookups == [{"unique_id": SCENE_ID, "domain": "scene"}]
+    assert removed.dumps == 0
+    assert ENTITY_ID in removed.polled
+    assert hass.states.get(ENTITY_ID) is None
 
-        idx = {"n": 0}
 
-        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-            if command_type == "ha_mcp_tools/info":
-                return {"success": True, "result": _CAPS_ENTITY_LOOKUP}
-            if command_type == "ha_mcp_tools/entity_lookup":
-                idx["n"] += 1
-                if idx["n"] == 1:
-                    return {"success": True, "result": {"matches": []}}
-                # The recheck frame fails — component went unavailable mid-retry,
-                # so fetch_entity_lookup_via_component returns None.
-                raise HomeAssistantCommandTimeout("recheck timeout")
-            raise AssertionError(f"unexpected command {command_type!r}")
+async def test_an_empty_lookup_is_rechecked_once_and_finds_a_late_registration(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The entry lands in the registry between the two reads (#1168): the real
+    entity_id, not the ``scene.<key>`` guess, and no registry dump."""
+    _move_unique_id(hass, "registering")
 
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(side_effect=_send)
+    def land(n: int) -> None:
+        if n == 1:
+            _move_unique_id(hass, SCENE_ID)
 
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        # Resolved from the legacy registry dump, not the naive guess.
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        assert len(_lookup_calls(ws)) == 2
-        assert sleep_mock.await_count == 1
+    with _before_each_lookup(hass, land):
+        removed = await _remove(hass, client)
 
-    @pytest.mark.asyncio
-    async def test_get_path_never_touches_component(self) -> None:
-        """With ``allow_component`` unset (the config-get default), the resolver
-        never probes caps nor sends a frame even though the component advertises
-        entity_lookup — it serves from the legacy registry list. Guards the
-        TestConfigGetSeam invariant at the resolver level."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_result={"matches": [{"entity_id": "scene.wrong"}]},
-        )
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night"
-            )
-        assert entity_id == "scene.movie_night"
-        # The component WS was never touched — not even the caps probe.
-        assert ws.send_command.await_count == 0
-        assert client.ws_types["config/entity_registry/list"] == 1
+    assert len(removed.lookups) == 2
+    assert removed.dumps == 0
+    assert ENTITY_ID in removed.polled
+    assert NAIVE_ID not in removed.polled
 
-    @pytest.mark.asyncio
-    async def test_caps_miss_falls_back_to_legacy(self) -> None:
-        """A component that answers ``info`` but lacks entity_lookup → legacy list."""
-        ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_OTHER)
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        assert not _lookup_calls(ws)
 
-    @pytest.mark.asyncio
-    async def test_unknown_command_invalidates_and_falls_back(self) -> None:
-        """unknown_command on entity_lookup → invalidate caps + legacy list."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-        )
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        assert client not in component_api._CAPS_CACHE
+async def test_an_empty_recheck_falls_back_to_the_storage_key_guess(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component said twice that no entity has the key: that answer is
+    authoritative, so the registry is not dumped."""
+    _move_unique_id(hass, "elsewhere")
 
-    @pytest.mark.asyncio
-    async def test_command_timeout_falls_back_without_invalidating(self) -> None:
-        """A non-unknown command error (timeout) → legacy list WITHOUT dropping the
-        still-advertised capability."""
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantCommandTimeout("timeout"),
-        )
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        assert client in component_api._CAPS_CACHE
+    removed = await _remove(hass, client)
 
-    @pytest.mark.asyncio
-    async def test_connection_error_falls_back_to_legacy(self) -> None:
-        """A WS-down error on the entity_lookup frame falls back to the legacy list.
+    assert len(removed.lookups) == 2
+    assert removed.dumps == 0
+    assert NAIVE_ID in removed.polled
 
-        The resolver's legacy path rides the ``send_websocket_message``
-        bridge (and, on an empty scan, the naive ``scene.{id}`` fallback), so it does
-        NOT die identically on a pooled-WS drop. ``fetch_entity_lookup_via_component``
-        catches the error and returns ``None`` so the legacy scan runs — an escaping
-        error would report a landed scene write as failed.
-        """
-        ws = make_ws(
-            "ha_mcp_tools/entity_lookup",
-            info_result=_CAPS_ENTITY_LOOKUP,
-            cmd_exc=HomeAssistantConnectionError("ws down"),
-        )
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws(ws, component_config_reads):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        # A transient connection error is not a downgrade — caps stay cached.
-        assert client in component_api._CAPS_CACHE
 
-    @pytest.mark.asyncio
-    async def test_ws_establish_failure_falls_back_to_legacy(self) -> None:
-        """A failed establish in ``get_websocket_client()`` → legacy.
+async def test_an_unanswered_recheck_falls_back_to_the_registry_not_a_guess(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The first empty answer is no verdict once the recheck gets none: the
+    legacy registry list resolves the scene."""
+    _move_unique_id(hass, "registering")
+    lookups = count()
 
-        After caps are cached, ``WebSocketManager`` raises
-        ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled
-        socket for the read. The helper catches it → ``None`` so the resolver's
-        legacy scan runs.
-        """
-        caps_ws = make_ws("ha_mcp_tools/entity_lookup", info_result=_CAPS_ENTITY_LOOKUP)
-        client = RoutingClient(
-            registry_list=[
-                {"entity_id": "scene.movie_night", "unique_id": "movie_night"}
-            ]
-        )
-        with patch_ws_establish_failure(
-            caps_ws,
+    def hold_the_recheck(msg: dict[str, Any]) -> bool:
+        if next(lookups) == 0:
+            return False
+        _move_unique_id(hass, SCENE_ID)
+        return True
+
+    async with held_command(hass, client, LOOKUP, when=hold_the_recheck):
+        removed = await _remove(hass, client)
+
+    assert len(removed.lookups) == 2
+    assert removed.dumps == 1
+    assert ENTITY_ID in removed.polled
+    assert NAIVE_ID not in removed.polled
+
+
+async def test_reading_a_scene_never_asks_the_component(
+    client: HomeAssistantClient,
+) -> None:
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await ConfigSceneTools(client).ha_config_get_scene(scene_id=SCENE_ID)
+
+    assert resp["success"] is True
+    types = sent_types(sent)
+    assert LOOKUP not in types
+    assert types.count(ENTITY_DUMP) == 1
+
+
+async def test_a_component_without_the_capability_leaves_it_to_the_registry(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        system,
+        "CAPABILITIES",
+        [c for c in system.CAPABILITIES if c != "entity_lookup"],
+    )
+
+    removed = await _remove(hass, client)
+
+    assert removed.lookups == []
+    assert removed.dumps == 1
+    assert ENTITY_ID in removed.polled
+
+
+async def test_a_component_without_the_command_is_invalidated_and_core_resolves(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], LOOKUP)
+
+    with invalidations(component_config_reads) as invalidate:
+        removed = await _remove(hass, client)
+
+    assert removed.dumps == 1
+    assert ENTITY_ID in removed.polled
+    invalidate.assert_called_once_with(client)
+
+
+async def test_a_timed_out_lookup_falls_back_and_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    async with held_command(hass, client, LOOKUP):
+        with invalidations(component_config_reads) as invalidate:
+            removed = await _remove(hass, client)
+
+    assert removed.dumps == 1
+    assert ENTITY_ID in removed.polled
+    invalidate.assert_not_called()
+
+
+async def test_an_unreachable_component_socket_falls_back_to_the_registry(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """An escaping error would report a landed removal as failed; the legacy
+    resolve rides the WebSocket bridge, not the component's socket."""
+    assert await component_api.get_component_caps(client) is not None
+
+    with (
+        patch.object(
             component_config_reads,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ):
-            entity_id = await ConfigSceneTools(client)._resolve_scene_entity_id(
-                "movie_night", allow_component=True
-            )
-        assert entity_id == "scene.movie_night"
-        assert client.ws_types["config/entity_registry/list"] == 1
-        assert client in component_api._CAPS_CACHE
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        invalidations(component_config_reads) as invalidate,
+    ):
+        removed = await _remove(hass, client)
+
+    assert removed.dumps == 1
+    assert ENTITY_ID in removed.polled
+    invalidate.assert_not_called()
