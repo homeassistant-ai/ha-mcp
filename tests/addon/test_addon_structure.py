@@ -5,17 +5,12 @@ import os
 import re
 import stat
 import sys
+import tomllib
 import warnings
 from pathlib import Path
 
 import pytest
 import yaml
-
-try:
-    import tomllib  # Python 3.11+
-except ImportError:
-    import tomli as tomllib  # Fallback for older Python
-
 
 ADDON_DIR = "homeassistant-addon"
 _REPO_ROOT = Path(__file__).resolve().parents[2]

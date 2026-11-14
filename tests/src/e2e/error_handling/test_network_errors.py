@@ -852,7 +852,7 @@ class TestErrorHandling:
 
 
 async def _safe_tool_call_standalone(
-    mcp_client, tool_name: str, params: dict[str, Any] = None, timeout: float = 10.0
+    mcp_client, tool_name: str, params: dict | None = None, timeout: float = 10.0
 ):
     """Standalone safe wrapper for tool calls with timeout protection."""
     if params is None:

@@ -25,7 +25,7 @@ def _jpeg(
     ``Lf``), matching what real camera firmware emits.
     """
     app1_payload = b"Exif\x00\x00" + b"\x00" * 16
-    app1 = (
+    app1_segment = (
         b"\xff\xe1" + (len(app1_payload) + 2).to_bytes(2, "big") + app1_payload
         if app1
         else b""  # no APP1: bare SOI + SOF0 + EOI
@@ -41,7 +41,7 @@ def _jpeg(
         + b"\x01"  # one component
         + b"\x01\x11\x00"  # component: id 1, 1x1 sampling, table 0
     )
-    return b"\xff\xd8" + extra_segments + app1 + sof0 + b"\xff\xd9"
+    return b"\xff\xd8" + extra_segments + app1_segment + sof0 + b"\xff\xd9"
 
 
 def _png(width: int, height: int) -> bytes:

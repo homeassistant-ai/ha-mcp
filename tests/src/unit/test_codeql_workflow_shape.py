@@ -28,7 +28,7 @@ from __future__ import annotations
 import importlib.util
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import yaml
 
@@ -49,7 +49,7 @@ _LANGUAGES = ("python", "javascript")
 _JOB_CAP_SLACK = 3
 
 
-def _is_budget(value: object) -> bool:
+def _is_budget(value: object) -> TypeGuard[int]:
     """True for a value a workflow can actually use as `timeout-minutes`.
 
     `bool` is a subclass of `int`, so a stray `true` would pass an
@@ -60,7 +60,7 @@ def _is_budget(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _workflow() -> dict[str, Any]:
+def _workflow() -> dict[Any, Any]:
     """The workflow as YAML, re-read on every call so no test caches it."""
     return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
 

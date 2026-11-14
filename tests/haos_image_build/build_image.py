@@ -39,9 +39,9 @@ if __package__:  # imported by the unit tests
     from .python_base import copy_addon_tree
     from .supervisor_logs import log_supervisor_tail
 else:  # python3 tests/haos_image_build/build_image.py
-    from dev_addon_tree import stage_dev_addon_tree
-    from python_base import copy_addon_tree
-    from supervisor_logs import log_supervisor_tail
+    from dev_addon_tree import stage_dev_addon_tree  # type: ignore[no-redef]
+    from python_base import copy_addon_tree  # type: ignore[no-redef]
+    from supervisor_logs import log_supervisor_tail  # type: ignore[no-redef]
 
 LOG = logging.getLogger("haos_image_build")
 
@@ -592,7 +592,7 @@ class HAWebSocket:
             + "/api/websocket"
         )
         self._credentials = credentials
-        self._ws = None  # type: ignore[var-annotated]
+        self._ws: Any = None
         self._next_id = 0
 
     def __enter__(self) -> HAWebSocket:
@@ -2232,7 +2232,7 @@ def _configure_supervisor_image_variant(
             timeout=timeout,
         )
 
-    if core_version is None:
+    if core_version is None or base_url is None:
         return
 
     _wait_supervisor_running(ws)

@@ -281,5 +281,7 @@ class TestEmbeddedListenerBehaviour:
         """
         import uvicorn.config
 
-        assert "websockets" in uvicorn.config.WS_PROTOCOLS["websockets-sansio"]
+        sansio = uvicorn.config.WS_PROTOCOLS["websockets-sansio"]
+        assert sansio is not None
+        assert "websockets" in sansio
         assert uvicorn.config.WS_PROTOCOLS["none"] is None
