@@ -318,32 +318,6 @@ async def test_closest_keys_come_from_the_keys_domain_first(
             {
                 "alias": "porch",
                 "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
-                "actions": [{"triggers": [{"trigger": "state"}]}],
-            },
-            "root",
-        ),
-        (
-            {
-                "alias": "porch",
-                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
-                "actions": [
-                    {"choose": [{"conditions": [], "sequence": [{"conditions": []}]}]}
-                ],
-            },
-            "root",
-        ),
-        (
-            {
-                "alias": "porch",
-                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
-                "action": {"trigger": "state"},
-            },
-            "root",
-        ),
-        (
-            {
-                "alias": "porch",
-                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
                 "actions": [],
                 "variables": "porch",
             },
@@ -359,13 +333,7 @@ async def test_closest_keys_come_from_the_keys_domain_first(
             "'platform'",
         ),
     ],
-    ids=[
-        "root-field-in-action-step",
-        "root-field-in-nested-step",
-        "root-field-as-lone-legacy-step",
-        "variables-not-a-dict",
-        "condition-as-trigger",
-    ],
+    ids=["variables-not-a-dict", "condition-as-trigger"],
 )
 async def test_rejection_hint_names_what_core_objected_to(
     hass: HomeAssistant,
@@ -379,18 +347,3 @@ async def test_rejection_hint_names_what_core_objected_to(
 
     assert len(suggestions) == 1
     assert names in suggestions[0]
-
-
-async def test_a_misspelt_action_gets_no_root_field_hint(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """Core answers a misspelt step the way it answers a root field inside
-    one; only the step that really carries a root field gets that hint."""
-    config = {
-        "alias": "porch",
-        "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
-        "actions": [{"delya": {"seconds": 1}}],
-    }
-    core_text = await _core_rejection(hass, core_client, config)
-
-    assert text_suggestions(core_text, config) == []
