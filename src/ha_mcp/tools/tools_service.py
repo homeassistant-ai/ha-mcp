@@ -1690,9 +1690,7 @@ class ServiceTools(EventCallMixin):
             return None
         if (failure := component_result.get("service_error")) is not None:
             self._raise_unexpected_call_service_error(
-                HomeAssistantAPIError(
-                    f"API error: 500 - {failure.get('message')}", status_code=500
-                ),
+                HomeAssistantCommandError(f"Command failed: {failure.get('message')}"),
                 domain=domain,
                 service=service,
                 entity_id=entity_id,
