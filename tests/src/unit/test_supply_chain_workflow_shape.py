@@ -15,11 +15,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 
 
-def _workflow(path: Path) -> dict[str, Any]:
+def _workflow(path: Path) -> dict[Any, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _triggers(data: dict[str, Any]) -> set[str]:
+def _triggers(data: dict[Any, Any]) -> set[str]:
     on_node = data.get(True) or data.get("on") or {}
     if isinstance(on_node, str):
         return {on_node}

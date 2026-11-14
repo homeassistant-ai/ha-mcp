@@ -31,7 +31,7 @@ _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
 
 
-def _workflow() -> dict[str, Any]:
+def _workflow() -> dict[Any, Any]:
     return yaml.safe_load((_WORKFLOW_DIR / _WORKFLOW).read_text(encoding="utf-8"))
 
 

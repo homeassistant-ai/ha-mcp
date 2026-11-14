@@ -154,7 +154,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     ]
     if drift_samples:
         culprits = sorted(
-            {p.get("unloaded") for p in drift_samples if p.get("unloaded")}
+            {str(p["unloaded"]) for p in drift_samples if p.get("unloaded")}
         )
         terminalreporter.write_line(
             f"⚠️ [READINESS_GATE_DRIFT] {len(drift_samples)} core_state sample(s) "
@@ -471,7 +471,7 @@ def _dump_config_entries_diagnostics(
             entries = entries_resp.json()
             entry_domains = sorted(
                 {
-                    e.get("domain")
+                    str(e["domain"])
                     for e in entries
                     if isinstance(e, dict) and e.get("domain")
                 }

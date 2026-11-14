@@ -13,6 +13,8 @@ MCP_CONFIG = Path(__file__).resolve().parents[2] / "uat" / "mcp_config.py"
 
 # Load by path: ``uat`` is not importable as a package from pytest's rootdir.
 spec = importlib.util.spec_from_file_location("mcp_config", str(MCP_CONFIG))
+assert spec is not None
+assert spec.loader is not None
 mcp_config = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcp_config)
 

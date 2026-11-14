@@ -41,13 +41,13 @@ class _CoreToolAnnotations:
 def _annotated_entry(sdk: str, **hints: bool) -> SimpleNamespace:
     """A stamped tool entry whose annotations come from a real SDK model."""
     if sdk == "v1":
-        from mcp import types
+        from mcp import types as sdk_types
 
-        annotations = types.ToolAnnotations(title="Get Entity State", **hints)
+        annotations = sdk_types.ToolAnnotations(title="Get Entity State", **hints)
     else:
-        from ha_mcp._vendor.mcp import types
+        from ha_mcp._vendor.mcp import types as vendored_types
 
-        annotations = types.ToolAnnotations.model_validate(
+        annotations = vendored_types.ToolAnnotations.model_validate(
             {"title": "Get Entity State", **hints}
         )
     entry = tool_entry("ha_get_state")

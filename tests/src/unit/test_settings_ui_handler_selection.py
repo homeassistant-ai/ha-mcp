@@ -15,6 +15,7 @@ This is a contract test for the branch at
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -150,11 +151,11 @@ async def test_the_decision_pin_route_answers_in_every_mode(
     """
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
 
-    server: object | None = None if setup_name == "no_server" else MagicMock()
+    server: Any = None if setup_name == "no_server" else MagicMock()
     if setup_name == "no_queue":
-        server.approval_queue = None  # type: ignore[union-attr]
+        server.approval_queue = None
     elif setup_name in ("sidecar", "live"):
-        server.approval_queue = ApprovalQueue()  # type: ignore[union-attr]
+        server.approval_queue = ApprovalQueue()
 
     handlers = build_settings_handlers(server, is_sidecar=setup_name == "sidecar")
 

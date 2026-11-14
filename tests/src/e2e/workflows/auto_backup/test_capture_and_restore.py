@@ -987,7 +987,7 @@ class TestComplexHelperCaptureRestore:
         helper_id = f"e2e_sched_{suffix}"
 
         # Several days with several time ranges each, fixed for the assertions.
-        original = {
+        original: dict[str, Any] = {
             "helper_type": "schedule",
             "name": helper_id,
             "icon": "mdi:calendar-clock",

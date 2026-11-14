@@ -113,8 +113,11 @@ def _blueprint_http_server():
     assets_dir = Path(__file__).parent.parent.parent / "assets" / "blueprints"
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(assets_dir))
-    handler.log_message = lambda *args: None  # type: ignore[method-assign]
+    class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    handler = partial(_QuietHandler, directory=str(assets_dir))
     srv = http.server.HTTPServer(("0.0.0.0", 0), handler)
     port = srv.server_address[1]
     t = threading.Thread(target=srv.serve_forever, daemon=True)
