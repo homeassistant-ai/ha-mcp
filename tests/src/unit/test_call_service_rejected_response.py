@@ -22,8 +22,9 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT, COMPONENT_VIA_HACS
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.service_response import (
     RESPONSE_CALL_FAILED_HINT,
@@ -143,11 +144,39 @@ async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
     assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]
 
 
+async def test_a_failed_response_call_does_not_wait_for_its_target_to_change(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The handler raised, so the wait for the target's new state could only
+    run out: the error is reported at once, well inside the client's own wait."""
+
+    async def _fail(call: ServiceCall) -> ServiceResponse:
+        raise HomeAssistantError("upstream failed")
+
+    hass.services.async_register(
+        "light", "toggle", _fail, supports_response=SupportsResponse.OPTIONAL
+    )
+    hass.states.async_set("light.a", "off")
+    monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1.0)
+
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(
+            component_core_client, DeviceControlTools(component_core_client)
+        ).ha_call_service(
+            domain="light", service="toggle", entity_id="light.a", return_response=True
+        )
+
+    assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]
+
+
 async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     """Core checks the schema before the service runs, so nothing ran. The
-    error does not tell a user who has the component to install it."""
+    error tells a user who has the component to update an older one, not to
+    install it."""
     calls: list[ServiceCall] = []
 
     async def _handle(call: ServiceCall) -> ServiceResponse:
@@ -169,7 +198,9 @@ async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
 
     assert error_of(exc)["code"] == "VALIDATION_FAILED"
     assert calls == []
-    assert not any(COMPONENT_INSTALL_HINT in hint for hint in _may_have_run_hints(exc))
+    (hint,) = _may_have_run_hints(exc)
+    assert COMPONENT_INSTALL_HINT not in hint
+    assert f"update an older one {COMPONENT_VIA_HACS}" in hint
 
 
 async def test_a_rejected_response_inside_the_service_is_its_failure(

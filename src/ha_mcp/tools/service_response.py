@@ -6,6 +6,7 @@ from typing import Any
 
 from .component_api import (
     COMPONENT_INSTALL_HINT,
+    COMPONENT_VIA_HACS,
     component_supports,
     get_component_caps,
 )
@@ -48,12 +49,17 @@ async def response_call_failed_hint(client: Any, return_response: bool) -> str |
     """``RESPONSE_CALL_FAILED_HINT`` for a call that asked for a response.
 
     Only the component's answer says whether the service ran before a refusal,
-    so an installation without it is also told to install it.
+    so an installation without it is also told to install it, and one that has
+    it to update it if it is older than the server: an outdated component is
+    not supported, and it answers such a call as a failed one.
     """
     if not return_response:
         return None
     if component_supports(await get_component_caps(client), "call_service"):
-        return RESPONSE_CALL_FAILED_HINT
+        return (
+            f"{RESPONSE_CALL_FAILED_HINT} A current ha_mcp_tools component reports "
+            f"a refused response as such: update an older one {COMPONENT_VIA_HACS}"
+        )
     return (
         f"{RESPONSE_CALL_FAILED_HINT} The ha_mcp_tools component reports a "
         f"refused response as such. {COMPONENT_INSTALL_HINT}"

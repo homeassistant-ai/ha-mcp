@@ -164,11 +164,13 @@ async def _call_service_prep(
             hass, domain, service, dict(service_data), return_response, msg
         )
         dispatched = True
+        failed = bool(response_error and response_error.pop("failed", False))
         # ``evt`` is None when nothing was worth waiting on (should_confirm was
         # True but every target was excluded as unconfirmable) — there is then
         # nothing that could ever confirm, so skip the wait outright rather than
-        # awaiting an event that was never registered to fire.
-        if should_confirm and evt is not None:
+        # awaiting an event that was never registered to fire. A handler that
+        # raised reports its error at once, not after a wait for its target.
+        if should_confirm and evt is not None and not failed:
             await _await_confirmation(
                 hass, confirmable_entity_ids, expected_by_entity, captured, evt, timeout
             )
@@ -185,7 +187,6 @@ async def _call_service_prep(
             response=response,
         )
         if response_error is not None:
-            failed = response_error.pop("failed", False)
             result["service_error" if failed else "response_error"] = response_error
         if return_response:
             result["changed_states"] = changed
