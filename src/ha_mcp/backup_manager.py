@@ -429,7 +429,30 @@ def _entity_id_aliases(entity_id: str) -> list[str]:
     """
     current = _safe_entity_id(entity_id)
     legacy = _SAFE_ID_RE.sub("_", entity_id).lstrip(".") or "_"
-    return [current] if legacy == current else [current, legacy]
+    aliases = [current, legacy]
+    legacy_digest = _legacy_entity_id_digest(entity_id, legacy)
+    if legacy_digest is not None:
+        aliases.append(legacy_digest)
+    return list(dict.fromkeys(aliases))
+
+
+_MAX_ENTITY_STEM_LENGTH = 112
+_ENTITY_ID_DIGEST_LENGTH = 8
+
+
+def _entity_id_digest(entity_id: str) -> str:
+    return hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[
+        :_ENTITY_ID_DIGEST_LENGTH
+    ]
+
+
+def _legacy_entity_id_digest(entity_id: str, cleaned: str) -> str | None:
+    if (
+        cleaned != entity_id
+        and len(cleaned) + _ENTITY_ID_DIGEST_LENGTH + 1 > _MAX_ENTITY_STEM_LENGTH
+    ):
+        return f"{cleaned}-{_entity_id_digest(entity_id)}"
+    return None
 
 
 def _safe_entity_id(entity_id: str) -> str:
@@ -445,19 +468,20 @@ def _safe_entity_id(entity_id: str) -> str:
     ``user_motion.yaml`` -- without the digest they share one snapshot
     namespace, so captures in the same second overwrite each other and
     rotation counts both histories as one, able to delete the only restore
-    point for a blueprint that was never written. Entity ids are already
-    within the safe set, so their filenames are unchanged and existing
-    snapshots stay discoverable.
+    point for a blueprint that was never written. Long stems are bounded to
+    leave room for the domain, timestamp and atomic-write suffix. The complete
+    original id remains in the snapshot payload.
     """
     if not entity_id:
         return "_"
     cleaned = _SAFE_ID_RE.sub("_", entity_id).lstrip(".")
     if not cleaned:
         return "_"
-    if cleaned == entity_id:
+    if cleaned == entity_id and len(cleaned) <= _MAX_ENTITY_STEM_LENGTH:
         return cleaned
-    digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[:8]
-    return f"{cleaned}-{digest}"
+    digest = _entity_id_digest(entity_id)
+    prefix_length = _MAX_ENTITY_STEM_LENGTH - len(digest) - 1
+    return f"{cleaned[:prefix_length]}-{digest}"
 
 
 def _snapshot_order(path: Path) -> tuple[str, str, str]:
@@ -478,15 +502,16 @@ def _snapshot_order(path: Path) -> tuple[str, str, str]:
 def _id_matches(payload_id: str | None, wanted: str) -> bool:
     """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
 
-    Two spellings select an entity: the id itself, and the digest stem
-    ``_safe_entity_id`` derives from it — the stem a listing used to show and
-    a filename still carries. Both name exactly one entity. The bare
-    pre-digest stem is deliberately not accepted: it is the current stem of a
-    differently-named entity, which is the ambiguity this check exists for.
+    The original id and its current or previous digest stem select an
+    entity. A bare pre-digest stem is deliberately not accepted because
+    it may belong to a differently-named entity.
     """
     if payload_id is None:
         return False
-    return payload_id == wanted or _safe_entity_id(payload_id) == wanted
+    if payload_id == wanted or _safe_entity_id(payload_id) == wanted:
+        return True
+    cleaned = _SAFE_ID_RE.sub("_", payload_id).lstrip(".") or "_"
+    return _legacy_entity_id_digest(payload_id, cleaned) == wanted
 
 
 def _now_ts() -> str:
@@ -1103,7 +1128,7 @@ class BackupManager:
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+            prefix=".snapshot-", suffix=".tmp", dir=target.parent
         )
         try:
             try:

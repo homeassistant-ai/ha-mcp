@@ -1008,6 +1008,22 @@ class TestFilenameSafety:
 
 
 class TestCapture:
+    async def test_long_calendar_identifiers_keep_distinct_snapshots(
+        self, tmp_path: Path
+    ) -> None:
+        manager = _mk_manager(tmp_path)
+        manager.register(_mk_handler("calendar_event", {"summary": "Meeting"}))
+        common = f"calendar.work::{'u' * 300}::{'r' * 120}"
+        first = await manager.maybe_snapshot("calendar_event", f"{common}1")
+        second = await manager.maybe_snapshot("calendar_event", f"{common}2")
+
+        assert first is not None
+        assert second is not None
+        assert first.name != second.name
+        assert yaml.safe_load(first.read_text())["entity_id"] == f"{common}1"
+        assert yaml.safe_load(second.read_text())["entity_id"] == f"{common}2"
+        assert not list(tmp_path.glob("*.tmp"))
+
     async def test_disabled_means_no_snapshot(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path, enable_auto_backup=False)
         mgr.register(_mk_handler(fetched={"x": 1}))
