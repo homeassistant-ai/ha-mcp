@@ -35,12 +35,6 @@ _MOVIE = {
 }
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's scene config API reads ``scenes.yaml`` here."""
-    return hass_tmp_config_dir
-
-
 def _hue_scene(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> None:
     entity_registry.async_get_or_create(
         "scene", "hue", "hue-vendor-id", suggested_object_id="hue"

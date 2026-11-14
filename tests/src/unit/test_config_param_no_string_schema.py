@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ._tool_param_tables import BULK_TOOLS, DICT_TOOLS
+
 
 def _get_param_schema(
     register_fn: Callable[..., Any], tool_name: str, param_name: str
@@ -49,99 +51,9 @@ def _contains_string_type(schema: dict[str, Any]) -> bool:
     )
 
 
-# ---------------------------------------------------------------------------
-# config param on set tools (PR #1485)
-# ---------------------------------------------------------------------------
-
-_CONFIG_TOOLS = [
-    (
-        "ha_mcp.tools.tools_config_automations",
-        "register_config_automation_tools",
-        "ha_config_set_automation",
-        "config",
-    ),
-    (
-        "ha_mcp.tools.tools_config_scripts",
-        "register_config_script_tools",
-        "ha_config_set_script",
-        "config",
-    ),
-    (
-        "ha_mcp.tools.tools_config_scenes",
-        "register_config_scene_tools",
-        "ha_config_set_scene",
-        "config",
-    ),
-    (
-        "ha_mcp.tools.tools_config_helpers",
-        "register_config_helper_tools",
-        "ha_config_set_helper",
-        "config",
-    ),
-    (
-        "ha_mcp.tools.tools_config_dashboards",
-        "register_config_dashboard_tools",
-        "ha_config_set_dashboard",
-        "config",
-    ),
-]
-
-# ---------------------------------------------------------------------------
-# data/options/categories/expose_to params on service & entity tools
-# ---------------------------------------------------------------------------
-
-_SERVICE_AND_ENTITY_TOOLS = [
-    (
-        "ha_mcp.tools.tools_service",
-        "register_service_tools",
-        "ha_call_service",
-        "data",
-    ),
-    (
-        "ha_mcp.tools.tools_service",
-        "register_service_tools",
-        "ha_call_event",
-        "data",
-    ),
-    (
-        "ha_mcp.tools.tools_entities",
-        "register_entity_tools",
-        "ha_set_entity",
-        "options",
-    ),
-    (
-        "ha_mcp.tools.tools_entities",
-        "register_entity_tools",
-        "ha_set_entity",
-        "categories",
-    ),
-    (
-        "ha_mcp.tools.tools_entities",
-        "register_entity_tools",
-        "ha_set_entity",
-        "expose_to",
-    ),
-]
-
-# ---------------------------------------------------------------------------
-# operations param on ha_bulk_control (list[dict], not dict)
-# ---------------------------------------------------------------------------
-
-_BULK_TOOLS = [
-    (
-        "ha_mcp.tools.tools_service",
-        "register_service_tools",
-        "ha_bulk_control",
-        "operations",
-    ),
-]
-
-_ALL_TOOLS = _CONFIG_TOOLS + _SERVICE_AND_ENTITY_TOOLS
-
-
 @pytest.mark.parametrize(
     ("module", "register_fn", "tool_name", "param_name"),
-    _ALL_TOOLS,
+    DICT_TOOLS,
 )
 def test_param_does_not_advertise_string(module, register_fn, tool_name, param_name):
     """Object/dict parameter schema must not include type:string."""
@@ -157,7 +69,7 @@ def test_param_does_not_advertise_string(module, register_fn, tool_name, param_n
 
 @pytest.mark.parametrize(
     ("module", "register_fn", "tool_name", "param_name"),
-    _ALL_TOOLS,
+    DICT_TOOLS,
 )
 def test_param_advertises_object(module, register_fn, tool_name, param_name):
     """Object/dict parameter schema must include type:object."""
@@ -176,7 +88,7 @@ def test_param_advertises_object(module, register_fn, tool_name, param_name):
 
 @pytest.mark.parametrize(
     ("module", "register_fn", "tool_name", "param_name"),
-    _BULK_TOOLS,
+    BULK_TOOLS,
 )
 def test_list_param_does_not_advertise_string(
     module, register_fn, tool_name, param_name
@@ -194,7 +106,7 @@ def test_list_param_does_not_advertise_string(
 
 @pytest.mark.parametrize(
     ("module", "register_fn", "tool_name", "param_name"),
-    _BULK_TOOLS,
+    BULK_TOOLS,
 )
 def test_list_param_advertises_array(module, register_fn, tool_name, param_name):
     """List parameter schema must include type:array."""

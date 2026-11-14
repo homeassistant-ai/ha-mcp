@@ -1,401 +1,385 @@
-"""Test that ``_apply_tool_security_policies`` wires PolicyMiddleware correctly.
+"""Tool security policies are wired into the real server (#966, #2502).
 
-Mirrors the ``TestApplySearchKeywordEnrichment`` pattern in
-``tests/src/unit/test_categorized_search.py``: build a ``MagicMock`` stub
-exposing only the attributes the method touches and call the unbound
-method directly. This avoids the full HA/FastMCP boot path in
-``HomeAssistantSmartMCPServer.__init__`` (which would pull in the real
-client, register every tool module, and run ``_initialize_server``).
+Each test builds ``HomeAssistantSmartMCPServer`` on the ``core_client``
+fixture, so the gate announces on, and hears decisions from, a real Home
+Assistant. The global settings carry placeholder credentials, as in OAuth
+mode: whatever reaches Home Assistant does so as the server's own client.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+import json
+import logging
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
+import pytest
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import async_capture_events
 
-def _make_server_stub(*, enable_policies: bool) -> MagicMock:
-    """Minimal stub exposing only what ``_apply_tool_security_policies`` reads.
+from ha_mcp.__main__ import OAuthProxyClient
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client.rest_client import HomeAssistantAuthError, HomeAssistantClient
+from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.policy.decision_pin import set_pin
+from ha_mcp.policy.decisions import APPROVAL_RESPONSE_EVENT
+from ha_mcp.policy.events import (
+    APPROVAL_REQUESTED_EVENT,
+    APPROVAL_RESULT_EVENT,
+    emit_approval_result,
+)
+from ha_mcp.policy.middleware import PolicyMiddleware
+from ha_mcp.policy.model import Policy, Rule
+from ha_mcp.policy.persistence import POLICY_FILENAME, save_policy
+from ha_mcp.policy.server_channels import approval_ws_client
+from ha_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp.tools.renamed_tool_middleware import RenamedToolAliasMiddleware
+from ha_mcp.utils.data_paths import get_data_dir
 
-    The method touches:
-      * ``self.settings.enable_tool_security_policies`` (early return gate)
-      * ``self.approval_queue = ApprovalQueue()`` (attribute write)
-      * ``self.mcp.add_middleware(...)`` (the wiring side-effect)
-    """
-    stub = MagicMock()
-    stub.settings = MagicMock(enable_tool_security_policies=enable_policies)
-    stub.mcp = MagicMock()
-    # Explicitly start without the attribute the method is supposed to
-    # set, so the disabled-case assertion is a real signal.
-    del stub.approval_queue
-    return stub
+GATED_TOOL = "ha_get_state"
+ENTITY = "light.porch"
+PIN = "4711-porch"
 
-
-def test_alias_middleware_is_registered_before_the_policy_gate():
-    """Registration order IS inbound order (first added = outermost).
-
-    Both halves of the retired-name defence are pinned: the gate resolves the
-    name itself (see ``policy/test_middleware.py``), and the alias still runs
-    ahead of it, which is what keeps every other name-keyed middleware in the
-    chain reading the current name. Running the real ``_initialize_server``
-    against a MagicMock records both the inline ``add_middleware`` calls and
-    the ``_apply_*`` helpers, in order.
-    """
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-    from ha_mcp.tools.renamed_tool_middleware import RenamedToolAliasMiddleware
-
-    stub = MagicMock()
-    stub.mcp = MagicMock()
-    stub.settings.ha_tool_concurrency = 0
-    HomeAssistantSmartMCPServer._initialize_server(stub)
-
-    calls = list(stub.mock_calls)
-    alias = [
-        index
-        for index, (name, args, _kwargs) in enumerate(calls)
-        if name == "mcp.add_middleware"
-        and args
-        and isinstance(args[0], RenamedToolAliasMiddleware)
+# A file the pre-#1993 editor wrote: one rule, its conditions AND-ed, no
+# schema_version stamp.
+UNMIGRATED_POLICY = {
+    "rules": [
+        {
+            "tool_name": "ha_call_service",
+            "when": [
+                {"path": "args.domain", "op": "eq", "value": "lock"},
+                {"path": "args.service", "op": "eq", "value": "unlock"},
+            ],
+        }
     ]
-    policy = [
-        index
-        for index, (name, _args, _kwargs) in enumerate(calls)
-        if name == "_apply_tool_security_policies"
-    ]
-    assert alias, "the alias middleware is not registered at all"
-    assert policy, "the policy gate is not wired at all"
-    assert alias[0] < policy[0]
+}
 
 
-def test_policy_middleware_attached_when_enabled():
-    """Enabled flag → ApprovalQueue attached and one PolicyMiddleware added."""
-    from ha_mcp.policy.middleware import PolicyMiddleware
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    # ApprovalQueue attached on the server object so settings_ui can find it
-    assert hasattr(stub, "approval_queue")
-    assert stub.approval_queue is not None
-
-    # Middleware was wired in exactly once
-    assert stub.mcp.add_middleware.call_count == 1
-    args, _kwargs = stub.mcp.add_middleware.call_args
-    assert len(args) == 1
-    assert isinstance(args[0], PolicyMiddleware)
-    # Queue identity: the middleware MUST hold the same ApprovalQueue
-    # instance the server exposes via stub.approval_queue. If these
-    # diverge, /api/policy/approve and the middleware's wait-loop look
-    # at different queues and approvals silently never unblock the call.
-    assert args[0]._queue is stub.approval_queue
+@pytest.fixture
+async def policy_client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` on a Home Assistant that, like every real one, has
+    ``auth`` loaded, so the client can ask whether its token is an admin's."""
+    assert await async_setup_component(hass, "auth", {})
+    return core_client
 
 
-def test_policy_middleware_can_reach_the_servers_home_assistant_client():
-    """The announce path needs a client, and only this wiring supplies it.
-
-    Every middleware-level announce test injects its own ``get_client``, so
-    dropping the one in ``_apply_tool_security_policies`` leaves them green
-    while the feature is dead in production: a held call would then be
-    invisible outside the settings UI, which is the whole point of #2502.
-    """
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    args, _kwargs = stub.mcp.add_middleware.call_args
-    get_client = args[0]._get_client
-    assert get_client is not None, "no client factory: approvals cannot be announced"
-    assert get_client() is stub.client
+def _build_server(
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    *,
+    policies: bool,
+) -> HomeAssistantSmartMCPServer:
+    monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", "oauth-mode-token")
+    monkeypatch.setenv("ENABLE_TOOL_SECURITY_POLICIES", str(policies).lower())
+    reset_global_settings()
+    return HomeAssistantSmartMCPServer(client=core_client)
 
 
-def test_policy_middleware_not_attached_when_disabled():
-    """Disabled flag → no queue, no middleware (clean no-op)."""
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=False)
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    # No queue attribute set (the early return runs before the assignment)
-    assert getattr(stub, "approval_queue", None) is None
-    # No middleware registered on the FastMCP instance
-    assert stub.mcp.add_middleware.call_count == 0
-
-
-def test_migration_runs_even_when_policies_disabled():
-    """The ANY-match schema migration must run at startup regardless of the
-    enable flag, so the file already matches the editor's semantics whenever
-    the user later turns the feature on. The method imports
-    ``migrate_policy_any_semantics`` from ``ha_mcp.policy.persistence`` at call
-    time, so patching the source module intercepts it."""
-    from unittest.mock import patch
-
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-    from ha_mcp.utils.data_paths import get_data_dir
-
-    stub = _make_server_stub(enable_policies=False)
-    with patch(
-        "ha_mcp.policy.persistence.migrate_policy_any_semantics"
-    ) as mock_migrate:
-        HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    mock_migrate.assert_called_once_with(get_data_dir())
-    # Disabled path is otherwise a clean no-op: no queue, no middleware.
-    assert getattr(stub, "approval_queue", None) is None
-    assert stub.mcp.add_middleware.call_count == 0
-
-
-def test_raising_migration_does_not_block_startup():
-    """A migration that raises must be swallowed — startup continues. A
-    crash here would take down every server boot over a one-time data fixup."""
-    from unittest.mock import patch
-
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=False)
-    with patch(
-        "ha_mcp.policy.persistence.migrate_policy_any_semantics",
-        side_effect=RuntimeError("migration boom"),
-    ):
-        # Must not propagate out of _apply_tool_security_policies.
-        HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    assert getattr(stub, "approval_queue", None) is None
-    assert stub.mcp.add_middleware.call_count == 0
-
-
-def test_policy_middleware_can_open_the_decision_channel():
-    """The response listener is wired in, and shares the server's queue.
-
-    Same class of failure as the client factory above: every listener test
-    builds its own, so dropping this wiring leaves them green while no
-    event on the bus can ever decide a request.
-    """
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    args, _kwargs = stub.mcp.add_middleware.call_args
-    listener = stub.approval_response_listener
-    assert listener is not None
-    assert listener._queue is stub.approval_queue
-    assert args[0]._ensure_decisions_listener == listener.ensure_subscribed
-
-
-def test_the_response_subscription_uses_the_requests_own_credentials():
-    """OAuth mode: the subscription must authenticate as the caller does.
-
-    ``self.client`` is a proxy there, resolving to the client built from the
-    current request's OAuth claims, while the global settings hold only the
-    ``oauth-mode-token`` placeholder. An unparameterised
-    ``get_websocket_client()`` would therefore open the response channel as
-    nobody — the announcement goes out over REST with valid credentials and
-    succeeds, while the channel that has to carry the answer back fails
-    authentication. The failure is silent by construction: announcing works,
-    deciding never does.
-    """
-    import anyio
-
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    stub.client = MagicMock(
-        base_url="http://ha.local:8123",
-        token="request-scoped-token",
-        verify_ssl=False,
+def _gate_the_tool(*, event_decisions: bool = False) -> None:
+    data_dir = get_data_dir()
+    save_policy(
+        data_dir,
+        Policy(
+            wait_seconds=10,
+            rules=[Rule(tool_name=GATED_TOOL)],
+            event_decisions_enabled=event_decisions,
+        ),
     )
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    captured: dict[str, object] = {}
-
-    async def fake_get_websocket_client(**kwargs):
-        captured.update(kwargs)
-        return MagicMock()
-
-    with patch(
-        "ha_mcp.client.websocket_client.get_websocket_client",
-        new=fake_get_websocket_client,
-    ):
-        anyio.run(stub.approval_response_listener._get_ws_client)
-
-    assert captured == {
-        "url": "http://ha.local:8123",
-        "token": "request-scoped-token",
-        "verify_ssl": False,
-    }
+    if event_decisions:
+        set_pin(data_dir, PIN)
 
 
-def test_a_client_without_credentials_falls_back_to_the_pooled_connection():
-    """Token deployments keep the behaviour they had.
+def _write_unmigrated_policy() -> None:
+    (get_data_dir() / POLICY_FILENAME).write_text(json.dumps(UNMIGRATED_POLICY))
 
-    There ``self.client`` carries the same credentials the settings do, and
-    a client that exposes none at all must still produce a usable call
-    rather than an AttributeError on the announce path.
+
+def _stored_policy() -> dict[str, Any]:
+    stored: dict[str, Any] = json.loads(
+        (get_data_dir() / POLICY_FILENAME).read_text(encoding="utf-8")
+    )
+    return stored
+
+
+def _first(hass: HomeAssistant, event_type: str) -> asyncio.Future[Event]:
+    """The next ``event_type`` event on Home Assistant's bus."""
+    future: asyncio.Future[Event] = hass.loop.create_future()
+
+    @callback
+    def _seen(event: Event) -> None:
+        if not future.done():
+            future.set_result(event)
+
+    hass.bus.async_listen_once(event_type, _seen)
+    return future
+
+
+async def _arrival(future: asyncio.Future[Event]) -> Event:
+    return await asyncio.wait_for(future, 10)
+
+
+def _policy_gates(server: HomeAssistantSmartMCPServer) -> list[PolicyMiddleware]:
+    return [mw for mw in server.mcp.middleware if isinstance(mw, PolicyMiddleware)]
+
+
+async def test_retired_tool_names_are_resolved_before_the_policy_gate(
+    monkeypatch: pytest.MonkeyPatch, policy_client: HomeAssistantClient
+) -> None:
+    """Registration order is inbound order (first added = outermost).
+
+    The gate resolves a retired name itself (``policy/test_middleware.py``);
+    the alias still runs ahead of it, which keeps every other name-keyed
+    middleware in the chain reading the current name.
     """
-    import anyio
-
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    stub.client = object()
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    captured: dict[str, object] = {}
-
-    async def fake_get_websocket_client(**kwargs):
-        captured.update(kwargs)
-        return MagicMock()
-
-    with patch(
-        "ha_mcp.client.websocket_client.get_websocket_client",
-        new=fake_get_websocket_client,
-    ):
-        anyio.run(stub.approval_response_listener._get_ws_client)
-
-    assert captured == {"url": None, "token": None, "verify_ssl": None}
+    server = _build_server(monkeypatch, policy_client, policies=True)
+    chain = server.mcp.middleware
+    alias = [
+        i for i, mw in enumerate(chain) if isinstance(mw, RenamedToolAliasMiddleware)
+    ]
+    gate = [i for i, mw in enumerate(chain) if isinstance(mw, PolicyMiddleware)]
+    assert alias, "the alias middleware is not registered at all"
+    assert gate, "the policy gate is not wired at all"
+    assert alias[0] < gate[0]
 
 
-def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call():
-    """OAuth mode with no request context raises, and must not read as "none".
+async def test_a_gated_call_is_announced_and_released_by_a_settings_ui_approval(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+) -> None:
+    """The gate announces through the server's client and waits on the
+    queue the settings UI approves on.
 
-    ``OAuthProxyClient.__getattr__`` resolves the current request's client
-    and raises ``HomeAssistantAuthError`` when there is no token in
-    context — which this test gets by using the real proxy rather than a
-    stand-in. That is not an AttributeError, so it propagates out of the
-    factory — which is the wanted outcome: opening the response channel on
-    the pooled default connection would authenticate it as the placeholder
-    principal, the exact state this wiring exists to prevent. The caller
-    treats a failure here as best-effort (the gated call still proceeds and
-    stays decidable in the settings UI), so the propagation costs nothing
-    but visibility.
+    Were the gate holding a queue of its own, ``/api/policy/approve`` would
+    approve a request no call is waiting on; were it built without the
+    server's client, a held call would be invisible outside the settings UI.
     """
-    import anyio
-    import pytest
+    hass.states.async_set(ENTITY, "on")
+    _gate_the_tool()
+    server = _build_server(monkeypatch, policy_client, policies=True)
+    assert len(_policy_gates(server)) == 1
+    requested = async_capture_events(hass, APPROVAL_REQUESTED_EVENT)
+    first_request = _first(hass, APPROVAL_REQUESTED_EVENT)
 
-    from ha_mcp.__main__ import OAuthProxyClient
-    from ha_mcp.client.rest_client import HomeAssistantAuthError
-    from ha_mcp.server import HomeAssistantSmartMCPServer
+    async with Client(server.mcp) as client:
+        call = asyncio.create_task(
+            client.call_tool(GATED_TOOL, {"entity_id": ENTITY}, raise_on_error=False)
+        )
+        announced = await _arrival(first_request)
+        assert requested == [announced]
+        assert announced.data["tool_name"] == GATED_TOOL
+        assert not call.done()
 
-    stub = _make_server_stub(enable_policies=True)
-    # The real proxy, outside a request context — no stand-in, so the test
-    # cannot drift from what __getattr__ actually raises there.
-    stub.client = OAuthProxyClient("http://ha.local:8123")
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+        [pending] = server.approval_queue.list_pending()
+        assert pending.token == announced.data["token"]
+        server.approval_queue.approve(pending.token)
+        result = await call
 
-    called: list[dict] = []
+    assert not result.is_error
+    assert ENTITY in result.content[0].text
 
-    async def fake_get_websocket_client(**kwargs):
-        called.append(kwargs)
-        return MagicMock()
+
+async def test_with_policies_off_the_server_gates_nothing(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+) -> None:
+    hass.states.async_set(ENTITY, "on")
+    _gate_the_tool()
+    server = _build_server(monkeypatch, policy_client, policies=False)
+    assert _policy_gates(server) == []
+    assert getattr(server, "approval_queue", None) is None
+    requested = async_capture_events(hass, APPROVAL_REQUESTED_EVENT)
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(GATED_TOOL, {"entity_id": ENTITY})
+
+    assert ENTITY in result.content[0].text
+    assert requested == []
+
+
+async def test_an_old_policy_file_is_migrated_even_with_policies_off(
+    monkeypatch: pytest.MonkeyPatch, policy_client: HomeAssistantClient
+) -> None:
+    """The file must already read as ANY-match whenever the user later turns
+    the feature on, without another restart."""
+    _write_unmigrated_policy()
+
+    _build_server(monkeypatch, policy_client, policies=False)
+
+    stored = _stored_policy()
+    assert stored["schema_version"] is not None
+    assert [len(rule["when"]) for rule in stored["rules"]] == [1, 1]
+
+
+async def test_a_migration_that_cannot_save_does_not_stop_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A one-time data fixup must never take down every server boot, and the
+    user is told the file still needs fixing."""
+    _write_unmigrated_policy()
 
     with (
         patch(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            new=fake_get_websocket_client,
+            "ha_mcp.policy.persistence.save_policy",
+            side_effect=OSError(30, "Read-only file system"),
         ),
-        pytest.raises(HomeAssistantAuthError),
+        caplog.at_level(logging.ERROR, logger="ha_mcp.server"),
     ):
-        anyio.run(stub.approval_response_listener._get_ws_client)
+        server = _build_server(monkeypatch, policy_client, policies=False)
 
-    assert called == [], (
-        "a failed credential resolution must not fall through to the pooled "
-        "default connection"
-    )
+    assert server.mcp is not None
+    assert "schema_version" not in _stored_policy()
+    errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "ha_mcp.server" and r.levelno == logging.ERROR
+    ]
+    assert any(POLICY_FILENAME in m and "Fix the file" in m for m in errors), errors
 
 
-def test_the_result_event_closes_the_client_it_built():
-    """One client per event, and nothing else will ever reclaim it.
+async def test_a_decision_from_the_event_bus_releases_the_held_call(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+) -> None:
+    """The response listener is wired in, shares the server's queue, and
+    subscribes as the server's own client.
+
+    In OAuth mode the global settings hold only a placeholder token; a
+    subscription opened with them would authenticate as nobody, and the
+    announcement would go out on REST while no answer could ever come back.
+    Here the global settings point at nothing at all.
+    """
+    hass.states.async_set(ENTITY, "on")
+    _gate_the_tool(event_decisions=True)
+    server = _build_server(monkeypatch, policy_client, policies=True)
+    first_request = _first(hass, APPROVAL_REQUESTED_EVENT)
+    first_result = _first(hass, APPROVAL_RESULT_EVENT)
+
+    async with Client(server.mcp) as client:
+        call = asyncio.create_task(
+            client.call_tool(GATED_TOOL, {"entity_id": ENTITY}, raise_on_error=False)
+        )
+        token = (await _arrival(first_request)).data["token"]
+        hass.bus.async_fire(
+            APPROVAL_RESPONSE_EVENT,
+            {"token": token, "decision": "approve", "pin": PIN},
+        )
+        result = await call
+        reported = await _arrival(first_result)
+
+    assert not result.is_error
+    assert ENTITY in result.content[0].text
+    assert reported.data["token"] == token
+    assert reported.data["applied"] is True
+
+
+async def test_the_result_event_goes_out_on_a_client_it_builds_and_closes(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    policy_client: HomeAssistantClient,
+) -> None:
+    """One client per event, built as the server's client, and nothing else
+    will ever reclaim it.
 
     The emitter runs in a bus handler rather than a request, so it cannot
     use the shared client in OAuth mode and builds its own from the same
-    credential snapshot the subscription uses. That client carries its own
-    httpx connection pool. Left open, every decided approval, every wrong
-    PIN and every rate-limited retry adds one -- a chatty automation turns
-    a feature into a file-descriptor leak. Asserted on the close, not on
-    the fire, because firing works either way.
+    credentials. That client carries its own connection pool: left open,
+    every decided approval adds one. It also starts from what the server's
+    client already knows about the token's admin rights, rather than probing
+    again or re-sending a refused request.
     """
-    import anyio
+    hass.states.async_set(ENTITY, "on")
+    _gate_the_tool(event_decisions=True)
+    server = _build_server(monkeypatch, policy_client, policies=True)
+    first_request = _first(hass, APPROVAL_REQUESTED_EVENT)
+    first_result = _first(hass, APPROVAL_RESULT_EVENT)
 
-    from ha_mcp.server import HomeAssistantSmartMCPServer
+    async with Client(server.mcp) as client:
+        call = asyncio.create_task(
+            client.call_tool(GATED_TOOL, {"entity_id": ENTITY}, raise_on_error=False)
+        )
+        token = (await _arrival(first_request)).data["token"]
+        # Announcing settled the admin question on the server's client.
+        assert policy_client.known_is_admin is True
+        with (
+            patch.object(
+                HomeAssistantClient,
+                "__init__",
+                autospec=True,
+                wraps=HomeAssistantClient.__init__,
+            ) as built,
+            patch.object(
+                HomeAssistantClient,
+                "close",
+                autospec=True,
+                wraps=HomeAssistantClient.close,
+            ) as closed,
+        ):
+            hass.bus.async_fire(
+                APPROVAL_RESPONSE_EVENT,
+                {"token": token, "decision": "approve", "pin": PIN},
+            )
+            _ = await call
+            await _arrival(first_result)
 
-    stub = _make_server_stub(enable_policies=True)
-    stub.client = MagicMock(
-        base_url="http://ha.local:8123", token="tok", verify_ssl=True
-    )
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    built: list[MagicMock] = []
-
-    def fake_client(*_args, **_kwargs):
-        client = MagicMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=None)
-        client.fire_event = AsyncMock()
-        built.append(client)
-        return client
-
-    emitter = stub.approval_response_listener._emit_result
-    assert emitter is not None, "the listener was wired without a result emitter"
-
-    with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
-        anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
-
-    assert len(built) == 1
-    built[0].__aexit__.assert_awaited_once()
-
-
-def test_the_result_client_inherits_the_known_admin_status():
-    """A fresh client per event would otherwise re-probe, or re-send a 401."""
-    import anyio
-
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    stub = _make_server_stub(enable_policies=True)
-    stub.client = MagicMock(
-        base_url="http://ha.local:8123",
-        token="tok",
-        verify_ssl=True,
-        known_is_admin=None,
-        admin_route_refused=True,
-    )
-    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
-
-    seen: list[dict] = []
-
-    def fake_client(*_args, **kwargs):
-        seen.append(kwargs)
-        client = MagicMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=None)
-        client.fire_event = AsyncMock()
-        return client
-
-    emitter = stub.approval_response_listener._emit_result
-    with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
-        anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
-
-    assert seen == [{"verify_ssl": True, "is_admin": None, "admin_route_refused": True}]
+    [construction] = built.call_args_list
+    result_client = construction.args[0]
+    assert construction.args[1:3] == (policy_client.base_url, policy_client.token)
+    assert construction.kwargs == {
+        "verify_ssl": policy_client.verify_ssl,
+        "is_admin": True,
+        "admin_route_refused": False,
+    }
+    assert [c.args[0] for c in closed.await_args_list] == [result_client]
 
 
-def test_a_refused_result_event_logs_one_line_without_a_traceback(caplog):
-    import logging
+async def test_a_channel_without_oauth_credentials_is_refused_not_opened_on_the_pool(
+    monkeypatch: pytest.MonkeyPatch, policy_client: HomeAssistantClient
+) -> None:
+    """OAuth mode with no request context must not read as "no credentials".
 
-    import anyio
+    ``OAuthProxyClient`` raises ``HomeAssistantAuthError`` there. Falling
+    back to the pooled default connection would authenticate the response
+    channel as the placeholder principal, the state this wiring exists to
+    prevent; here the pooled connection would even succeed, because the
+    global settings point at the real Home Assistant.
+    """
+    settings = get_global_settings()
+    monkeypatch.setattr(settings, "homeassistant_url", policy_client.base_url)
+    monkeypatch.setattr(settings, "homeassistant_token", policy_client.token)
+    server = SimpleNamespace(client=OAuthProxyClient(policy_client.base_url))
 
-    from ha_mcp.client.rest_client import HomeAssistantAdminRequiredError
-    from ha_mcp.policy.events import emit_approval_result
+    with pytest.raises(HomeAssistantAuthError):
+        await approval_ws_client(server)
 
-    client = MagicMock()
-    client.fire_event = AsyncMock(
-        side_effect=HomeAssistantAdminRequiredError("POST /api/events/x is admin-only")
-    )
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
-        anyio.run(
-            lambda: emit_approval_result(
+
+async def test_a_result_event_refused_for_a_non_admin_logs_one_line(
+    hass: HomeAssistant,
+    policy_client: HomeAssistantClient,
+    hass_read_only_access_token: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-admin token cannot fire events; that is a configuration fact,
+    not a crash, so it is one warning and no traceback."""
+    results = async_capture_events(hass, APPROVAL_RESULT_EVENT)
+    async with HomeAssistantClient(
+        policy_client.base_url, hass_read_only_access_token, verify_ssl=False
+    ) as client:
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
+            await emit_approval_result(
                 client, "tok-1", "approve", applied=True, reason="applied"
             )
-        )
-    [record] = caplog.records
+
+    [record] = [r for r in caplog.records if r.name == "ha_mcp.policy.events"]
     assert "administrator's token" in record.getMessage()
     assert record.exc_info is None
+    assert results == []

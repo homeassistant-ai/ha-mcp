@@ -545,7 +545,9 @@ jobs:
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
-      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+      # xdist's `auto` counts physical cores (2 on the hosted runner);
+      # `logical` uses all 4 CPUs.
+      run: uv run pytest tests/src/unit/ -n logical --tb=short -v
 
     - name: Run BAT runner tests
       # The tests of the UAT/BAT tooling need no Docker and no model.
@@ -554,16 +556,23 @@ jobs:
       run: >-
         uv run pytest tests/uat/
         --ignore=tests/uat/stories/test_stories.py
-        -n auto --tb=short -v
+        -n logical --tb=short -v
 
     - name: Check unit tests left no local state
       # The runner's home starts without ~/.ha-mcp. A unit test that writes
       # there or leaves a settings sidecar running bypassed the isolation in
       # tests/src/unit/conftest.py and would do the same on a developer machine.
+      # tests/testing_config is Core's shared config directory, which the
+      # conftest's hass_config_dir replaces with a temporary one.
       run: |
         if [ -e ~/.ha-mcp ]; then
           find ~/.ha-mcp
           echo "::error::Unit tests wrote to ~/.ha-mcp"
+          exit 1
+        fi
+        if [ -e tests/testing_config ]; then
+          find tests/testing_config
+          echo "::error::Unit tests wrote to Core's shared tests/testing_config"
           exit 1
         fi
         # procps (pgrep) is not in the slim image; read /proc directly.
@@ -578,8 +587,16 @@ jobs:
       # nowhere in CI. Excludes test_addon_startup.py, which spins up real
       # Docker containers (testcontainers) this lint/unit runner doesn't have.
       run: >-
-        uv run pytest tests/addon/ -n auto --tb=short -v
+        uv run pytest tests/addon/ -n logical --tb=short -v
         --ignore=tests/addon/test_addon_startup.py
+
+    - name: Check app tests left no local state
+      run: |
+        if [ -e tests/testing_config ]; then
+          find tests/testing_config
+          echo "::error::App tests wrote to Core's shared tests/testing_config"
+          exit 1
+        fi
 
   # The unit and app (add-on) suites against the current beta Core, the same
   # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
@@ -681,12 +698,12 @@ jobs:
     # would quietly test the stable Core again.
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
-      run: uv run --no-sync pytest tests/src/unit/ -n auto --tb=short -q -rf
+      run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 
     - name: Run app tests on the beta Core
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: >-
-        uv run --no-sync pytest tests/addon/ -n auto --tb=short -q -rf
+        uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py
 
   # Comprehensive E2E validation for all PRs

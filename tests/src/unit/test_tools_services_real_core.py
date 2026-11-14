@@ -8,6 +8,9 @@ user at all. Unload removes every service the setup registered.
 
 from __future__ import annotations
 
+from collections.abc import Coroutine
+from typing import Any
+
 import pytest
 from homeassistant.auth.models import User
 from homeassistant.config_entries import ConfigEntryState
@@ -19,6 +22,16 @@ import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import file_ops, yaml_find
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
+
+
+def assert_unauthorized(response: dict[str, Any] | None, service: str) -> None:
+    """The reply ha-mcp's client reads as a refused caller token."""
+    assert response is not None
+    assert response["success"] is False
+    assert response["error_code"] == "unauthorized"
+    error = response["error"]
+    assert isinstance(error, str)
+    assert f"{DOMAIN}.{service}" in error
 
 
 @pytest.fixture
@@ -43,8 +56,12 @@ async def test_every_service_refuses_a_non_admin(
     assert services
     context = Context(user_id=hass_read_only_user.id)
     for name, service in services.items():
+        # The handler is called directly: Core's schema check in async_call
+        # would refuse the empty data before the admin check is reached.
+        outcome = service.job.target(ServiceCall(hass, DOMAIN, name, {}, context))
+        assert isinstance(outcome, Coroutine), name
         with pytest.raises(Unauthorized):
-            await service.job.target(ServiceCall(hass, DOMAIN, name, {}, context))
+            _ = await outcome
 
 
 async def test_admin_with_a_wrong_token_gets_the_unauthorized_response(
@@ -58,7 +75,7 @@ async def test_admin_with_a_wrong_token_gets_the_unauthorized_response(
         return_response=True,
         context=Context(user_id=hass_admin_user.id),
     )
-    assert response == comp._unauthorized_response(yaml_find.SERVICE_FIND_YAML_KEY)
+    assert_unauthorized(response, yaml_find.SERVICE_FIND_YAML_KEY)
 
 
 async def test_edit_file_is_response_only_with_its_schema(
@@ -80,13 +97,21 @@ async def test_edit_file_is_response_only_with_its_schema(
     response = await hass.services.async_call(
         DOMAIN, file_ops.SERVICE_EDIT_FILE, data, blocking=True, return_response=True
     )
-    assert response == comp._unauthorized_response(file_ops.SERVICE_EDIT_FILE)
+    assert_unauthorized(response, file_ops.SERVICE_EDIT_FILE)
 
 
 async def test_edit_file_refuses_a_path_outside_the_allowlist(
     hass: HomeAssistant, tools_entry: MockConfigEntry
 ) -> None:
-    token = hass.data[DOMAIN][comp._HASS_DATA_TOKEN_KEY]
+    token_reply = await hass.services.async_call(
+        DOMAIN,
+        comp.SERVICE_GET_CALLER_TOKEN,
+        {},
+        blocking=True,
+        return_response=True,
+    )
+    assert token_reply is not None
+    token = token_reply["token"]
     response = await hass.services.async_call(
         DOMAIN,
         file_ops.SERVICE_EDIT_FILE,
@@ -98,8 +123,11 @@ async def test_edit_file_refuses_a_path_outside_the_allowlist(
         blocking=True,
         return_response=True,
     )
+    assert response is not None
     assert response["success"] is False
-    assert "Write not allowed" in response["error"]
+    error = response["error"]
+    assert isinstance(error, str)
+    assert "Write not allowed" in error
 
 
 async def test_unload_removes_every_service(

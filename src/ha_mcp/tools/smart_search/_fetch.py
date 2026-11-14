@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from ...client.rest_client import HomeAssistantAPIError
+from ...client.rest_client import HomeAssistantAPIError, HomeAssistantCommandTimeout
 from ._config import INDIVIDUAL_FETCH_BATCH_SIZE
 from ._scoring import ScoringMixin
 
@@ -145,11 +145,13 @@ def is_timeout_error(exc: BaseException) -> bool:
     arrives wrapped, and classifying by ``except TimeoutError`` alone would
     drop it into the generic "failed" bucket: the exact misclassification
     issue #1784 exists to eliminate. Checking ``__cause__`` (set by the
-    client's ``raise ... from e``) catches the wrapped form.
+    client's ``raise ... from e``) catches the wrapped form. A WebSocket
+    command that waited past its own wait (e.g. the registry lookup a script
+    fetch makes first) arrives as ``HomeAssistantCommandTimeout``, directly or
+    as the ``__cause__`` of the client's connection error.
     """
-    if isinstance(exc, TimeoutError | httpx.TimeoutException):
-        return True
-    return isinstance(exc.__cause__, TimeoutError | httpx.TimeoutException)
+    timeouts = (TimeoutError, httpx.TimeoutException, HomeAssistantCommandTimeout)
+    return isinstance(exc, timeouts) or isinstance(exc.__cause__, timeouts)
 
 
 class ConfigFetchMixin(ScoringMixin):
@@ -217,7 +219,8 @@ class ConfigFetchMixin(ScoringMixin):
                 i for i in ids if i in deprioritize
             ]
         configs: dict[str, dict[str, Any]] = {}
-        budget_start = time.perf_counter()
+        clock = self.clock or time.perf_counter
+        budget_start = clock()
         total_to_fetch = len(ids)
         fetched_count = 0
         failed_count = 0
@@ -225,7 +228,7 @@ class ConfigFetchMixin(ScoringMixin):
         yaml_skipped_count = 0
         timeout_count = 0
         for i in range(0, len(ids), INDIVIDUAL_FETCH_BATCH_SIZE):
-            if time.perf_counter() - budget_start > budget:
+            if clock() - budget_start > budget:
                 skipped_count = (
                     total_to_fetch
                     - fetched_count

@@ -28,7 +28,7 @@ from ha_mcp.config import get_global_settings
 from ha_mcp.tools.tools_groups import GroupTools
 
 from ._client_spies import sent_messages
-from ._tool_errors import _error as _error
+from ._tool_errors import error_of
 
 YAML_GROUP = {"group": {"from_yaml": {"entities": ["light.a"]}}}
 
@@ -215,7 +215,7 @@ class TestSetGroup:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_group(object_id="group.lights")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "invalid slug group.lights (try group_lights)" in error["message"]
         assert "Command failed" not in error["message"]
@@ -234,7 +234,7 @@ class TestSetGroup:
                 object_id="lights", entities=["light.a"], add_entities=["light.b"]
             )
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "exclusion" in error["message"]
         assert "prefix" not in error.get("suggestion", "")
@@ -304,7 +304,7 @@ class TestServiceFailures:
         ):
             await tool(object_id="lights")
 
-        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
+        assert error_of(exc_info)["code"] == "SERVICE_CALL_FAILED"
         sent.assert_not_called()
         assert _members(hass, "group.lights") == ["light.a"]
 
@@ -372,7 +372,7 @@ class TestServiceFailures:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_group(object_id="group.lights")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_NOT_FOUND"
         assert "prefix" not in error.get("suggestion", "")
 
@@ -385,7 +385,7 @@ class TestServiceFailures:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_remove_group(object_id="lights")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_NOT_FOUND"
         assert "group.remove not found" in error["message"]
         assert "Command failed" not in error["message"]
@@ -419,7 +419,7 @@ class TestRemoveGroup:
         with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
             await tools.ha_config_remove_group(object_id="no_such_group")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "ENTITY_NOT_FOUND"
         assert "without the 'group.' prefix" in error["suggestion"]
         sent.assert_not_called()

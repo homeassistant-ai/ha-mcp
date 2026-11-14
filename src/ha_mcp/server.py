@@ -226,13 +226,12 @@ class HomeAssistantSmartMCPServer:
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
-        # Keep the pre-rename tool names callable for clients that still hold
-        # an older catalog. First in the chain, so everything after it sees the
-        # current name it is keyed on.
+        # Keep retired tool names callable for clients holding an older catalog;
+        # first in the chain, so everything after it sees the current name.
         from .mcp_client_context import McpClientDebugLogMiddleware
         from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
 
-        self.mcp.add_middleware(RenamedToolAliasMiddleware())
+        self.mcp.add_middleware(RenamedToolAliasMiddleware(lambda: self.client))
         # After the alias, so the DEBUG line logs the current tool name.
         self.mcp.add_middleware(McpClientDebugLogMiddleware())
 
@@ -576,6 +575,7 @@ class HomeAssistantSmartMCPServer:
                     # invocation through ``ha_call_write_tool``. See the
                     # docstring on ``_rebuild_category_cache``.
                     enable_code_mode=self.settings.enable_code_mode,
+                    get_client=lambda: self.client,
                 )
             )
         except Exception:

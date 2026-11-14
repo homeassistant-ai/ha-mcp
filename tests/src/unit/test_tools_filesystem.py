@@ -914,7 +914,7 @@ class TestEmbeddedDirectBlueprintReadStaysOffTheFilesystemTools:
             "http://127.0.0.1:8123", "tok", config_dir=str(tmp_path)
         )
         yield tmp_path
-        ha_config._reset_embedded_connection()
+        ha_config.reset_embedded_connection()
 
     @pytest.mark.asyncio
     async def test_direct_read_serves_a_blueprint_without_registering_tools(

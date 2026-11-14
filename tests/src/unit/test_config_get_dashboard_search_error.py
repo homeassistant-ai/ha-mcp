@@ -34,8 +34,8 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools import tools_config_dashboards
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-from ._addon_tool_helpers import _parse_tool_error
 from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
+from ._tool_errors import error_body
 
 
 async def _search_without_answer(
@@ -61,7 +61,7 @@ async def _search_without_answer(
         await DashboardConfigTools(client).ha_config_get_dashboard(
             url_path=SEARCH_URL_PATH, entity_id="light.test"
         )
-    return _parse_tool_error(exc_info)
+    return error_body(exc_info)
 
 
 class TestConfigGetDashboardSearchErrorHandling:
@@ -268,4 +268,4 @@ class TestResolvedUrlPathInErrorContext:
         with pytest.raises(ToolError) as exc_info:
             await tool(url_path="resolved_path", **criteria)
 
-        assert _parse_tool_error(exc_info)["url_path"] == "resolved-path"
+        assert error_body(exc_info)["url_path"] == "resolved-path"

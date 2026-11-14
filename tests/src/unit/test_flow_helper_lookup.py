@@ -21,7 +21,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.flow_helper_lookup import get_entry_id_for_flow_helper
 
-from ._addon_tool_helpers import _parse_tool_error
+from ._tool_errors import error_body, error_of
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +124,7 @@ async def test_a_registry_read_core_refuses_is_not_reported_as_missing(
     with pytest.raises(ToolError) as exc_info:
         await get_entry_id_for_flow_helper(core_client, "template", "sensor.not valid")
 
-    error = _parse_tool_error(exc_info)["error"]
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "sensor.not valid" in error["message"]
 
@@ -177,7 +177,7 @@ async def test_wrong_helper_type_refusal_names_the_owning_integration(
     with pytest.raises(ToolError) as exc_info:
         await get_entry_id_for_flow_helper(core_client, "group", owned.entity_id)
 
-    response = _parse_tool_error(exc_info)
+    response = error_body(exc_info)
     err = response["error"]
     assert err["code"] == "VALIDATION_INVALID_PARAMETER"
     assert f"'{platform}'" in err["message"]

@@ -34,7 +34,7 @@ from ha_mcp.tools import tools_config_dashboards
 from ha_mcp.tools.dashboard_read_errors import is_unknown_dashboard
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-from ._addon_tool_helpers import _parse_tool_error
+from ._tool_errors import error_body
 
 _LOGGER_NAME = "ha_mcp.tools.tools_config_dashboards"
 _STORED_CONFIG = {"views": [{"title": "Stored", "cards": []}]}
@@ -174,7 +174,7 @@ class TestLazyResolveAndRetry:
                 url_path="ghost-dash"
             )
 
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert is_unknown_dashboard(error["error"]["message"])
         assert _sent_types(spy).count("lovelace/dashboards/list") == 1
@@ -203,7 +203,7 @@ class TestLazyResolveAndRetry:
                 url_path="resolved_path"
             )
 
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert is_unknown_dashboard(error["error"]["message"])
         assert any("Lazy resolver failed" in rec.message for rec in caplog.records)
@@ -286,7 +286,7 @@ class TestDeleteDashboard:
                 url_path="ghost-dash"
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["success"] is False
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "ghost-dash" in body["error"]["message"]
@@ -317,7 +317,7 @@ class TestDeleteDashboard:
                 url_path="existing-dash"
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "dashboard registry" in body["error"]["message"]
         assert "not found" not in body["error"]["message"].lower()
@@ -380,7 +380,7 @@ class TestDeleteDashboard:
                 url_path="stale-dash"
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Storage file not found" in body["error"]["message"]
 
@@ -416,7 +416,7 @@ class TestDeleteDashboard:
                 url_path="yaml-dash"
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "YAML-mode" in body["error"]["message"]
         assert "configuration.yaml" in body["error"]["details"]

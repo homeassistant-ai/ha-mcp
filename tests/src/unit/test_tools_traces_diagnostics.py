@@ -58,12 +58,6 @@ async def trace_store(hass: HomeAssistant) -> None:
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Keep the built-in blueprints Core copies on setup out of the repository."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def registry_api(hass: HomeAssistant) -> None:
     """Core's config component, which serves ``config/entity_registry/get``."""
     assert await async_setup_component(hass, "config", {})

@@ -11,7 +11,8 @@ import yaml
 from ha_mcp import backup_manager as bm
 from ha_mcp.tools.config_entry_flow import OptionsFlowError
 
-from .test_template_backup_review import manager as manager
+from ._template_backup_core import manager as manager
+from ._template_backup_core import settings as settings
 from .test_template_deleted_recovery import ENTITY, OPTIONS
 from .test_template_deleted_recovery import recovery as recovery
 

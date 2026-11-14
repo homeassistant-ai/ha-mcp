@@ -25,7 +25,7 @@ Beta gating is the real production gate (``ENABLE_BETA_FEATURES`` master +
 ``HAMCP_ENABLE_DASHBOARD_SCREENSHOT`` sub-flag); the tool is only registered
 when both are on, same as for end users. The engine's *failure* degradation
 (feature off / engine unreachable → warning, never breaks the op) is pinned by
-the unit tests in ``tests/src/unit/test_dashboard_screenshot.py``.
+the unit tests in ``tests/src/unit/test_dashboard_screenshot_*.py``.
 
 ``container_only``: the test builds an in-process MCP server, which the inaddon
 lane does not have (it already covers the real engine), and the external-HAOS

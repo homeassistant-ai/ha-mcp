@@ -11,7 +11,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_addons import AddOnTools
 
 from ._addon_tool_helpers import RUNNING_ADDON_INFO
-from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
+from ._tool_errors import error_body
 
 
 async def _proxy(
@@ -86,7 +86,7 @@ async def test_refused_app_port_explains_listener_setup(
         with pytest.raises(ToolError) as exc_info:
             await _proxy(core_client, slug, websocket=websocket, port=port)
 
-    result = _parse_tool_error(exc_info)
+    result = error_body(exc_info)
     assert result["error"]["code"] == "CONNECTION_FAILED"
     guidance = " ".join(result["error"]["suggestions"])
     assert f"ha_get_app(slug='{slug}')" in guidance
@@ -128,7 +128,7 @@ async def test_connect_timeout_preserves_route_guidance(
         with pytest.raises(ToolError) as exc_info:
             await _proxy(core_client, "test_addon", websocket=False, port=port)
 
-    result = _parse_tool_error(exc_info)
+    result = error_body(exc_info)
     guidance = " ".join(
         result["error"].get("suggestions", [result["error"]["suggestion"]])
     )
@@ -180,7 +180,7 @@ async def test_app_timeout_does_not_change_listener_auth(
                 body={"command": "run"},
             )
 
-    result = _parse_tool_error(exc_info)
+    result = error_body(exc_info)
     assert result["error"]["code"] == "TIMEOUT_OPERATION"
     guidance = " ".join(
         result["error"].get("suggestions", [result["error"]["suggestion"]])

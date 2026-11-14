@@ -16,13 +16,13 @@ import pytest
 
 import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.read_only import ReadOnlyToolsTransform
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 from ha_mcp.transforms.compact_params import compact_params
 
+from ._tool_errors import rejected_call_body
 from .test_search_pinned_results import _tool
 from .test_search_pinned_results import toolsearch_server as toolsearch_server
 
@@ -73,12 +73,6 @@ async def _call(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     async with Client(mcp) as client:
         result = await client.call_tool("ha_search_tools", arguments)
     return list(result.data)
-
-
-async def _error(arguments: dict[str, Any]) -> dict[str, Any]:
-    with pytest.raises(ToolError) as exc_info:
-        await _call(arguments)
-    return json.loads(str(exc_info.value))
 
 
 async def _entity_hit() -> dict[str, Any]:
@@ -207,7 +201,7 @@ async def test_named_pinned_tool_returns_the_stub() -> None:
 async def test_unknown_name_alone_is_an_error() -> None:
     """A single hallucinated name is a failed call, not a successful page
     with one failed entry."""
-    error = await _error({"tools": ["ha_no_such_tool"]})
+    error = await rejected_call_body(_call({"tools": ["ha_no_such_tool"]}))
     assert error["name"] == "ha_no_such_tool"
     assert error["success"] is False
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -216,7 +210,9 @@ async def test_unknown_name_alone_is_an_error() -> None:
 
 @pytest.mark.anyio
 async def test_only_unknown_names_is_an_error_listing_each() -> None:
-    error = await _error({"tools": ["ha_no_such_tool", "ha_nor_this"]})
+    error = await rejected_call_body(
+        _call({"tools": ["ha_no_such_tool", "ha_nor_this"]})
+    )
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert [e["name"] for e in error["results"]] == ["ha_no_such_tool", "ha_nor_this"]
 
@@ -245,7 +241,7 @@ async def test_query_is_ignored_when_tools_are_named() -> None:
 
 @pytest.mark.anyio
 async def test_call_without_query_or_tools_is_a_validation_error() -> None:
-    error = await _error({})
+    error = await rejected_call_body(_call({}))
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
@@ -255,7 +251,7 @@ async def test_read_only_mode_explains_a_hidden_write_tool() -> None:
     """The proxies answer a hidden write tool with READ_ONLY_MODE; a
     'not found' here would send the model searching for a capability it
     then concludes does not exist."""
-    error = await _error({"tools": ["ha_config_set_thing"]})
+    error = await rejected_call_body(_call({"tools": ["ha_config_set_thing"]}))
     assert error["error"]["code"] == "READ_ONLY_MODE"
     assert error["read_only_mode"] is True
     assert "inputSchema" not in error
@@ -268,7 +264,7 @@ async def test_read_only_mode_explains_a_hidden_write_tool() -> None:
 @pytest.mark.anyio
 @pytest.mark.usefixtures("read_only_on")
 async def test_read_only_mode_still_says_not_found_for_a_made_up_name() -> None:
-    error = await _error({"tools": ["ha_no_such_tool"]})
+    error = await rejected_call_body(_call({"tools": ["ha_no_such_tool"]}))
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
@@ -277,7 +273,9 @@ async def test_read_only_mode_still_says_not_found_for_a_made_up_name() -> None:
 async def test_mixed_hidden_and_unknown_names_say_only_the_unknown_is_missing() -> None:
     """The top-level message must not tell the model a hidden write tool
     does not exist; its own entry carries READ_ONLY_MODE."""
-    error = await _error({"tools": ["ha_config_set_thing", "ha_no_such_tool"]})
+    error = await rejected_call_body(
+        _call({"tools": ["ha_config_set_thing", "ha_no_such_tool"]})
+    )
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert "ha_no_such_tool" in error["error"]["message"]
     assert "ha_config_set_thing" not in error["error"]["message"]

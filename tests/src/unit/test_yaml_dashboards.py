@@ -20,12 +20,6 @@ from ._edit_yaml import EditYaml, make_edit_yaml
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 async def edit_yaml(hass: HomeAssistant) -> EditYaml:
     """Call ``ha_mcp_tools.edit_yaml_config`` the way ha-mcp does."""
     return await make_edit_yaml(hass)

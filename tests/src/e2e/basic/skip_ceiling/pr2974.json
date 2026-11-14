@@ -1,0 +1,13 @@
+{
+  "reason": "Adds four haos_only E2E tests (tests/src/e2e/haos_only/test_supervisor_log_window.py: hours_back page reads of the host journal, order='newest' answered oldest-first, and the multicast journal paged to its end, through Supervisor directly or Core's hassio proxy) that run on every HAOS lane and skip at collection on the four non-HAOS lanes, and two inaddon_only tests (tests/src/e2e/workflows/system/test_supervisor_inaddon.py, TestGetLogsHoursBackReal: a whole-journal window of Supervisor's and the dev app's logs) that run on the inaddon lanes and skip at collection everywhere else.",
+  "deltas": {
+    "container": 6,
+    "haos": 2,
+    "haos_stdio": 2,
+    "embedded": 6,
+    "haos_embedded": 2,
+    "container_no_tools": 6,
+    "embedded_no_tools": 6,
+    "haos_embedded_no_tools": 2
+  }
+}

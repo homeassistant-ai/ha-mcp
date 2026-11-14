@@ -31,7 +31,7 @@ from ha_mcp.tools.tools_addons import (
 )
 
 from ._addon_tool_helpers import RUNNING_ADDON_INFO
-from ._addon_tool_helpers import _parse_tool_error as _parse_tool_error
+from ._tool_errors import error_body
 
 _INGRESS_SESSION_TOKEN = "test-ingress-session"
 
@@ -96,7 +96,7 @@ class TestCallAddonApiErrors:
         with pytest.raises(ToolError) as exc_info:
             await _call_addon_api(client, "test_addon", "../../etc/passwd")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "traversal" in result["error"]["message"].lower()
@@ -110,7 +110,7 @@ class TestCallAddonApiErrors:
         with pytest.raises(ToolError) as exc_info:
             await _call_addon_api(client, "test_addon", "api/../secret/data")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert ".." in result["error"]["message"]
 
@@ -135,7 +135,7 @@ class TestCallAddonApiErrors:
             await _call_addon_api(client, "test_addon", "..foo/bar")
 
         # Should have passed traversal check and failed on addon lookup instead
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "Not found" in result["error"]["message"]
 
@@ -161,7 +161,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "fake_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "not found" in result["error"]["message"].lower()
 
@@ -188,7 +188,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ingress" in result["error"]["message"].lower()
 
@@ -216,7 +216,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "not running" in result["error"]["message"].lower()
         assert "stopped" in result["error"]["message"]
@@ -245,7 +245,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "ingress_entry" in result["error"]["message"].lower()
@@ -276,7 +276,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ip_address" in str(result).lower()
 
@@ -305,7 +305,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "timeout" in result["error"]["message"].lower()
@@ -339,7 +339,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "connect" in result["error"]["message"].lower()
@@ -470,7 +470,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any("ingress" in s.lower() for s in suggestions), suggestions
 
@@ -503,7 +503,7 @@ class TestCallAddonApiErrors:
                     client, "test_addon", "/flows", port=1880, timeout=5
                 )
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
@@ -531,7 +531,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/api/test", timeout=5)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
@@ -568,7 +568,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         # Suggestion should reference the configured HA URL so the user
         # knows where to verify reachability.
@@ -700,7 +700,7 @@ class TestCallAddonApiErrors:
         ):
             await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["error"]["code"] == "INTERNAL_ERROR"
         assert "ingress_port" in str(result).lower()
 
@@ -737,7 +737,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/api/test")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         # Addon-variant suggestion should be about the target add-on / addon
         # network — not about HA Core reachability.
@@ -964,7 +964,7 @@ class TestCallAddonApiErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_api(client, "test_addon", "/flows")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "TLS verification failed" in result["error"]["message"]
         # A single suggestion lands under the singular key.
         joined = " ".join(
@@ -1263,7 +1263,7 @@ class TestCreateIngressSession:
         ):
             await _create_ingress_session(client)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert result["error"]["code"] == "CONNECTION_FAILED"
 
@@ -1284,7 +1284,7 @@ class TestCreateIngressSession:
         ):
             await _create_ingress_session(client)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ingress session" in result["error"]["message"].lower()
 
@@ -1305,7 +1305,7 @@ class TestCreateIngressSession:
         ):
             await _create_ingress_session(client)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ingress session" in result["error"]["message"].lower()
 
@@ -1326,7 +1326,7 @@ class TestCreateIngressSession:
         ):
             await _create_ingress_session(client)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ingress session" in result["error"]["message"].lower()
 
@@ -1356,7 +1356,7 @@ class TestCallAddonWsErrors:
         with pytest.raises(ToolError) as exc_info:
             await _call_addon_ws(client, "test_addon", "../../etc/passwd")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "traversal" in result["error"]["message"].lower()
@@ -1385,7 +1385,7 @@ class TestCallAddonWsErrors:
         ):
             await _call_addon_ws(client, "fake_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "not found" in result["error"]["message"].lower()
 
@@ -1412,7 +1412,7 @@ class TestCallAddonWsErrors:
         ):
             await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ingress" in result["error"]["message"].lower()
 
@@ -1576,7 +1576,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/ws")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "TLS verification failed" in result["error"]["message"]
         joined = " ".join(
             [
@@ -1611,7 +1611,7 @@ class TestCallAddonWsErrors:
         ):
             await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "not running" in result["error"]["message"].lower()
 
@@ -1651,7 +1651,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         joined = " ".join(suggestions).lower()
         assert any(k in joined for k in must_mention), suggestions
@@ -1704,7 +1704,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/compile", port=1880)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         joined = " ".join(suggestions).lower()
         if front_door in (True, "unexposed"):
@@ -1747,7 +1747,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any(
             "path" in s.lower() or "endpoints" in s.lower() for s in suggestions
@@ -1776,7 +1776,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "handshake" in result["error"]["message"].lower()
 
@@ -1949,7 +1949,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/validate", port=6052)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any("ingress" in s.lower() for s in suggestions), suggestions
 
@@ -1978,7 +1978,7 @@ class TestCallAddonWsErrors:
                     client, "test_addon", "/validate", port=6052, timeout=5
                 )
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
@@ -2004,7 +2004,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/validate", timeout=5)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert "status before retrying" in result["error"]["suggestion"]
 
     @pytest.mark.asyncio
@@ -2037,7 +2037,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/validate")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any(client.base_url in s for s in suggestions), suggestions
         assert not any("'port' parameter" in s for s in suggestions), suggestions
@@ -2070,7 +2070,7 @@ class TestCallAddonWsErrors:
                     body={"type": "spawn", "configuration": "test.yaml"},
                 )
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "closed unexpectedly" in result["error"]["message"].lower()
 
@@ -2097,7 +2097,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/compile")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert (
             "connect" in result["error"]["message"].lower()
@@ -2257,7 +2257,7 @@ class TestCallAddonWsErrors:
         ):
             await _call_addon_ws(client, "test_addon", "/validate", port=6052)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "ip_address" in str(result).lower()
 
@@ -2373,7 +2373,7 @@ class TestCallAddonWsErrors:
         ):
             await _call_addon_ws(client, "test_addon", "/validate")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["error"]["code"] == "INTERNAL_ERROR"
         assert "ingress_port" in str(result).lower()
 
@@ -2402,7 +2402,7 @@ class TestCallAddonWsErrors:
             with pytest.raises(ToolError) as exc_info:
                 await _call_addon_ws(client, "test_addon", "/validate")
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         suggestions = result["error"].get("suggestions", [])
         assert any(
             "restart" in s.lower() or "addon network" in s.lower() for s in suggestions
@@ -2602,7 +2602,7 @@ class TestApplyResponseTransform:
         message produced by ``format_sandbox_error``."""
         with pytest.raises(ToolError) as exc_info:
             _apply_response_transform([1, 2, 3], "import os")
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "Expression validation failed" in result["error"]["message"]
 
@@ -2611,7 +2611,7 @@ class TestApplyResponseTransform:
         runtime-error message (distinct from validation failures)."""
         with pytest.raises(ToolError) as exc_info:
             _apply_response_transform({}, "response['missing']['key'] = 1")
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "Expression raised at runtime" in result["error"]["message"]
 
@@ -2875,7 +2875,7 @@ class TestCallAddonWsNewParams:
                     python_transform="import os",
                 )
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "Expression validation failed" in result["error"]["message"]
 
@@ -3049,7 +3049,7 @@ class TestValidateAddonAccessWithPort:
         ):
             await _call_addon_ws(client, "test_addon", "/compile", port=6052)
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "not running" in result["error"]["message"].lower()
 
@@ -3153,7 +3153,7 @@ class TestCallAddonApiPythonTransform:
                     python_transform="open('/etc/passwd')",
                 )
 
-        result = _parse_tool_error(exc_info)
+        result = error_body(exc_info)
         assert result["success"] is False
         assert "Expression validation failed" in result["error"]["message"]
 
@@ -3700,7 +3700,7 @@ class TestManageAddon:
                 slug="test_addon",
                 options={"ssh": {"sftp": True}},
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
@@ -3769,7 +3769,7 @@ class TestManageAddon:
                 path="/api/events",
                 options={"key": "value"},
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "Cannot combine" in error["error"]["message"]
 
@@ -3778,7 +3778,7 @@ class TestManageAddon:
         """Providing neither path nor config params raises ToolError."""
         with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(slug="test_addon")
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert (
             "path" in error["error"]["message"] or "config" in error["error"]["message"]
@@ -3789,7 +3789,7 @@ class TestManageAddon:
         """Empty string path is explicitly rejected with VALIDATION_FAILED."""
         with pytest.raises(ToolError) as exc_info:
             await manage_addon_tool(slug="test_addon", path="")
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "path" in error["error"]["message"]
 
@@ -3802,7 +3802,7 @@ class TestManageAddon:
                 options={"key": "val"},
                 method="DELETE",
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "method" in error["error"]["message"]
 
@@ -3815,7 +3815,7 @@ class TestManageAddon:
                 auto_update=False,
                 websocket=True,
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "websocket" in error["error"]["message"]
 
@@ -3830,7 +3830,7 @@ class TestManageAddon:
                 auto_update=False,
                 wait_for_close=False,
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "wait_for_close" in error["error"]["message"]
 
@@ -3879,7 +3879,7 @@ class TestManageAddon:
             pytest.raises(ToolError) as exc_info,
         ):
             await manage_addon_tool(slug="test_addon", path="/flows", method="INVALID")
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert (
             "method" in error["error"]["message"]
@@ -3937,7 +3937,7 @@ class TestManageAddon:
                 path="/flows",
                 message_limit=10,
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "WebSocket" in error["error"]["message"]
 
@@ -3950,7 +3950,7 @@ class TestManageAddon:
                 auto_update=False,
                 message_limit=10,
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "message_limit" in error["error"]["message"]
 
@@ -3963,7 +3963,7 @@ class TestManageAddon:
                 auto_update=False,
                 python_transform="response = []",
             )
-        error = _parse_tool_error(exc_info)
+        error = error_body(exc_info)
         assert error["error"]["code"] == "VALIDATION_FAILED"
         assert "python_transform" in error["error"]["message"]
 
@@ -4097,7 +4097,7 @@ class TestGetAddonInfoLogLevel:
         ):
             await get_addon_info(client, slug)
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         mock_call.assert_not_awaited()
 
@@ -4199,7 +4199,7 @@ class TestSupervisorApiCall:
                 method="POST",
                 data=submitted,
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         direct_client.request.assert_awaited_once_with(
             "POST", "/addons/core_ssh/options", json=submitted
@@ -4288,7 +4288,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons/missing/info")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == expected_code
         if status_code == 401:
             suggestions = " ".join(payload["error"]["suggestions"]).lower()
@@ -4334,7 +4334,7 @@ class TestSupervisorApiCall:
         with pytest.raises(ToolError) as exc_info:
             await _supervisor_api_call(client, "/addons/missing/info")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert (
             payload["error"]["suggestion"]
@@ -4374,7 +4374,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == expected_code
         client.send_websocket_message.assert_not_awaited()
 
@@ -4428,7 +4428,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == expected_code
         if isinstance(transport_error, (httpx.ConnectTimeout, httpx.PoolTimeout)):
             assert "10.0s connection-acquisition timeout" in payload["error"]["message"]
@@ -4464,7 +4464,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "TIMEOUT_OPERATION"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -4510,7 +4510,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "CONNECTION_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -4567,7 +4567,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -4605,7 +4605,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suffix = "\n[Supervisor response truncated to 50 KiB]"
         assert payload["response_body"] == ("x" * (50 * 1024 - len(suffix)) + suffix)
 
@@ -4636,7 +4636,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         prefix = "Command failed: "
         message = payload["error"]["message"]
@@ -4668,7 +4668,7 @@ class TestSupervisorApiCall:
         with pytest.raises(ToolError) as exc_info:
             await _supervisor_api_call(client, "/addons/x/restart", method="POST")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suffix = "\n[Supervisor response truncated to 50 KiB]"
         message = payload["error"]["message"]
         assert message.endswith(suffix)
@@ -4691,7 +4691,7 @@ class TestSupervisorApiCall:
         with pytest.raises(ToolError) as exc_info:
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suffix = "\n[Supervisor response truncated to 50 KiB]"
         message = payload["error"]["message"]
         assert message.startswith("Command failed: w")
@@ -4725,7 +4725,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         message = payload["error"]["message"]
         prefix = "Command failed: Supervisor returned an invalid response: "
         suffix = "\n[Supervisor response truncated to 50 KiB]"
@@ -4760,7 +4760,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         suffix = "\n[Supervisor response truncated to 50 KiB]"
         message = payload["error"]["message"]
         # The status-code path prefixes the bounded Supervisor text, so the
@@ -4797,7 +4797,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         message = payload["error"]["message"]
         prefix = "Supervisor API GET /addons returned an invalid result payload: "
         suffix = "\n[Supervisor response truncated to 50 KiB]"
@@ -4836,7 +4836,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -4886,7 +4886,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -4917,7 +4917,7 @@ class TestSupervisorApiCall:
         ):
             await _supervisor_api_call(client, "/addons/core_mosquitto/info")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "invalid result payload" in payload["error"]["message"]
         assert "outcome" not in payload
@@ -4946,7 +4946,7 @@ class TestSupervisorApiCall:
                 method="POST",
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
@@ -5024,7 +5024,7 @@ class TestSupervisorApiCall:
                 method="POST",
                 data={"options": {"ssh": {"sftp": True}}},
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -5053,7 +5053,7 @@ class TestSupervisorApiCall:
                 "/addons/core_ssh/info",
                 method="GET",
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
 
@@ -5398,7 +5398,7 @@ class TestManageAddonActionMode:
         ):
             await tools._execute_action_mode("local_ha_mcp", "update")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["self_slug"] == "local_ha_mcp"
         assert any(
@@ -5461,7 +5461,7 @@ class TestManageAddonActionMode:
         ):
             await tools._execute_action_mode("core_ssh", "update")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["endpoint"] == "/addons/self/info"
         supervisor_call.assert_awaited_once_with(tools._client, "/addons/self/info")
@@ -5471,7 +5471,7 @@ class TestManageAddonActionMode:
         tools = self._tools()
         with pytest.raises(ToolError) as exc_info:
             await tools._execute_action_mode("core_ssh", "frobnicate")
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -5487,7 +5487,7 @@ class TestManageAddonActionMode:
         ):
             await tools.manage_addon(**_manage_addon_kwargs(slug=slug, action="start"))
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         mock_call.assert_not_awaited()
 
@@ -5513,7 +5513,7 @@ class TestManageAddonActionMode:
             pytest.raises(ToolError) as exc_info,
         ):
             await tools._execute_action_mode("core_ssh", "start")
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
 
     @pytest.mark.asyncio
@@ -5544,7 +5544,7 @@ class TestManageAddonActionMode:
                 request_headers=None,
                 action="start",
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -5557,7 +5557,7 @@ class TestManageAddonActionMode:
                     slug="core_ssh", action="start", options={"k": "v"}
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -5569,7 +5569,7 @@ class TestManageAddonActionMode:
                     slug="core_ssh", action="start", array_patch={"ops": []}
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -5606,7 +5606,7 @@ class TestManageAddonActionMode:
         ):
             await tools.manage_addon(**kwargs)
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         assert parameter in str(exc_info.value)
         mock_call.assert_not_awaited()
@@ -6050,7 +6050,7 @@ class TestManageAddonRepositoryAction:
                 )
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["outcome"] == "unknown"
         assert payload["method"] == "POST"
         assert payload["endpoint"] == "/store/repositories"
@@ -6088,7 +6088,7 @@ class TestManageAddonRepositoryAction:
                 )
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["outcome"] == "unknown"
         assert payload["method"] == "POST"
         assert payload["endpoint"] == "/store/repositories"
@@ -6251,7 +6251,7 @@ class TestManageAddonRepositoryAction:
                 )
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
 
     @pytest.mark.asyncio
@@ -6287,7 +6287,7 @@ class TestManageAddonRepositoryAction:
                     action="add_repository", repository="https://example.com/bad"
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         err_obj = payload["error"]
         suggestions = " ".join(
             [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
@@ -6321,7 +6321,7 @@ class TestManageAddonRepositoryAction:
             await tools.manage_addon(
                 **_manage_addon_kwargs(action="remove_repository", repository="abc123")
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         err_obj = payload["error"]
         suggestions = " ".join(
             [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
@@ -6392,7 +6392,7 @@ class TestManageAddonRepositoryAction:
             await tools.manage_addon(
                 **_manage_addon_kwargs(action="add_repository", repository=None)
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -6402,7 +6402,7 @@ class TestManageAddonRepositoryAction:
             await tools.manage_addon(
                 **_manage_addon_kwargs(action="remove_repository", repository="   ")
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -6424,7 +6424,7 @@ class TestManageAddonRepositoryAction:
                 )
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         mock_call.assert_not_awaited()
 
@@ -6440,7 +6440,7 @@ class TestManageAddonRepositoryAction:
                     repository="https://example.com/repo",
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -6454,7 +6454,7 @@ class TestManageAddonRepositoryAction:
                     path="/info",
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
@@ -6491,7 +6491,7 @@ class TestManageAddonRepositoryAction:
         with pytest.raises(ToolError) as exc_info:
             await tools.manage_addon(**kwargs)
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         assert parameter in str(exc_info.value)
 
@@ -6510,7 +6510,7 @@ class TestManageAddonRepositoryAction:
                 )
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         assert payload["parameter"] == "repository"
 
@@ -6558,7 +6558,7 @@ class TestManageAddonRepositoryAction:
                     action="add_repository", repository="https://example.com/repo"
                 )
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
 
 
@@ -6679,7 +6679,7 @@ class TestConfigModeSentinelRejection:
             await self._tools()._execute_config_mode(
                 "secretful", {"options": {"github_pat": REDACTED_SET}}
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
         assert "github_pat" in payload["error"]["message"]
 
@@ -6747,7 +6747,7 @@ class TestConfigModeSentinelRejection:
             await self._tools()._execute_config_mode(
                 "secretful", {"options": {"github_pat": REDACTED_SET}}
             )
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
 

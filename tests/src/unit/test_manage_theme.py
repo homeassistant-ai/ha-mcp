@@ -20,7 +20,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_themes import ThemesTools
 
-from ._addon_tool_helpers import _parse_tool_error
+from ._tool_errors import error_body
 
 _THEMES = {"nord": {"primary-color": "#5e81ac"}, "iceberg": {}}
 
@@ -87,7 +87,7 @@ class TestManageThemeList:
         with pytest.raises(ToolError) as exc_info:
             await ThemesTools(core_client).ha_manage_theme(action="list")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
         assert "Failed to list themes" in payload["error"]["message"]
         assert "Unknown command" in payload["error"]["message"]
@@ -108,7 +108,7 @@ class TestManageThemeSet:
         ):
             await ThemesTools(core_client).ha_manage_theme(action="set")
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
         call_spy.assert_not_awaited()
 
@@ -180,7 +180,7 @@ class TestManageThemeSet:
             )
 
         call_spy.assert_awaited_once()
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
         assert "ws dropped" in payload["error"]["message"]
         assert (await _core_defaults(core_client))["default_theme"] == "nord"
@@ -196,7 +196,7 @@ class TestManageThemeSet:
                 action="set", theme_name="nope"
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "nope" in payload["error"]["message"]
         assert (await _core_defaults(core_client))["default_theme"] == "default"
@@ -217,7 +217,7 @@ class TestManageThemeSet:
                 action="set", theme_name="nope"
             )
 
-        payload = _parse_tool_error(exc_info)
+        payload = error_body(exc_info)
         assert payload["success"] is False
         assert payload["error"]["code"] == "CONNECTION_FAILED"
         assert any(

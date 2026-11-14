@@ -45,12 +45,6 @@ WRITE_SERVICES = {EDIT_FILE_SERVICE, "write_file", "edit_yaml_config"}
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """A config directory of the test's own for the files the tools write."""
-    return hass_tmp_config_dir
-
-
-@pytest.fixture
 def auto_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     """Auto-backup on (file writes require it), into ``tmp_path``."""
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
