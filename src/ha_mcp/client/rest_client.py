@@ -1935,8 +1935,6 @@ class HomeAssistantClient:
                     "success": False,
                     "error": str(e),
                     "error_code": getattr(e, "code", None),
-                    "translation_domain": getattr(e, "translation_domain", None),
-                    "translation_key": getattr(e, "translation_key", None),
                 }
 
         # Unreachable: every attempt either returns, raises, or ``continue``s,

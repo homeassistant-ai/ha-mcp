@@ -1,9 +1,10 @@
 """A service that ran but whose response Core rejected is no failed call.
 
 Core runs a service asked for its response, then refuses the response when it
-is not a mapping (``service_reponse_invalid``). The write has landed by then,
-so ``ha_call_service`` must say the call ran and Core rejected its response,
-never report an unapplied failure that invites a retry. The service is a
+is not a mapping (``service_reponse_invalid``). The write has landed by then.
+Through the component, ``ha_call_service`` says the call ran and Core rejected
+its response. Without it, Core's REST POST answers only a server error, so the
+tool's error says the service may have run and sends nothing again. The service is a
 handler in Core's ``hass.services`` registered with an optional response; it
 writes a state and returns nothing.
 """
@@ -18,9 +19,13 @@ from homeassistant.core import (
     SupportsResponse,
 )
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.device_control import DeviceControlTools
+from ha_mcp.tools.service_response import RESPONSE_CALL_FAILED_HINT
 from ha_mcp.tools.tools_service import ServiceTools
+
+from ._tool_errors import error_of
 
 
 class Counter:
@@ -79,15 +84,15 @@ async def test_a_confirmed_call_whose_response_core_rejects_ran_once_and_says_so
     assert counter.calls == 1
 
 
-async def test_a_posted_call_whose_response_core_rejects_ran_once_and_says_so(
+async def test_without_the_component_a_rejected_response_is_not_called_again(
     hass: HomeAssistant, core_client: HomeAssistantClient, counter: Counter
 ) -> None:
-    """Without the component, and for any call the component does not confirm."""
-    resp = await ServiceTools(
-        core_client, DeviceControlTools(core_client)
-    ).ha_call_service(domain="counter", service="bump", return_response=True)
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(
+            core_client, DeviceControlTools(core_client)
+        ).ha_call_service(domain="counter", service="bump", return_response=True)
 
-    _rejected(resp)
+    assert RESPONSE_CALL_FAILED_HINT in error_of(exc)["suggestions"]
     state = hass.states.get("sensor.count")
     assert state is not None and state.state == "1"
     assert counter.calls == 1
