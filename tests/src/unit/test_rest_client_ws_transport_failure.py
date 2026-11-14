@@ -32,7 +32,7 @@ from ha_mcp.client.rest_client import (
 from ._command_faults import dropped_on, pooled_socket, received, unanswered
 from ._receipt_faults import revoke
 
-_ENTRIES = {"type": "config_entries/get"}
+_STATES = {"type": "get_states"}
 
 
 async def test_a_connection_dropped_after_core_received_the_command_raises(
@@ -42,10 +42,10 @@ async def test_a_connection_dropped_after_core_received_the_command_raises(
     socket = await pooled_socket(core_client)
 
     with (
-        dropped_on(hass, "config_entries/get", socket),
+        dropped_on(hass, "get_states", socket),
         pytest.raises(HomeAssistantConnectionError) as exc,
     ):
-        await core_client.send_websocket_message(_ENTRIES)
+        await core_client.send_websocket_message(_STATES)
 
     assert not isinstance(exc.value, HomeAssistantCommandNotSent)
 
@@ -57,9 +57,9 @@ async def test_an_unanswered_command_raises_with_its_timeout(
 ) -> None:
     """An open socket that stopped answering leaves the caller as blind as a
     closed one."""
-    async with unanswered(hass, "config_entries/get", monkeypatch):
+    async with unanswered(hass, "get_states", monkeypatch):
         with pytest.raises(HomeAssistantConnectionError) as exc:
-            await core_client.send_websocket_message(_ENTRIES)
+            await core_client.send_websocket_message(_STATES)
 
     assert isinstance(exc.value.__cause__, HomeAssistantCommandTimeout)
 
@@ -68,7 +68,7 @@ async def test_a_refused_connection_sent_nothing(
     unreachable_client: HomeAssistantClient,
 ) -> None:
     with pytest.raises(HomeAssistantCommandNotSent):
-        await unreachable_client.send_websocket_message(_ENTRIES)
+        await unreachable_client.send_websocket_message(_STATES)
 
 
 # Revoking the token closes the server socket, leaving its heartbeat timer.
@@ -79,7 +79,7 @@ async def test_a_refused_token_sent_nothing_and_keeps_its_cause(
     revoke(hass, hass_access_token)
 
     with pytest.raises(HomeAssistantCommandNotSent) as exc:
-        await core_client.send_websocket_message(_ENTRIES)
+        await core_client.send_websocket_message(_STATES)
 
     assert isinstance(exc.value.__cause__, HomeAssistantAuthError)
 
@@ -99,7 +99,7 @@ async def test_a_fault_on_this_side_returns_an_envelope(
 ) -> None:
     """A message the client cannot encode never reaches Home Assistant."""
     result = await core_client.send_websocket_message(
-        {"type": "config_entries/get", "domain": {"not", "json"}}
+        {"type": "get_states", "filter": {"not", "json"}}
     )
 
     assert result["success"] is False
