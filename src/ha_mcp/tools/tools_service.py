@@ -1595,25 +1595,38 @@ class ServiceTools(EventCallMixin):
                 response.setdefault("warnings", []).append(
                     COMPONENT_RESPONSE_UNCONFIRMED_WARNING
                 )
-        if should_wait:
-            if component_result.get("partial"):
-                # Reached only when _raise_for_missing_or_unavailable_target above
-                # did NOT raise -- i.e. a genuine confirmation lapse on a real,
-                # available target whose confirming state_changed simply never
-                # arrived within the wait. success stays True here (the same
-                # partial-success contract the legacy timeout path reports);
-                # unlike this generic case, a target proven nonexistent or still
-                # unavailable is a raised ToolError, not a partial success.
-                response["partial"] = True
+        self._note_confirmation(
+            response, component_result, transitions, entity_id, should_wait
+        )
+        return response
+
+    @classmethod
+    def _note_confirmation(
+        cls,
+        response: dict[str, Any],
+        component_result: dict[str, Any],
+        transitions: list[Any],
+        entity_id: str | None,
+        should_wait: bool,
+    ) -> None:
+        """Mark a partial result, or add the confirmed target's verified state."""
+        if component_result.get("partial"):
+            # Without a wait, only the component's post-dispatch fallback is
+            # partial. With one, this is reached only when
+            # _raise_for_missing_or_unavailable_target did NOT raise -- a genuine
+            # confirmation lapse on a real, available target. success stays True
+            # (the legacy timeout path's partial-success contract); a target
+            # proven nonexistent or still unavailable is a raised ToolError.
+            response["partial"] = True
+            if should_wait:
                 response.setdefault("warnings", []).append(
                     "Service executed but state change could not be verified "
                     "within timeout."
                 )
-            else:
-                verified_state = self._component_verified_state(transitions, entity_id)
-                if verified_state is not None:
-                    response["verified_state"] = verified_state
-        return response
+        elif should_wait:
+            verified_state = cls._component_verified_state(transitions, entity_id)
+            if verified_state is not None:
+                response["verified_state"] = verified_state
 
     async def _maybe_component_call_service(
         self,
