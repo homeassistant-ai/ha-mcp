@@ -565,7 +565,7 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
     # Cancelling the await cannot stop its executor thread, and releasing the
     # caller's lock early would let another capture reserve the same filename.
     # asyncio.wait never cancels the worker and, unlike a cancelled shield on
-    # Python 3.14.0-3.14.4, leaves nothing for the loop's error handler.
+    # the Python 3.14.4 the unit tests run, leaves nothing for the loop's error handler.
     while not worker.done():
         try:
             await asyncio.wait({worker})
