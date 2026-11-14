@@ -3,25 +3,24 @@
 import pytest
 
 from ha_mcp.tools.bug_report_redaction import (
-    _URL_USERINFO_RE,
     KnownIdentifiers,
-    _sanitize_log_text,
     known_identifiers_scope,
+    sanitize_log_text,
 )
 
 
 class TestSanitizeLogText:
-    """Tests for _sanitize_log_text."""
+    """The regex rules every report text passes through."""
 
     def test_redacts_jwt_tokens(self) -> None:
         text = "auth: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "eyJ" not in result
         assert "[REDACTED_JWT]" in result
 
     def test_redacts_bearer_tokens(self) -> None:
         text = "Authorization: Bearer abc123secrettoken"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "abc123" not in result
         assert "Bearer [REDACTED]" in result
 
@@ -29,32 +28,32 @@ class TestSanitizeLogText:
         # Bare hex (no leading "token:" — that path is exercised by the
         # key=value rule below) gets the dedicated hex marker.
         text = f"raw: {'a1b2c3d4' * 5}"  # 40-char hex string
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "a1b2c3d4" not in result
         assert "[REDACTED_HEX]" in result
 
     def test_redacts_ipv4_with_port(self) -> None:
         text = "Connected to 192.168.1.100:8123"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "192.168.1.100" not in result
         assert "[IP]" in result
 
     def test_redacts_ipv4_in_url(self) -> None:
         text = "fetched https://192.168.1.1/api/states"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "192.168.1.1" not in result
         assert "[IP]" in result
 
     def test_redacts_ipv4_after_keyword(self) -> None:
         text = "host=10.0.0.5 connecting"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "10.0.0.5" not in result
         assert "[IP]" in result
 
     def test_redacts_quoted_ipv4_after_keyword(self) -> None:
-        assert _sanitize_log_text("host='203.0.113.7' refused") == "host='[IP]' refused"
-        assert _sanitize_log_text('host="203.0.113.7" refused') == 'host="[IP]" refused'
-        result = _sanitize_log_text(
+        assert sanitize_log_text("host='203.0.113.7' refused") == "host='[IP]' refused"
+        assert sanitize_log_text('host="203.0.113.7" refused') == 'host="[IP]" refused'
+        result = sanitize_log_text(
             "HTTPConnectionPool(host='203.0.113.7', port=32400): Max retries exceeded"
         )
         assert "203.0.113.7" not in result
@@ -69,46 +68,46 @@ class TestSanitizeLogText:
             f"HTTPSConnectionPool(host='203-0-113-7.{hex_label}.plex.direct', port=32400)",
         ]
         for text in cases:
-            result = _sanitize_log_text(text)
+            result = sanitize_log_text(text)
             assert "203-0-113-7" not in result, result
             assert "[IP].[REDACTED_HEX].plex.direct" in result, result
 
     def test_preserves_dashed_numbers_outside_plex_direct(self) -> None:
         for text in ("build 1-2-3-4 starting", "resolved 1-2-3-4.example.com"):
-            assert _sanitize_log_text(text) == text
+            assert sanitize_log_text(text) == text
 
     def test_redacts_lan_hostnames(self) -> None:
-        result = _sanitize_log_text("GET http://nas.home.lan:5000/api failed")
+        result = sanitize_log_text("GET http://nas.home.lan:5000/api failed")
         assert result == "GET http://[HOST]:5000/api failed"
-        result = _sanitize_log_text("HTTPConnectionPool(host='nas.home.lan', port=80)")
+        result = sanitize_log_text("HTTPConnectionPool(host='nas.home.lan', port=80)")
         assert "nas.home.lan" not in result
         assert "host='[HOST]'" in result
 
     def test_preserves_words_containing_lan(self) -> None:
         for text in ("plan the route", "iface wlan0 up", "foo.language set"):
-            assert _sanitize_log_text(text) == text
+            assert sanitize_log_text(text) == text
 
     def test_lan_and_tailnet_suffixes_must_end_the_hostname(self) -> None:
         # ``lan`` or ``ts.net`` as an inner label is some other domain.
         for text in ("GET nas.home.lan.example.com/x", "GET machine.ts.net.au/x"):
-            assert _sanitize_log_text(text) == text
+            assert sanitize_log_text(text) == text
 
     def test_redacts_tailnet_hostnames(self) -> None:
         for text in (
             "https://machine.tailnet-name.ts.net/api failed",
             "resolving machine.tailnet-name.ts.net failed",
         ):
-            result = _sanitize_log_text(text)
+            result = sanitize_log_text(text)
             assert "tailnet-name" not in result, result
             assert "[TAILNET_HOST]" in result, result
-        assert _sanitize_log_text("visit sports.net") == "visit sports.net"
+        assert sanitize_log_text("visit sports.net") == "visit sports.net"
 
     def test_redacts_graph_calendar_id(self) -> None:
         text = (
             "GET https://graph.microsoft.com/v1.0/me/calendars/"
             "AAMkAGI2TGuLAAA-x_y=/calendarView?startDateTime=2026-01-01 failed"
         )
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "AAMkAGI2TGuLAAA" not in result
         assert "/me/calendars/[CALENDAR_ID]/calendarView?" in result
 
@@ -116,7 +115,7 @@ class TestSanitizeLogText:
         # Regression: bare four-segment values without network context (e.g.
         # version banners) were being mangled by the IPv4 rule.
         text = "ha-mcp version 1.2.3.4 starting"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert result == text
 
     def test_redacts_key_value_credentials(self) -> None:
@@ -133,7 +132,7 @@ class TestSanitizeLogText:
             ('{"authorization": "Digest abc123"}', "abc123"),
         ]
         for text, secret in cases:
-            result = _sanitize_log_text(text)
+            result = sanitize_log_text(text)
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
@@ -143,23 +142,23 @@ class TestSanitizeLogText:
             ("mqtt://user:pass@broker.local:1883", "user:pass"),
         ]
         for text, secret in cases:
-            result = _sanitize_log_text(text)
+            result = sanitize_log_text(text)
             assert secret not in result, f"{secret!r} leaked in {result!r}"
             assert "[REDACTED]" in result
 
-    def test_the_userinfo_rule_cannot_start_matching_inside_plain_text(self) -> None:
+    @pytest.mark.timeout(10)
+    def test_a_long_unbroken_word_is_scrubbed_in_linear_time(self) -> None:
         # A base64 blob or minified payload in a log message once took the
         # userinfo rule time quadratic in its length, so ha_report_issue
         # appeared to hang: the rule began matching at the scheme, so every
-        # character of the word was a candidate start. Anchored on "://" it
-        # can only start at the separator, which plain text never contains.
-        url = "https://admin:supersecret@ha.local/api"
-        assert _URL_USERINFO_RE.match(url) is None
-        assert _URL_USERINFO_RE.search(url).start() == len("https")
-        assert _URL_USERINFO_RE.search("a" * 200_000) is None
+        # character of the word was a candidate start (about a minute for
+        # 200 kB; anchored on "://" it takes milliseconds).
+        blob = "z" * 200_000
+        assert sanitize_log_text(blob) == blob
+        assert sanitize_log_text("https" + blob) == "https" + blob
 
     def test_redacts_userinfo_after_a_scheme_glued_to_other_text(self) -> None:
-        result = _sanitize_log_text("url=1https://admin:supersecret@ha.local/api")
+        result = sanitize_log_text("url=1https://admin:supersecret@ha.local/api")
         assert "supersecret" not in result
 
     def test_redacts_legacy_oauth_client_secret_log_line(self) -> None:
@@ -167,7 +166,7 @@ class TestSanitizeLogText:
         # INFO, and those lines can still sit in home-assistant.log. A shared
         # bug report must scrub them; the generic "secret:" key=value rule
         # covers the logged line.
-        result = _sanitize_log_text("  OAuth Client Secret: s3cr3tV4lue_Zz-99aa")
+        result = sanitize_log_text("  OAuth Client Secret: s3cr3tV4lue_Zz-99aa")
         assert "s3cr3tV4lue" not in result
         assert "[REDACTED]" in result
 
@@ -181,13 +180,13 @@ class TestSanitizeLogText:
             ("hdr: BeArEr abc123token", "BeArEr [REDACTED]"),
         ]
         for text, expected in cases:
-            result = _sanitize_log_text(text)
+            result = sanitize_log_text(text)
             assert "abc123" not in result, f"abc123 leaked in {result!r}"
             assert expected in result, f"missing {expected!r} in {result!r}"
 
     def test_handles_multiple_secrets_in_one_line(self) -> None:
         text = "token=abc123 connected to 192.168.1.5 with bearer xyz789"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert "abc123" not in result
         assert "xyz789" not in result
         assert "192.168.1.5" not in result
@@ -196,7 +195,7 @@ class TestSanitizeLogText:
 
     def test_preserves_normal_text(self) -> None:
         text = "2024-12-01 10:00:00 ERROR ha_mcp.server: Entity not found"
-        result = _sanitize_log_text(text)
+        result = sanitize_log_text(text)
         assert result == text
 
 
@@ -212,7 +211,7 @@ class TestKnownIdentifierRedaction:
 
     def _scrub(self, text: str) -> str:
         with known_identifiers_scope(self.IDS):
-            return _sanitize_log_text(text)
+            return sanitize_log_text(text)
 
     def test_bare_known_address_is_redacted(self) -> None:
         """The version-string guard spares a bare address without context."""
@@ -240,8 +239,8 @@ class TestKnownIdentifierRedaction:
     def test_known_ipv4_mapped_ipv6_address_is_redacted(self) -> None:
         ids = KnownIdentifiers(addresses=frozenset({"::ffff:192.0.2.1"}))
         with known_identifiers_scope(ids):
-            assert _sanitize_log_text("peer2 ::ffff:192.0.2.1 up") == "peer2 [IP] up"
-            assert _sanitize_log_text("peer2 ::ffff:192.0.2.10 up") == (
+            assert sanitize_log_text("peer2 ::ffff:192.0.2.1 up") == "peer2 [IP] up"
+            assert sanitize_log_text("peer2 ::ffff:192.0.2.10 up") == (
                 "peer2 ::ffff:192.0.2.10 up"
             )
 
@@ -287,7 +286,7 @@ class TestKnownIdentifierRedaction:
         with known_identifiers_scope(self.IDS):
             pass
         text = "Setup failed for 172.17.0.3 on nas.example"
-        assert _sanitize_log_text(text) == text
+        assert sanitize_log_text(text) == text
 
     def test_scope_resets_when_its_body_raises(self) -> None:
         def assemble_report() -> str:
@@ -295,4 +294,4 @@ class TestKnownIdentifierRedaction:
 
         with pytest.raises(RuntimeError), known_identifiers_scope(self.IDS):
             assemble_report()
-        assert _sanitize_log_text("on nas.example") == "on nas.example"
+        assert sanitize_log_text("on nas.example") == "on nas.example"

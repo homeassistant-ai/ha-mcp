@@ -17,6 +17,12 @@ from .test_capture_and_restore import (
 )
 
 
+def _exposed_to_assist(entity: dict) -> bool:
+    """Assist exposure, as Core stores it in the entry's options."""
+    options = entity["entity_entry"]["options"].get("conversation") or {}
+    return bool(options.get("should_expose"))
+
+
 @pytest.mark.convenience
 @pytest.mark.cleanup
 @pytest.mark.external_only
@@ -47,13 +53,14 @@ class TestEntityCaptureRestore:
                     mcp_client,
                     tool_name="ha_get_entity",
                     arguments={"entity_id": entity_id},
-                    predicate=lambda d: d["entity_entry"]["hidden"] is False,
+                    predicate=lambda d: d["entity_entry"]["hidden_by"] is None,
                     description=f"{entity_id} in the entity registry",
                 )
-                exposure = await mcp.call_tool_success(
-                    "ha_get_entity_exposure", {"entity_id": entity_id}
+                exposed = _exposed_to_assist(
+                    await mcp.call_tool_success(
+                        "ha_get_entity", {"entity_id": entity_id}
+                    )
                 )
-                exposed = exposure["exposed_to"]["conversation"]
                 # The edit flips the exposure read above, so the read-back after
                 # the restore fails if the restore leaves exposure as edited.
                 await mcp.call_tool_success(
@@ -72,11 +79,8 @@ class TestEntityCaptureRestore:
                 edited = await mcp.call_tool_success(
                     "ha_get_entity", {"entity_id": renamed}
                 )
-                assert edited["entity_entry"]["hidden"] is True
-                exposure = await mcp.call_tool_success(
-                    "ha_get_entity_exposure", {"entity_id": renamed}
-                )
-                assert exposure["exposed_to"]["conversation"] is (not exposed)
+                assert edited["entity_entry"]["hidden_by"] == "user"
+                assert _exposed_to_assist(edited) is (not exposed)
 
                 restore = await mcp.call_tool_success(
                     "ha_manage_backup",
@@ -93,11 +97,8 @@ class TestEntityCaptureRestore:
                 restored = await mcp.call_tool_success(
                     "ha_get_entity", {"entity_id": entity_id}
                 )
-                assert restored["entity_entry"]["hidden"] is False
-                exposure = await mcp.call_tool_success(
-                    "ha_get_entity_exposure", {"entity_id": entity_id}
-                )
-                assert exposure["exposed_to"]["conversation"] is exposed
+                assert restored["entity_entry"]["hidden_by"] is None
+                assert _exposed_to_assist(restored) is exposed
             finally:
                 for target in (entity_id, renamed):
                     await safe_call_tool(
@@ -127,7 +128,7 @@ class TestEntityCaptureRestore:
                     mcp_client,
                     tool_name="ha_get_entity",
                     arguments={"entity_id": entity_id},
-                    predicate=lambda d: d["entity_entry"]["hidden"] is False,
+                    predicate=lambda d: d["entity_entry"]["hidden_by"] is None,
                     description=f"{entity_id} in the entity registry",
                 )
                 await mcp.call_tool_success(

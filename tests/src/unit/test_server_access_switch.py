@@ -36,6 +36,12 @@ async def _switch_entry(
     return registered
 
 
+def _shown(hass: HomeAssistant, entity_id: str) -> str:
+    state = hass.states.get(entity_id)
+    assert state is not None
+    return state.state
+
+
 async def test_the_server_entry_gets_one_access_switch(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
@@ -92,13 +98,13 @@ async def test_turning_the_switch_on_shows_on(
     registered = await _switch_entry(
         hass, entity_registry, **{DATA_ACCESS_ENABLED: False}
     )
-    assert hass.states.get(registered.entity_id).state == STATE_OFF
+    assert _shown(hass, registered.entity_id) == STATE_OFF
 
     await hass.services.async_call(
         "switch", "turn_on", {"entity_id": registered.entity_id}, blocking=True
     )
 
-    assert hass.states.get(registered.entity_id).state == STATE_ON
+    assert _shown(hass, registered.entity_id) == STATE_ON
 
 
 async def test_switch_shows_off_when_the_stop_fails(
@@ -118,4 +124,4 @@ async def test_switch_shows_off_when_the_stop_fails(
         )
     server.teardown.side_effect = None
 
-    assert hass.states.get(registered.entity_id).state == STATE_OFF
+    assert _shown(hass, registered.entity_id) == STATE_OFF

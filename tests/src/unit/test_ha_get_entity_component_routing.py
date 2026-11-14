@@ -2,13 +2,13 @@
 
 ``ha_get_entity`` serves its base registry record from the native
 ``config/entity_registry/get`` (single) / ``config/entity_registry/get_entries``
-(bulk) reads Phase 0 already landed. When the component advertises
-``entity_enrich``, one ``ha_mcp_tools/entity_enrich`` frame additively decorates
-each record with the resolved area/floor NAMES and label NAMES the raw registry
-entry lacks (it carries ``area_id`` / label ids). These tests pin the additive
-merge, that the enrichment keys are ABSENT on a capability miss (legacy shape
-unchanged), and the error-taxonomy fallbacks (``unknown_command`` → invalidate the
-cached caps + fields absent; a command error/timeout → fields absent silently).
+(bulk) reads. When the component advertises ``entity_enrich``, one
+``ha_mcp_tools/entity_enrich`` frame additively decorates each record with the
+resolved area/floor NAMES and label NAMES the raw registry entry lacks (it
+carries ``area_id`` / label ids). These tests pin the additive merge, that
+the enrichment keys are ABSENT on a capability miss, with a warning to install
+or update the component, and on ``unknown_command`` (which also invalidates the
+cached caps).
 """
 
 from __future__ import annotations
@@ -21,8 +21,6 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api, tools_entities
 from ha_mcp.tools.tools_entities import (
@@ -35,7 +33,6 @@ from ha_mcp.tools.tools_entities import (
 from ._component_routing_helpers import (
     make_ws,
     patch_ws,
-    patch_ws_establish_failure,
 )
 
 _CAPS_PRE_CHILD_SEMANTICS = {
@@ -94,7 +91,9 @@ class RoutingClient:
         self._entries = dict(entries)
         self.ws_calls: list[str] = []
 
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def send_websocket_message(
+        self, msg: dict[str, Any], **_: Any
+    ) -> dict[str, Any]:
         msg_type = msg.get("type")
         self.ws_calls.append(msg_type)
         if msg_type == "config/entity_registry/get":
@@ -268,53 +267,6 @@ async def test_unknown_command_invalidates_and_omits_fields() -> None:
     assert "area" not in entry
     # The stale positive caps entry was dropped so the next call re-probes.
     assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_command_error_omits_fields_silently() -> None:
-    """A non-unknown command error/timeout → fields absent, base record intact."""
-    ws = make_ws(
-        "ha_mcp_tools/entity_enrich",
-        info_result=_CAPS_ENRICH,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient(
-        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
-    )
-    get_entity = _build_get_entity(client)
-
-    with patch_ws(ws, tools_entities):
-        resp = await get_entity("light.a")
-
-    entry = resp["entity_entry"]
-    assert entry["entity_id"] == "light.a"
-    assert "area" not in entry
-    assert "label_names" not in entry
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_omits_fields_silently() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) → enrichment fields absent, base record intact, not a propagated
-    error. Enrichment is strictly additive (no legacy enrichment fetch), so a
-    transport failure just skips it."""
-    caps_ws = make_ws("ha_mcp_tools/entity_enrich", info_result=_CAPS_ENRICH)
-    client = RoutingClient(
-        {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
-    )
-    get_entity = _build_get_entity(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        tools_entities,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        resp = await get_entity("light.a")
-
-    entry = resp["entity_entry"]
-    assert entry["entity_id"] == "light.a"
-    assert "area" not in entry
-    assert "label_names" not in entry
 
 
 class _CredClient:

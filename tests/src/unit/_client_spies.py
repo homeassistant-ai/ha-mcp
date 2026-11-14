@@ -20,6 +20,13 @@ def sent_messages(client: HomeAssistantClient) -> Iterator[AsyncMock]:
 
 
 @contextmanager
+def sent_commands(socket: HomeAssistantWebSocketClient) -> Iterator[AsyncMock]:
+    """Spy on the socket's commands; Core still answers each one."""
+    with patch.object(socket, "send_command", wraps=socket.send_command) as spy:
+        yield spy
+
+
+@contextmanager
 def routing_spies(
     client: HomeAssistantClient, socket: HomeAssistantWebSocketClient
 ) -> Iterator[tuple[AsyncMock, AsyncMock]]:

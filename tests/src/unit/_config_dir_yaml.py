@@ -2,8 +2,8 @@
 
 Core's config API reads and writes ``scenes.yaml``, ``automations.yaml`` and
 ``scripts.yaml`` there, a reload reads ``configuration.yaml`` again, and
-blueprints load from ``blueprints/``. A test that uses these overrides
-``hass_config_dir`` with ``hass_tmp_config_dir`` so the files are its own.
+blueprints load from ``blueprints/``. The conftest's ``hass_config_dir`` gives
+each test a temporary config directory, so the files are its own.
 """
 
 from __future__ import annotations

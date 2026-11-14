@@ -18,6 +18,9 @@ The call is served, so nothing else tells that client its list is stale: the
 result carries a warning with the refresh steps, and the server log records
 the first use of each old name.
 
+A retired call whose argument the current tool drops has Core judge that
+argument first (``adapt_retired_call``); the search proxies call it too.
+
 Registering the old name as a second, disabled tool would not work:
 ``get_tool`` filters on ``is_enabled`` and ``call_tool`` then raises
 ``NotFoundError``, so a disabled tool is unlisted *and* uncallable.
@@ -26,6 +29,7 @@ Registering the old name as a second, disabled tool would not work:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
@@ -34,16 +38,48 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     MiddlewareContext,
 )
 
+from ..client.rest_client import HomeAssistantError
 from ..renamed_tools import (
     RENAMED_TOOLS,
     adapt_retired_arguments,
     add_stale_list_warning,
     retired_parameters_used,
 )
+from .entity_expose_batch import read_expose_new
+from .helpers import exception_to_structured_error
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["RENAMED_TOOLS", "RenamedToolAliasMiddleware"]
+__all__ = ["RENAMED_TOOLS", "RenamedToolAliasMiddleware", "adapt_retired_call"]
+
+
+async def adapt_retired_call(
+    name: str,
+    arguments: Mapping[str, Any] | None,
+    get_client: Callable[[], Any] | None,
+) -> dict[str, Any] | None:
+    """``adapt_retired_arguments``, after Core judged what the adapter drops.
+
+    ``ha_get_entity_exposure`` refused an unknown ``assistant`` sent with an
+    ``entity_id``; ``ha_get_entity`` has no place for that name, so Core's
+    ``homeassistant/expose_new_entities/get`` judges it here, the check an
+    ``expose_to`` name gets. A read that fails without Core's verdict on the
+    name (no answer, a rejected token) is the call's structured error, as
+    inside the old tool.
+    """
+    if (
+        name == "ha_get_entity_exposure"
+        and arguments
+        and arguments.get("entity_id") is not None
+        and arguments.get("assistant") is not None
+    ):
+        assert get_client is not None, "the server passes its client"
+        assistant = arguments["assistant"]
+        try:
+            await read_expose_new(get_client(), assistant)
+        except HomeAssistantError as exc:
+            exception_to_structured_error(exc, {"assistant": assistant})
+    return adapt_retired_arguments(name, arguments)
 
 
 class RenamedToolAliasMiddleware(Middleware):
@@ -54,7 +90,10 @@ class RenamedToolAliasMiddleware(Middleware):
     on, rather than an alias it would not recognise.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
+        # Core judges a name the retired signature carried and the current
+        # one drops (``adapt_retired_call``).
+        self._get_client = get_client
         # Which retired names have been logged at INFO already, so the first
         # call on each is audible and the rest stay at DEBUG. An operator
         # otherwise has no way to know a client is still calling the old name —
@@ -91,9 +130,9 @@ class RenamedToolAliasMiddleware(Middleware):
         if name != called:
             self._announce(called, called, name)
             renames.append((called, name))
-            # A consolidated tool needs the ``action`` the retired signature
-            # never carried; a plain rename forwards the arguments as they are.
-            arguments = adapt_retired_arguments(called, arguments)
+            # ``adapt_retired_call`` maps the retired signature onto the
+            # current one; a plain rename forwards the arguments as they are.
+            arguments = await adapt_retired_call(called, arguments, self._get_client)
         retired_parameters = retired_parameters_used(name, arguments)
         if retired_parameters:
             arguments = {

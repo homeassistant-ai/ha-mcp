@@ -9,7 +9,6 @@ the real ``hass``: Core renders every template and checks every condition, and
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,16 +36,13 @@ from ha_mcp.tools.component_api import (
 )
 from ha_mcp.tools.tools_utility import UtilityTools
 
+from ._tool_errors import error_body
+
 DIAGNOSE = "ha_mcp_tools/template_diagnose"
 # Runs far past any timeout; Core's sandbox caps a single range, so two nest.
 RUNAWAY = (
     "{% for i in range(100000) %}{% for j in range(100000) %}{% endfor %}{% endfor %}"
 )
-
-
-def _error_payload(exc: ToolError) -> dict[str, Any]:
-    payload: dict[str, Any] = json.loads(str(exc))
-    return payload
 
 
 async def _eval(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
@@ -65,7 +61,7 @@ async def _eval(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
 async def _eval_error(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
     with pytest.raises(ToolError) as exc:
         await _eval(client, **kwargs)
-    return _error_payload(exc.value)
+    return error_body(exc)
 
 
 async def _socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:

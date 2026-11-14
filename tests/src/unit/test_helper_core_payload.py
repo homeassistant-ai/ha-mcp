@@ -28,7 +28,7 @@ from ha_mcp.tools.config_helpers.core_payload import (
 )
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
-from ._tool_errors import _error
+from ._tool_errors import error_of
 
 
 async def _stored_counter(hass: HomeAssistant, client: HomeAssistantClient) -> str:
@@ -80,7 +80,7 @@ def test_a_list_is_not_a_storage_helpers_config() -> None:
     """A list answers a flow's forms; a storage helper has no flow."""
     with pytest.raises(ToolError) as exc_info:
         storage_fields("input_number", [{"min": 0}], "T", None)
-    assert "written in one call" in _error(exc_info)["message"]
+    assert "written in one call" in error_of(exc_info)["message"]
 
 
 def test_update_does_not_send_the_items_id() -> None:

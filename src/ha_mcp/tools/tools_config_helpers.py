@@ -50,7 +50,7 @@ from .config_helpers.registry import (
     validate_registry_ids,
 )
 from .config_helpers.schemas import (
-    _SIMPLE_CONFIG_KEYS_DESCRIPTION,
+    SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
     StorageHelperType,
 )
@@ -633,7 +633,7 @@ class HelperConfigTools:
                     "Type-specific fields. On update it is a patch: a field "
                     "you omit keeps its current value, and a SIMPLE type's "
                     "field set to null is removed. SIMPLE types take "
-                    f"these keys: {_SIMPLE_CONFIG_KEYS_DESCRIPTION} "
+                    f"these keys: {SIMPLE_CONFIG_KEYS_DESCRIPTION} "
                     "FLOW types and config_subentry: the answers to the form "
                     "the flow is at, under the form's own field names (a "
                     "section's fields nested under the section's name). On an "

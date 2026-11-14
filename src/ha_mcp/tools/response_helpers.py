@@ -125,9 +125,9 @@ _COMPACT_RESULT_DROP_ATTRIBUTES: frozenset[str] = frozenset(
 
 
 def compact_service_result(
-    result: Any,
+    result: list[dict[str, Any]],
     target_entity_id: str | None,
-) -> Any:
+) -> list[dict[str, Any]]:
     """Trim a ha_call_service ``result`` list to the compact default (issue #1446).
 
     Compact rules:
@@ -141,30 +141,21 @@ def compact_service_result(
     3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
        every record's ``attributes`` dict.
 
-    Returns ``result`` unchanged when it is not a list (defensive — every
-    ha_call_service path now projects a changed-state list), or when the list
-    is empty.
+    Returns ``result`` unchanged when the list is empty.
     """
-    if not isinstance(result, list) or not result:
+    if not result:
         return result
 
-    records: list[Any] = result
+    records = result
     if isinstance(target_entity_id, str) and target_entity_id:
         targets = {t.strip() for t in target_entity_id.split(",") if t.strip()}
         if targets:
-            matched = [
-                r
-                for r in records
-                if isinstance(r, dict) and r.get("entity_id") in targets
-            ]
+            matched = [r for r in records if r.get("entity_id") in targets]
             if matched:
                 records = matched
 
-    compacted: list[Any] = []
+    compacted: list[dict[str, Any]] = []
     for record in records:
-        if not isinstance(record, dict):
-            compacted.append(record)
-            continue
         trimmed = {
             k: v for k, v in record.items() if k not in _COMPACT_RESULT_DROP_TOP_LEVEL
         }

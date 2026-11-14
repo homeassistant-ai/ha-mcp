@@ -3,7 +3,7 @@ time-budget knobs must be first-class, UI-tunable ``Settings`` fields
 rather than direct ``os.environ`` reads that bypass ``config.py``.
 
 Before #1538 these lived only as ``os.environ.get(...)`` reads inside
-``tools/smart_search/_config.py``, so add-on users (who cannot set raw
+``tools/smart_search/smart_search.py``, so add-on users (who cannot set raw
 env vars) had no way to tune them — the web Settings UI only surfaces
 fields registered in ``config.py``. These tests lock in that they are
 now registered ``Settings`` fields, rendered in the Advanced panel, and
@@ -14,7 +14,7 @@ advanced setting.
 import pytest
 
 from ha_mcp.config import (
-    _ADVANCED_SETTINGS_BOUNDS,
+    ADVANCED_SETTINGS_BOUNDS,
     ADVANCED_SETTINGS_FIELDS,
     Settings,
     get_global_settings,
@@ -66,7 +66,7 @@ def test_budget_field_is_editable_float_in_advanced_search_section(field, env, d
     assert row.editable is True
     assert row.section == "search"
     # Numeric advanced fields must carry UI/POST bounds.
-    assert field in _ADVANCED_SETTINGS_BOUNDS
+    assert field in ADVANCED_SETTINGS_BOUNDS
 
 
 @pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
@@ -126,7 +126,7 @@ def test_invalid_or_out_of_range_env_value_falls_back_to_default(
 ):
     """Lenient contract: an empty, unparseable, or out-of-range (incl.
     non-finite) env value falls back to the default rather than crashing
-    startup or smuggling a budget past _ADVANCED_SETTINGS_BOUNDS. A ``<= 0``
+    startup or smuggling a budget past ADVANCED_SETTINGS_BOUNDS. A ``<= 0``
     budget would silently disable the per-id config-fetch scan."""
     _clear_budget_envs(monkeypatch)
     monkeypatch.setenv(env, bad_value)
@@ -154,12 +154,12 @@ def test_smart_search_constants_track_settings_field_defaults():
     regardless of any settings rebuild / caching elsewhere in the session,
     while still catching a constant that drifts away from the Settings
     default (e.g. someone re-hardcoding it)."""
-    from ha_mcp.tools.smart_search import _config
+    from ha_mcp.tools import smart_search
 
     constants = {
-        "automation_config_time_budget": _config.AUTOMATION_CONFIG_TIME_BUDGET,
-        "script_config_time_budget": _config.SCRIPT_CONFIG_TIME_BUDGET,
-        "scene_config_time_budget": _config.SCENE_CONFIG_TIME_BUDGET,
+        "automation_config_time_budget": smart_search.AUTOMATION_CONFIG_TIME_BUDGET,
+        "script_config_time_budget": smart_search.SCRIPT_CONFIG_TIME_BUDGET,
+        "scene_config_time_budget": smart_search.SCENE_CONFIG_TIME_BUDGET,
     }
     for field, _env, default in BUDGET_FIELDS:
         assert constants[field] == default

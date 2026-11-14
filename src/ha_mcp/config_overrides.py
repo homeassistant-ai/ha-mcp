@@ -6,11 +6,11 @@ from typing import Any
 
 from ha_mcp._version import is_running_in_addon
 from ha_mcp.config_registry import (
-    _ADVANCED_SETTINGS_BOUNDS,
     _ADVANCED_SETTINGS_CHOICES,
     _ADVANCED_SETTINGS_SENTINELS,
     _FEATURE_FLAG_INT_BOUNDS,
     _FEATURE_FLAG_OVERRIDE_FILENAME,
+    ADVANCED_SETTINGS_BOUNDS,
     ADVANCED_SETTINGS_FIELDS,
     BETA_FEATURE_FIELDS,
     FEATURE_FLAG_FIELDS,
@@ -401,7 +401,7 @@ def _coerce_advanced_override_value(
 
 def _advanced_override_passes_constraints(fname: str, coerced: Any) -> bool:
     """Bounds/sentinel/choices gate for a coerced ADVANCED_SETTINGS_FIELDS value."""
-    bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+    bounds = ADVANCED_SETTINGS_BOUNDS.get(fname)
     sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
     if (
         bounds is not None

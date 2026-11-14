@@ -1,10 +1,11 @@
 """
 Voice Assistant Exposure E2E Tests
 
-Tests for voice assistant exposure tools:
+Tests for voice assistant exposure and the registry-wide settings:
 - ha_set_entity(expose_to=...) - Expose/hide entities from voice assistants
-- ha_get_entity_exposure - List entity exposure status
-- ha_get_entity_exposure - Get specific entity exposure
+- ha_get_entity() / ha_get_entity(exposed_to=...) - List exposed entities
+- ha_get_entity(entity_id=...) - An entity's exposure in its registry options
+- ha_set_entity(expose_new_entities=... / entity_id_parts=...) - Registry-wide
 
 Note: These tests may have limited functionality in test environments
 without Nabu Casa cloud configured. The tests focus on API functionality
@@ -15,7 +16,8 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +33,15 @@ class TestVoiceAssistantExposure:
 
         This is a read-only operation that should always succeed.
         """
-        logger.info("Testing ha_get_entity_exposure")
+        logger.info("Testing ha_get_entity without an entity")
 
-        result = await mcp_client.call_tool("ha_get_entity_exposure", {})
+        result = await mcp_client.call_tool("ha_get_entity", {})
 
         data = parse_mcp_result(result)
         assert data.get("success"), f"Failed to list exposed entities: {data}"
 
         # Check response structure
+        assert "entity_id_parts" in data["settings"], data
         assert "exposed_entities" in data, "Response should have exposed_entities"
         assert "count" in data, "Response should have count"
         assert "summary" in data, "Response should have summary"
@@ -52,21 +55,19 @@ class TestVoiceAssistantExposure:
         """
         Test: Filter exposed entities by specific assistant
         """
-        logger.info("Testing ha_get_entity_exposure with assistant filter")
+        logger.info("Testing ha_get_entity with exposed_to")
 
         result = await mcp_client.call_tool(
-            "ha_get_entity_exposure",
-            {"assistant": "conversation"},
+            "ha_get_entity",
+            {"exposed_to": "conversation"},
         )
 
         data = parse_mcp_result(result)
         assert data.get("success"), f"Failed to list exposed entities: {data}"
 
-        # Check filter was applied
-        filters = data.get("filters_applied", {})
-        assert filters.get("assistant") == "conversation", (
-            "Assistant filter should be applied"
-        )
+        assert data["assistant"] == "conversation"
+        assert isinstance(data["expose_new_entities"], bool)
+        assert all(v.get("conversation") for v in data["exposed_entities"].values())
 
         logger.info(f"Listed entities exposed to conversation: {data.get('count')}")
 
@@ -74,16 +75,13 @@ class TestVoiceAssistantExposure:
         """
         Test: Invalid assistant name should fail
         """
-        logger.info("Testing ha_get_entity_exposure with invalid assistant")
+        logger.info("Testing ha_get_entity with invalid assistant")
 
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_entity_exposure",
-            {"assistant": "invalid_assistant"},
+        data = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_get_entity", {"exposed_to": "invalid_assistant"}
         )
 
-        assert not data.get("success"), "Invalid assistant should fail"
-        assert "valid_assistants" in data, "Should suggest valid assistants"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
 
         logger.info("Invalid assistant correctly rejected")
 
@@ -91,7 +89,7 @@ class TestVoiceAssistantExposure:
         """
         Test: Get exposure settings for a specific entity
         """
-        logger.info("Testing ha_get_entity_exposure")
+        logger.info("Testing ha_get_entity exposure options")
 
         # Create a test entity first
         create_result = await mcp_client.call_tool(
@@ -107,21 +105,18 @@ class TestVoiceAssistantExposure:
         entity_id = "input_boolean.test_exposure_check"
         cleanup_tracker.track("input_boolean", entity_id)
 
-        # Get exposure settings
+        # A registered entity keeps its exposure in the entry's options
         result = await mcp_client.call_tool(
-            "ha_get_entity_exposure",
+            "ha_get_entity",
             {"entity_id": entity_id},
         )
 
         data = parse_mcp_result(result)
-        assert data.get("success"), f"Failed to get entity exposure: {data}"
-
-        # Check response structure
-        assert "exposed_to" in data, "Response should have exposed_to"
-        assert "is_exposed_anywhere" in data, "Response should have is_exposed_anywhere"
+        assert data.get("success"), f"Failed to get entity: {data}"
         assert data.get("entity_id") == entity_id
+        assert "options" in data["entity_entry"], data
 
-        logger.info(f"Entity exposure: {data.get('exposed_to')}")
+        logger.info(f"Entity options: {data['entity_entry']['options']}")
 
         # Cleanup
         await mcp_client.call_tool(
@@ -171,17 +166,15 @@ class TestVoiceAssistantExposure:
 
         logger.info(f"Exposed entity to conversation: {expose_data}")
 
-        # Verify exposure
+        # Verify exposure: Core stores it in the entry's options
         check_result = await mcp_client.call_tool(
-            "ha_get_entity_exposure",
+            "ha_get_entity",
             {"entity_id": entity_id},
         )
         check_data = parse_mcp_result(check_result)
         assert check_data.get("success"), f"Failed to check exposure: {check_data}"
-
-        # The entity should now show as exposed to conversation
-        # Note: In some HA versions/configs this might not immediately reflect
-        logger.info(f"Entity exposure after expose: {check_data.get('exposed_to')}")
+        options = check_data["entity_entry"]["options"]
+        assert options["conversation"]["should_expose"] is True, options
 
         # Cleanup
         await mcp_client.call_tool(
@@ -244,8 +237,7 @@ class TestVoiceAssistantExposure:
         """
         logger.info("Testing ha_set_entity expose_to with invalid assistant")
 
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_set_entity",
             {
                 "entity_id": "input_boolean.test",
@@ -253,7 +245,7 @@ class TestVoiceAssistantExposure:
             },
         )
 
-        assert not data.get("success"), "Invalid assistant should fail"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
 
         logger.info("Invalid assistant correctly rejected")
 
@@ -265,7 +257,7 @@ async def test_voice_exposure_basic(mcp_client):
     """
     logger.info("Running basic voice exposure test")
 
-    result = await mcp_client.call_tool("ha_get_entity_exposure", {})
+    result = await mcp_client.call_tool("ha_get_entity", {})
     data = parse_mcp_result(result)
 
     assert data.get("success"), f"Failed: {data}"
@@ -275,3 +267,54 @@ async def test_voice_exposure_basic(mcp_client):
     logger.info(
         f"Voice exposure test completed: {data.get('count')} entities with settings"
     )
+
+
+@pytest.mark.registry
+async def test_expose_new_entities_round_trip(mcp_client):
+    """ha_set_entity writes an assistant's "expose new entities" flag."""
+    read = parse_mcp_result(
+        await mcp_client.call_tool("ha_get_entity", {"exposed_to": "conversation"})
+    )
+    before = read["expose_new_entities"]
+    try:
+        written = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_entity", {"expose_new_entities": {"conversation": not before}}
+            )
+        )
+        assert written["previous_expose_new_entities"] == {"conversation": before}
+        after = parse_mcp_result(
+            await mcp_client.call_tool("ha_get_entity", {"exposed_to": "conversation"})
+        )
+        assert after["expose_new_entities"] is (not before)
+    finally:
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_set_entity", {"expose_new_entities": {"conversation": before}}
+            )
+
+
+@pytest.mark.registry
+async def test_entity_id_parts_round_trip(mcp_client):
+    """ha_set_entity writes the registry's entity_id_parts; Core judges the list."""
+    before = parse_mcp_result(await mcp_client.call_tool("ha_get_entity", {}))[
+        "settings"
+    ]["entity_id_parts"]
+    try:
+        written = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_entity", {"entity_id_parts": ["device", "entity"]}
+            )
+        )
+        assert written["settings"] == {"entity_id_parts": ["device", "entity"]}
+        assert written["previous_settings"] == {"entity_id_parts": before}
+
+        refused = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_set_entity", {"entity_id_parts": ["entity"]}
+        )
+        assert refused["error"]["code"] == "VALIDATION_INVALID_PARAMETER", refused
+    finally:
+        with CleanupSteps() as cleanup, cleanup.step():
+            await MCPAssertions(mcp_client).call_tool_success(
+                "ha_set_entity", {"entity_id_parts": before or []}
+            )

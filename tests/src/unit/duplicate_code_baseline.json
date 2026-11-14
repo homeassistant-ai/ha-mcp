@@ -28,10 +28,6 @@
     "tests/src/unit/test_usage_logger.py::TestParameterRedaction.reset_global_logger",
     "tests/src/unit/test_usage_logger.py::TestUsageLoggerGlobalFunctions.reset_global_logger"
   ],
-  "0f28231fdeb3": [
-    "tests/src/unit/test_helper_field_persistence.py::_find_msg",
-    "tests/src/unit/test_helper_input_validation.py::_find_msg"
-  ],
   "0fb9daa255ef": [
     "tests/src/unit/test_component_server_entry_update_contract.py::_BgHass.__init__",
     "tests/src/unit/test_ha_dev_manage_server_component_contract.py::_ComponentHass.__init__"
@@ -274,10 +270,8 @@
     "tests/src/unit/test_ha_get_zone_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_list_services_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_manage_blueprints_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_ha_remove_device_component_routing.py::_clear_caps_cache",
     "tests/src/unit/test_ha_system_health_component_routing.py::_clear_caps_cache",
-    "tests/src/unit/test_list_tools_pagination.py::_clear_caps_cache",
-    "tests/src/unit/test_radio_zigbee_component_routing.py::_clear_caps_cache"
+    "tests/src/unit/test_list_tools_pagination.py::_clear_caps_cache"
   ],
   "53d660951f36": [
     "tests/src/unit/test_settings_ui.py::_reset_data_dir_cache",
@@ -516,10 +510,6 @@
     "tests/src/e2e/workflows/filesystem/conftest.py::mcp_client_fs",
     "tests/src/e2e/workflows/services/test_ha_mcp_tools_refusal.py::mcp_client_for_refusal"
   ],
-  "a4ab857982a4": [
-    "tests/src/unit/test_dashboard_screenshot.py::TestCapture.test_attack_vector_paths_rejected",
-    "tests/src/unit/test_dashboard_screenshot.py::TestCapture.test_root_or_empty_path_rejected"
-  ],
   "a4b437f4c1c5": [
     "custom_components/ha_mcp_tools/dependency_diagnostics.py::_exception_text",
     "custom_components/ha_mcp_tools/websocket_api/bulk.py::_bulk_op_error"
@@ -552,10 +542,6 @@
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityLabels.mock_mcp",
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityRegistryDisableGuardrail.mock_mcp",
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityShowAs.mock_mcp"
-  ],
-  "afe1347e6f1f": [
-    "tests/src/unit/test_tools_logs_fault_log.py::_parse_tool_error",
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::_parse_tool_error"
   ],
   "b0a3786ecd8b": [
     "tests/src/unit/test_tools_addons.py::TestConfigModeSentinelRejection._tools",
@@ -628,7 +614,6 @@
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_valid_cimd_client_id"
   ],
   "c5da4ccba388": [
-    "tests/src/unit/test_alias_fetch_chunking.py::_make_tools",
     "tests/src/unit/test_deep_search_helper_dashboard_partial.py::_make_tools",
     "tests/src/unit/test_deep_search_tier3_parallel.py::_make_tools",
     "tests/src/unit/test_search_related_graph.py::_make_tools",
@@ -680,9 +665,7 @@
     "tests/src/unit/test_tools_entities.py::TestHaSetEntityShowAs.mock_client",
     "tests/src/unit/test_tools_resources.py::TestHaConfigDeleteDashboardResource.mock_client",
     "tests/src/unit/test_tools_resources.py::TestHaConfigListDashboardResources.mock_client",
-    "tests/src/unit/test_tools_resources.py::TestHaConfigSetDashboardResource.mock_client",
-    "tests/src/unit/test_tools_voice_assistant.py::TestHaGetEntityExposure.mock_client",
-    "tests/src/unit/test_tools_voice_assistant.py::TestHaListExposedEntities.mock_client"
+    "tests/src/unit/test_tools_resources.py::TestHaConfigSetDashboardResource.mock_client"
   ],
   "d29ab431ea8a": [
     "tests/src/e2e/tools/test_dev_mode_tools.py::_reset_settings_state",
@@ -786,7 +769,6 @@
   ],
   "ec1fbbf7c3d1": [
     "tests/src/unit/test_action_discriminator.py::register_tools",
-    "tests/src/unit/test_helper_field_persistence.py::register_tools",
     "tests/src/unit/test_helper_input_validation.py::register_tools",
     "tests/src/unit/test_helper_registry_id_validation.py::register_tools",
     "tests/src/unit/test_helper_update_persistence.py::register_tools"

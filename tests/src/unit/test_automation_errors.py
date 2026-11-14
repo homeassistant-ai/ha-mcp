@@ -1,37 +1,42 @@
 """Errors for an automation Home Assistant rejected.
 
-The failed section comes from Core's validation status or its
-``validate_config`` verdicts, the closest keys from the platforms Core
-registered, and the hints from Core's own rejection text.
+The rejection text, the ``validate_config`` verdicts and the trigger keys come
+from Core on the real ``hass`` through ``core_client``; the component's own
+describe answer comes from ``component_core_client``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.websocket_api import commands as ws_commands
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools import automation_errors, component_automation
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantClient,
+)
+from ha_mcp.client.websocket_client import get_websocket_client
+from ha_mcp.tools import automation_errors
 from ha_mcp.tools.automation_errors import (
     REJECTION_PREFIX,
-    _text_suggestions,
     closest_matches,
+    core_rejection_text,
     failed_section_from_core,
+    platform_descriptions,
     raise_core_rejection,
     section_from_status,
+    text_suggestions,
 )
 
-from ._component_routing_helpers import make_ws, patch_ws
-from .test_component_todo_items import _Client
-from .test_ha_call_service_component_routing import (
-    _clear_caps_cache,  # noqa: F401 - autouse fixture shared across routing tests
-)
-from .test_ha_config_automation_component_routing import _NO_CAPS, Client
+from ._core_client import refused_url
 
 # --- the failed section ---------------------------------------------------------
 
@@ -57,68 +62,90 @@ def test_rejection_names_the_section_cores_status_names(
     assert section_from_status(status) == section
 
 
-async def test_blueprint_automation_failure_is_the_blueprint() -> None:
+async def test_blueprint_automation_failure_is_the_blueprint(
+    core_client: HomeAssistantClient,
+) -> None:
     """A blueprint automation has no sections of its own for Core to check,
     so its rejection points at the blueprint without asking Core."""
-    client = _Client()
     config = {"use_blueprint": {"path": "motion.yaml", "input": {}}}
 
-    assert await failed_section_from_core(client, config) == "blueprint"
-    assert client.sent == []
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(wraps=core_client.send_websocket_message),
+    ) as ask_core:
+        assert await failed_section_from_core(core_client, config) == "blueprint"
+
+    ask_core.assert_not_awaited()
 
 
-async def test_legacy_root_keys_are_checked_under_cores_names() -> None:
+async def test_legacy_root_keys_are_checked_under_cores_names(
+    core_client: HomeAssistantClient,
+) -> None:
     """A config written with ``trigger``/``action`` still has its sections
     checked: ``validate_config`` takes only the plural names."""
     triggers = [{"trigger": "state", "entity_id": "light.porch"}]
-    actions = [{"delay": {"seconds": 1}}]
-    client = _Client(
-        {
-            "success": True,
-            "result": {
-                "triggers": {"valid": True, "error": None},
-                "actions": {"valid": False, "error": "bad delay"},
-            },
-        }
-    )
+    actions = [{"delay": {"seconds": 1}, "bogus": 1}]
 
-    got = await failed_section_from_core(
-        client, {"trigger": triggers, "action": actions}
-    )
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(wraps=core_client.send_websocket_message),
+    ) as ask_core:
+        got = await failed_section_from_core(
+            core_client, {"trigger": triggers, "action": actions}
+        )
 
     assert got == "actions"
-    assert client.sent == [
+    ask_core.assert_awaited_once_with(
         {"type": "validate_config", "triggers": triggers, "actions": actions}
-    ]
+    )
 
 
-@pytest.mark.parametrize(
-    "client",
-    [
-        _Client(raise_=HomeAssistantConnectionError("socket closed")),
-        _Client({"success": False, "error": "Unknown command."}),
-    ],
-    ids=["no-answer", "refused"],
-)
-async def test_no_verdict_from_core_names_no_section(client: _Client) -> None:
+@pytest.fixture
+async def unreachable_client(
+    hass_access_token: str, socket_enabled: None
+) -> AsyncIterator[HomeAssistantClient]:
+    """A client whose Home Assistant refuses every connection."""
+    client = HomeAssistantClient(
+        base_url=refused_url(), token=hass_access_token, verify_ssl=False
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+async def test_no_answer_from_core_names_no_section(
+    unreachable_client: HomeAssistantClient,
+) -> None:
     """Without Core's verdicts any section named would be a guess."""
-    assert await failed_section_from_core(client, {"triggers": []}) is None
+    assert await failed_section_from_core(unreachable_client, {"triggers": []}) is None
 
 
-# --- closest keys from the platform subscription ---------------------------------
-
-_UNKNOWN_TRIGGER = "Message malformed: Invalid trigger 'stat' specified"
+# --- Core's rejection text --------------------------------------------------------
 
 
-async def _rejection() -> dict[str, Any]:
-    with (
-        patch_ws(make_ws("unused", info_result=_NO_CAPS), component_automation),
-        pytest.raises(ToolError) as exc,
-    ):
+async def _core_rejection(
+    hass: HomeAssistant, core_client: HomeAssistantClient, config: dict[str, Any]
+) -> str:
+    """Core's own text for ``config``, from the write Core refuses with a 400."""
+    assert await async_setup_component(hass, "config", {})
+    with pytest.raises(HomeAssistantAPIError) as rejected:
+        await core_client.upsert_automation_config(config, None, _resolved=True)
+    text = core_rejection_text(rejected.value)
+    assert text is not None
+    return text
+
+
+async def _rejection(
+    client: HomeAssistantClient, core_text: str, config: dict[str, Any]
+) -> dict[str, Any]:
+    with pytest.raises(ToolError) as exc:
         await raise_core_rejection(
-            Client(),
-            _UNKNOWN_TRIGGER,
-            {"triggers": [{"trigger": "stat"}], "actions": []},
+            client,
+            core_text,
+            config,
             failed_section="triggers",
             context={},
             bp_warnings=[],
@@ -127,85 +154,140 @@ async def _rejection() -> dict[str, Any]:
     return body
 
 
-async def test_platforms_that_never_answer_release_the_subscription(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.fixture
+async def schedule_triggers(hass: HomeAssistant) -> None:
+    """Load the integrations whose trigger keys Core describes."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "schedule", {})
+    await hass.async_block_till_done()
+
+
+async def test_rejection_offers_the_registered_trigger_closest_to_the_typo(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    schedule_triggers: None,
 ) -> None:
-    """A first event that never came left the subscription open on the
-    shared socket; the rejection still carries Core's text."""
-    monkeypatch.setattr(automation_errors, "_DESCRIPTIONS_TIMEOUT_S", 0.01)
-    ws = AsyncMock()
-    ws.subscribe_command = AsyncMock(return_value=(7, asyncio.Queue()))
+    """A trigger key one letter off gets Core's registered key as its match,
+    read from the platforms Core describes."""
+    config = {
+        "alias": "porch",
+        "triggers": [{"trigger": "schedule.block_strt"}],
+        "actions": [],
+    }
+    core_text = await _core_rejection(hass, core_client, config)
 
-    with patch.object(
-        automation_errors, "get_websocket_client", AsyncMock(return_value=ws)
-    ):
-        body = await _rejection()
+    body = await _rejection(core_client, core_text, config)
 
-    ws.release_subscription.assert_awaited_once_with(7)
-    assert body["error"]["message"] == f"{REJECTION_PREFIX}{_UNKNOWN_TRIGGER}"
-    assert "closest_matches" not in body
+    assert body["error"]["message"] == f"{REJECTION_PREFIX}{core_text}"
+    assert body["closest_matches"] == ["schedule.block_started", "schedule.block_ended"]
 
 
-async def test_unreachable_platforms_still_raise_cores_rejection() -> None:
-    """Failing to open the socket for the closest keys must not replace
+async def test_component_describe_offers_the_same_closest_trigger(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    schedule_triggers: None,
+) -> None:
+    """With the component installed its describe command answers the match."""
+    config = {
+        "alias": "porch",
+        "triggers": [{"trigger": "schedule.block_strt"}],
+        "actions": [],
+    }
+    core_text = await _core_rejection(hass, component_core_client, config)
+
+    body = await _rejection(component_core_client, core_text, config)
+
+    assert body["closest_matches"] == ["schedule.block_started", "schedule.block_ended"]
+
+
+async def test_unreachable_core_still_raises_cores_rejection(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    unreachable_client: HomeAssistantClient,
+    schedule_triggers: None,
+) -> None:
+    """Failing to reach Home Assistant for the closest keys must not replace
     Core's rejection with a connection error."""
-    connect = AsyncMock(side_effect=HomeAssistantConnectionError("refused"))
+    config = {
+        "alias": "porch",
+        "triggers": [{"trigger": "schedule.block_strt"}],
+        "actions": [],
+    }
+    core_text = await _core_rejection(hass, core_client, config)
 
-    with patch.object(automation_errors, "get_websocket_client", connect):
-        body = await _rejection()
+    body = await _rejection(unreachable_client, core_text, config)
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
-    assert body["error"]["message"] == f"{REJECTION_PREFIX}{_UNKNOWN_TRIGGER}"
+    assert body["error"]["message"] == f"{REJECTION_PREFIX}{core_text}"
     assert "closest_matches" not in body
+
+
+async def test_platforms_that_never_answer_release_the_subscription(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first event that never came left the subscription open on the shared
+    socket; the rejection still carries Core's text.
+
+    Core acknowledges the subscription, then holds its trigger descriptions;
+    released, Core answers with its own.
+    """
+    released = asyncio.Event()
+    core_descriptions = ws_commands.async_get_all_trigger_descriptions
+
+    async def descriptions_held(core: HomeAssistant) -> dict[str, Any]:
+        await released.wait()
+        return await core_descriptions(core)
+
+    monkeypatch.setattr(
+        ws_commands, "async_get_all_trigger_descriptions", descriptions_held
+    )
+    monkeypatch.setattr(automation_errors, "DESCRIPTIONS_TIMEOUT_S", 0.05)
+    ws = await get_websocket_client(
+        url=core_client.base_url, token=core_client.token, verify_ssl=False
+    )
+    monkeypatch.setattr(
+        ws, "release_subscription", AsyncMock(wraps=ws.release_subscription)
+    )
+    config = {"alias": "porch", "triggers": [{"trigger": "stat"}], "actions": []}
+    core_text = await _core_rejection(hass, core_client, config)
+    try:
+        body = await _rejection(core_client, core_text, config)
+    finally:
+        released.set()
+        await hass.async_block_till_done()
+
+    assert body["error"]["message"] == f"{REJECTION_PREFIX}{core_text}"
+    assert "closest_matches" not in body
+    cast("AsyncMock", ws.release_subscription).assert_awaited_once()
 
 
 # --- closest keys: the domain first -------------------------------------------------
 
-_SCHEDULE_AND_LOOKALIKES = [
-    "climate.turned_on",
-    "schedule.block_ended",
-    "schedule.block_started",
-    "siren.turned_on",
-    "switch.turned_on",
-]
-
 
 @pytest.mark.parametrize(
-    ("key", "candidates", "expected"),
+    ("key", "expected"),
     [
-        # The 2026.7 rename: lookalikes from other domains outscored the
-        # replacement, which shares only the domain with the old key.
-        (
-            "schedule.turned_on",
-            _SCHEDULE_AND_LOOKALIKES,
-            ["schedule.block_started", "schedule.block_ended"],
-        ),
+        # A renamed key's replacement lives in the key's own domain.
+        ("schedule.turned_on", ["schedule.block_started", "schedule.block_ended"]),
         # A near miss inside a registered domain ranks by similarity.
         (
-            "battery.low",
-            ["battery.became_low", "battery.level_changed", "gate.closed"],
-            ["battery.became_low", "battery.level_changed"],
+            "schedule.block_strt",
+            ["schedule.block_started", "schedule.block_ended"],
         ),
         # A misspelt domain registers nothing, so every domain is searched.
         (
-            "batery.low",
-            ["battery.became_low", "switch.turned_on"],
-            ["battery.became_low"],
+            "schedul.block_started",
+            ["schedule.block_started", "schedule.block_ended"],
         ),
         # A key without a domain is searched across every key.
-        ("stat", ["state", "tag", "zone"], ["state", "tag"]),
-        # Nothing in the domain comes close: its other keys were offered as
-        # "closest", which they are not.
         (
-            "light.qwzxvjkpqwzxvjkpqwzxvjkp",
-            [
-                "light.brightness_changed",
-                "light.turned_on",
-                # A lookalike from another domain must not be offered either.
-                "switch.qwzxvjkpqwzxvjkpqwzxvjkp",
-            ],
-            [],
+            "restart_required",
+            ["homeassistant.restart_required", "homeassistant.host_reboot_required"],
         ),
+        # Nothing in the domain comes close: its other keys are not corrections.
+        ("schedule.qwzxvjkpqwzxvjkp", []),
     ],
     ids=[
         "renamed-in-domain",
@@ -215,40 +297,53 @@ _SCHEDULE_AND_LOOKALIKES = [
         "nothing-close-in-domain",
     ],
 )
-def test_closest_keys_come_from_the_keys_domain_first(
-    key: str, candidates: list[str], expected: list[str]
+async def test_closest_keys_come_from_the_keys_domain_first(
+    core_client: HomeAssistantClient,
+    schedule_triggers: None,
+    key: str,
+    expected: list[str],
 ) -> None:
-    assert closest_matches(key, candidates) == expected
+    keys = sorted(await platform_descriptions(core_client, "trigger") or {})
+
+    assert closest_matches(key, keys) == expected
 
 
 # --- hints from Core's text -----------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("core_text", "names"),
+    ("config", "names"),
     [
         (
-            "Message malformed: Script.__init__() got an unexpected keyword "
-            "argument 'triggers'",
-            "root",
-        ),
-        (
-            "Message malformed: expected a dictionary for dictionary value "
-            "@ data['variables']",
+            {
+                "alias": "porch",
+                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
+                "actions": [],
+                "variables": "porch",
+            },
             "variables",
         ),
+        (
+            {
+                "alias": "porch",
+                "triggers": [{"trigger": "state", "entity_id": "light.porch"}],
+                "conditions": [{"platform": "state", "entity_id": "light.porch"}],
+                "actions": [],
+            },
+            "'platform'",
+        ),
     ],
-    ids=["root-field-in-action-step", "variables-not-a-dict"],
+    ids=["variables-not-a-dict", "condition-as-trigger"],
 )
-def test_rejection_hint_names_what_core_objected_to(core_text: str, names: str) -> None:
-    suggestions = _text_suggestions(core_text, {})
+async def test_rejection_hint_names_what_core_objected_to(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    config: dict[str, Any],
+    names: str,
+) -> None:
+    core_text = await _core_rejection(hass, core_client, config)
+
+    suggestions = text_suggestions(core_text, config)
+
     assert len(suggestions) == 1
     assert names in suggestions[0]
-
-
-def test_service_key_rejection_gets_no_rename_hint() -> None:
-    """Core renames ``service`` to ``action`` inside an action step, so a
-    rejected ``service`` key sits outside one; telling the caller to rename
-    it sent them after the wrong fix."""
-    text = "Message malformed: extra keys not allowed @ data['service']"
-    assert not any("service:" in s for s in _text_suggestions(text, {}))

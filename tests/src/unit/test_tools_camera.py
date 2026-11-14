@@ -1,6 +1,5 @@
 """Unit tests for camera tools module."""
 
-import json
 import re
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +8,8 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools, _detect_image_format
+
+from ._tool_errors import error_of
 
 
 def _png(width: int, height: int) -> bytes:
@@ -22,11 +23,6 @@ def _png(width: int, height: int) -> bytes:
         + b"IHDR"
         + ihdr_payload
     )
-
-
-def _error_body(exc_info: pytest.ExceptionInfo[ToolError]) -> dict:
-    """Parse the structured error payload carried by a raised ToolError."""
-    return json.loads(exc_info.value.args[0])["error"]
 
 
 class TestDetectImageFormat:
@@ -85,7 +81,7 @@ class TestHaGetCameraImage:
         """Empty entity_id raises a structured validation error."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "Invalid entity_id format" in error["message"]
 
@@ -94,7 +90,7 @@ class TestHaGetCameraImage:
         """Entity ID without dot raises a structured validation error."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="front_door")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
@@ -102,7 +98,7 @@ class TestHaGetCameraImage:
         """Non-camera entity raises a structured validation error."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="light.living_room")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "not a camera entity" in error["message"]
 
@@ -111,7 +107,7 @@ class TestHaGetCameraImage:
         """Sensor entity raises a structured validation error naming the domain."""
         with pytest.raises(ToolError) as exc_info:
             await camera_tools.ha_get_camera_image(entity_id="sensor.temperature")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "Domain is 'sensor', expected 'camera'" in error["message"]
 
@@ -271,7 +267,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "AUTH_INVALID_TOKEN"
         assert "Invalid authentication token" in error["message"]
 
@@ -285,7 +281,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.nonexistent")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "ENTITY_NOT_FOUND"
         assert "not found" in error["message"]
         assert "ha_search" in error.get("details", "")
@@ -300,7 +296,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "HTTP 500" in error["message"]
 
@@ -316,7 +312,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
         assert "empty image" in error["message"]
 
@@ -330,7 +326,7 @@ class TestHaGetCameraImage:
         tools = CameraTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_camera_image(entity_id="camera.front_door")
-        error = _error_body(exc_info)
+        error = error_of(exc_info)
         # Classified by type, not swallowed as a generic "camera online" failure.
         assert error["code"] == "CONNECTION_FAILED"
 

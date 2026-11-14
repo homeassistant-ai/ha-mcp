@@ -39,7 +39,6 @@ VALUE_SOURCE_REGISTRY: dict[tuple[str, str], str] = {
     ("ha_get_entity", "args.entity_id"): "ha_entities",
     ("ha_get_history", "args.entity_ids"): "ha_entities",
     ("ha_remove_entity", "args.entity_id"): "ha_entities",
-    ("ha_get_entity_exposure", "args.entity_id"): "ha_entities",
     ("ha_set_integration", "args.entry_id"): "ha_config_entries",
 }
 
@@ -58,6 +57,11 @@ def all_value_sources_for(tool_name: str) -> dict[str, str]:
         for (tn, arg_path), source in VALUE_SOURCE_REGISTRY.items()
         if tn == tool_name
     }
+
+
+def clear_value_source_cache() -> None:
+    """Forget every fetched value, so the next fetch reads Home Assistant."""
+    _cache.clear()
 
 
 def _cache_get(key: str) -> list[str] | None:
@@ -108,10 +112,7 @@ async def fetch_value_source(
 
 async def _fetch_ha_domains(client: Any, _params: dict[str, str]) -> list[str]:
     services = await client.get_services()
-    # /services returns either {domain: {service: ...}} or
-    # [{domain, services}, ...] depending on HA version; handle both.
-    if isinstance(services, dict):
-        return list(services.keys())
+    # /services returns [{domain, services}, ...].
     if isinstance(services, list):
         return [s["domain"] for s in services if isinstance(s, dict) and "domain" in s]
     # Unknown shape — surface it so a future HA API change doesn't silently
@@ -126,14 +127,6 @@ async def _fetch_ha_services(client: Any, params: dict[str, str]) -> list[str]:
     services = await client.get_services()
     domain_filter = params.get("domain")
     out: set[str] = set()
-    if isinstance(services, dict):
-        if domain_filter:
-            out.update((services.get(domain_filter) or {}).keys())
-        else:
-            for svcs in services.values():
-                if isinstance(svcs, dict):
-                    out.update(svcs.keys())
-        return list(out)
     if isinstance(services, list):
         for entry in services:
             if not isinstance(entry, dict):

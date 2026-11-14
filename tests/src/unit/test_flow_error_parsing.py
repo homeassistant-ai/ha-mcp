@@ -36,12 +36,12 @@ from ha_mcp.tools.config_entry_flow_errors import FlowRef
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from ._addon_tool_helpers import _parse_tool_error
 from ._mock_flow_integration import (
     answer_translations,
     mock_flow_integration,
     open_flow_ids,
 )
+from ._tool_errors import error_body
 
 _DOMAIN = "flow_error_texts"
 _SHARED = "flow_error_shared"
@@ -270,7 +270,7 @@ class TestRejectedSubmit:
                 domain=_DOMAIN, config={"entity_id": "light.foo"}
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["success"] is False
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert list(body["field_errors"]) == ["entity_id"]
@@ -288,7 +288,7 @@ class TestRejectedSubmit:
         with pytest.raises(ToolError) as exc_info:
             await _reconfigure(client, entry, {"host": ["not", "text"]})
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert list(body["field_errors"]) == ["host"]
         assert [f["name"] for f in body["data_schema"]] == ["host", "api_key"]
         assert body["status"] == "apply_failed"
@@ -304,7 +304,7 @@ class TestFlowTextFromCore:
         with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(domain=_ABORTING)
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert "no_devices_found" in body["error"]["message"]
         assert "reason_text" not in body
         assert "warnings" not in body
@@ -329,7 +329,7 @@ class TestFlowTextFromCore:
                 entry_id=entry.entry_id, config={"host": "10.0.0.2"}
             )
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         # The raw keys stay; a key Core ships no string for has no text.
         assert body["errors"] == {
@@ -356,7 +356,7 @@ class TestFlowTextFromCore:
         ):
             await _set_subentry(client, entry, "conversation", {})
 
-        assert _parse_tool_error(exc_info)["reason_text"] == "The entry is not loaded."
+        assert error_body(exc_info)["reason_text"] == "The entry is not loaded."
         assert _translation_requests(sent) == [("config_subentries", [_DOMAIN])]
 
     async def test_abort_translation_domain_names_where_the_reason_lives(
@@ -379,7 +379,7 @@ class TestFlowTextFromCore:
         ):
             await _set_subentry(client, entry, "conversation", {})
 
-        assert _parse_tool_error(exc_info)["reason_text"] == "Log in first."
+        assert error_body(exc_info)["reason_text"] == "Log in first."
         assert _translation_requests(sent) == [("config", [_SHARED])]
 
     async def test_reconfigure_abort_carries_cores_reason_text(
@@ -390,7 +390,7 @@ class TestFlowTextFromCore:
         with pytest.raises(ToolError) as exc_info:
             await _reconfigure(client, entry, {"host": "10.0.0.3"})
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["reason_text"] == "Wrong device."
         assert body["status"] == "apply_failed"
 
@@ -412,7 +412,7 @@ class TestFlowTextFromCore:
         ):
             await _reconfigure(client, entry, {"host": "10.0.0.9"})
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert open_flow_ids(hass) == [body["flow_id"]]
         assert body["errors"] == {"base": "not_valid"}
         assert body["status"] == "apply_failed"
@@ -446,7 +446,7 @@ class TestFlowTextFromCore:
         ):
             await _set_subentry(client, entry, "device", {"host": "x"}, subentry_id)
 
-        body = _parse_tool_error(exc_info)
+        body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body["errors"] == {"base": "cannot_connect"}
         assert body.get("status") == status
@@ -468,7 +468,7 @@ async def test_form_errors_redact_the_schemas_password_value(
         )
 
     assert "sk-LIVE" not in str(exc_info.value)
-    assert "api_key" in [f["name"] for f in _parse_tool_error(exc_info)["fields"]]
+    assert "api_key" in [f["name"] for f in error_body(exc_info)["fields"]]
 
 
 @pytest.mark.parametrize("path", ["config", "options", "config_subentries.device"])
@@ -492,7 +492,7 @@ async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level(
     with pytest.raises(ToolError) as exc_info:
         await _reconfigure(component_core_client, entry, {"host": "10.0.0.9"})
 
-    body = _parse_tool_error(exc_info)
+    body = error_body(exc_info)
     assert body["errors"] == {"base": "not_valid"}
     assert "error_text" not in body
     assert any("could not be read" in w for w in body["warnings"])

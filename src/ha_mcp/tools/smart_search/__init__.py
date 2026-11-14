@@ -11,6 +11,7 @@ focused (see issue #925):
 """
 
 import logging
+from collections.abc import Callable
 
 from ...client.rest_client import HomeAssistantClient
 from ...config import get_global_settings
@@ -38,9 +39,17 @@ class SmartSearchTools(DeepSearchMixin, SystemOverviewMixin, EntitySearchMixin):
     """Smart search tools with fuzzy matching and AI optimization."""
 
     def __init__(
-        self, client: HomeAssistantClient | None = None, fuzzy_threshold: int = 60
+        self,
+        client: HomeAssistantClient | None = None,
+        fuzzy_threshold: int = 60,
+        clock: Callable[[], float] | None = None,
     ):
-        """Initialize with Home Assistant client."""
+        """Initialize with Home Assistant client.
+
+        ``clock`` times the config-fetch budget; ``None`` reads
+        ``time.perf_counter``.
+        """
+        self.clock = clock
         # Always load settings for configuration access
         self.settings = get_global_settings()
 

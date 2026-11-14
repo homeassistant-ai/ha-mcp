@@ -25,6 +25,7 @@ from ha_mcp.visibility.enforcement import (
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.resolver import VisibilityDataUnavailable
 
+from .._tool_errors import error_body, error_of
 from ._chained_enforcement import (
     _ChainedEnforcement,
     _returns,
@@ -81,10 +82,6 @@ class FakeClient:
         if mtype == "config/device_registry/list":
             return self.device
         raise AssertionError(f"unexpected ws message: {mtype}")
-
-
-def _error_body(exc: pytest.ExceptionInfo[ToolError]) -> dict:
-    return json.loads(exc.value.args[0])
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +250,7 @@ class TestReportIssueRestriction:
                 _returns(text_result("diagnostics mention sensor.hidden")),
             )
 
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +270,7 @@ class TestInboundScan:
         # Matches the canonical not-found helper shape (existence concealment is
         # best-effort — individual tools decorate their genuine not-founds
         # differently, see _conceal_as_not_found).
-        assert _error_body(exc) == create_entity_not_found_error("sensor.hidden")
+        assert error_body(exc) == create_entity_not_found_error("sensor.hidden")
 
     async def test_exact_match_on_service_call_write_is_concealed(self, set_config):
         # The inbound scan applies to EVERY tool, including a write/service call.
@@ -287,7 +284,7 @@ class TestInboundScan:
                 ),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert body["entity_id"] == "lock.front"
 
@@ -301,7 +298,7 @@ class TestInboundScan:
                 ),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert body["tool_name"] == "ha_eval_template"
 
@@ -327,7 +324,7 @@ class TestInboundScan:
                 ),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert body["entity_id"] == "sensor.hidden"
 
@@ -342,7 +339,7 @@ class TestInboundScan:
                 ),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
@@ -378,7 +375,7 @@ class TestConfigLoadFailure:
                 make_context("ha_get_state", {"entity_id": "light.any"}),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert "entity_visibility.json" in body["error"]["message"]
 
@@ -494,7 +491,7 @@ class TestConfigLoadFailure:
                 make_context("ha_get_state", {"entity_id": "sensor.hidden"}),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
 
     async def test_corrupt_config_after_report_opt_in_stays_enforced(
@@ -520,7 +517,7 @@ class TestConfigLoadFailure:
                 make_context("ha_report_issue", {"fields": ["recent_logs"]}),
                 _returns(text_result("diagnostics mention sensor.hidden")),
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +543,7 @@ class TestProxyUnwrap:
                 ),
                 _unreached_call_next,
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert body["entity_id"] == "sensor.hidden"
 
@@ -564,7 +561,7 @@ class TestProxyUnwrap:
                 _returns(text_result("label mentions sensor.hidden")),
             )
 
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert body["tool_name"] == "ha_config_get_label"
 
@@ -581,7 +578,7 @@ class TestProxyUnwrap:
                 _returns(text_result("result mentions sensor.hidden")),
             )
 
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["tool_name"] == "ha_get_app"
         assert "ha_get_app" in body["error"]["message"]
 
@@ -598,7 +595,7 @@ class TestProxyUnwrap:
                 _unreached_call_next,
             )
 
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["tool_name"] == "ha_get_logs"
 
     async def test_proxy_outbound_error_names_inner_tool(self, set_config):
@@ -614,7 +611,7 @@ class TestProxyUnwrap:
                 _returns(text_result("result mentions sensor.hidden")),
             )
 
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["tool_name"] == "ha_get_logs"
         assert "ha_get_logs" in body["error"]["message"]
 
@@ -858,7 +855,7 @@ class TestOutboundScan:
                 _returns(tool_result),
             )
 
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_get_state_scrub_warning_appends_to_existing_warnings(
         self, set_config
@@ -955,7 +952,7 @@ class TestOutboundScan:
                 _returns(tool_result),
             )
 
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_get_state_refuses_list_root_that_cannot_carry_warning(
         self, set_config
@@ -978,7 +975,7 @@ class TestOutboundScan:
                 _returns(tool_result),
             )
 
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_get_state_non_json_hidden_reference_still_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
@@ -988,7 +985,7 @@ class TestOutboundScan:
                 make_context("ha_get_state", {"entity_id": "light.allowed"}),
                 _returns(text_result("relationship: sensor.foo")),
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_text_content_hit_refused_without_naming_entity(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
@@ -998,7 +995,7 @@ class TestOutboundScan:
                 make_context("ha_get_logs", {}),
                 _returns(text_result("log entry references sensor.foo here")),
             )
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         # The refusal must NOT confirm the id the caller may not have known.
         assert "sensor.foo" not in json.dumps(body)
@@ -1013,7 +1010,7 @@ class TestOutboundScan:
                     text_result("ok", structured={"cards": [{"entity": "sensor.foo"}]})
                 ),
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_clean_output_passes_through(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
@@ -1049,7 +1046,7 @@ class TestOutboundScan:
 
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(make_context("ha_get_logs", {}), _raise_leaky)
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert "sensor.foo" not in json.dumps(body)
 
@@ -1119,7 +1116,7 @@ class TestUnscannableSurfaces:
                 _unreached_call_next,
             )
 
-        body = _error_body(exc)
+        body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert body["tool_name"] == target_name
 
@@ -1131,7 +1128,7 @@ class TestUnscannableSurfaces:
                 make_context("ha_manage_custom_tool", {"code": "print(1)"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_custom_tool_run_saved_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
@@ -1159,7 +1156,7 @@ class TestUnscannableSurfaces:
                 make_context("ha_get_dashboard_screenshot", {"dashboard": "x"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_set_dashboard_return_screenshot_refused(self, set_config):
         # The dashboard WRITE tool shares the native-image capture path:
@@ -1174,7 +1171,7 @@ class TestUnscannableSurfaces:
                 ),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_set_dashboard_without_screenshot_allowed(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
@@ -1272,7 +1269,7 @@ class TestCacheAndFallback:
                 make_context("ha_get_state", {"entity_id": "sensor.hidden"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert error_of(exc)["code"] == "ENTITY_NOT_FOUND"
 
     async def test_fail_closed_with_no_data(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
@@ -1283,7 +1280,7 @@ class TestCacheAndFallback:
                 make_context("ha_get_state", {"entity_id": "sensor.anything"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 # ---------------------------------------------------------------------------
@@ -1428,7 +1425,7 @@ class TestFallbackScoping:
                 make_context("ha_get_state", {"entity_id": "sensor.b"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_unusable_device_registry_fails_closed_for_area_dimension(
         self, set_config
@@ -1445,7 +1442,7 @@ class TestFallbackScoping:
                 make_context("ha_get_state", {"entity_id": "light.any"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_null_device_registry_entry_fails_closed(self, set_config):
         # A degenerate success payload ({"result": [null]}) passes the shape
@@ -1460,7 +1457,7 @@ class TestFallbackScoping:
                 make_context("ha_get_state", {"entity_id": "light.any"}),
                 _unreached_call_next,
             )
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
     async def test_missing_device_parent_fails_closed_for_area_dimension(
         self, set_config
@@ -1496,7 +1493,7 @@ class TestFallbackScoping:
                 _unreached_call_next,
             )
 
-        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert error_of(exc)["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 class TestComponentBucketScrub:

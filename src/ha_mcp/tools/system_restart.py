@@ -17,18 +17,18 @@ logger = logging.getLogger(__name__)
 
 # Embedded mode: delay before the restart fires, so ha_restart's reply flushes
 # to the client first. Same value as tools_dev._SELF_ACTION_FLUSH_DELAY_S.
-_EMBEDDED_RESTART_DELAY_S = 1.0
+EMBEDDED_RESTART_DELAY_S = 1.0
 
 # Strong references to in-flight deferred restarts (the event loop holds tasks
 # only weakly).
-_RESTART_TASKS: set[asyncio.Task[None]] = set()
+RESTART_TASKS: set[asyncio.Task[None]] = set()
 
 
 def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
     """Fire ``homeassistant.restart`` after this tool's reply has flushed."""
 
     async def _restart() -> None:
-        await asyncio.sleep(_EMBEDDED_RESTART_DELAY_S)
+        await asyncio.sleep(EMBEDDED_RESTART_DELAY_S)
         try:
             await client.call_service("homeassistant", "restart", data)
         except Exception as exc:
@@ -45,8 +45,8 @@ def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
                 logger.warning("Deferred Home Assistant restart failed", exc_info=True)
 
     task = asyncio.get_running_loop().create_task(_restart())
-    _RESTART_TASKS.add(task)
-    task.add_done_callback(_RESTART_TASKS.discard)
+    RESTART_TASKS.add(task)
+    task.add_done_callback(RESTART_TASKS.discard)
 
 
 async def _core_info(client: Any, msg_type: str) -> dict[str, Any] | None:

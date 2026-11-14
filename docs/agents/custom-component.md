@@ -80,6 +80,21 @@ the server tells the user to update the component (or to install it when none
 answered) and returns what it has without it. Do not rebuild the missing
 behaviour on the server side to keep an older component working.
 
+A component that advertises a read command and then fails it (an error reply,
+a timeout or a malformed result) is treated as a missing component. The tool
+takes the route it takes without the component, and gives the same warning to
+install or update it where that route returns less. Do not add a separate
+error, code path or test for a failing read. A fallback that already exists
+stays; do not remove it. The logbook read is the one exception: apart from
+`unknown_command`, its bridge errors and timeouts surface instead of falling
+back, and a timed-out read is not run again as a second recorder query.
+
+This covers reads only. What a write does when its bridge command fails is
+that tool's own rule, because a write that may have run cannot simply be
+repeated; the
+[native contracts](native-core-contracts.md#choose-the-authoritative-path)
+describe `ha_call_event` and the todo bridge.
+
 A component newer than the external server that calls it is unlikely and does
 not shape a design. Do not keep a server-side fallback, a second code path or a
 frozen schema for it. An old command may stay registered while it costs

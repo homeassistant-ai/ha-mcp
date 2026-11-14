@@ -18,12 +18,6 @@ from ._component_core import ws_result
 from ._knx_core import set_up_knx
 
 
-@pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """KNX keeps its telegram database in the config directory; this one is the test's."""
-    return hass_tmp_config_dir
-
-
 async def _listing(component_ws: Any, domain: str) -> list[dict[str, Any]]:
     result = await ws_result(
         component_ws, "ha_mcp_tools/integration_commands", domain=domain

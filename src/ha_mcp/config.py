@@ -20,7 +20,7 @@ from ha_mcp.config_overrides import (
     get_feature_flag_origin as get_feature_flag_origin,
 )
 from ha_mcp.config_registry import (
-    _ADVANCED_SETTINGS_BOUNDS as _ADVANCED_SETTINGS_BOUNDS,
+    ADVANCED_SETTINGS_BOUNDS as ADVANCED_SETTINGS_BOUNDS,
     _ADVANCED_SETTINGS_CHOICES as _ADVANCED_SETTINGS_CHOICES,
     _ADVANCED_SETTINGS_SENTINELS as _ADVANCED_SETTINGS_SENTINELS,
     _FEATURE_FLAG_INT_BOUNDS as _FEATURE_FLAG_INT_BOUNDS,
@@ -50,7 +50,7 @@ __all__ = [
     "FEATURE_FLAG_FIELDS",
     "OAUTH_MODE_TOKEN",
     "OAUTH_MODE_URL",
-    "_ADVANCED_SETTINGS_BOUNDS",
+    "ADVANCED_SETTINGS_BOUNDS",
     "_ADVANCED_SETTINGS_CHOICES",
     "_ADVANCED_SETTINGS_SENTINELS",
     "_FEATURE_FLAG_INT_BOUNDS",
@@ -201,7 +201,7 @@ def should_emit_llm_api_metadata() -> bool:
     return enabled if isinstance(enabled, bool) else True
 
 
-def _reset_embedded_connection() -> None:
+def reset_embedded_connection() -> None:
     """Drop the registered embedded connection (test seam).
 
     Sibling to :func:`reset_global_settings`; lets suites that exercise the
