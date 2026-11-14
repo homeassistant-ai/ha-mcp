@@ -4,7 +4,11 @@ import asyncio
 import logging
 from typing import Any
 
-from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
+from ...client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_api import COMPONENT_INSTALL_HINT, ask_component
@@ -348,9 +352,12 @@ async def _find_collision_in_flow_helpers(
         result = await client.send_websocket_message(
             {"type": "config_entries/get", "domain": helper_type}
         )
-    except HomeAssistantAPIError, ConnectionError, TimeoutError:
+    except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
+        logger.warning(
+            "config_entries/get failed; skipped the %s name check: %r", helper_type, exc
+        )
         return None
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
@@ -383,7 +390,7 @@ async def _find_collision_in_simple_helpers(
     Core's ``{type}/list``."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except (HomeAssistantAPIError, ConnectionError, TimeoutError) as exc:
+    except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
         logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
