@@ -560,10 +560,10 @@ class DevTools:
     def _settings_rows(self) -> list[dict[str, Any]]:
         """Build the full settings matrix from both registries."""
         from ..config import (
-            _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_INT_BOUNDS,
+            ADVANCED_SETTINGS_BOUNDS,
             ADVANCED_SETTINGS_FIELDS,
             FEATURE_FLAG_FIELDS,
             OAUTH_MODE_TOKEN,
@@ -615,7 +615,7 @@ class DevTools:
                 "origin": origin,
                 "editable": registry_editable and origin != "env",
             }
-            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            bounds = ADVANCED_SETTINGS_BOUNDS.get(fname)
             if bounds is not None:
                 row["min"], row["max"] = bounds
                 sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
@@ -1012,10 +1012,10 @@ class DevTools:
         _guard_security_policy_setting(setting)
 
         from ..config import (
-            _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_INT_BOUNDS,
+            ADVANCED_SETTINGS_BOUNDS,
             ADVANCED_SETTINGS_FIELDS,
             FEATURE_FLAG_FIELDS,
             _read_feature_flag_override_file,
@@ -1039,7 +1039,7 @@ class DevTools:
             overrides = await asyncio.to_thread(_read_feature_flag_override_file)
             origin = self._advanced_origin(setting, env_name, overrides)
             editable = registry_editable and origin != "env"
-            bounds = _ADVANCED_SETTINGS_BOUNDS.get(setting)
+            bounds = ADVANCED_SETTINGS_BOUNDS.get(setting)
             sentinel = _ADVANCED_SETTINGS_SENTINELS.get(setting)
             choices = _ADVANCED_SETTINGS_CHOICES.get(setting)
         else:

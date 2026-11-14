@@ -26,7 +26,7 @@ __all__ = [
     "BETA_FEATURE_FIELDS",
     "FEATURE_FLAG_FIELDS",
     "SETTING_BOUNDS",
-    "_ADVANCED_SETTINGS_BOUNDS",
+    "ADVANCED_SETTINGS_BOUNDS",
     "_ADVANCED_SETTINGS_CHOICES",
     "_ADVANCED_SETTINGS_SENTINELS",
     "_BACKUP_OVERRIDE_FILENAME",
@@ -222,7 +222,7 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[float, float]] = {
     for f in FEATURE_FLAG_FIELDS
     if f.field in SETTING_BOUNDS
 }
-_ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
+ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     f.field: SETTING_BOUNDS[f.field]
     for f in ADVANCED_SETTINGS_FIELDS
     if f.field in SETTING_BOUNDS

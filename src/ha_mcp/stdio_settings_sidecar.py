@@ -766,7 +766,7 @@ def _spawn_lock() -> Iterator[bool]:
         os.close(fd)
 
 
-def _bind_listener(preferred: int, source: str) -> socket.socket:
+def bind_listener(preferred: int, source: str) -> socket.socket:
     """Bind and return the sidecar's actual serving socket.
 
     Binding the real socket up front (instead of probing a port and
@@ -1405,7 +1405,7 @@ def run_main() -> int:
     remembered_port, remembered_secret = persisted if persisted else (0, None)
     pin_port = get_global_settings().sidecar_pin_port
     try:
-        listener = _bind_listener(
+        listener = bind_listener(
             pin_port or remembered_port, "Pinned" if pin_port else "Remembered"
         )
     except OSError:
@@ -1464,7 +1464,7 @@ def run_main() -> int:
 
     try:
         # Hand uvicorn the pre-bound socket — re-binding host/port here
-        # would reintroduce the probe-then-rebind race _bind_listener
+        # would reintroduce the probe-then-rebind race bind_listener
         # exists to close.
         server.run(sockets=[listener])
     finally:

@@ -82,9 +82,9 @@ def _advanced_field_row(
 ) -> dict[str, Any]:
     """Build one ``_get_advanced_settings`` field row (value + origin + bounds)."""
     from ..config import (
-        _ADVANCED_SETTINGS_BOUNDS,
         _ADVANCED_SETTINGS_CHOICES,
         _ADVANCED_SETTINGS_SENTINELS,
+        ADVANCED_SETTINGS_BOUNDS,
         OAUTH_MODE_TOKEN,
     )
     from ..config_registry import ADVANCED_MULTILINE, ADVANCED_RESTART_REQUIRED
@@ -110,7 +110,7 @@ def _advanced_field_row(
         # The UI shows the restart banner after saving such a field.
         "restart_required": fname in ADVANCED_RESTART_REQUIRED,
     }
-    bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+    bounds = ADVANCED_SETTINGS_BOUNDS.get(fname)
     if bounds is not None:
         row["min"], row["max"] = bounds
         # A value outside the range with its own meaning (sidecar_pin_port:
@@ -259,10 +259,10 @@ def _coerce_advanced_value(
 
 def _check_advanced_bounds_choices(fname: str, coerced: Any) -> JSONResponse | None:
     """Enforce the bounds + choices constraints for a coerced value."""
-    from ..config import _ADVANCED_SETTINGS_BOUNDS, _ADVANCED_SETTINGS_CHOICES
+    from ..config import _ADVANCED_SETTINGS_CHOICES, ADVANCED_SETTINGS_BOUNDS
     from ..config import _ADVANCED_SETTINGS_SENTINELS as _SENTINELS
 
-    bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+    bounds = ADVANCED_SETTINGS_BOUNDS.get(fname)
     sentinel = _SENTINELS.get(fname)
     if (
         bounds is not None

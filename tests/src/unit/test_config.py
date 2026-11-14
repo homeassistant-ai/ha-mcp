@@ -27,7 +27,7 @@ def test_history_query_guardrails_env_var(env_value, expected):
     from ha_mcp.config import Settings
 
     settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS=env_value,
     )
     assert settings.enable_history_query_guardrails is expected
@@ -62,7 +62,7 @@ def test_enable_mandatory_bps_env_var_coercion_accepted(env_value, expected):
     from ha_mcp.config import Settings
 
     settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         ENABLE_MANDATORY_BPS=env_value,
     )
     assert settings.enable_mandatory_bps is expected
@@ -78,7 +78,7 @@ def test_enable_mandatory_bps_env_var_coercion_rejected(env_value):
 
     with pytest.raises(pydantic.ValidationError):
         Settings(
-            _env_file=None,  # type: ignore[call-arg]
+            _env_file=None,
             ENABLE_MANDATORY_BPS=env_value,
         )
 
@@ -112,7 +112,7 @@ def test_enable_strict_mandatory_bps_env_var_coercion_accepted(env_value, expect
     from ha_mcp.config import Settings
 
     settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         ENABLE_STRICT_MANDATORY_BPS=env_value,
     )
     assert settings.enable_strict_mandatory_bps is expected
@@ -128,7 +128,7 @@ def test_enable_strict_mandatory_bps_env_var_coercion_rejected(env_value):
 
     with pytest.raises(pydantic.ValidationError):
         Settings(
-            _env_file=None,  # type: ignore[call-arg]
+            _env_file=None,
             ENABLE_STRICT_MANDATORY_BPS=env_value,
         )
 
@@ -174,7 +174,7 @@ def test_read_only_mode_env_var_coercion_accepted(env_value, expected):
     from ha_mcp.config import Settings
 
     settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         READ_ONLY_MODE=env_value,
     )
     assert settings.read_only_mode is expected
@@ -189,7 +189,7 @@ def test_read_only_mode_env_var_coercion_rejected(env_value):
 
     with pytest.raises(pydantic.ValidationError):
         Settings(
-            _env_file=None,  # type: ignore[call-arg]
+            _env_file=None,
             READ_ONLY_MODE=env_value,
         )
 
@@ -825,48 +825,40 @@ def test_snapshot_delete_min_age_days_default_seven() -> None:
     assert Settings().snapshot_delete_min_age_days == 7
 
 
-def test_enable_snapshot_delete_env_var_true() -> None:
+def test_enable_snapshot_delete_env_var_true(monkeypatch) -> None:
     from ha_mcp.config import Settings
 
-    settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        ENABLE_SNAPSHOT_DELETE="true",
-    )
+    monkeypatch.setenv("ENABLE_SNAPSHOT_DELETE", "true")
+    settings = Settings(_env_file=None)
     assert settings.enable_snapshot_delete is True
 
 
-def test_snapshot_delete_min_age_days_env_var() -> None:
+def test_snapshot_delete_min_age_days_env_var(monkeypatch) -> None:
     from ha_mcp.config import Settings
 
-    settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        SNAPSHOT_DELETE_MIN_AGE_DAYS="14",
-    )
+    monkeypatch.setenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", "14")
+    settings = Settings(_env_file=None)
     assert settings.snapshot_delete_min_age_days == 14
 
 
-def test_snapshot_delete_min_age_days_zero_disables_floor() -> None:
+def test_snapshot_delete_min_age_days_zero_disables_floor(monkeypatch) -> None:
     """0 is a valid, in-range value (the age floor is opt-out per #1861
     design: min_age_days=0 disables the age guard)."""
     from ha_mcp.config import Settings
 
-    settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        SNAPSHOT_DELETE_MIN_AGE_DAYS="0",
-    )
+    monkeypatch.setenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", "0")
+    settings = Settings(_env_file=None)
     assert settings.snapshot_delete_min_age_days == 0
 
 
-def test_snapshot_delete_min_age_days_rejects_out_of_range() -> None:
+def test_snapshot_delete_min_age_days_rejects_out_of_range(monkeypatch) -> None:
     import pydantic
 
     from ha_mcp.config import Settings
 
+    monkeypatch.setenv("SNAPSHOT_DELETE_MIN_AGE_DAYS", "9999")
     with pytest.raises(pydantic.ValidationError):
-        Settings(
-            _env_file=None,  # type: ignore[call-arg]
-            SNAPSHOT_DELETE_MIN_AGE_DAYS="9999",
-        )
+        Settings(_env_file=None)
 
 
 def test_backup_override_enable_snapshot_delete_accepts_bool(
@@ -941,4 +933,4 @@ def test_unknown_log_level_fails_at_startup() -> None:
     from ha_mcp.config import Settings
 
     with pytest.raises(pydantic.ValidationError, match="must be one of"):
-        Settings(_env_file=None, LOG_LEVEL="verbose")  # type: ignore[call-arg]
+        Settings(_env_file=None, LOG_LEVEL="verbose")
