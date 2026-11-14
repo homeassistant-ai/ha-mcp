@@ -263,7 +263,7 @@ class SceneSearchMixin(ConfigFetchMixin):
                 # Fetch by STORAGE key (what the endpoint indexes on),
                 # return under the SLUG (what the scoring pass looks up).
                 self.client.get_scene_config(sid, resolution=resolution),
-                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                timeout=self.config_timeout,
             )
             return (sid, config_resp.get("config", {}), None)
         except SceneStorageConfigNotFoundError as e:
@@ -307,7 +307,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             # (#1784).
             logger.debug(
                 f"Scene individual config fetch ({sid}) timed out "
-                f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                f"after {self.config_timeout}s."
             )
             return (sid, None, "timeout")
         except Exception as e:  # noqa: BLE001

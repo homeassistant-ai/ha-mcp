@@ -43,13 +43,16 @@ class SmartSearchTools(DeepSearchMixin, SystemOverviewMixin, EntitySearchMixin):
         client: HomeAssistantClient | None = None,
         fuzzy_threshold: int = 60,
         clock: Callable[[], float] | None = None,
+        config_timeout: float = INDIVIDUAL_CONFIG_TIMEOUT,
     ):
         """Initialize with Home Assistant client.
 
         ``clock`` times the config-fetch budget; ``None`` reads
-        ``time.perf_counter``.
+        ``time.perf_counter``. ``config_timeout`` bounds each per-id config
+        fetch in seconds of real time.
         """
         self.clock = clock
+        self.config_timeout = config_timeout
         # Always load settings for configuration access
         self.settings = get_global_settings()
 

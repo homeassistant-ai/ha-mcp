@@ -53,7 +53,12 @@ class PollClock:
 
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> PollClock:
-    """Advance polling time without sleeping or changing the event loop clock."""
+    """Advance polling time without sleeping or changing the event loop clock.
+
+    The budget runs out on this clock alone. The real-time cap around the
+    loop is lifted, so Core taking longer to answer a lookup than the budget
+    allows cannot end the poll early; the stalled-lookup test keeps the cap.
+    """
     clock = PollClock()
     monkeypatch.setattr(
         registration, "time", SimpleNamespace(monotonic=clock.monotonic)
@@ -61,7 +66,9 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> PollClock:
     monkeypatch.setattr(
         registration,
         "asyncio",
-        SimpleNamespace(sleep=clock.sleep, timeout=asyncio.timeout),
+        SimpleNamespace(
+            sleep=clock.sleep, timeout=lambda _delay: asyncio.timeout(None)
+        ),
     )
     return clock
 

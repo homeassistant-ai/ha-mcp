@@ -20,6 +20,7 @@ class _SearchBase:
 
     client: HomeAssistantClient
     clock: Callable[[], float] | None
+    config_timeout: float
     fuzzy_searcher: Any
     settings: Any
 
