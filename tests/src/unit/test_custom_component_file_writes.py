@@ -10,26 +10,27 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ServiceNotFound
+from homeassistant.components.homeassistant import services as homeassistant_services
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.template import MAX_CUSTOM_TEMPLATE_SIZE
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry, async_mock_service
+from pytest_homeassistant.common import async_mock_service
 
 from custom_components.ha_mcp_tools import (
-    CALLER_TOKEN_FIELD,
-    SERVICE_GET_CALLER_TOKEN,
     SERVICE_READ_FILE,
     SERVICE_WRITE_FILE,
     file_ops,
     file_post_action,
 )
-from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 from custom_components.ha_mcp_tools.file_ops import (
     edit_file_sync,
     refusal_text,
     write_text_atomic,
 )
+
+from ._edit_yaml import EditYaml, make_edit_yaml
+from ._file_services import make_file_service
 
 needs_symlinks = pytest.mark.skipif(
     sys.platform == "win32", reason="creating symlinks needs privileges on Windows"
@@ -40,87 +41,79 @@ def _edit(old: str, new: str) -> dict[str, str]:
     return {"old": old, "new": new}
 
 
-async def _file_service(hass: HomeAssistant) -> Any:
-    """Set up the component and return a caller that presents its token."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=TOOLS_ENTRY_TITLE,
-        version=HaMcpToolsConfigFlow.VERSION,
-        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
-        data={},
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-
-    async def call(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        response = await hass.services.async_call(
-            DOMAIN, service, data, blocking=True, return_response=True
-        )
-        assert response is not None
-        return dict(response)
-
-    bootstrap = await call(SERVICE_GET_CALLER_TOKEN, {})
-
-    async def call_with_token(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        return await call(service, {**data, CALLER_TOKEN_FIELD: bootstrap["token"]})
-
-    return call_with_token
+def _replace_file(path: str, content: str) -> dict[str, str]:
+    return {
+        "file": path,
+        "action": "replace_file",
+        "yaml_path": "",
+        "content": content,
+    }
 
 
 @pytest.fixture
-def hass_config_dir(hass_tmp_config_dir: str) -> str:
-    """Core's config directory is this test's ``tmp_path``."""
-    return hass_tmp_config_dir
+async def edit_yaml(hass: HomeAssistant) -> EditYaml:
+    return await make_edit_yaml(hass)
 
 
 class TestWholeFileReplace:
-    def test_a_sibling_tmp_file_survives(self, tmp_path: Path) -> None:
+    async def test_a_sibling_tmp_file_survives(
+        self, hass: HomeAssistant, edit_yaml: EditYaml
+    ) -> None:
         """The swap used a fixed foo.tmp, which deleted a file of that name."""
-        target = tmp_path / "foo.yaml"
+        themes = Path(hass.config.config_dir) / "themes"
+        themes.mkdir()
+        target = themes / "foo.yaml"
         target.write_text("a: 1\n")
-        sibling = tmp_path / "foo.tmp"
+        sibling = themes / "foo.tmp"
         sibling.write_text("keep me")
 
-        write_text_atomic(target, "a: 2\n")
+        result = await edit_yaml(_replace_file("themes/foo.yaml", "a: 2\n"))
 
+        assert result["success"] is True, result
         assert target.read_text() == "a: 2\n"
         assert sibling.read_text() == "keep me"
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["foo.tmp", "foo.yaml"]
+        assert sorted(p.name for p in themes.iterdir()) == ["foo.tmp", "foo.yaml"]
 
     async def test_a_missing_file_is_created_with_its_folder(
-        self, hass: HomeAssistant
+        self, hass: HomeAssistant, edit_yaml: EditYaml
     ) -> None:
-        call = await _file_service(hass)
         target = Path(hass.config.config_dir) / "themes" / "new.yaml"
 
-        result = await call(
-            SERVICE_WRITE_FILE, {"path": "themes/new.yaml", "content": "a: 1\r\n"}
-        )
+        result = await edit_yaml(_replace_file("themes/new.yaml", "a: 1\r\n"))
 
         assert result["success"] is True
-        assert result["created"] is True
         assert target.read_bytes() == b"a: 1\r\n"
         assert result["size"] == 6
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
-    def test_the_file_mode_survives(self, tmp_path: Path) -> None:
-        target = tmp_path / "foo.yaml"
+    async def test_the_file_mode_survives(
+        self, hass: HomeAssistant, edit_yaml: EditYaml
+    ) -> None:
+        themes = Path(hass.config.config_dir) / "themes"
+        themes.mkdir()
+        target = themes / "foo.yaml"
         target.write_text("a: 1\n")
         os.chmod(target, 0o640)
 
-        write_text_atomic(target, "a: 2\n")
+        result = await edit_yaml(_replace_file("themes/foo.yaml", "a: 2\n"))
 
+        assert result["success"] is True, result
         assert target.stat().st_mode & 0o777 == 0o640
 
     @needs_symlinks
-    def test_a_symlink_stays_a_link(self, tmp_path: Path) -> None:
-        real = tmp_path / "real.yaml"
+    async def test_a_symlink_stays_a_link(
+        self, hass: HomeAssistant, edit_yaml: EditYaml
+    ) -> None:
+        themes = Path(hass.config.config_dir) / "themes"
+        themes.mkdir()
+        real = themes / "real.yaml"
         real.write_text("a: 1\n")
-        link = tmp_path / "link.yaml"
+        link = themes / "link.yaml"
         link.symlink_to(real)
 
-        write_text_atomic(link, "a: 2\n")
+        result = await edit_yaml(_replace_file("themes/link.yaml", "a: 2\n"))
 
+        assert result["success"] is True, result
         assert link.is_symlink()
         assert real.read_text() == "a: 2\n"
 
@@ -161,7 +154,7 @@ class TestWholeFileReplace:
 
 class TestLineEndingsAsStored:
     async def test_read_can_keep_crlf(self, hass: HomeAssistant) -> None:
-        call = await _file_service(hass)
+        call = await make_file_service(hass)
         target = Path(hass.config.config_dir) / "www" / "card.js"
         target.parent.mkdir()
         target.write_bytes(b"one\r\ntwo\r\n")
@@ -178,7 +171,7 @@ class TestLineEndingsAsStored:
 
     async def test_write_stores_line_endings_as_sent(self, hass: HomeAssistant) -> None:
         """A restore of a CRLF snapshot must write CRLF back, on any OS."""
-        call = await _file_service(hass)
+        call = await make_file_service(hass)
         target = Path(hass.config.config_dir) / "www" / "card.js"
 
         result = await call(
@@ -248,20 +241,7 @@ _REFUSAL_FIELDS = {
 }
 
 
-_REFUSAL_REASONS = (
-    "invalid_edit",
-    "line_endings_only",
-    "not_a_file",
-    "not_found",
-    "not_mounted",
-    "not_text",
-    "old_not_found",
-    "old_not_unique",
-    "too_large",
-)
-
-
-@pytest.mark.parametrize("reason", _REFUSAL_REASONS)
+@pytest.mark.parametrize("reason", file_ops.REFUSALS)
 def test_every_refusal_renders(reason: str) -> None:
     """A missing field or template would raise KeyError inside the service."""
     text = refusal_text(reason, "www/a.css", dict(_REFUSAL_FIELDS))
@@ -277,14 +257,12 @@ def test_every_refusal_reason_has_a_template() -> None:
         if '"_error": "' in line
     }
 
-    assert reasons <= set(_REFUSAL_REASONS)
+    assert reasons == set(file_ops.REFUSALS)
 
 
 class TestAfterFileWrite:
     @pytest.mark.parametrize("path", ["themes/rev.yaml", "themes/sub/rev.yml"])
-    async def test_a_theme_is_reloaded(
-        self, hass: HomeAssistant, hass_config_dir: str, path: str
-    ) -> None:
+    async def test_a_theme_is_reloaded(self, hass: HomeAssistant, path: str) -> None:
         reload_calls = async_mock_service(hass, "frontend", "reload_themes")
 
         info = await file_post_action.after_file_write(hass, path, 10)
@@ -296,67 +274,69 @@ class TestAfterFileWrite:
             "reload_service": "frontend.reload_themes",
         }
 
-    async def test_a_failed_reload_is_reported(
-        self, hass: HomeAssistant, hass_config_dir: str
+    async def test_a_failed_custom_template_reload_is_reported(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without the frontend loaded, Core has no frontend.reload_themes."""
+        """Core's reload handler can report a failure after the write."""
+        assert await async_setup_component(hass, "homeassistant", {})
 
-        info = await file_post_action.after_file_write(hass, "themes/x.yaml", 1)
+        async def fail_reload(_hass: HomeAssistant) -> None:
+            raise HomeAssistantError("reload boom")
+
+        monkeypatch.setattr(
+            homeassistant_services, "async_load_custom_templates", fail_reload
+        )
+
+        info = await file_post_action.after_file_write(
+            hass, "custom_templates/x.jinja", 1
+        )
 
         assert info["post_action"] == "reload_available"
-        assert info["reload_error"] == str(ServiceNotFound("frontend", "reload_themes"))
+        assert info["reload_service"] == "homeassistant.reload_custom_templates"
+        assert info["reload_error"] == "reload boom"
 
-    async def test_a_custom_template_is_reloaded(
-        self,
-        hass: HomeAssistant,
-        hass_config_dir: str,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        reload_calls = async_mock_service(
-            hass, "homeassistant", "reload_custom_templates"
-        )
+    async def test_a_custom_template_is_reloaded(self, hass: HomeAssistant) -> None:
+        assert await async_setup_component(hass, "homeassistant", {})
 
         info = await file_post_action.after_file_write(
             hass,
             "custom_templates/sub/rev.jinja",
-            100,
+            MAX_CUSTOM_TEMPLATE_SIZE,
         )
 
-        assert len(reload_calls) == 1
-        assert reload_calls[0].data == {}
-        assert info["post_action"] == "reload_performed"
+        assert info == {
+            "post_action": "reload_performed",
+            "reload_service": "homeassistant.reload_custom_templates",
+        }
 
     @pytest.mark.parametrize(
         ("path", "size", "says"),
         [
             ("custom_templates/rev.txt", 10, "*.jinja"),
-            ("custom_templates/rev.jinja", 101, "over 100 bytes"),
+            (
+                "custom_templates/rev.jinja",
+                MAX_CUSTOM_TEMPLATE_SIZE + 1,
+                f"over {MAX_CUSTOM_TEMPLATE_SIZE:,} bytes",
+            ),
         ],
         ids=["not-jinja", "too-large"],
     )
     async def test_a_template_core_skips_is_flagged(
         self,
         hass: HomeAssistant,
-        hass_config_dir: str,
-        monkeypatch: pytest.MonkeyPatch,
         path: str,
         size: int,
         says: str,
     ) -> None:
-        monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        reload_calls = async_mock_service(
-            hass, "homeassistant", "reload_custom_templates"
-        )
+        assert await async_setup_component(hass, "homeassistant", {})
 
         info = await file_post_action.after_file_write(hass, path, size)
 
-        assert reload_calls == []
         assert "post_action" not in info
         assert says in info["warnings"][0]
 
     async def test_a_dashboard_file_names_its_dashboard(
-        self, hass: HomeAssistant, hass_config_dir: str
+        self, hass: HomeAssistant
     ) -> None:
         assert await async_setup_component(
             hass,
@@ -388,9 +368,10 @@ class TestAfterFileWrite:
         assert [row["url_path"] for row in info["dashboards"]] == ["rev-2976"]
         assert info["dashboards"][0]["mode"] == "yaml"
         assert info["dashboards"][0]["title"] == "Rev"
+        assert set(info) == {"dashboards"}
 
     async def test_an_unused_dashboard_file_is_flagged(
-        self, hass: HomeAssistant, hass_config_dir: str
+        self, hass: HomeAssistant
     ) -> None:
         assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
 
@@ -405,21 +386,22 @@ class TestAfterFileWrite:
     async def test_an_absolute_path_inside_the_config_dir_counts(
         self,
         hass: HomeAssistant,
-        hass_config_dir: str,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A custom directory can name the config dir by its absolute path."""
-        monkeypatch.setattr(file_post_action, "_max_custom_template_size", lambda: 100)
-        async_mock_service(hass, "homeassistant", "reload_custom_templates")
-        path = str(tmp_path / "custom_templates" / "rev.jinja")
+        assert await async_setup_component(hass, "homeassistant", {})
+        path = str(Path(hass.config.config_dir) / "custom_templates" / "rev.jinja")
 
-        info = await file_post_action.after_file_write(hass, path, 10)
+        info = await file_post_action.after_file_write(
+            hass, path, MAX_CUSTOM_TEMPLATE_SIZE
+        )
 
-        assert info["reload_service"] == "homeassistant.reload_custom_templates"
+        assert info == {
+            "post_action": "reload_performed",
+            "reload_service": "homeassistant.reload_custom_templates",
+        }
 
     async def test_unreadable_dashboards_claim_nothing(
-        self, hass: HomeAssistant, hass_config_dir: str
+        self, hass: HomeAssistant
     ) -> None:
         """Without Core's dashboards nothing was checked, so nothing is said."""
 
@@ -435,7 +417,7 @@ class TestAfterFileWrite:
         "path", ["www/card.js", "/share/themes/x.yaml", "themes/readme.md"]
     )
     async def test_other_files_need_nothing(
-        self, hass: HomeAssistant, hass_config_dir: str, path: str
+        self, hass: HomeAssistant, path: str
     ) -> None:
         reload_calls = async_mock_service(hass, "frontend", "reload_themes")
 
@@ -444,28 +426,22 @@ class TestAfterFileWrite:
 
 
 async def test_an_edit_reports_the_theme_reload(
-    hass: HomeAssistant, hass_config_dir: str, tmp_path: Path
+    hass: HomeAssistant,
 ) -> None:
-    (tmp_path / "themes").mkdir()
-    (tmp_path / "themes" / "rev.yaml").write_text("rev:\n  primary-color: red\n")
-    async_mock_service(hass, "frontend", "reload_themes")
-    handler = file_ops.build_edit_file_handler(
-        hass,
-        caller_token_ok=lambda _hass, _call: True,
-        unauthorized_response=lambda service: {"success": False},
-        write_denied=lambda _hass, _path: None,
-        volume_root_for=lambda _path: None,
-    )
+    call = await make_file_service(hass)
+    themes = Path(hass.config.config_dir) / "themes"
+    themes.mkdir()
+    target = themes / "rev.yaml"
+    target.write_text("rev:\n  primary-color: red\n")
+    reload_calls = async_mock_service(hass, "frontend", "reload_themes")
 
-    response = await handler(
-        ServiceCall(
-            hass=hass,
-            domain=DOMAIN,
-            service="edit_file",
-            data={"path": "themes/rev.yaml", "edits": [_edit("red", "blue")]},
-        )
+    response = await call(
+        file_ops.SERVICE_EDIT_FILE,
+        {"path": "themes/rev.yaml", "edits": [_edit("red", "blue")]},
     )
 
     assert response is not None
     assert response["success"] is True
     assert response["post_action"] == "reload_performed"
+    assert target.read_text() == "rev:\n  primary-color: blue\n"
+    assert len(reload_calls) == 1

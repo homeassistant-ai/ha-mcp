@@ -16,58 +16,21 @@ configured as an allowed directory.
 
 import errno
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import MockConfigEntry
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import (
-    CALLER_TOKEN_FIELD,
     SERVICE_DELETE_FILE,
-    SERVICE_GET_CALLER_TOKEN,
-    SERVICE_SET_ALLOWED_PATHS,
     SERVICE_WRITE_FILE,
     volume_mounts,
 )
-from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 
-FileService = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
-
-
-async def _file_service(hass: HomeAssistant, allowed: str) -> FileService:
-    """Set the tools entry up with ``allowed`` as an extra directory and return
-    a caller of its services that presents the caller token."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=TOOLS_ENTRY_TITLE,
-        version=HaMcpToolsConfigFlow.VERSION,
-        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
-        data={},
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-
-    async def call(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        response = await hass.services.async_call(
-            DOMAIN, service, data, blocking=True, return_response=True
-        )
-        assert response is not None
-        return dict(response)
-
-    bootstrap = await call(SERVICE_GET_CALLER_TOKEN, {})
-    token = bootstrap["token"]
-
-    async def call_with_token(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        return await call(service, {**data, CALLER_TOKEN_FIELD: token})
-
-    configured = await call_with_token(SERVICE_SET_ALLOWED_PATHS, {"paths": [allowed]})
-    assert configured["paths"] == [allowed], configured
-    return call_with_token
+from ._file_services import FileService, make_file_service
 
 
 @pytest.fixture
@@ -80,7 +43,7 @@ def volume_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 async def write_file(hass: HomeAssistant, volume_root: Path) -> FileService:
-    return await _file_service(hass, str(volume_root))
+    return await make_file_service(hass, str(volume_root))
 
 
 @pytest.fixture
@@ -203,7 +166,7 @@ async def test_read_only_mount_is_named_not_a_raw_errno(
     # On HAOS and Supervised, Supervisor mounts /ssl read-only into Core.
     erofs = OSError(errno.EROFS, "Read-only file system", "/ssl/t")
     monkeypatch.setattr(comp, f"_{build}_file_sync", _raise(erofs))
-    call = await _file_service(hass, "/ssl/t")
+    call = await make_file_service(hass, "/ssl/t")
     data: dict[str, Any] = {"path": "/ssl/t/a.txt"}
     if build == "write":
         data["content"] = "x"

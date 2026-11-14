@@ -292,7 +292,7 @@ def edit_file_sync(
     return {"size": stat.st_size, "mtime": stat.st_mtime}
 
 
-_REFUSALS = {
+REFUSALS = {
     "not_found": "File not found: {path}. Pass content to create it.",
     "not_a_file": "Not a file: {path}.",
     "not_text": "{path} is not UTF-8 text, so it cannot be edited.",
@@ -319,7 +319,7 @@ _MIXED_LINE_ENDINGS = (
 
 def refusal_text(reason: str, path: str, details: dict[str, Any]) -> str:
     """The message for a refused edit, ``details`` being its ``_error`` fields."""
-    text = _REFUSALS[reason].format(path=path, **details)
+    text = REFUSALS[reason].format(path=path, **details)
     if details.get("line_endings") == "mixed":
         text += _MIXED_LINE_ENDINGS.format(path=path)
     return text
