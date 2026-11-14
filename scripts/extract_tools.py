@@ -4,7 +4,7 @@
 Parses tool source files statically to extract names, tags, annotations,
 descriptions, and parameter schemas. Produces:
   - site/src/data/tools.json  (for Astro site tool explorer)
-  - README.md update          (table between markers, badge count)
+  - README.md update          (table between markers, badge count and alt text)
 
 Usage:
     python scripts/extract_tools.py
@@ -896,6 +896,7 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
         )
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
+    readme = re.sub(r'alt="\d+ Tools"', f'alt="{count} Tools"', readme)
     return readme
 
 
