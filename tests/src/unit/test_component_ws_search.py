@@ -1944,6 +1944,9 @@ class TestRegistrationAndAdminGate:
                 handler(FakeHass(), conn, msg)
             return
         hass = FakeHass()
+        if command == wsapi.WS_EXPOSURE:
+            # A bare FakeHass holds no exposed-entities store; Core always does.
+            monkeypatch.setattr(wsapi, "_async_get_assistant_settings", lambda h: {})
         if command == wsapi.WS_CALL_EVENT:
             hass.bus = SimpleNamespace(
                 async_fire=lambda *args, **kwargs: None,
@@ -3113,6 +3116,8 @@ class TestEntityEnrich:
             "floor": "Upstairs",
             "labels": ["Favorites"],
             "aliases": ["reading light"],
+            # This fake view has no hass, so there is no name to compose.
+            "full_name": None,
         }
 
     def test_device_inherited_area_and_labels(self, monkeypatch):
@@ -3133,6 +3138,7 @@ class TestEntityEnrich:
             "floor": None,
             "labels": [],
             "aliases": [],
+            "full_name": None,
         }
 
     def test_empty_id_list(self, monkeypatch):
@@ -3171,7 +3177,7 @@ class TestExposure:
             floors=[FakeFloor("f1", "Main")],
         )
 
-    def _patch(self, monkeypatch, settings_map, legacy_ids=()):
+    def _patch(self, monkeypatch, settings_map):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: self._view())
 
         def fake_settings(hass, entity_id):
@@ -3179,9 +3185,10 @@ class TestExposure:
                 raise HomeAssistantError("Unknown entity")
             return settings_map[entity_id]
 
+        candidates = {"conversation": dict.fromkeys(settings_map)}
         monkeypatch.setattr(wsapi, "_async_get_entity_settings", fake_settings)
         monkeypatch.setattr(
-            wsapi, "_legacy_exposed_entity_ids", lambda h: list(legacy_ids)
+            wsapi, "_async_get_assistant_settings", lambda h: candidates
         )
 
     def test_single_should_expose_filter(self, monkeypatch):
@@ -3245,7 +3252,7 @@ class TestExposure:
             wsapi._do_exposure(FakeHass(states=[]), {"entity_id": "light.kitchen"})
 
     def test_list_mode_mirrors_ws_list(self, monkeypatch):
-        """List mode walks the registry, keeps only exposed ids, enriches each."""
+        """List mode keeps only exposed ids and enriches each."""
         self._patch(
             monkeypatch,
             {
@@ -3257,17 +3264,6 @@ class TestExposure:
         res = wsapi._do_exposure(FakeHass(states=states), {})
         assert res["exposed_entities"] == {"light.kitchen": {"conversation": True}}
         assert set(res["entity_info"]) == {"light.kitchen"}
-
-    def test_list_mode_includes_legacy_store_ids(self, monkeypatch):
-        """An exposed entity present only in the legacy store (no registry entry)
-        is still enumerated — the union of store ids and registry ids."""
-        self._patch(
-            monkeypatch,
-            {"scene.movie": {"conversation": {"should_expose": True}}},
-            legacy_ids=["scene.movie"],
-        )
-        res = wsapi._do_exposure(FakeHass(states=[]), {})
-        assert res["exposed_entities"] == {"scene.movie": {"conversation": True}}
 
 
 # =============================================================================

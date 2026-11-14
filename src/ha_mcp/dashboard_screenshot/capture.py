@@ -112,12 +112,12 @@ class DashboardImageCapture:
     image_format: ScreenshotFormat
     mime_type: str
     size_bytes: int
-    options: _CaptureOptions
+    options: CaptureOptions
     legacy_full_page_fallback: bool
 
 
 @dataclass(frozen=True, slots=True)
-class _CaptureOptions:
+class CaptureOptions:
     """Validated batch options."""
 
     width: int
@@ -291,7 +291,7 @@ def _oriented_dimensions(
 
 
 def _capture_viewports(
-    options: _CaptureOptions,
+    options: CaptureOptions,
 ) -> list[_ViewportRequest]:
     """Resolve custom or named viewport requests in caller-provided order."""
     auto_height = options.full_page or options.height == "auto"
@@ -379,7 +379,7 @@ def validate_capture_parameters(
     language: Any,
     image_format: Any,
     render_timeout_seconds: Any,
-) -> _CaptureOptions:
+) -> CaptureOptions:
     """Validate capture inputs independently of FastMCP/Pydantic callers."""
     valid_width = _bounded_int(
         "width",
@@ -432,7 +432,7 @@ def validate_capture_parameters(
         minimum=MIN_RENDER_TIMEOUT_SECONDS,
         maximum=MAX_RENDER_TIMEOUT_SECONDS,
     )
-    return _CaptureOptions(
+    return CaptureOptions(
         width=valid_width,
         height=valid_height,
         viewport_presets=valid_presets,
@@ -621,7 +621,7 @@ async def _request_viewport_image(
     engine_kind: EngineKind | None,
     engine_version: str | None,
     params: dict[str, str],
-    options: _CaptureOptions,
+    options: CaptureOptions,
     viewport: _ViewportRequest,
     mime_type: str,
     request_context: dict[str, Any],
@@ -727,7 +727,7 @@ async def _request_or_collect_failure(
     engine_kind: EngineKind | None,
     engine_version: str | None,
     params: dict[str, str],
-    options: _CaptureOptions,
+    options: CaptureOptions,
     viewport: _ViewportRequest,
     mime_type: str,
     request_context: dict[str, Any],
@@ -771,7 +771,7 @@ async def _request_or_collect_failure(
 
 
 def _viewport_params(
-    options: _CaptureOptions, viewport: _ViewportRequest
+    options: CaptureOptions, viewport: _ViewportRequest
 ) -> dict[str, str]:
     """Build one viewport's engine query parameters."""
     params: dict[str, str] = {

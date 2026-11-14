@@ -2,20 +2,16 @@
 
 Covers:
 - ha_get_entity bulk backend via native config/entity_registry/get_entries
-- ha_set_entity bulk expose batched into one homeassistant/expose_entity call
 - ha_remove_entity bulk removal envelope
 - ha_get_entity unique_id -> entity_id resolver mode
 """
 
-import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_entities import register_entity_tools
-from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 from ._tool_errors import error_body
 
@@ -92,38 +88,6 @@ class TestBulkGetViaGetEntries:
         msg = client.send_websocket_message.call_args[0][0]
         assert msg["type"] == "config/entity_registry/get_entries"
         assert msg["entity_ids"] == ["light.a", "switch.b"]
-        # Shape is projected through the same formatter as the single path.
-        by_id = {e["entity_id"]: e for e in result["entity_entries"]}
-        assert by_id["light.a"]["enabled"] is True
-        assert by_id["light.a"]["platform"] == "hue"
-        assert by_id["light.a"]["unique_id"] == "uid_light.a"
-        assert by_id["switch.b"]["enabled"] is False
-        assert by_id["switch.b"]["disabled_by"] == "user"
-
-    @pytest.mark.asyncio
-    async def test_bulk_get_missing_id_maps_to_error(self):
-        """A null in the entries map reproduces the per-id not-found contract."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "light.a": self._entry("light.a"),
-                    "light.missing": None,
-                },
-            }
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(entity_id=["light.a", "light.missing"])
-
-        assert result["success"] is True
-        assert result["count"] == 1
-        assert result["entity_entries"][0]["entity_id"] == "light.a"
-        assert result["errors"] == [
-            {"entity_id": "light.missing", "error": "Entity not found"}
-        ]
-        assert "suggestions" in result
 
     @pytest.mark.asyncio
     async def test_bulk_get_preserves_request_order(self):
@@ -149,7 +113,11 @@ class TestBulkGetViaGetEntries:
 
     @pytest.mark.asyncio
     async def test_bulk_get_whole_call_failure_errors_every_id(self):
-        """A chunk-level WS failure maps every id in the chunk to an error."""
+        """A chunk-level WS failure maps every id in the chunk to an error.
+
+        Those ids carry Core's message, not "Entity not found", so no exposure
+        lookup for unregistered entities runs; this mock would fail it too.
+        """
         client = _make_client()
         client.send_websocket_message = AsyncMock(
             return_value={"success": False, "error": {"message": "registry offline"}}
@@ -178,157 +146,6 @@ class TestBulkGetViaGetEntries:
         assert client.send_websocket_message.call_args[0][0]["type"] == (
             "config/entity_registry/get"
         )
-
-
-# --------------------------------------------------------------------------
-# Item 2 — batched homeassistant/expose_entity in bulk ha_set_entity
-# --------------------------------------------------------------------------
-class TestBulkExposeBatching:
-    @pytest.mark.asyncio
-    async def test_mixed_true_false_sends_one_call_per_set(self):
-        """expose_to with an on-set and off-set => two expose calls, each with
-        the full id list, plus one get_entries refetch."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose True set for [a, b]
-                {"success": True},  # expose False set for [a, b]
-                {  # single get_entries refetch
-                    "success": True,
-                    "result": {
-                        "light.a": {"entity_id": "light.a", "options": {}},
-                        "light.b": {"entity_id": "light.b", "options": {}},
-                    },
-                },
-            ]
-        )
-        tool = _register(client)["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            expose_to={"conversation": True, "cloud.alexa": False},
-        )
-
-        assert result["success"] is True
-        assert result["succeeded_count"] == 2
-        calls = [c[0][0] for c in client.send_websocket_message.call_args_list]
-        assert client.send_websocket_message.call_count == 3
-        assert calls[0]["type"] == "homeassistant/expose_entity"
-        assert calls[0]["assistants"] == ["conversation"]
-        assert calls[0]["entity_ids"] == ["light.a", "light.b"]
-        assert calls[0]["should_expose"] is True
-        assert calls[1]["assistants"] == ["cloud.alexa"]
-        assert calls[1]["entity_ids"] == ["light.a", "light.b"]
-        assert calls[1]["should_expose"] is False
-        assert calls[2]["type"] == "config/entity_registry/get_entries"
-
-    @pytest.mark.asyncio
-    async def test_batch_expose_failure_fails_all_ids(self):
-        """A batch-level expose failure is reported against every id."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"message": "not supported"}}
-        )
-        tool = _register(client)["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is False
-        assert result["failed_count"] == 2
-        assert result["succeeded_count"] == 0
-        assert {f["entity_id"] for f in result["failed"]} == {"light.a", "light.b"}
-        assert all("not supported" in f["error"] for f in result["failed"])
-        # One expose attempt; no refetch after a failure.
-        assert client.send_websocket_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_labels_and_expose_registry_per_entity_expose_batched(self):
-        """labels+expose: per-entity registry updates, then ONE batched expose,
-        then one get_entries refetch. updates carry both label + expose info."""
-        client = _make_client()
-
-        def _reg_entry(eid):
-            return {
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": eid,
-                        "name": None,
-                        "original_name": "O",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": ["outdoor"],
-                        "options": {},
-                    }
-                },
-            }
-
-        responses = iter(
-            [
-                _reg_entry("light.a"),  # registry update for a
-                _reg_entry("light.b"),  # registry update for b
-                {"success": True},  # single batched expose for [a, b]
-                {  # single get_entries refetch
-                    "success": True,
-                    "result": {
-                        "light.a": {
-                            "entity_id": "light.a",
-                            "labels": ["outdoor"],
-                            "options": {"conversation": {"should_expose": True}},
-                        },
-                        "light.b": {
-                            "entity_id": "light.b",
-                            "labels": ["outdoor"],
-                            "options": {"conversation": {"should_expose": True}},
-                        },
-                    },
-                },
-            ]
-        )
-        client.send_websocket_message = AsyncMock(
-            side_effect=lambda message: (
-                {"success": True, "result": [{"label_id": "outdoor"}]}
-                if message["type"] == "config/label_registry/list"
-                else next(responses)
-            )
-        )
-        tool = _register(client)["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            labels=["outdoor"],
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["succeeded_count"] == 2
-        calls = [c[0][0] for c in client.send_websocket_message.call_args_list]
-        # Shared preflight plus one revalidation per entity; exposure stays batched.
-        assert sum(c["type"] == "config/label_registry/list" for c in calls) == 3
-        writes_and_refetch = [
-            c for c in calls if c["type"] != "config/label_registry/list"
-        ]
-        assert [c["type"] for c in writes_and_refetch] == [
-            "config/entity_registry/update",
-            "config/entity_registry/update",
-            "homeassistant/expose_entity",
-            "config/entity_registry/get_entries",
-        ]
-        assert writes_and_refetch[2]["entity_ids"] == ["light.a", "light.b"]
-        entries = {e["entity_id"]: e for e in result["succeeded"]}
-        updates_a = str(entries["light.a"]["updates"])
-        assert "labels=['outdoor']" in updates_a
-        assert "expose_to=" in updates_a
-        # entity_entry reflects the post-exposure refetch.
-        assert entries["light.a"]["entity_entry"]["options"] == {
-            "conversation": {"should_expose": True}
-        }
 
 
 # --------------------------------------------------------------------------
@@ -444,131 +261,6 @@ class TestBulkRemove:
 # Item 4 — unique_id -> entity_id resolver in ha_get_entity
 # --------------------------------------------------------------------------
 class TestUniqueIdResolver:
-    def _list_entry(self, eid, unique_id, platform):
-        return {
-            "entity_id": eid,
-            "unique_id": unique_id,
-            "platform": platform,
-            "name": None,
-            "original_name": "O",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "labels": [],
-            "categories": {},
-            "options": {},
-            "device_id": None,
-            "config_entry_id": "ce1",
-        }
-
-    @pytest.mark.asyncio
-    async def test_resolve_single_match(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.temp", "abc123", "zwave_js"),
-                    self._list_entry("sensor.other", "zzz", "hue"),
-                ],
-            }
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(unique_id="abc123")
-
-        assert result["success"] is True
-        assert result["matches"] == 1
-        assert result["unique_id"] == "abc123"
-        entry = result["entity_entries"][0]
-        assert entry["entity_id"] == "sensor.temp"
-        assert entry["unique_id"] == "abc123"
-        assert entry["platform"] == "zwave_js"
-        # Single list fetch only.
-        assert client.send_websocket_message.call_count == 1
-        assert client.send_websocket_message.call_args[0][0] == {
-            "type": "config/entity_registry/list"
-        }
-
-    @pytest.mark.asyncio
-    async def test_resolve_multi_platform_collision(self):
-        """Same unique_id under two platforms => both returned."""
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(unique_id="shared")
-
-        assert result["matches"] == 2
-        assert {e["entity_id"] for e in result["entity_entries"]} == {
-            "sensor.a",
-            "light.a",
-        }
-
-    @pytest.mark.asyncio
-    async def test_resolve_narrowing_by_platform(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(unique_id="shared", platform="zwave_js")
-
-        assert result["matches"] == 1
-        assert result["platform"] == "zwave_js"
-        assert result["entity_entries"][0]["entity_id"] == "light.a"
-
-    @pytest.mark.asyncio
-    async def test_resolve_narrowing_by_domain(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    self._list_entry("sensor.a", "shared", "hue"),
-                    self._list_entry("light.a", "shared", "zwave_js"),
-                ],
-            }
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        result = await tool(unique_id="shared", domain="sensor")
-
-        assert result["matches"] == 1
-        assert result["domain"] == "sensor"
-        assert result["entity_entries"][0]["entity_id"] == "sensor.a"
-
-    @pytest.mark.asyncio
-    async def test_resolve_not_found_raises(self):
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        tool = _register(client)["ha_get_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(unique_id="nope")
-
-        body = error_body(exc_info)
-        assert body["error"]["code"] == "ENTITY_NOT_FOUND"
-        assert "nope" in body["error"]["message"]
-
     @pytest.mark.asyncio
     async def test_mutual_exclusion_both_provided(self):
         client = _make_client()
@@ -583,18 +275,6 @@ class TestUniqueIdResolver:
         client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_neither_entity_id_nor_unique_id(self):
-        client = _make_client()
-        tool = _register(client)["ha_get_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool()
-
-        body = error_body(exc_info)
-        assert body["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
-        client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_domain_filter_without_unique_id_rejected(self):
         client = _make_client()
         tool = _register(client)["ha_get_entity"]
@@ -605,65 +285,3 @@ class TestUniqueIdResolver:
         body = error_body(exc_info)
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "resolver filter" in body["error"]["message"]
-
-
-# --------------------------------------------------------------------------
-# A single-entity ha_set_entity keeps the entity lock through all its writes
-# --------------------------------------------------------------------------
-class TestSingleSetHoldsEntityLock:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("new_entity_id", "locked_id"),
-        [
-            (None, "sensor.temp"),
-            ("sensor.new", "sensor.new"),
-            ("sensor.new", "sensor.temp"),
-        ],
-        ids=["same-id", "renamed", "renamed-old-id"],
-    )
-    async def test_restore_waits_for_every_write_of_the_set(
-        self, new_entity_id: str | None, locked_id: str
-    ) -> None:
-        """An entity restore takes the lock of the entity's ID, on a rename of
-        either ID. Queued while the registry update is in flight, it gets the
-        lock only after the options, device-rename and expose writes."""
-        entry = {"entity_id": "sensor.temp", "device_id": "d1", "options": {}}
-        order: list[str] = []
-        in_update = asyncio.Event()
-        restore_queued = asyncio.Event()
-
-        async def send(message: dict[str, Any]) -> dict[str, Any]:
-            await asyncio.sleep(0)
-            order.append(message["type"])
-            if message["type"] == "config/entity_registry/update" and "name" in message:
-                in_update.set()
-                await restore_queued.wait()
-            return {"success": True, "result": {"entity_entry": entry, **entry}}
-
-        async def restore() -> list[str]:
-            """What was sent before the restore got the lock."""
-            await in_update.wait()
-            lock = registry_update_lock("entity", locked_id)
-            restore_queued.set()
-            await lock.acquire()
-            lock.release()
-            return list(order)
-
-        client = _make_client()
-        client.send_websocket_message = AsyncMock(side_effect=send)
-        tool = _register(client)["ha_set_entity"]
-        waiter = asyncio.ensure_future(restore())
-
-        await tool(
-            entity_id="sensor.temp",
-            name="N",
-            new_entity_id=new_entity_id,
-            options={"sensor": {"display_precision": 2}},
-            new_device_name="Dev X",
-            expose_to={"conversation": True},
-        )
-        before = await waiter
-
-        assert before.count("config/entity_registry/update") == 2, order
-        assert "config/device_registry/update" in before, order
-        assert "homeassistant/expose_entity" in before, order

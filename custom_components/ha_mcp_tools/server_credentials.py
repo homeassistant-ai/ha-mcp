@@ -99,12 +99,7 @@ async def async_server_access_token(hass: HomeAssistant, entry: Any) -> str:
     rt_id = entry.data.get(DATA_REFRESH_TOKEN_ID)
     user = await hass.auth.async_get_user(user_id) if user_id else None
     refresh_token = hass.auth.async_get_refresh_token(rt_id) if rt_id else None
-    if (
-        user is None
-        or not user.is_active
-        or refresh_token is None
-        or refresh_token.user.id != user.id
-    ):
+    if user is None or refresh_token is None or refresh_token.user.id != user.id:
         raise CredentialNeeded("missing_token")
     if not user.is_admin:
         # An administrator can demote the account an older release created.
@@ -146,7 +141,7 @@ async def async_credential_from_input(
     # Any other account is refused before its password is checked, with the
     # same error, so these forms never test another account's password and
     # never issue a token that works from outside the local network.
-    if user is None or not (user.is_active and user.is_admin and user.local_only):
+    if user is None or not (user.is_admin and user.local_only):
         raise CredentialRefused("invalid_login")
     try:
         await provider.async_validate_login(username, password)

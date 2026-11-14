@@ -8,8 +8,9 @@ listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
 from __future__ import annotations
 
 import socket
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -121,3 +122,13 @@ async def backup_manager(
         auto_backup_dir=str(tmp_path),
     )
     return get_backup_manager(core_client, settings)
+
+
+@pytest.fixture
+def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on ``core_client``'s WebSocket send: it calls through, so Core
+    answers, and a test can count or forbid a command."""
+    from ._client_spies import sent_messages
+
+    with sent_messages(core_client) as spy:
+        yield spy

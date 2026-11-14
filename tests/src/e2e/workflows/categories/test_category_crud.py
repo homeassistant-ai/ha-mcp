@@ -253,7 +253,7 @@ class TestCategoryAssignment:
             },
         )
         assign_data = assert_mcp_success(assign_result, "Assign category to entity")
-        logger.info(f"Category assigned: {assign_data.get('message')}")
+        logger.info(f"Category assigned: {assign_data.get('updates')}")
 
         # Clear category from entity
         clear_result = await mcp_client.call_tool(
@@ -264,7 +264,7 @@ class TestCategoryAssignment:
             },
         )
         clear_data = assert_mcp_success(clear_result, "Clear category from entity")
-        logger.info(f"Category cleared: {clear_data.get('message')}")
+        logger.info(f"Category cleared: {clear_data.get('updates')}")
 
         # Clean up category
         await mcp_client.call_tool(
@@ -308,7 +308,7 @@ class TestCategoryAssignment:
             },
         )
         clear_data = assert_mcp_success(clear_result, "Clear category via null")
-        logger.info(f"Category cleared via null: {clear_data.get('message')}")
+        logger.info(f"Category cleared via null: {clear_data.get('updates')}")
 
         # Clean up category
         await mcp_client.call_tool(

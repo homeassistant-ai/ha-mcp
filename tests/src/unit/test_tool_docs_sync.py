@@ -125,8 +125,8 @@ class TestToolDocsSync:
         to state a count, and will not notice a new one added somewhere else.
 
         ``scripts/extract_tools.py`` regenerates only DOCS.md and two spans
-        of README.md — the ``tools-N-blue`` badge and the ``Complete Tool
-        List`` summary. Everything else below is typed by hand, and it had
+        of README.md — the ``tools-N-blue`` badge with its alt text and the
+        ``Complete Tool List`` summary. Everything else below is typed by hand, and it had
         drifted in five places at once when this test was written. Asserting
         the two regenerated needles alongside the rest is deliberate: it keeps
         one list of every place the repo states a tool count, so a reader does

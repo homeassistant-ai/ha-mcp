@@ -66,17 +66,20 @@ the info handshake carries no capability entry:
   equivalent of ``config/device_registry/list`` served through the component
   seam, so ``ha_get_device`` list mode need not mix a legacy WS read with the
   component path.
-* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join for a set
-  of entity_ids (``{entities: {id: {area, floor, labels, aliases}}}``), computed
-  by the SAME ``_entity_record``/``_RegistryView`` registry join the search path
-  uses (device-inherited area/labels included). Lets ``ha_get_entity`` add the
+* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join and the
+  name Core composes for a set of entity_ids (``{entities: {id: {area, floor,
+  labels, aliases, full_name}}}``). The join is the SAME
+  ``_entity_record``/``_RegistryView`` registry join the search path uses
+  (device-inherited area/labels included); ``full_name`` is the composed name
+  the overview serves as ``full_name`` (search's ``name`` falls back to
+  friendly_name where it is None). Lets ``ha_get_entity`` add the
   resolved-name enrichment fields the raw registry entry lacks (it carries
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are
   enriched too — the join keys off the registry, not the state machine.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
-  {id: {assistant: True}}}`` — byte-identical to ``homeassistant/expose_entity/
+  {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
   list``); single-entity mode reads core's module-level
   ``async_get_entity_settings``. Both add a sibling ``entity_info`` map enriching
   each id through the same registry join (friendly_name/domain/area/floor/labels),

@@ -28,6 +28,21 @@ def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:
     return async_get_entity_settings(hass, entity_id)
 
 
+def _async_get_assistant_settings(hass: HomeAssistant) -> dict[str, Any]:
+    """core's ``async_get_assistant_settings`` for each assistant core knows.
+
+    ``{assistant: {entity_id: settings_mapping}}`` over core's own
+    ``KNOWN_ASSISTANTS``, covering registry entities and the exposed-entities
+    store alike. A seam tests replace.
+    """
+    from homeassistant.components.homeassistant.exposed_entities import (
+        KNOWN_ASSISTANTS,
+        async_get_assistant_settings,
+    )
+
+    return {a: async_get_assistant_settings(hass, a) for a in KNOWN_ASSISTANTS}
+
+
 def _is_unknown_entity_error(exc: Exception) -> bool:
     """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
 

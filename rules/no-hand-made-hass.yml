@@ -42,7 +42,6 @@ ignores:
   - "tests/src/unit/test_oauth_autoapprove.py"
   - "tests/src/unit/test_oauth_dcr.py"
   - "tests/src/unit/test_oauth_legacy_component.py"
-  - "tests/src/unit/test_server_credentials.py"
   - "tests/src/unit/test_tools_entry_lifecycle.py"
   - "tests/src/unit/test_ui_panel.py"
   - "tests/src/unit/test_webhook_proxy_oauth_unified.py"

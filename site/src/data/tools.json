@@ -1559,7 +1559,7 @@
   {
     "name": "ha_get_entity",
     "title": "Get Entity",
-    "description": "Get entity registry information for one or more entities.\n\nReturns detailed entity registry metadata: area, custom name/icon,\noriginal name, disabled_by/hidden_by (with enabled/hidden shorthands),\naliases (a null entry = the entity's own name), labels, categories,\ndevice_class override, per-domain options, platform, device_id,\nconfig_entry_id and unique_id.\n\nRESOLVER MODE:\nPass unique_id (instead of entity_id) to resolve a stable integration\nunique_id to its entity_id(s). Since the registry's unique key is\n(domain, platform, unique_id), the same unique_id can match multiple\nplatforms — all matches are returned in entity_entries with a `matches`\ncount. Narrow with domain/platform. Resolver reads as_partial_dict, so\naliases and the device_class override come back as defaults ([]/null).\n\nWhen config_entry_id is non-null — e.g. for UI-created template / group /\nutility_meter / derivative helpers — pass it to\n``ha_get_integration(entry_id=..., include_options=True)`` to read the\nhelper's current config (template body, group members, etc.) without\nscanning a domain list. Voice-assistant exposure is stored under options\nbut is set via ha_set_entity(expose_to=...).\n\nResolved-name enrichment (present only when the ha_mcp_tools component\nadvertises it; otherwise these keys are absent): `area` (assigned area\nNAME, device-inherited when the entity has none), `floor`, and\n`label_names`. This tool's base `labels` carries the label ids;\nha_search result_fields and ha_get_entity_exposure instead emit the\nresolved names under `labels`.\n\nRELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()\nfor current state/attributes; ha_search() to find entities.\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n- Resolve a unique_id: ha_get_entity(unique_id=\"00:11:22:33\", domain=\"sensor\")",
+    "description": "Get entity registry entries, or without an entity the registry settings and exposed entities.\n\nReturns each entry as Home Assistant's entity registry serves it\n(`config/entity_registry/get` / `get_entries`): area_id, name override,\noriginal_name, icon, disabled_by/hidden_by, aliases (a null alias is the\nentity's own name), labels, categories, device_class, capabilities,\nentity_category, per-domain options, platform, device_id,\nconfig_entry_id, unique_id and `next_name_part`. An entity with a\ndevice_id and no name of its own (`name: \"\"`, or `name: null` with no\n`original_name`) is the main entity of its device (the dialog's \"Main\nentity of the device\" switch). Plus the enrichment keys below.\n\nRESOLVER MODE:\nPass unique_id to resolve it to its entity_id(s). Since the registry's\nunique key is (domain, platform, unique_id), the same unique_id can match\nmultiple platforms — all matches are returned in entity_entries with a\n`matches` count. Narrow with domain/platform.\n\nWhen config_entry_id is non-null — e.g. for UI-created template / group /\nutility_meter / derivative helpers — pass it to\n``ha_get_integration(entry_id=..., include_options=True)`` to read the\nhelper's current config (template body, group members, etc.) without\nscanning a domain list.\n\nResolved-name enrichment on an entity_id or unique_id lookup, served by the\nha_mcp_tools component (absent without it, and a warning says which\nfields are missing and whether to install or update the component):\n`full_name` (the name Home Assistant shows, composed from the parent\ndevice, device and entity names; null when it has none),\n`area` (assigned area NAME, device-inherited when the entity has none),\n`floor`, and `label_names`. This tool's base `labels` carries the label ids;\nha_search result_fields and the exposure listing's `entity_info`\ninstead emit the resolved names under `labels`.\n\nVOICE ASSISTANT EXPOSURE:\nAn entity with a registry entry keeps its exposure in the entry's\n`options` (`options.<assistant>.should_expose`; absent while nothing is\nstored); ha_set_entity(expose_to=...) sets it. An entity without a\nregistry entry that has a state, or is stored as exposed, returns\n`entity_entry: null` with `exposed_to` (the assistants Home Assistant has\nstored as exposed) and\n`is_exposed_anywhere`; a list call returns such entities under\n`unregistered_entities`.\n\nWITHOUT entity_id AND unique_id: returns the registry-wide state:\n`settings` (Home Assistant's `config/entity_registry/settings/get`:\n`entity_id_parts`, the name parts new entity IDs are built from, null\nfor Home Assistant's default) and `exposed_entities`, the entities\nexposed to at least one voice assistant as Home Assistant's\n`expose_entity/list` map, with `count` and a per-assistant `summary`\n(an assistant with no exposed entity is left out). An entity missing\nfrom that map is not stored as exposed: either it is stored as not\nexposed, or nothing is stored yet and Home Assistant applies its own\ndefault when an assistant first asks (it depends on the assistant's\nexpose-new-entities flag and on the entity). When the ha_mcp_tools\ncomponent advertises it, `entity_info` names each listed entity:\ndomain, area, floor and labels (plus friendly_name and state when it\nhas a state). Without it the listing has no `entity_info`, and a\nwarning says whether to install or update the component.\n\nRELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()\nfor current state/attributes; ha_search() to find entities.\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n- Resolve a unique_id: ha_get_entity(unique_id=\"00:11:22:33\", domain=\"sensor\")\n- Entities exposed to Alexa: ha_get_entity(exposed_to=\"cloud.alexa\")\n- Registry settings and all exposed entities: ha_get_entity()",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1581,6 +1581,11 @@
           "type": "str | None",
           "description": "Resolver filter (unique_id mode only): restrict matches to this integration platform, e.g. 'hue'.",
           "default": null
+        },
+        "exposed_to": {
+          "type": "str | None",
+          "description": "Without entity_id and unique_id: list only the entities exposed to this voice assistant, an ID Home Assistant knows (today 'conversation', 'cloud.alexa', 'cloud.google_assistant'). Adds `assistant` and its `expose_new_entities` flag; leaves out `summary`.",
+          "default": null
         }
       }
     },
@@ -1594,35 +1599,6 @@
       "Entity Registry"
     ],
     "source_file": "tools_entities.py"
-  },
-  {
-    "name": "ha_get_entity_exposure",
-    "title": "Get Entity Exposure",
-    "description": "Get entity exposure settings - list all or get settings for a specific entity.\n\nWithout an entity_id: lists the entities that have explicit exposure\nsettings for voice assistants (Alexa, Google Assistant, Assist) as\n`exposed_entities`, plus a per-assistant `summary` count. An entity absent\nfrom that list uses the default exposure settings.\n\nWith an entity_id: returns `exposed_to` (assistant -> True/False from the\nentity's explicit settings), `is_exposed_anywhere`, and\n`has_custom_settings`. When has_custom_settings is False the defaults\napply and exposed_to is all False; the default values themselves are\nnot computed.\n\nEXAMPLES:\n- Filter by assistant: ha_get_entity_exposure(assistant=\"cloud.alexa\")\n- Get specific entity: ha_get_entity_exposure(entity_id=\"light.living_room\")\n\nWhen the ha_mcp_tools component advertises the exposure capability, each\nrecord is additively enriched with the entity's name/area so no second\nha_search is needed to identify it: friendly_name, domain, area, floor,\nand labels (plus state for entities that have one) on a single-entity\nlookup, and a parallel entity_info map keyed by entity_id when listing.\nThese fields are absent when the component is unavailable.",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "str | None",
-          "description": "Entity ID to check exposure settings for.",
-          "default": null
-        },
-        "assistant": {
-          "type": "str | None",
-          "description": "Filter by assistant: 'conversation', 'cloud.alexa', or 'cloud.google_assistant'.",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    },
-    "tags": [
-      "Entity Registry"
-    ],
-    "source_file": "tools_voice_assistant.py"
   },
   {
     "name": "ha_remove_entity",
@@ -1653,12 +1629,13 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(entity_id=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
+    "description": "Update entity registry entries, or without entity_id the registry-wide settings.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitation: an entity without a unique ID cannot be renamed.\n\nREGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home\nAssistant's `settings`, the `expose_new_entities` written, and the values\nthey replace\n(`previous_settings`, `previous_expose_new_entities`). ha_get_entity()\nreads them.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Stop exposing new entities to Alexa: ha_set_entity(expose_new_entities={\"cloud.alexa\": false})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nAUTOMATIONS AND SCRIPTS:\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(entity_id=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "str | list[str]",
-          "description": "Entity ID or list of entity IDs to update."
+          "type": "str | list[str] | None",
+          "description": "Entity ID or list of entity IDs to update. Omit only for the registry-wide expose_new_entities and entity_id_parts.",
+          "default": null
         },
         "area_id": {
           "type": "str | None",
@@ -1667,12 +1644,12 @@
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
+          "description": "The entity's own name part, not the full name. Use empty string '' to remove the custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "use_device_name": {
           "type": "bool | None",
-          "description": "HA 2026.10's 'Use device name' switch. True names the entity after its device and follows device renames; False restores the integration's default name. Omit to leave it as is; not combinable with name.",
+          "description": "The entity dialog's 'Main entity of the device' switch. True names the entity after its device, following device renames, and like the dialog moves it from its own area to the device's. An entity without a name of its own already is the main entity and is left as is. False restores the integration's default name. Omit to leave it as is; not combinable with name.",
           "default": null
         },
         "icon": {
@@ -1687,12 +1664,12 @@
         },
         "options": {
           "type": "dict[str, dict[str, Any]] | None",
-          "description": "Per-domain entity registry options (e.g. sensor 'display_precision', weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. Multiple domains are sent as separate registry updates. For 'Show As' use device_class; for voice-assistant exposure use expose_to, not options.<assistant>.should_expose.",
+          "description": "Per-domain entity registry options (e.g. sensor 'display_precision', weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. For 'Show As' use device_class; for voice-assistant exposure use expose_to, not options.<assistant>.should_expose.",
           "default": null
         },
         "enabled": {
           "type": "bool | None",
-          "description": "True to enable the entity, False to disable it. WARNING: Setting enabled=False is a registry-level disable — it completely removes the entity from the state machine and hides it from the UI. A reload or restart is required to restore it after re-enabling.",
+          "description": "True to enable the entity, False to disable it. WARNING: enabled=False is a registry-level disable, not 'turning off': the entity leaves the state machine, the UI, dashboards and automations. Re-enabling returns Home Assistant's own answer: require_restart, or reload_delay (seconds until it reloads the integration itself).",
           "default": null
         },
         "hidden": {
@@ -1727,23 +1704,30 @@
         },
         "expose_to": {
           "type": "dict[str, bool] | None",
-          "description": "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Valid assistants: 'conversation' (Assist), 'cloud.alexa', 'cloud.google_assistant'. Example: {\"conversation\": true, \"cloud.alexa\": false}.",
+          "description": "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Assistant IDs Home Assistant knows, today 'conversation' (Assist), 'cloud.alexa' and 'cloud.google_assistant'; it refuses any other name before any change is sent to it. Example: {\"conversation\": true, \"cloud.alexa\": false}. An entity without a registry entry is written under the id Home Assistant reads it by and answers with entity_entry null; an id Home Assistant does not know is refused before anything is written.",
+          "default": null
+        },
+        "expose_new_entities": {
+          "type": "dict[str, bool] | None",
+          "description": "Registry-wide, no entity_id: each assistant's 'Expose new entities' switch, as a dict mapping assistant IDs to booleans (e.g. {\"cloud.alexa\": false}). Home Assistant refuses an assistant it does not know before any change is sent.",
+          "default": null
+        },
+        "entity_id_parts": {
+          "type": "list[str] | None",
+          "description": "Registry-wide, no entity_id: the name parts new entity IDs are built from, in order. Home Assistant judges the list; today it takes 'area', 'floor', 'parent_device', 'device' and 'entity', and requires 'device' and 'entity'. [] restores Home Assistant's default.",
           "default": null
         },
         "new_entity_id": {
           "type": "str | None",
-          "description": "New entity ID to rename to (e.g., 'light.new_name'). Domain must match the original.",
+          "description": "New entity ID to rename to (e.g., 'light.new_name'); the domain must stay the same. 'auto' takes the ID Home Assistant would generate for the entity now, like the UI's Restore entity ID (no rename when the entity already has it).",
           "default": null
         },
         "new_device_name": {
           "type": "str | None",
-          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
+          "description": "New display name for the associated device. An entity_id Home Assistant does not know is refused; an entity without a device gets a warning. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
           "default": null
         }
-      },
-      "required": [
-        "entity_id"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": false,

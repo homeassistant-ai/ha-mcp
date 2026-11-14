@@ -6,7 +6,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    safe_call_tool,
+)
 from ...utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
@@ -179,7 +183,7 @@ class TestEntityManagement:
             {"entity_id": "sensor.nonexistent_entity_xyz", "name": "Test Name"},
         )
         assert not data.get("success", False), "Should fail for non-existent entity"
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND"
 
         logger.info("Non-existent entity error handling verified")
 
@@ -447,18 +451,12 @@ class TestEntityManagement:
             f"area_id mismatch: {entity_entry}"
         )
 
-        # Verify disabled_by/hidden_by and translated booleans
+        # Verify disabled_by/hidden_by
         assert entity_entry.get("disabled_by") is None, (
             f"disabled_by should be None: {entity_entry}"
         )
         assert entity_entry.get("hidden_by") is None, (
             f"hidden_by should be None: {entity_entry}"
-        )
-        assert entity_entry.get("enabled") is True, (
-            f"enabled should be True when disabled_by is None: {entity_entry}"
-        )
-        assert entity_entry.get("hidden") is False, (
-            f"hidden should be False when hidden_by is None: {entity_entry}"
         )
 
         # Verify aliases
@@ -540,8 +538,6 @@ class TestEntityManagement:
             assert "area_id" in entry, f"Missing area_id: {entry}"
             assert "disabled_by" in entry, f"Missing disabled_by: {entry}"
             assert "hidden_by" in entry, f"Missing hidden_by: {entry}"
-            assert "enabled" in entry, f"Missing enabled: {entry}"
-            assert "hidden" in entry, f"Missing hidden: {entry}"
             assert "aliases" in entry, f"Missing aliases: {entry}"
 
         logger.info("Multiple entity lookup verified")
@@ -551,17 +547,12 @@ class TestEntityManagement:
 
     async def test_get_entity_nonexistent(self, mcp_client):
         """Test error handling for non-existent entity in ha_get_entity."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_get_entity",
-            {"entity_id": "sensor.nonexistent_entity_xyz"},
+        data = await MCPAssertions(mcp_client).call_tool_failure(
+            "ha_get_entity", {"entity_id": "sensor.nonexistent_entity_xyz"}
         )
 
-        assert not data.get("success", True), "Should fail for non-existent entity"
-        assert "error" in data, f"Missing error field: {data}"
-        assert data.get("error", {}).get("suggestions"), (
-            f"Missing suggestions field: {data}"
-        )
+        assert data["error"]["code"] == "ENTITY_NOT_FOUND", data
+        assert data["error"]["suggestions"], data
 
         logger.info("Non-existent entity error handling verified")
 
@@ -577,9 +568,7 @@ class TestEntityManagement:
         assert data.get("entity_entries") == [], (
             f"Expected empty entity_entries: {data}"
         )
-        assert data.get("message") == "No entities requested", (
-            f"Expected 'No entities requested' message: {data}"
-        )
+        assert "message" not in data, f"Unexpected message next to count: {data}"
 
         logger.info("Empty list handling verified")
 

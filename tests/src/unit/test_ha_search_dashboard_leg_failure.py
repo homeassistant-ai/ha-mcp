@@ -2,305 +2,273 @@
 
 The component ``search`` leg failing falls back to the legacy path exactly as
 it did before the dashboards leg existed; the split must not change that.
+
+The server's client runs on a real ``hass`` with the component's commands. Core
+answers the capability probe, the dashboards reads and the legacy reads. The
+component's search fails with Core's own error reply, and where a leg has to
+stall, Core holds that leg's own command (``_held_command.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
-from unittest.mock import AsyncMock
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from custom_components.ha_mcp_tools.websocket_api import system as component_system
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import tools_search
+from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
 from ha_mcp.tools.search import component as search_component
-from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_config_dashboards import WS_DASHBOARDS
 
-from ._component_routing_helpers import patch_ws
-from .test_ha_search_component_routing import (
-    DashboardRoutingClient,
-    _build_ha_search,
-    _setup_visibility_disabled,
-)
-from .test_ha_search_dashboard_split import (
-    _CAPS_SPLIT,
-    _dashboards_result,
-    _patch_dashboards_ws,
-    _search_result,
-    _split_ws,
-)
+from ._held_command import held_command
+from ._search_tool import _build_ha_search, _setup_visibility_disabled
+
+_DASHBOARD_PATH = "energy-board"
+_COMPONENT_SEARCH = "ha_mcp_tools/search"
+_QUERY: dict[str, Any] = {
+    "query": "kitchen",
+    "search_types": ["automation", "dashboard"],
+}
+
+
+def _fail_component_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the component's config-surface search raise, so Core replies with an error."""
+
+    def _boom(*args: Any, **kwargs: Any) -> None:
+        raise HomeAssistantError("boom")
+
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api.search._search_config_surface",
+        _boom,
+    )
+
+
+async def _store_energy_dashboard(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """Save a storage dashboard whose config mentions "kitchen", through Core."""
+    assert await async_setup_component(hass, "lovelace", {})
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": _DASHBOARD_PATH,
+            "title": "Energy",
+        }
+    )
+    assert created["success"], created
+    saved = await client.send_websocket_message(
+        {
+            "type": "lovelace/config/save",
+            "url_path": _DASHBOARD_PATH,
+            "config": {"views": [{"title": "Kitchen", "cards": []}]},
+        }
+    )
+    assert saved["success"], saved
+
+
+async def _store_second_dashboard(client: HomeAssistantClient) -> None:
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": "kitchen-board",
+            "title": "K",
+        }
+    )
+    assert created["success"], created
+
+
+def _component_without_doc_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A component from before the dashboards document search: the dashboards
+    leg walks each dashboard's config itself, one ``lovelace/config`` read per
+    dashboard, side by side."""
+    monkeypatch.setattr(
+        component_system,
+        "CAPABILITIES",
+        [c for c in component_system.CAPABILITIES if c != "dashboards_doc_search"],
+    )
+
+
+def _dashboard_legs() -> list[asyncio.Task[Any]]:
+    """The dashboards leg tasks still running."""
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done()
+        and "_search_dashboards_leg" in getattr(task.get_coro(), "__qualname__", "")
+    ]
+
+
+def _dashboard_leg_pending() -> bool:
+    return bool(_dashboard_legs())
+
+
+async def _until_the_leg_is_being_cancelled() -> None:
+    """Yield until the call has cancelled its dashboards leg, which then needs
+    several loop steps to unwind its side-by-side dashboard reads."""
+    for _ in range(1000):
+        if any(task.cancelling() for task in _dashboard_legs()):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("the dashboards leg was never cancelled")
 
 
 class TestDashboardSplitComponentLegFailure:
     """The component leg's failure taxonomy is unchanged by the split."""
 
-    @pytest.mark.asyncio
-    async def test_command_error_falls_back_once(self, tmp_path, monkeypatch) -> None:
+    async def test_command_error_falls_back_once(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """A failing component search serves the WHOLE call from legacy — which
         searches dashboards itself, so the split's own dashboard records must
         not be merged on top of it."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        ws = _split_ws(
-            search_exc=HomeAssistantCommandError("Command failed: boom", "internal"),
-            dashboards_result=_dashboards_result(
-                [{"url_path": "energy", "title": "Energy"}]
-            ),
+        await _store_energy_dashboard(hass, component_core_client)
+        _fail_component_search(monkeypatch)
+        monkeypatch.setattr(
+            component_core_client,
+            "get_states",
+            AsyncMock(wraps=component_core_client.get_states),
         )
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
+        ha_search = _build_ha_search(component_core_client)
 
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            resp = await ha_search(
-                query="kitchen", search_types=["automation", "dashboard"]
-            )
+        resp = await ha_search(**_QUERY)
 
         assert resp["success"] is True
         assert any("served via legacy path" in w for w in resp["warnings"])
-        assert client.get_states_calls == 1
-        # Exactly one "energy" record: the legacy path produced it, and the
+        assert cast("AsyncMock", component_core_client.get_states).await_count == 1
+        # Exactly one dashboard record: the legacy path produced it, and the
         # split leg's copy was dropped rather than merged on top.
-        assert [d["url_path"] for d in resp["dashboards"]] == ["energy"]
+        assert [d["url_path"] for d in resp["dashboards"]] == [_DASHBOARD_PATH]
 
-    @pytest.mark.asyncio
     async def test_component_error_cancels_slow_dashboard_leg(
-        self, tmp_path, monkeypatch
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A failed component leg cancels the dashboards leg instead of
         waiting for it: the legacy fallback searches dashboards itself, so a
         slow leg would only delay the fallback and duplicate its I/O."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        state = {"calls": 0, "cancelled": False}
+        await _store_energy_dashboard(hass, component_core_client)
+        _fail_component_search(monkeypatch)
+        ha_search = _build_ha_search(component_core_client)
 
-        async def hang_then_serve(
-            self: SmartSearchTools,
-            query_lower: str,
-            exact_match: bool,
-            semaphore: asyncio.Semaphore,
-            *,
-            include_config: bool,
-        ) -> tuple[list[dict[str, Any]], int]:
-            state["calls"] += 1
-            if state["calls"] == 1:
-                try:
-                    await asyncio.Event().wait()
-                except asyncio.CancelledError:
-                    state["cancelled"] = True
-                    raise
-            return [], 0
-
-        monkeypatch.setattr(
-            SmartSearchTools, "_search_dashboards_surface", hang_then_serve
-        )
-        ws = _split_ws(
-            search_exc=HomeAssistantCommandError("Command failed: boom", "internal"),
-            dashboards_result=_dashboards_result([]),
-        )
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
-
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            resp = await ha_search(
-                query="kitchen", search_types=["automation", "dashboard"]
-            )
+        # Only the leg's request is held; the legacy fallback's own
+        # dashboards read is answered at once.
+        async with (
+            held_command(hass, WS_DASHBOARDS, first_only=True) as held,
+            asyncio.timeout(10),
+        ):
+            resp = await ha_search(**_QUERY)
+            assert held.arrived.is_set()
 
         assert resp["success"] is True
         assert any("served via legacy path" in w for w in resp["warnings"])
-        assert state["cancelled"] is True
+        assert [d["url_path"] for d in resp["dashboards"]] == [_DASHBOARD_PATH]
 
-    @pytest.mark.asyncio
+    async def test_parent_cancellation_settles_the_dashboard_leg(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cancelling ha_search while both legs wait settles the dashboards
+        leg BEFORE the call completes: the leg task must not outlive the
+        parent with an unobserved cancellation."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        _component_without_doc_search(monkeypatch)
+        await _store_energy_dashboard(hass, component_core_client)
+        await _store_second_dashboard(component_core_client)
+        ha_search = _build_ha_search(component_core_client)
+
+        async with (
+            held_command(hass, "lovelace/config") as dashboards,
+            held_command(hass, _COMPONENT_SEARCH) as search,
+        ):
+            call = asyncio.ensure_future(ha_search(**_QUERY))
+            await dashboards.arrived.wait()
+            await search.arrived.wait()
+            assert _dashboard_leg_pending()
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+            assert not _dashboard_leg_pending()
+
     async def test_parent_cancellation_during_fallback_settle_propagates(
-        self, tmp_path, monkeypatch
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A cancellation delivered while the failed-component branch settles
         the leg must propagate — not be consumed right before the legacy
         fallback runs uncancellably (human review on #2291)."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        cancel_seen = asyncio.Event()
-        release = asyncio.Event()
+        _component_without_doc_search(monkeypatch)
+        await _store_energy_dashboard(hass, component_core_client)
+        await _store_second_dashboard(component_core_client)
+        _fail_component_search(monkeypatch)
+        ha_search = _build_ha_search(component_core_client)
 
-        async def stubborn_leg(
-            self: SmartSearchTools,
-            query_lower: str,
-            exact_match: bool,
-            semaphore: asyncio.Semaphore,
-            *,
-            include_config: bool,
-        ) -> tuple[list[dict[str, Any]], int]:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                cancel_seen.set()
-                # Hold through the first cancellation so the caller is
-                # provably parked in its settle wait when the test cancels it.
-                await release.wait()
-                raise
-            return [], 0
-
-        monkeypatch.setattr(
-            SmartSearchTools, "_search_dashboards_surface", stubborn_leg
-        )
-        ws = _split_ws(
-            search_exc=HomeAssistantCommandError("Command failed: boom", "internal"),
-            dashboards_result=_dashboards_result([]),
-        )
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
-
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            call = asyncio.ensure_future(
-                ha_search(query="kitchen", search_types=["automation", "dashboard"])
-            )
-            # The component leg fails fast; once the leg has received its
-            # cancel, the call is parked in the settle wait.
-            await cancel_seen.wait()
+        async with (
+            held_command(hass, "lovelace/config") as dashboards,
+            held_command(hass, _COMPONENT_SEARCH) as search,
+        ):
+            call = asyncio.ensure_future(ha_search(**_QUERY))
+            await dashboards.arrived.wait()
+            # The leg is reading dashboards; now let the component search fail.
+            search.release.set()
+            await _until_the_leg_is_being_cancelled()
             call.cancel()
-            release.set()
-            with pytest.raises(asyncio.CancelledError):
-                await call
+            async with asyncio.timeout(10):
+                with pytest.raises(asyncio.CancelledError):
+                    await call
 
-    @pytest.mark.asyncio
-    async def test_parent_cancellation_settles_the_dashboard_leg(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """Cancelling ha_search settles the dashboards leg BEFORE the call
-        completes: the leg task must not outlive the parent with an
-        unobserved cancellation."""
-        _setup_visibility_disabled(tmp_path, monkeypatch)
-        search_started = asyncio.Event()
-        state = {"cancelled": False}
-
-        async def hang_forever(
-            self: SmartSearchTools,
-            query_lower: str,
-            exact_match: bool,
-            semaphore: asyncio.Semaphore,
-            *,
-            include_config: bool,
-        ) -> tuple[list[dict[str, Any]], int]:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                state["cancelled"] = True
-                raise
-            return [], 0
-
-        monkeypatch.setattr(
-            SmartSearchTools, "_search_dashboards_surface", hang_forever
-        )
-
-        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-            if command_type == "ha_mcp_tools/info":
-                return {"success": True, "result": _CAPS_SPLIT}
-            if command_type == "ha_mcp_tools/search":
-                search_started.set()
-                await asyncio.Event().wait()
-            raise AssertionError(f"unexpected command {command_type!r}")
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(side_effect=_send)
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
-
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            call = asyncio.ensure_future(
-                ha_search(query="kitchen", search_types=["automation", "dashboard"])
-            )
-            await search_started.wait()
-            call.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await call
-
-        # The leg settled before the parent call completed — without the
-        # settle-await, its CancelledError delivery would still be pending
-        # here and the flag unset.
-        assert state["cancelled"] is True
-
-    @pytest.mark.asyncio
-    async def test_parent_cancellation_at_the_second_await_settles_the_leg(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """The same invariant at the OTHER await: the component leg has already
-        returned, so the call is parked on ``await dashboard_task`` when the
-        cancellation lands. Only the second ``except BaseException`` covers
-        that point — without it the leg task outlives the call with its
-        cancellation still undelivered."""
-        _setup_visibility_disabled(tmp_path, monkeypatch)
-        leg_parked = asyncio.Event()
-        component_returned = asyncio.Event()
-        state = {"cancelled": False}
-
-        async def hang_forever(
-            self: SmartSearchTools,
-            query_lower: str,
-            exact_match: bool,
-            semaphore: asyncio.Semaphore,
-            *,
-            include_config: bool,
-        ) -> tuple[list[dict[str, Any]], int]:
-            leg_parked.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                state["cancelled"] = True
-                raise
-            return [], 0
-
-        monkeypatch.setattr(
-            SmartSearchTools, "_search_dashboards_surface", hang_forever
-        )
-
-        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-            if command_type == "ha_mcp_tools/info":
-                return {"success": True, "result": _CAPS_SPLIT}
-            if command_type == "ha_mcp_tools/search":
-                # Answer only once the dashboards leg is parked, so the leg is
-                # provably still pending when the component leg completes.
-                await leg_parked.wait()
-                component_returned.set()
-                return {"success": True, "result": _search_result()}
-            raise AssertionError(f"unexpected command {command_type!r}")
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(side_effect=_send)
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
-
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            call = asyncio.ensure_future(
-                ha_search(query="kitchen", search_types=["automation", "dashboard"])
-            )
-            await component_returned.wait()
-            # Let the call resume from ``await component_task`` and park on
-            # ``await dashboard_task``; cancelling before that would land on
-            # the first await instead, which the test above already covers.
-            for _ in range(2):
-                await asyncio.sleep(0)
-            call.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await call
-
-        assert state["cancelled"] is True
-
-    @pytest.mark.asyncio
     async def test_unknown_command_falls_back_silently(
-        self, tmp_path, monkeypatch
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A component downgraded mid-session is still a silent legacy route."""
+        """Capabilities cached as serving search, but Core, without the
+        component, answers ``ha_mcp_tools/search`` unknown_command: the stale
+        capabilities are dropped and the route is a silent legacy one, with no
+        warning naming a failed component."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        ws = _split_ws(
-            search_exc=HomeAssistantCommandError(
-                "Command failed: nope", "unknown_command"
-            ),
-            dashboards_result=_dashboards_result([]),
+        assert await async_setup_component(hass, "config", {})
+        served = ComponentCaps(
+            1, "2.2.2", frozenset({"search", DEVICE_REGISTRY_CHILD_SEMANTICS}), {}
         )
-        client = DashboardRoutingClient()
-        ha_search = _build_ha_search(client)
+        monkeypatch.setattr(
+            tools_search, "get_component_caps", AsyncMock(return_value=served)
+        )
+        invalidated = MagicMock(wraps=search_component.invalidate_caps)
+        monkeypatch.setattr(search_component, "invalidate_caps", invalidated)
+        monkeypatch.setattr(
+            core_client, "get_states", AsyncMock(wraps=core_client.get_states)
+        )
+        ha_search = _build_ha_search(core_client)
 
-        with patch_ws(ws, search_component), _patch_dashboards_ws(ws):
-            resp = await ha_search(
-                query="kitchen", search_types=["automation", "dashboard"]
-            )
+        resp = await ha_search(**_QUERY)
 
         assert resp["success"] is True
-        assert client.get_states_calls == 1
+        invalidated.assert_called_once_with(core_client)
+        assert cast("AsyncMock", core_client.get_states).await_count == 1
         assert not any("served via legacy path" in w for w in resp["warnings"])

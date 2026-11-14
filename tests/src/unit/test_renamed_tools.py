@@ -331,6 +331,19 @@ class TestBlueprintConsolidation:
             "ha_import_blueprint", {"url": "https://example.com/bp.yaml"}
         ) == {"action": "import", "url": "https://example.com/bp.yaml"}
 
+    def test_entity_exposure_arguments_map_onto_ha_get_entity(self) -> None:
+        """The assistant filter becomes exposed_to only for the listing; with
+        an entity_id the adapter drops it, after adapt_retired_call had Core
+        check the name."""
+        assert adapt_retired_arguments(
+            "ha_get_entity_exposure", {"assistant": "cloud.alexa"}
+        ) == {"exposed_to": "cloud.alexa"}
+        assert adapt_retired_arguments(
+            "ha_get_entity_exposure",
+            {"entity_id": "light.lamp", "assistant": "cloud.alexa"},
+        ) == {"entity_id": "light.lamp"}
+        assert adapt_retired_arguments("ha_get_entity_exposure", {}) == {}
+
     def test_an_explicit_action_survives_the_adapter(self) -> None:
         """The docstring promises it, and the dict spread is what delivers it.
 

@@ -14,7 +14,6 @@ import pytest
 
 from ...utilities.assertions import (
     assert_mcp_success,
-    extract_error_message,
     parse_mcp_result,
     safe_call_tool,
 )
@@ -828,18 +827,14 @@ class TestInputButtonCRUD:
             f"{delete_data.get('method')} (unique_id={delete_data.get('unique_id')})"
         )
 
-        # Verify entity is gone — error code varies (ENTITY_NOT_FOUND vs
-        # SERVICE_CALL_FAILED), so the assertion targets the message.
+        # Verify entity is gone: ha_get_entity reports it not found.
         get_data = await safe_call_tool(
             mcp_client, "ha_get_entity", {"entity_id": entity_id}
         )
         assert get_data.get("success", True) is False, (
             f"Entity still present in registry after delete: {get_data}"
         )
-        err_msg = extract_error_message(get_data).lower()
-        assert "not found" in err_msg, (
-            f"Expected 'not found' in error message, got: {get_data}"
-        )
+        assert get_data["error"]["code"] == "ENTITY_NOT_FOUND", get_data
 
         logger.info(
             f"Issue #1057 regression test passed: disabled "

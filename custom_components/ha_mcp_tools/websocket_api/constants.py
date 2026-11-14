@@ -156,6 +156,9 @@ CAPABILITIES: list[str] = [
     # unless this flag accompanies the individual command capability.
     "device_registry_child_semantics",
     "entity_enrich",
+    # A flag on entity_enrich: each entity carries ``full_name``, the name Core
+    # composes, as the overview's ``full_name``.
+    "entity_enrich_full_name",
     "exposure",
     "config_entries",
     # A flag on config_entries: gates its opt-in ``include_subentry_data``, the

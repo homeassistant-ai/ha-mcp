@@ -175,7 +175,8 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "
-        "test_parent_cancellation_settles_the_dashboard_leg: awaiting the "
+        "test_parent_cancellation_settles_the_dashboard_leg and "
+        "test_parent_cancellation_during_fallback_settle_propagates: awaiting the "
         "cancelled ha_search task IS the effect (it drives the call to "
         "completion and raises the CancelledError the context manager "
         "asserts).",
@@ -390,6 +391,19 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "",
         "False positive on _wait_for_backup's return-in-the-loop vs raise "
         "shape: after the loop it always goes through raise_tool_error, typed "
+        "'-> NoReturn' (see helpers.py), so there is no implicit None return "
+        "for CodeQL's heuristic to have correctly caught. mypy already "
+        "confirms this file is clean under that typing.",
+    ),
+    # NOTE: same PATH-WIDE caveat as the server.py entry above — re-audit if
+    # provision.py grows genuinely mixed-returns functions.
+    (
+        "py/mixed-returns",
+        "src/ha_mcp/dashboard_screenshot/provision.py",
+        "Mixing implicit and explicit returns",
+        "",
+        "False positive on _discover_engine_via_supervisor's return-in-the-try "
+        "vs raise shape: every other path ends in raise_tool_error, typed "
         "'-> NoReturn' (see helpers.py), so there is no implicit None return "
         "for CodeQL's heuristic to have correctly caught. mypy already "
         "confirms this file is clean under that typing.",

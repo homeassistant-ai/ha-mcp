@@ -77,6 +77,10 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # friendly_name alone, and the server says so where that changes the answer.
 ENTITY_COMPOSED_NAME = "entity_composed_name"
 
+# Additive flag on entity_enrich: each entity carries the name Core composes
+# (as under ENTITY_COMPOSED_NAME) as ``full_name``.
+ENTITY_ENRICH_FULL_NAME = "entity_enrich_full_name"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
@@ -620,11 +624,35 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     return auth if isinstance(auth, str) else None
 
 
+COMPONENT_VIA_HACS = (
+    "via HACS (the Marketplace on Home Assistant 2026.11+) and restart Home Assistant."
+)
 # Said wherever a response is poorer for want of a component command.
 COMPONENT_INSTALL_HINT = (
-    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
-    "on Home Assistant 2026.11+) and restart Home Assistant."
+    f"Install or update the ha_mcp_tools component {COMPONENT_VIA_HACS}"
 )
+
+
+def component_unusable_warning(caps: ComponentCaps | None, without: str) -> str:
+    """Why a read came without the component's part, and how to get it.
+
+    ``caps`` is None when no component answered (install it); otherwise the
+    component predates the command (update it).
+    """
+    if caps is None:
+        return (
+            f"No ha_mcp_tools component answered, so {without}. "
+            f"Install it {COMPONENT_VIA_HACS}"
+        )
+    return (
+        f"The ha_mcp_tools component is too old, so {without}. "
+        f"Update it {COMPONENT_VIA_HACS}"
+    )
+
+
+def component_unasked_warning(exc: ComponentDiscoveryError, without: str) -> str:
+    """A read that could not ask the component whether it serves its part."""
+    return f"The ha_mcp_tools component could not be asked ({exc}), so {without}."
 
 
 async def component_serves(client: Any, capability: str) -> bool:
