@@ -3,53 +3,58 @@ when Core's config API cannot reach it.
 
 Core's config API reads and edits only ``automations.yaml``. An automation
 from YAML or a package still has a registry row (its ``id`` is the unique_id),
-so the tools can tell it apart from one that does not exist.
+so the tools can tell it apart from one that does not exist. Every test runs
+on a real ``hass``; the package automation is one Core loaded from a second
+``automation`` key.
 """
 
 from __future__ import annotations
 
-import json
+import uuid
 from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools import component_automation
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
-from ._component_routing_helpers import make_ws, patch_ws
-from .test_ha_call_service_component_routing import (
-    _clear_caps_cache,  # noqa: F401 - autouse fixture shared across routing tests
+from ._automation_core import (
+    COMPONENT,
+    FALLBACK,
+    define_in_package,
+    routed_automation_tools,
+    upserts,
 )
-from .test_ha_config_automation_component_routing import _CAPS, _NO_CAPS, Client
+from ._tool_errors import error_body
 
 _ID = "1700000000000"
-_ENTITY = "automation.lights"
-_FOUND = {
-    "found": True,
-    "entity": {"entity_id": _ENTITY, "unique_id": _ID, "platform": "automation"},
-    "validation": None,
-    "references": None,
-}
-_NO_ROW = {"found": False, "entity": None, "validation": None, "references": None}
+_PACKAGED = {"id": _ID, "alias": "Lights", "triggers": [], "actions": []}
 _CONFIG = {"alias": "Lights", "triggers": [], "actions": []}
 
 
-def _not_stored() -> HomeAssistantAPIError:
-    return HomeAssistantAPIError(f"Automation not found: {_ID}", status_code=404)
+@pytest.fixture
+async def tools(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AutomationConfigTools:
+    """The automation tools; on the component path unless parametrized."""
+    return await routed_automation_tools(
+        getattr(request, "param", COMPONENT), hass, core_client, monkeypatch
+    )
 
 
 async def _refusal(
-    client: Client, caps: dict[str, Any], tool: str, **kwargs: Any
+    tools: AutomationConfigTools, tool: str, **kwargs: Any
 ) -> dict[str, Any]:
-    with (
-        patch_ws(make_ws("unused", info_result=caps), component_automation),
-        pytest.raises(ToolError) as exc,
-    ):
-        await getattr(AutomationConfigTools(client), tool)(**kwargs)
-    body: dict[str, Any] = json.loads(str(exc.value))
-    return body
+    with pytest.raises(ToolError) as exc:
+        await getattr(tools, tool)(**kwargs)
+    return error_body(exc)
 
 
 # --- an automation Core's config API cannot reach --------------------------------
@@ -57,140 +62,135 @@ async def _refusal(
 
 class TestAutomationOutsideAutomationsYaml:
     @pytest.mark.parametrize(
-        ("caps", "replies", "identifier"),
-        [
-            (_CAPS, {"lookup": _FOUND}, _ENTITY),
-            (_NO_CAPS, {}, _ENTITY),
-            (_CAPS, {"lookup": _FOUND}, _ID),
-        ],
+        ("tools", "by_entity_id"),
+        [(COMPONENT, True), (FALLBACK, True), (COMPONENT, False)],
         ids=["component-entity-id", "fallback-entity-id", "component-config-id"],
+        indirect=["tools"],
     )
     async def test_get_says_the_automation_is_not_editable_here(
-        self, caps: dict[str, Any], replies: dict[str, Any], identifier: str
+        self, hass: HomeAssistant, tools: AutomationConfigTools, by_entity_id: bool
     ) -> None:
         """A package automation was reported as not existing although Home
         Assistant runs it, and its id was missing from the ids offered."""
-        client = Client(replies)
-        client.get_automation_config.side_effect = _not_stored()
+        entity_id = await define_in_package(hass, _PACKAGED)
 
         body = await _refusal(
-            client, caps, "ha_config_get_automation", entity_id=identifier
+            tools,
+            "ha_config_get_automation",
+            entity_id=entity_id if by_entity_id else _ID,
         )
 
         assert body["error"]["code"] == "CONFIG_NOT_FOUND", body
         assert body["config_id"] == _ID, body
 
-    async def test_write_to_it_is_refused_not_created(self) -> None:
+    async def test_write_to_it_is_refused_not_created(
+        self,
+        hass: HomeAssistant,
+        tools: AutomationConfigTools,
+        core_client: HomeAssistantClient,
+    ) -> None:
         """Writing would create a second automation in automations.yaml under
         the same id instead of editing the one that runs."""
-        client = Client({"lookup": _FOUND})
-        client.get_automation_config.side_effect = _not_stored()
+        entity_id = await define_in_package(hass, _PACKAGED)
 
-        body = await _refusal(
-            client,
-            _CAPS,
-            "ha_config_set_automation",
-            entity_id=_ENTITY,
-            config=dict(_CONFIG),
-            wait=False,
-        )
+        with upserts(core_client) as upsert:
+            body = await _refusal(
+                tools,
+                "ha_config_set_automation",
+                entity_id=entity_id,
+                config=dict(_CONFIG),
+                wait=False,
+            )
 
         assert body["error"]["code"] == "CONFIG_NOT_FOUND", body
-        client.upsert_automation_config.assert_not_awaited()
+        upsert.assert_not_awaited()
 
-    async def test_remove_says_the_automation_is_not_editable_here(self) -> None:
-        client = Client({"lookup": _FOUND})
-        client.get_automation_config.side_effect = _not_stored()
-        client.delete_automation_config.side_effect = _not_stored()
+    async def test_remove_says_the_automation_is_not_editable_here(
+        self, hass: HomeAssistant, tools: AutomationConfigTools
+    ) -> None:
+        entity_id = await define_in_package(hass, _PACKAGED)
 
         body = await _refusal(
-            client,
-            _CAPS,
-            "ha_config_remove_automation",
-            entity_id=_ENTITY,
-            wait=False,
+            tools, "ha_config_remove_automation", entity_id=entity_id, wait=False
         )
 
         assert body["error"]["code"] == "CONFIG_NOT_FOUND", body
         assert body["config_id"] == _ID, body
+        assert hass.states.get(entity_id) is not None
 
-    async def test_config_id_without_a_registry_row_is_not_found(self) -> None:
-        client = Client({"lookup": _NO_ROW})
-        client.get_automation_config.side_effect = _not_stored()
-
-        body = await _refusal(client, _CAPS, "ha_config_get_automation", entity_id=_ID)
+    async def test_config_id_without_a_registry_row_is_not_found(
+        self, tools: AutomationConfigTools
+    ) -> None:
+        body = await _refusal(tools, "ha_config_get_automation", entity_id=_ID)
 
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND", body
 
 
-async def test_hash_for_an_unstored_config_id_is_refused() -> None:
+@pytest.mark.parametrize("tools", [FALLBACK], indirect=True)
+async def test_hash_for_an_unstored_config_id_is_refused(
+    tools: AutomationConfigTools, core_client: HomeAssistantClient
+) -> None:
     """A config_hash comes from reading a stored automation; writing anyway
     would create a new one where the caller meant to edit."""
-    client = Client()
-    client.get_automation_config.side_effect = _not_stored()
-
-    body = await _refusal(
-        client,
-        _NO_CAPS,
-        "ha_config_set_automation",
-        entity_id="fresh_id",
-        config_hash="0123456789abcdef",
-        config=dict(_CONFIG),
-        wait=False,
-    )
+    with upserts(core_client) as upsert:
+        body = await _refusal(
+            tools,
+            "ha_config_set_automation",
+            entity_id="fresh_id",
+            config_hash="0123456789abcdef",
+            config=dict(_CONFIG),
+            wait=False,
+        )
 
     assert body["error"]["code"] == "RESOURCE_NOT_FOUND", body
-    client.upsert_automation_config.assert_not_awaited()
+    upsert.assert_not_awaited()
 
 
 # --- the load failure without the component --------------------------------------
 
 
-class _RepairsClient(Client):
-    """Answers ``repairs/list_issues`` with the given automation issues."""
-
-    def __init__(self, issue_ids: list[str]) -> None:
-        super().__init__()
-        self.issues = [
-            {
-                "domain": "automation",
-                "issue_id": issue_id,
-                "translation_placeholders": {"error": "Missing input event"},
-            }
-            for issue_id in issue_ids
-        ]
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg["type"] == "repairs/list_issues":
-            return {"success": True, "result": {"issues": self.issues}}
-        return await super().send_websocket_message(msg)
-
-
+@pytest.mark.parametrize("tools", [FALLBACK], indirect=True)
 @pytest.mark.parametrize(
-    ("issue_id", "validation"),
+    ("issue_suffix", "validation"),
     [
         (
-            "automation.zz_pv_validation_failed_blueprint",
+            "_validation_failed_blueprint",
             {"status": "failed_blueprint", "error": "Missing input event"},
         ),
-        # automation.zz_pv_validation_failed_blueprint's own issue.
-        (
-            "automation.zz_pv_validation_failed_blueprint_validation_failed_blueprint",
-            None,
-        ),
+        # The issue of an automation whose entity_id extends this one's.
+        ("_validation_failed_blueprint_validation_failed_blueprint", None),
     ],
     ids=["own-issue", "issue-of-an-entity-id-extending-it"],
 )
 async def test_load_failure_is_read_from_the_automations_own_issue(
-    issue_id: str, validation: dict[str, Any] | None
+    hass: HomeAssistant,
+    tools: AutomationConfigTools,
+    issue_suffix: str,
+    validation: dict[str, Any] | None,
 ) -> None:
     """A healthy automation was reported broken, with a doubled status, when
     another automation's entity_id started with its own."""
-    client = _RepairsClient([issue_id])
+    assert await async_setup_component(hass, "repairs", {})
+    created = await tools.ha_config_set_automation(
+        config={"alias": f"pv {uuid.uuid4().hex[:8]}", "triggers": [], "actions": []},
+        wait=False,
+    )
+    entity_id = created["entity_id"]
+    ir.async_create_issue(
+        hass,
+        "automation",
+        f"{entity_id}{issue_suffix}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="validation_failed_blueprint",
+        translation_placeholders={
+            "edit": "/config/automation/edit/x",
+            "entity_id": entity_id,
+            "error": "Missing input event",
+            "name": "pv",
+        },
+    )
 
-    with patch_ws(make_ws("unused", info_result=_NO_CAPS), component_automation):
-        got = await AutomationConfigTools(client).ha_config_get_automation(
-            entity_id="automation.zz_pv"
-        )
+    got = await tools.ha_config_get_automation(entity_id=entity_id)
 
     assert got["validation"] == validation

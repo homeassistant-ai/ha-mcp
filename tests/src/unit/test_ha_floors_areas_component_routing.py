@@ -1,561 +1,350 @@
 """Routing tests for ``ha_list_floors_areas`` over the ``ha_mcp_tools`` component gate.
 
 ``ha_list_floors_areas`` fetched the area AND floor registries via two
-CONCURRENT but independent WebSocket list calls — a TOCTOU window where a
+concurrent but independent WebSocket list calls, a TOCTOU window where a
 registry change between the two reads could misclassify an area as
 orphaned/unassigned. When the component advertises ``registries``, both
-registries come from ONE in-process ``ha_mcp_tools/registries`` read (a single
-consistent snapshot), and neither legacy list call is sent. These tests pin
-that: the component-served path skips both legacy calls, and every backend
-degradation still falls back to the byte-identical legacy 2-call gather — no
-caps, ``unknown_command`` → invalidate + fall back, a non-unknown command
-error, AND a transport failure (both a ``HomeAssistantConnectionError`` off the
-frame and the same error from ``get_websocket_client()`` failing to
-establish the socket). The registries legacy path does NOT die identically on a
-pooled-WS drop (``ha_list_floors_areas`` rides the
-``send_websocket_message`` bridge; the auto-backup capture fetchers use a
-dedicated one-shot socket under a best-effort warn-and-skip contract), so a
-transport failure falls back rather than propagating.
+registries come from ONE in-process ``ha_mcp_tools/registries`` read, and
+neither legacy list call is sent. Every backend degradation still falls back to
+the legacy 2-call gather: no component, ``unknown_command`` → invalidate + fall
+back, a non-unknown command error, and a dropped connection.
+
+The auto-backup capture fetchers take the same component read and fall back
+to their own one-shot socket, so a fault on the pooled socket never costs a
+write its capture.
+
+Everything runs on a real ``hass`` through the server's own client; Core's
+registries hold the areas, floors, labels and categories.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
+    HomeAssistantClient,
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, component_registries
-from ha_mcp.tools.tools_areas import register_area_tools
-
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
 )
+from ha_mcp.tools import component_registries
+from ha_mcp.tools.component_api import component_supports, get_component_caps
+from ha_mcp.tools.tools_areas import AreaTools
 
-_CAPS_REGISTRIES = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["registries"],
-    "limits": {},
-}
+from ._client_spies import sent_commands, sent_messages
+from ._component_frames import drop_connection_on
+from ._core_setup import with_config_component
 
-
-def _raw_area(area_id: str, name: str, **overrides: Any) -> dict[str, Any]:
-    """A ``config/area_registry/list`` element (also the component's area row)."""
-    base: dict[str, Any] = {
-        "aliases": [],
-        "area_id": area_id,
-        "floor_id": None,
-        "humidity_entity_id": None,
-        "icon": None,
-        "labels": [],
-        "name": name,
-        "picture": None,
-        "temperature_entity_id": None,
-        "created_at": 1700000000.0,
-        "modified_at": 1700000000.0,
-    }
-    base.update(overrides)
-    return base
+_LEGACY_LISTS = ("config/area_registry/list", "config/floor_registry/list")
 
 
-def _raw_floor(floor_id: str, name: str, **overrides: Any) -> dict[str, Any]:
-    """A ``config/floor_registry/list`` element (also the component's floor row)."""
-    base: dict[str, Any] = {
-        "aliases": [],
-        "created_at": 1700000000.0,
-        "floor_id": floor_id,
-        "icon": None,
-        "level": 0,
-        "name": name,
-        "modified_at": 1700000000.0,
-    }
-    base.update(overrides)
-    return base
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` with Core's registry commands (``config``)."""
+    return await with_config_component(hass, core_client)
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy registry-list fetches."""
-
-    def __init__(
-        self,
-        areas: list[dict[str, Any]] | None = None,
-        floors: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        self._areas = list(areas or [])
-        self._floors = list(floors or [])
-        self.area_list_calls = 0
-        self.floor_list_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/area_registry/list":
-            self.area_list_calls += 1
-            return {"success": True, "result": list(self._areas)}
-        if msg_type == "config/floor_registry/list":
-            self.floor_list_calls += 1
-            return {"success": True, "result": list(self._floors)}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+@pytest.fixture
+def component(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The same client with the component's commands registered."""
+    return component_core_client
 
 
-def _build_list_floors_areas(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_area_tools(mcp, client)
-    return registered["ha_list_floors_areas"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-def _registries_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/registries"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_component_served_single_snapshot_skips_legacy_calls() -> None:
-    """A single ``registries(registries=["area","floor"])`` frame serves both
-    registries; NEITHER legacy list call is sent, and downstream partitioning
-    (floor nesting / unassigned / orphaned) behaves identically over the
-    component-shaped rows."""
-    areas = [
-        _raw_area("a1", "Office", floor_id="f1"),
-        _raw_area("a2", "Garage"),  # unassigned: no floor_id
-        _raw_area("a3", "Attic", floor_id="ghost"),  # orphaned: unknown floor_id
-    ]
-    floors = [_raw_floor("f1", "Ground")]
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_result=_CAPS_REGISTRIES,
-        cmd_result={"areas": areas, "floors": floors},
+@pytest.fixture
+async def socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
+    return await websocket_manager.get_client(
+        url=client.base_url, token=client.token, verify_ssl=False
     )
-    client = RoutingClient()
-    list_floors_areas = _build_list_floors_areas(client)
 
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
 
+@pytest.fixture
+def invalidated(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """A spy on the capability invalidation; the real one still runs."""
+    spy = MagicMock(wraps=component_registries.invalidate_caps)
+    monkeypatch.setattr(component_registries, "invalidate_caps", spy)
+    return spy
+
+
+def _office_on_ground(hass: HomeAssistant) -> tuple[str, str]:
+    """A Ground floor with an Office area on it; returns (floor_id, area_id)."""
+    floor = fr.async_get(hass).async_create("Ground")
+    area = ar.async_get(hass).async_create("Office", floor_id=floor.floor_id)
+    return floor.floor_id, area.id
+
+
+def _sent_types(spy: AsyncMock) -> list[str]:
+    return [str(call.args[0].get("type")) for call in spy.await_args_list]
+
+
+def _legacy_gather(spy: AsyncMock) -> list[str]:
+    return sorted(t for t in _sent_types(spy) if t in _LEGACY_LISTS)
+
+
+def _registries_frames(spy: AsyncMock) -> list[Any]:
+    return [
+        c for c in spy.call_args_list if c.args[0] == component_registries.WS_REGISTRIES
+    ]
+
+
+async def _list(client: HomeAssistantClient) -> tuple[dict[str, Any], AsyncMock]:
+    """Run the tool; returns its result and a spy on the legacy WS bridge."""
+    with sent_messages(client) as bridge:
+        resp: dict[str, Any] = await AreaTools(client).ha_list_floors_areas()
     assert resp["success"] is True
-    assert client.area_list_calls == 0
-    assert client.floor_list_calls == 0
-    assert len(_registries_calls(ws)) == 1
-    call = _registries_calls(ws)[0]
-    assert set(call.kwargs["registries"]) == {"area", "floor"}
+    return resp, bridge
 
+
+async def test_component_served_single_snapshot_skips_legacy_calls(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    """A single ``registries(registries=["area","floor"])`` frame serves both
+    registries; NEITHER legacy list call is sent, and the floor nesting /
+    unassigned / orphaned partition holds over the component's rows."""
+    floor_id, office = _office_on_ground(hass)
+    garage = ar.async_get(hass).async_create("Garage")  # unassigned: no floor_id
+    # Core keeps a floor_id it was given without checking the floor exists.
+    attic = ar.async_get(hass).async_create("Attic", floor_id="ghost")
+
+    with sent_commands(socket) as sent:
+        resp, bridge = await _list(client)
+
+    assert _legacy_gather(bridge) == []
+    (frame,) = _registries_frames(sent)
+    assert set(frame.kwargs["registries"]) == {"area", "floor"}
     assert resp["floor_count"] == 1
     assert resp["area_count"] == 3
     assert resp["unassigned_count"] == 1
     assert resp["orphaned_count"] == 1
-    assert resp["floors"][0]["floor_id"] == "f1"
-    assert [a["area_id"] for a in resp["floors"][0]["areas"]] == ["a1"]
-    assert resp["unassigned_areas"][0]["area_id"] == "a2"
-    assert resp["orphaned_areas"][0]["area_id"] == "a3"
+    assert resp["floors"][0]["floor_id"] == floor_id
+    assert [a["area_id"] for a in resp["floors"][0]["areas"]] == [office]
+    assert resp["unassigned_areas"][0]["area_id"] == garage.id
+    assert resp["orphaned_areas"][0]["area_id"] == attic.id
 
 
-@pytest.mark.asyncio
-async def test_capsless_component_uses_legacy_two_call_gather() -> None:
-    """Old component (info unknown_command) → legacy 2-call gather."""
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-    assert not _registries_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_falls_back_and_invalidates_caps() -> None:
-    """unknown_command on ``registries`` → invalidate caps + legacy 2-call gather."""
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_result=_CAPS_REGISTRIES,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_non_unknown_error_falls_back_without_invalidating_caps() -> None:
-    """A non-unknown ``registries`` error (a command timeout) falls back to the
-    legacy 2-call gather for the byte-identical result WITHOUT invalidating
-    caps — the capability is still advertised, only this one frame failed."""
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_result=_CAPS_REGISTRIES,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-    # Caps stay cached: a transient failure is not a downgrade, so the next
-    # call still routes through the component instead of re-probing.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_connection_error_falls_back_to_legacy() -> None:
-    """A WS connection error on the component read falls back to the legacy 2-call
-    gather rather than propagating — ``ha_list_floors_areas``' legacy path rides the
-    WS bridge, so it does not die identically on a pooled-WS drop."""
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_result=_CAPS_REGISTRIES,
-        cmd_exc=HomeAssistantConnectionError("WebSocket not authenticated"),
-    )
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-    # A transient connection error is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) falls back to the legacy 2-call gather."""
-    caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        component_registries,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_malformed_areas_shape_falls_back_to_legacy() -> None:
-    """A component response whose ``areas`` slice isn't a list (a malformed
-    dump — e.g. a version-mismatched or buggy component) must not be
-    trusted: ``fetch_registries_via_component`` returns ``None`` and
-    ``ha_list_floors_areas`` falls back to the legacy 2-call gather instead
-    of crashing on the bad shape or silently misreporting counts."""
-    ws = make_ws(
-        "ha_mcp_tools/registries",
-        info_result=_CAPS_REGISTRIES,
-        cmd_result={"areas": "not-a-list", "floors": []},
-    )
-    client = RoutingClient(
-        areas=[_raw_area("a1", "Office", floor_id="f1")],
-        floors=[_raw_floor("f1", "Ground")],
-    )
-    list_floors_areas = _build_list_floors_areas(client)
-
-    with patch_ws(ws, component_registries):
-        resp = await list_floors_areas()
-
-    assert resp["success"] is True
-    assert client.area_list_calls == 1
-    assert client.floor_list_calls == 1
-
-
-@pytest.mark.parametrize(
-    "cmd_result",
-    [
-        pytest.param({"areas": "not-a-list", "floors": []}, id="area-not-list"),
-        pytest.param({"areas": [], "floors": {"oops": 1}}, id="floor-not-list"),
-        pytest.param({"floors": []}, id="area-key-missing"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_area_floor_shape_mismatch_returns_none(
-    cmd_result: dict[str, Any],
+async def test_without_the_component_uses_legacy_two_call_gather(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
 ) -> None:
-    """Direct unit coverage of ``fetch_registries_via_component``'s shape
-    guard for the ``area``/``floor`` slices: a non-list value, or a
-    requested slice missing outright, both return ``None`` (never raise)."""
-    ws = make_ws(
-        "ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES, cmd_result=cmd_result
-    )
-    client = RoutingClient()
+    """No component (``info`` is ``unknown_command``) → legacy 2-call gather."""
+    _office_on_ground(hass)
 
-    with patch_ws(ws, component_registries):
-        result = await component_registries.fetch_registries_via_component(
-            client, ["area", "floor"]
-        )
+    with sent_commands(socket) as sent:
+        resp, bridge = await _list(client)
+
+    assert _legacy_gather(bridge) == sorted(_LEGACY_LISTS)
+    assert not _registries_frames(sent)
+    assert resp["area_count"] == 1
+
+
+async def test_unknown_command_falls_back_and_invalidates_caps(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    invalidated: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``unknown_command`` on ``registries`` (Core's answer for a command it
+    never registered) → invalidate caps + legacy 2-call gather."""
+    _office_on_ground(hass)
+    monkeypatch.setattr(
+        component_registries, "WS_REGISTRIES", "ha_mcp_tools/registries_retired"
+    )
+
+    resp, bridge = await _list(client)
+
+    assert _legacy_gather(bridge) == sorted(_LEGACY_LISTS)
+    assert resp["area_count"] == 1
+    invalidated.assert_called_once_with(client)
+
+
+async def test_a_refused_read_falls_back_without_invalidating_caps(
+    client: HomeAssistantClient, component: HomeAssistantClient, invalidated: MagicMock
+) -> None:
+    """A component error that is not ``unknown_command`` (here its refusal of a
+    category read without scopes) is a fallback, not a downgrade: the
+    capability is still advertised, only this one read failed."""
+    result = await component_registries.fetch_registries_via_component(
+        client, ["category"]
+    )
 
     assert result is None
+    invalidated.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "cmd_result",
-    [
-        pytest.param({"categories": "not-a-dict"}, id="categories-not-dict"),
-        pytest.param({"categories": {"automation": "not-a-list"}}, id="scope-not-list"),
-        pytest.param({"categories": {}}, id="scope-missing"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_category_shape_mismatch_returns_none(cmd_result: dict[str, Any]) -> None:
-    """Same shape guard for the scoped ``categories`` mapping: the outer
-    value must be a dict AND the requested scope's value must be a list."""
-    ws = make_ws(
-        "ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES, cmd_result=cmd_result
+async def test_connection_drop_falls_back_to_legacy(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+    invalidated: MagicMock,
+) -> None:
+    """The connection dropping on the component read falls back to the legacy
+    2-call gather (on a fresh connection) rather than propagating, and keeps
+    the capability: a transient drop is not a downgrade."""
+    _office_on_ground(hass)
+    drop_connection_on(hass, component_registries.WS_REGISTRIES, socket)
+
+    resp, bridge = await _list(client)
+
+    assert _legacy_gather(bridge) == sorted(_LEGACY_LISTS)
+    assert resp["area_count"] == 1
+    invalidated.assert_not_called()
+
+
+# --- the auto-backup capture fetchers -------------------------------------------
+
+
+def _manager(client: HomeAssistantClient, tmp_path: Path) -> bm.BackupManager:
+    return bm.get_backup_manager(
+        client,
+        SimpleNamespace(
+            enable_auto_backup=True,
+            auto_backup_throttle_minutes=0,
+            auto_backup_retain_per_entity=5,
+            auto_backup_dir=str(tmp_path / "backups"),
+        ),
     )
-    client = RoutingClient()
 
-    with patch_ws(ws, component_registries):
-        result = await component_registries.fetch_registries_via_component(
-            client, ["category"], category_scopes=["automation"]
+
+async def _core_row(
+    client: HomeAssistantClient, message: dict[str, Any], key: str, value: str
+) -> dict[str, Any]:
+    """The row Core's own list command answers for ``value``."""
+    reply = await client.send_websocket_message(message)
+    (row,) = [r for r in reply["result"] if r[key] == value]
+    return dict(row)
+
+
+async def _label(hass: HomeAssistant, client: HomeAssistantClient) -> tuple[Any, ...]:
+    label = lr.async_get(hass).async_create("Favorites")
+    row = await _core_row(
+        client, {"type": "config/label_registry/list"}, "label_id", label.label_id
+    )
+    return "label", label.label_id, row
+
+
+async def _category(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> tuple[Any, ...]:
+    category = cr.async_get(hass).async_create(scope="automation", name="Lights")
+    row = await _core_row(
+        client,
+        {"type": "config/category_registry/list", "scope": "automation"},
+        "category_id",
+        category.category_id,
+    )
+    return (
+        "category",
+        f"automation:{category.category_id}",
+        {"scope": "automation", **row},
+    )
+
+
+async def _area(hass: HomeAssistant, client: HomeAssistantClient) -> tuple[Any, ...]:
+    area = ar.async_get(hass).async_create("Office")
+    row = await _core_row(
+        client, {"type": "config/area_registry/list"}, "area_id", area.id
+    )
+    return "area_or_floor", f"area:{area.id}", {"kind": "area", **row}
+
+
+async def _floor(hass: HomeAssistant, client: HomeAssistantClient) -> tuple[Any, ...]:
+    floor = fr.async_get(hass).async_create("Ground")
+    row = await _core_row(
+        client, {"type": "config/floor_registry/list"}, "floor_id", floor.floor_id
+    )
+    return "area_or_floor", f"floor:{floor.floor_id}", {"kind": "floor", **row}
+
+
+def _pooled_fails(socket: HomeAssistantWebSocketClient, *, timeout: bool) -> Any:
+    """The pooled socket gets no answer: a command timeout, or a dead connection."""
+    if timeout:
+        return patch.object(
+            socket,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantCommandTimeout("timeout")),
         )
-
-    assert result is None
-
-
-class _CredentialedClient:
-    """Bare credentialed double: enough for ``get_component_caps`` to probe
-    (truthy ``base_url``/``token``). No ``send_websocket_message`` — the
-    legacy path for the auto-backup fetchers below routes through
-    ``backup_manager._ws_send``, monkeypatched separately per test."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
+    return patch.object(
+        socket,
+        "send_command",
+        AsyncMock(side_effect=HomeAssistantConnectionError("pooled socket down")),
+    )
 
 
-async def _call_fetch_label(client: Any) -> Any:
-    return await bm._fetch_label(client, "lb1")
-
-
-async def _call_fetch_category(client: Any) -> Any:
-    return await bm._fetch_category(client, "automation:cat1")
-
-
-async def _call_fetch_area(client: Any) -> Any:
-    return await bm._fetch_area_or_floor(client, "area:a1")
-
-
-async def _call_fetch_floor(client: Any) -> Any:
-    return await bm._fetch_area_or_floor(client, "floor:f1")
-
-
-_LEGACY_LABEL_ITEM = {"label_id": "lb1", "name": "Favorites"}
-_LEGACY_CATEGORY_ITEM = {"category_id": "cat1", "name": "Lights"}
-_LEGACY_AREA_ITEM = _raw_area("a1", "Office")
-_LEGACY_FLOOR_ITEM = _raw_floor("f1", "Ground")
-
-_BACKUP_FETCH_CASES = [
-    pytest.param(
-        _call_fetch_label,
-        "config/label_registry/list",
-        [_LEGACY_LABEL_ITEM],
-        dict(_LEGACY_LABEL_ITEM),
-        id="label",
-    ),
-    pytest.param(
-        _call_fetch_category,
-        "config/category_registry/list",
-        [_LEGACY_CATEGORY_ITEM],
-        {"scope": "automation", **_LEGACY_CATEGORY_ITEM},
-        id="category",
-    ),
-    pytest.param(
-        _call_fetch_area,
-        "config/area_registry/list",
-        [_LEGACY_AREA_ITEM],
-        {"kind": "area", **_LEGACY_AREA_ITEM},
-        id="area",
-    ),
-    pytest.param(
-        _call_fetch_floor,
-        "config/floor_registry/list",
-        [_LEGACY_FLOOR_ITEM],
-        {"kind": "floor", **_LEGACY_FLOOR_ITEM},
-        id="floor",
-    ),
+_CAPTURES = [
+    pytest.param(_label, id="label"),
+    pytest.param(_category, id="category"),
+    pytest.param(_area, id="area"),
+    pytest.param(_floor, id="floor"),
 ]
 
 
 class TestBackupCaptureLegacyFallback:
-    """The auto-backup capture fetchers (``_fetch_label`` / ``_fetch_category``
-    / ``_fetch_area_or_floor``) fall back to the legacy per-registry WS list
-    call under both component-unavailable modes: caps absent (old component,
-    ``info`` itself is ``unknown_command``) and a component command error
-    (the ``registries`` frame times out despite caps being advertised).
-    Neither degradation is allowed to surface as a missing entity — the
-    legacy fetch must still run and return the matching row."""
+    """The capture fetchers fall back to the legacy per-registry list on their
+    own one-shot socket when the component is absent, when the component read
+    gets no answer in time, and when the pooled connection is down. Neither
+    degradation may surface as a missing item: the legacy fetch still returns
+    Core's row."""
+
+    @pytest.mark.parametrize("make", _CAPTURES)
+    async def test_without_the_component_falls_back_to_legacy(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        tmp_path: Path,
+        make: Any,
+    ) -> None:
+        domain, target, expected = await make(hass, client)
+        handler = _manager(client, tmp_path).handler_for(domain)
+        assert handler is not None
+
+        assert await handler.fetch(client, target) == expected
 
     @pytest.mark.parametrize(
-        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
+        "timeout", [True, False], ids=["command-timeout", "connection-error"]
     )
-    @pytest.mark.asyncio
-    async def test_caps_absent_falls_back_to_legacy(
+    @pytest.mark.parametrize("make", _CAPTURES)
+    async def test_a_failed_component_read_falls_back_to_legacy(
         self,
-        call_fetch: Any,
-        legacy_type: str,
-        legacy_items: list[dict[str, Any]],
-        expected: dict[str, Any],
-        monkeypatch: Any,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+        tmp_path: Path,
+        make: Any,
+        timeout: bool,
     ) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/registries",
-            info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-        )
-        calls: list[str] = []
+        """Losing the capture would cost the wrapped write its backup, or block
+        a mandatory one; the pooled socket's failure must not reach it."""
+        domain, target, expected = await make(hass, client)
+        handler = _manager(client, tmp_path).handler_for(domain)
+        assert handler is not None
+        assert component_supports(await get_component_caps(client), "registries")
 
-        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
-            calls.append(message["type"])
-            return list(legacy_items)
+        with _pooled_fails(socket, timeout=timeout) as pooled:
+            got = await handler.fetch(client, target)
 
-        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
-        client = _CredentialedClient()
-
-        with patch_ws(ws, component_registries):
-            result = await call_fetch(client)
-
-        assert calls == [legacy_type]
-        assert result == expected
-
-    @pytest.mark.parametrize(
-        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
-    )
-    @pytest.mark.asyncio
-    async def test_component_error_falls_back_to_legacy(
-        self,
-        call_fetch: Any,
-        legacy_type: str,
-        legacy_items: list[dict[str, Any]],
-        expected: dict[str, Any],
-        monkeypatch: Any,
-    ) -> None:
-        ws = make_ws(
-            "ha_mcp_tools/registries",
-            info_result=_CAPS_REGISTRIES,
-            cmd_exc=HomeAssistantCommandTimeout("timeout"),
-        )
-        calls: list[str] = []
-
-        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
-            calls.append(message["type"])
-            return list(legacy_items)
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
-        client = _CredentialedClient()
-
-        with patch_ws(ws, component_registries):
-            result = await call_fetch(client)
-
-        assert calls == [legacy_type]
-        assert result == expected
-
-    @pytest.mark.parametrize(
-        "call_fetch, legacy_type, legacy_items, expected", _BACKUP_FETCH_CASES
-    )
-    @pytest.mark.asyncio
-    async def test_ws_establish_failure_falls_back_to_legacy(
-        self,
-        call_fetch: Any,
-        legacy_type: str,
-        legacy_items: list[dict[str, Any]],
-        expected: dict[str, Any],
-        monkeypatch: Any,
-    ) -> None:
-        """A failed establish in ``get_websocket_client()`` after caps are cached
-        (review-5 I-1) must NOT cost the wrapped write its capture: the capture
-        fetcher catches it → legacy list, returning the matching row so the capture
-        proceeds instead of being skipped as a transient failure (or, for a
-        mandatory backup, blocking the write)."""
-        caps_ws = make_ws("ha_mcp_tools/registries", info_result=_CAPS_REGISTRIES)
-        calls: list[str] = []
-
-        async def fake_ws_send(_client: Any, message: dict[str, Any]) -> Any:
-            calls.append(message["type"])
-            return list(legacy_items)
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
-        client = _CredentialedClient()
-
-        with patch_ws_establish_failure(
-            caps_ws,
-            component_registries,
-            HomeAssistantConnectionError(
-                "Failed to connect to Home Assistant WebSocket"
-            ),
-        ):
-            result = await call_fetch(client)
-
-        assert calls == [legacy_type]
-        assert result == expected
+        assert got == expected
+        assert _registries_frames(pooled)

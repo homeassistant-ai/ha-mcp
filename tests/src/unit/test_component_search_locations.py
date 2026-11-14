@@ -1,73 +1,112 @@
-"""Component location resolution and complete result windows for ha_search."""
+"""Component location resolution and complete result windows for ha_search.
 
+Areas, floors, devices and entities are Core's own; the component's search
+runs through Core's WebSocket API (``component_ws``) and is compared with the
+server's legacy ``ha_search`` on the same ``hass``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
-import voluptuous as vol
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from .test_component_ws_search import (
-    FakeArea,
-    FakeChildDevice,
-    FakeDevice,
-    FakeFloor,
-    FakeHass,
-    FakeRegEntry,
-    FakeState,
-    make_view,
-    wsapi,
+from custom_components.ha_mcp_tools import websocket_api
+from custom_components.ha_mcp_tools.search_locations import (
+    SearchLocation,
+    add_location_metadata,
 )
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_SEARCH
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import invalidate_caps
+
+from ._component_core import ws_result
+from ._core_setup import add_test_entry
+from ._search_tool import _build_ha_search, _setup_visibility_disabled
+
+
+@dataclass
+class _Home:
+    ground: fr.FloorEntry
+    upper: fr.FloorEntry
+    bedroom: ar.AreaEntry
+
+
+def _light_in(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    name: str,
+    area: str,
+    state: str,
+) -> None:
+    entry = entity_registry.async_get_or_create(
+        "light", "test", name, suggested_object_id=name
+    )
+    entity_registry.async_update_entity(entry.entity_id, area_id=area)
+    hass.states.async_set(entry.entity_id, state)
 
 
 @pytest.fixture
-def location_search(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
-    view = make_view(
-        entity={
-            "light.kitchen": FakeRegEntry("light.kitchen", area_id="kitchen"),
-            "light.study": FakeRegEntry("light.study", area_id="study"),
-            "light.bedroom": FakeRegEntry("light.bedroom", area_id="bedroom"),
-        },
-        areas=[
-            FakeArea("kitchen", "Kitchen", "ground", aliases=["Cooking"]),
-            FakeArea("study", "Study", "ground"),
-            FakeArea("bedroom", "Bedroom", "upper"),
-        ],
-        floors=[
-            FakeFloor("ground", "Ground floor", aliases=["Downstairs"]),
-            FakeFloor("upper", "Upper floor"),
-        ],
+def home(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> _Home:
+    """Kitchen (alias Cooking) and Study on the ground floor (alias
+    Downstairs), Bedroom upstairs; a light in each, the study's off."""
+    ground = floor_registry.async_create("Ground floor", aliases={"Downstairs"})
+    upper = floor_registry.async_create("Upper floor")
+    kitchen = area_registry.async_create(
+        "Kitchen", floor_id=ground.floor_id, aliases={"Cooking"}
     )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-    hass = FakeHass(
-        states=[
-            FakeState("light.kitchen", "on"),
-            FakeState("light.study", "off"),
-            FakeState("light.bedroom", "on"),
-        ]
+    study = area_registry.async_create("Study", floor_id=ground.floor_id)
+    bedroom = area_registry.async_create("Bedroom", floor_id=upper.floor_id)
+    _light_in(hass, entity_registry, "kitchen", kitchen.id, "on")
+    _light_in(hass, entity_registry, "study", study.id, "off")
+    _light_in(hass, entity_registry, "bedroom", bedroom.id, "on")
+    return _Home(ground, upper, bedroom)
+
+
+async def _search(ws: MockHAClientWebSocket, area_filter: str, **params: Any) -> Any:
+    return await ws_result(
+        ws, WS_SEARCH, search_types=["entity"], area_filter=area_filter, **params
     )
-    return hass, view
+
+
+def _ids(result: dict[str, Any]) -> list[str]:
+    return [item["entity_id"] for item in result.get("entities", [])]
 
 
 @pytest.mark.parametrize(
-    "location", ["ground", "Ground floor", "DOWNSTAIRS", "Ground flor"]
+    "location", ["<floor id>", "Ground floor", "DOWNSTAIRS", "Ground flor"]
 )
 @pytest.mark.parametrize("query", [None, "light"])
 @pytest.mark.parametrize("exact", [True, False])
-def test_floor_expansion_before_state_and_pagination(
-    location_search: Any, location: str, query: str | None, exact: bool
+async def test_floor_expansion_before_state_and_pagination(
+    component_ws: MockHAClientWebSocket,
+    home: _Home,
+    location: str,
+    query: str | None,
+    exact: bool,
 ) -> None:
-    hass, _ = location_search
-    result = wsapi._do_search(
-        hass,
-        {
-            "search_types": ["entity"],
-            "area_filter": location,
-            "state_filter": "ON",
-            "limit": 1,
-            "query": query,
-            "exact": exact,
-        },
+    area_filter = home.ground.floor_id if location == "<floor id>" else location
+
+    result = await _search(
+        component_ws, area_filter, state_filter="ON", limit=1, query=query, exact=exact
     )
-    assert [item["entity_id"] for item in result["entities"]] == ["light.kitchen"]
+
+    assert _ids(result) == ["light.kitchen"]
     assert result["entity_total_matches"] == 1
     assert result["entity_has_more"] is False
     assert result["area_names"] == ["Kitchen", "Study"]
@@ -75,170 +114,171 @@ def test_floor_expansion_before_state_and_pagination(
 
 
 @pytest.mark.parametrize("location", [" Cooking ", "Kitchenn"])
-def test_area_alias_and_close_spelling(location_search: Any, location: str) -> None:
-    hass, _ = location_search
-    result = wsapi._do_search(
-        hass, {"area_filter": location, "search_types": ["entity"]}
-    )
-    assert [item["entity_id"] for item in result["entities"]] == ["light.kitchen"]
+async def test_area_alias_and_close_spelling(
+    component_ws: MockHAClientWebSocket, home: _Home, location: str
+) -> None:
+    result = await _search(component_ws, location)
+
+    assert _ids(result) == ["light.kitchen"]
     assert result["area_names"] == ["Kitchen"]
 
 
-def test_exact_area_wins_floor_collision(location_search: Any) -> None:
-    hass, view = location_search
-    view.floor._floors["ground"].aliases.add("Kitchen")
-    result = wsapi._do_search(
-        hass, {"area_filter": "Kitchen", "search_types": ["entity"]}
-    )
+async def test_an_exact_area_wins_over_a_floor_alias(
+    component_ws: MockHAClientWebSocket,
+    home: _Home,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    floor_registry.async_update(home.ground.floor_id, aliases={"Downstairs", "Kitchen"})
+
+    result = await _search(component_ws, "Kitchen")
+
     assert result["entity_total_matches"] == 1
     assert "both an area and a floor" in " ".join(result["warnings"])
 
 
-def test_floor_search_inherits_child_device_area(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_floor_search_finds_a_child_device_by_its_parents_area(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
 ) -> None:
-    view = make_view(
-        entity={"light.child": FakeRegEntry("light.child", device_id="child")},
-        areas=[FakeArea("study", "Study", "ground")],
-        floors=[FakeFloor("ground", "Ground floor")],
-        devices=[FakeDevice("parent", area_id="study")],
-        child_devices=[FakeChildDevice("child", "parent")],
+    ground = floor_registry.async_create("Ground floor")
+    study = area_registry.async_create("Study", floor_id=ground.floor_id)
+    entry = add_test_entry(hass)
+    parent = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "parent")}
     )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
-    result = wsapi._do_search(
-        FakeHass(states=[FakeState("light.child", "on")]),
-        {
-            "search_types": ["entity"],
-            "area_filter": "Ground floor",
-        },
+    device_registry.async_update_device(parent.id, area_id=study.id)
+    child = device_registry.async_get_or_create_child(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "child")},
+        parent_device_id=parent.id,
     )
+    entity_registry.async_get_or_create(
+        "light", "test", "child", suggested_object_id="child", device_id=child.id
+    )
+    hass.states.async_set("light.child", "on")
+
+    result = await _search(component_ws, "Ground floor")
+
     assert result["entity_total_matches"] == 1
     assert result["entities"][0]["area"] == "Study"
 
 
-def test_ambiguous_close_floor_does_not_select_one(location_search: Any) -> None:
-    hass, view = location_search
-    view.floor._floors["upper"].name = "Ground floar"
-    result = wsapi._do_search(
-        hass, {"area_filter": "Ground flor", "search_types": ["entity"]}
-    )
+async def test_an_ambiguous_close_floor_selects_none(
+    component_ws: MockHAClientWebSocket,
+    home: _Home,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    floor_registry.async_update(home.upper.floor_id, name="Ground floar")
+
+    result = await _search(component_ws, "Ground flor")
+
     assert result["entities"] == []
     assert "ambiguously matches multiple floors" in " ".join(result["warnings"])
 
 
-def test_broken_registry_enumeration_is_reported(
-    location_search: Any, monkeypatch: pytest.MonkeyPatch
+async def test_a_failed_floor_enumeration_is_reported(
+    component_ws: MockHAClientWebSocket,
+    home: _Home,
+    floor_registry: fr.FloorRegistry,
 ) -> None:
-    hass, view = location_search
+    with patch.object(
+        floor_registry, "async_list_floors", side_effect=RuntimeError("unavailable")
+    ):
+        result = await _search(component_ws, "Downstairs")
 
-    def broken() -> None:
-        raise RuntimeError("unavailable")
-
-    monkeypatch.setattr(view.floor, "async_list_floors", broken)
-    result = wsapi._do_search(
-        hass, {"area_filter": "Downstairs", "search_types": ["entity"]}
-    )
     assert result["partial"] is True
     assert "floor" in result["partial_reason"]
 
 
-@pytest.mark.parametrize("registry", ["area", "floor", "entity", "device"])
-def test_unavailable_location_registry_is_not_authoritative_empty(
-    location_search: Any, registry: str
+@pytest.mark.parametrize(
+    ("registry", "name"), [(ar, "area"), (fr, "floor"), (er, "entity"), (dr, "device")]
+)
+async def test_an_unavailable_location_registry_is_not_an_authoritative_empty(
+    component_ws: MockHAClientWebSocket, home: _Home, registry: Any, name: str
 ) -> None:
-    hass, view = location_search
-    setattr(view, registry, None)
-    result = wsapi._do_search(
-        hass, {"area_filter": "Downstairs", "search_types": ["entity"]}
-    )
+    with patch.object(registry, "async_get", side_effect=RuntimeError("core drift")):
+        result = await _search(component_ws, "Downstairs")
+
     assert result["partial"] is True
-    assert registry in result["partial_reason"]
+    assert name in result["partial_reason"]
     assert result["warnings"]
 
 
-def test_search_window_has_no_500_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
-    schema = vol.Schema(wsapi._search_schema())
-    params = schema(
-        {
-            "type": wsapi.WS_SEARCH,
-            "limit": 1001,
-            "offset": 1,
-            "search_types": ["entity"],
-        }
+async def test_the_search_window_has_no_500_ceiling(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    for i in range(1003):
+        hass.states.async_set(f"light.fixture_{i:04d}", "on")
+
+    result = await ws_result(
+        component_ws, WS_SEARCH, search_types=["entity"], limit=1001, offset=1
     )
-    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: make_view())
-    hass = FakeHass(
-        states=[FakeState(f"light.fixture_{i:04d}", "on") for i in range(1003)]
-    )
-    result = wsapi._do_search(hass, params)
+
     assert len(result["entities"]) == 1001
     assert result["entity_total_matches"] == 1003
     assert result["entity_has_more"] is True
     assert result["entities"][0]["entity_id"] == "light.fixture_0001"
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "kitchen",
-        "COOKING",
-        " Downstairs ",
-        "Ground flor",
-        "Kitchenn",
-        "Missing",
-        "Study",
-    ],
-)
+_LEGACY_QUERIES = [
+    "kitchen",
+    "COOKING",
+    " Downstairs ",
+    "Ground flor",
+    "Kitchenn",
+    "Missing",
+    "Study",
+]
+
+
 @pytest.mark.parametrize("floor_registry_available", [True, False])
-def test_location_resolver_matches_legacy_contract(
-    query: str, floor_registry_available: bool
+async def test_location_resolution_matches_the_legacy_search(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    home: _Home,
+    floor_registry: fr.FloorRegistry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    floor_registry_available: bool,
 ) -> None:
-    from custom_components.ha_mcp_tools.search_locations import _resolve_area_query
-    from ha_mcp.tools.smart_search._entities import EntitySearchMixin
+    """Every query names the same lights with or without the component, the
+    floor alias "Study" colliding with the area included."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    assert await async_setup_component(hass, "config", {})
+    floor_registry.async_update(home.ground.floor_id, aliases={"Downstairs", "Study"})
+    search = _build_ha_search(core_client)
 
-    areas = {
-        "kitchen": {
-            "area_id": "kitchen",
-            "name": "Kitchen",
-            "aliases": ["Cooking"],
-            "floor_id": "ground",
-        },
-        "study": {"area_id": "study", "name": "Study", "floor_id": "ground"},
-    }
-    floors = (
-        {
-            "ground": {
-                "floor_id": "ground",
-                "name": "Ground floor",
-                "aliases": ["Downstairs", "Study"],
-            }
-        }
-        if floor_registry_available
-        else {}
-    )
-    assert _resolve_area_query(
-        areas, floors, query, floor_registry_available=floor_registry_available
-    ) == EntitySearchMixin._resolve_area_query(
-        areas, floors, query, floor_registry_available=floor_registry_available
-    )
+    async def found(area_filter: str) -> list[str]:
+        if floor_registry_available:
+            return sorted(_ids(await search(area_filter=area_filter)))
+        with patch.object(fr, "async_get", side_effect=RuntimeError("core drift")):
+            return sorted(_ids(await search(area_filter=area_filter)))
+
+    legacy = {query: await found(query) for query in _LEGACY_QUERIES}
+    websocket_api.async_register_commands(hass)
+    invalidate_caps(core_client)
+    component = {query: await found(query) for query in _LEGACY_QUERIES}
+
+    assert component == legacy
 
 
-def test_location_resolution_observes_live_registry_changes(
-    location_search: Any,
+async def test_location_resolution_follows_live_registry_changes(
+    component_ws: MockHAClientWebSocket,
+    home: _Home,
+    area_registry: ar.AreaRegistry,
 ) -> None:
-    hass, view = location_search
-    params = {"search_types": ["entity"], "area_filter": "Downstairs"}
-    assert wsapi._do_search(hass, params)["entity_total_matches"] == 2
-    view.area._areas["bedroom"].floor_id = "ground"
-    assert wsapi._do_search(hass, params)["entity_total_matches"] == 3
+    before = await _search(component_ws, "Downstairs")
+    area_registry.async_update(home.bedroom.id, floor_id=home.ground.floor_id)
+    after = await _search(component_ws, "Downstairs")
+
+    assert (before["entity_total_matches"], after["entity_total_matches"]) == (2, 3)
 
 
 def test_location_metadata_preserves_existing_warnings() -> None:
-    from custom_components.ha_mcp_tools.search_locations import (
-        SearchLocation,
-        add_location_metadata,
-    )
-
     location = SearchLocation(
         area_ids={"kitchen"},
         area_names=["Kitchen"],

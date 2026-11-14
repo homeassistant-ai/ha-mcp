@@ -6,7 +6,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from ..const import DOMAIN
@@ -84,9 +85,11 @@ async def _call_service_prep(
     Raised exceptions PROPAGATE — the WS handler turns them into a command error the
     server maps (D7). Two distinct classes propagate: the D1 domain block and
     ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
-    landed); an ``async_call`` / ``return_response`` validation error is MID-dispatch
-    (the handler may mutate state and THEN raise — the documented D9 at-most-once
-    residual, NOT pre-dispatch). A confirmation timeout is caught and reported as
+    landed); an ``async_call`` error is MID-dispatch (the handler may mutate state
+    and THEN raise — the documented D9 at-most-once residual). For a call asking
+    for a response no exception is raised: it comes back as ``service_error``
+    (``response_error`` when Core rejected the response), and the server reports
+    it without sending the call again. A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
 
     The whole POST-dispatch section — the immediate-match re-read, the wait, and the
@@ -142,6 +145,12 @@ async def _call_service_prep(
         evt, captured, unsub = _register_transition_waiter(
             hass, set(confirmable_entity_ids), expected_by_entity
         )
+    changed: list[Any] = []
+    unsub_changed = (
+        _track_changed_states(hass, msg.get("ha_mcp_context"), changed)
+        if return_response
+        else None
+    )
 
     # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
     # Everything after ``dispatched = True`` is inside this ONE try so no post-dispatch
@@ -151,13 +160,8 @@ async def _call_service_prep(
     dispatched = False
     result: dict[str, Any]
     try:
-        response = await hass.services.async_call(
-            domain,
-            service,
-            dict(service_data),
-            blocking=True,
-            return_response=return_response,
-            context=msg.get("ha_mcp_context"),
+        response, response_error = await _dispatch(
+            hass, domain, service, dict(service_data), return_response, msg
         )
         dispatched = True
         # ``evt`` is None when nothing was worth waiting on (should_confirm was
@@ -180,6 +184,11 @@ async def _call_service_prep(
             return_response=return_response,
             response=response,
         )
+        if response_error is not None:
+            failed = response_error.pop("failed", False)
+            result["service_error" if failed else "response_error"] = response_error
+        if return_response:
+            result["changed_states"] = changed
     except Exception:
         # PRE-confirmation ``async_call`` failure (never dispatched) → re-raise so the
         # server maps it (D7/D9 MID-dispatch residual). Any POST-dispatch failure →
@@ -196,7 +205,21 @@ async def _call_service_prep(
     finally:
         if unsub is not None:
             unsub()
+        if unsub_changed is not None:
+            unsub_changed()
     return {"result": result}
+
+
+def _track_changed_states(hass: HomeAssistant, context: Any, changed: list[Any]) -> Any:
+    """Collect the states the call changes, as Core's REST service call lists
+    them: every new state written under the call's context."""
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        if event.context == context and (state := event.data["new_state"]):
+            changed.append(_state_as_dict(state))
+
+    return hass.bus.async_listen(EVENT_STATE_CHANGED, _record)
 
 
 def _confirmable_entity_ids(entity_ids: list[str], pre: Mapping[str, Any]) -> list[str]:
@@ -368,6 +391,64 @@ async def _await_confirmation(
         await asyncio.wait_for(evt.wait(), timeout)
     except TimeoutError:
         pass  # partial confirmation, not a failure (D4)
+
+
+# The (translation_domain, translation_key) Core raises when a requested
+# response is not a mapping, checked only after the service ran
+# (``ServiceRegistry.async_call``), so the write has landed; the key's spelling
+# is Core's.
+_RESPONSE_REJECTED = ("homeassistant", "service_reponse_invalid")
+
+
+async def _dispatch(
+    hass: HomeAssistant,
+    domain: str,
+    service: str,
+    service_data: dict[str, Any],
+    return_response: bool,
+    msg: dict[str, Any],
+) -> tuple[Any, dict[str, Any] | None]:
+    """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
+    Core rejected the response, or when the handler of a call asking for one
+    raised (``error["failed"]``): the service ran, so the server must not send it
+    again. A raise before the handler ran, and any raise of another call,
+    propagates (D9)."""
+    try:
+        response = await hass.services.async_call(
+            domain,
+            service,
+            service_data,
+            blocking=True,
+            return_response=return_response,
+            context=msg.get("ha_mcp_context"),
+        )
+    except Exception as err:  # a response call reports a handler's raise
+        key = (
+            getattr(err, "translation_domain", None),
+            getattr(err, "translation_key", None),
+        )
+        origin = _origin(err)
+        error: dict[str, Any] = {"translation_key": key[1], "message": str(err)}
+        if origin == "call" and key == _RESPONSE_REJECTED:
+            return None, error
+        if origin != "handler" or not return_response:
+            raise
+        error["failed"] = True
+        return None, error
+    return response, None
+
+
+def _origin(err: BaseException) -> str:
+    """Where in the awaited ``async_call`` ``err`` was raised: ``"call"`` in its
+    own frame (its checks, the response one after the handler returned),
+    ``"handler"`` under ``_execute_service`` (the handler ran; a rejected response
+    of a service it called lands here too) or ``"before"`` (the schema check)."""
+    call = err.__traceback__.tb_next if err.__traceback__ else None
+    if call is None or call.tb_next is None:
+        return "call"
+    if call.tb_next.tb_frame.f_code.co_name == "_execute_service":
+        return "handler"
+    return "before"
 
 
 def _build_call_service_result(

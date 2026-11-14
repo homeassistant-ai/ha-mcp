@@ -516,6 +516,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/clear-text-storage-sensitive-data",
+        "tests/src/unit/_core_setup.py",
+        "as clear text",
+        "",
+        "Test helper writing Core's secrets.yaml under the test's temporary "
+        "config directory; the values are throwaway strings the tests check "
+        "the component redacts.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
         "tests/addon/webhook_proxy/_start.py",
         "as clear text",
         "",

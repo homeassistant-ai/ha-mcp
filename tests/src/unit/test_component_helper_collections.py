@@ -1,328 +1,296 @@
-"""ha_mcp_tools helper_schemas / helper_item / helper_write, and the server client."""
+"""ha_mcp_tools helper_schemas / helper_item / helper_write, and the server client.
+
+The helpers live in Core's own storage collections on a real ``hass``; the
+commands run through Core's WebSocket API (``component_ws``), and the server's
+client (``component_core_client``) reads and writes them the way the helper
+tools do.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import functools
-import importlib
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import patch
 
 import pytest
-import voluptuous as vol
+from homeassistant.components import websocket_api as core_websocket_api
+from homeassistant.components.input_select import STORAGE_FIELDS as SELECT_FIELDS
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
+from custom_components.ha_mcp_tools import helper_collections as hc
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandNotSent,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandNotSent
 from ha_mcp.tools import component_helper_collections as client_mod
-from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.tools.component_api import invalidate_caps
+from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
 
-from .test_component_ws_search import (
-    FakeHass,
-    _FakeConnection,
-    _Unauthorized,
-    functional_ws,  # noqa: F401 - pytest fixture
-    wsapi,
-)
-
-hc = importlib.import_module("custom_components.ha_mcp_tools.helper_collections")
+from ._component_core import ws_call, ws_result
+from ._component_frames import pooled
 
 
-class ItemNotFound(Exception):
-    pass
+async def _write(ws: MockHAClientWebSocket, **msg: Any) -> Any:
+    return await ws_result(ws, hc.WS_HELPER_WRITE, **msg)
 
 
-class FakeCollection:
-    def __init__(self, items: dict[str, dict[str, Any]] | None = None) -> None:
-        self.data = dict(items or {})
-        self.invalid: Exception | None = None
-
-    async def async_create_item(self, data: dict[str, Any]) -> dict[str, Any]:
-        if self.invalid:
-            raise self.invalid
-        item = {"id": data["name"].lower(), **data}
-        self.data[item["id"]] = item
-        return item
-
-    async def async_update_item(self, item_id: str, data: dict[str, Any]) -> dict:
-        if item_id not in self.data:
-            raise ItemNotFound(item_id)
-        self.data[item_id] = {"id": item_id, **data}
-        return self.data[item_id]
+async def _item(ws: MockHAClientWebSocket, **msg: Any) -> Any:
+    return await ws_result(ws, hc.WS_HELPER_ITEM, **msg)
 
 
-class FakeCollectionWs:
-    def __init__(self, collection: FakeCollection) -> None:
-        self.storage_collection = collection
-        self.create_schema = {"name": str}
-        self.update_schema = {"name": str}
-
-    async def ws_create_item(
-        self, hass: HomeAssistant, connection, msg
-    ):  # pragma: no cover
-        raise AssertionError("never invoked")
+@pytest.fixture
+async def numbers(hass: HomeAssistant) -> None:
+    assert await async_setup_component(hass, "input_number", {})
 
 
-def _wrapped(handler):
-    """Core's require_admin(async_response(bound method)) wrapping."""
-
-    @functools.wraps(handler)
-    def async_response(*args):  # pragma: no cover
-        return handler(*args)
-
-    @functools.wraps(async_response)
-    def require_admin(*args):  # pragma: no cover
-        return async_response(*args)
-
-    return require_admin
-
-
-def _hass(collection: FakeCollection, helper_type: str = "input_number") -> FakeHass:
-    owner = FakeCollectionWs(collection)
-    handlers = {f"{helper_type}/create": (_wrapped(owner.ws_create_item), {})}
-    return FakeHass(data={"websocket_api": handlers})
-
-
-class FakeRegistry:
-    def __init__(self) -> None:
-        self.entries: dict[str, Any] = {}
-        self.updates: list[tuple[str, dict[str, Any]]] = []
-
-    def add(self, entity_id: str, platform: str, unique_id: str) -> None:
-        self.entries[entity_id] = SimpleNamespace(
-            entity_id=entity_id, platform=platform, unique_id=unique_id,
-            categories={"automation": "a1"},
-        )  # fmt: skip
-
-    def async_get(self, entity_id: str) -> Any:
-        return self.entries.get(entity_id)
-
-    def async_get_entity_id(self, domain: str, platform: str, unique_id: str):
-        return next(
-            (e.entity_id for e in self.entries.values()
-             if e.platform == platform and e.unique_id == unique_id),
-            None,
-        )  # fmt: skip
-
-    def async_update_entity(self, entity_id: str, **changes: Any) -> None:
-        self.updates.append((entity_id, changes))
-
-
-@pytest.fixture(autouse=True)
-def _item_not_found(monkeypatch):
-    monkeypatch.setattr(hc, "_item_not_found", lambda: ItemNotFound)
-
-
-def test_collection_owner_unwraps_core_handler() -> None:
-    collection = FakeCollection()
-    assert (
-        hc.collection_owner(_hass(collection), "input_number").storage_collection
-        is collection
+async def _target(ws: MockHAClientWebSocket) -> Any:
+    """``input_number.target``, stored through the component."""
+    return await _write(
+        ws,
+        helper_type="input_number",
+        action="create",
+        data={"name": "Target", "min": 0, "max": 9},
     )
-    assert hc.collection_owner(FakeHass(), "input_number") is None
 
 
-def test_describe_schemas_marks_unresolvable_types(monkeypatch) -> None:
-    monkeypatch.setattr(hc, "_serialize", lambda schema: [{"name": "name"}])
-    result = hc.describe_schemas(_hass(FakeCollection()))
-    assert result["types"] == {"input_number": {"create": [{"name": "name"}],
-                                                "update": [{"name": "name"}]}}  # fmt: skip
-    assert "input_number" not in result["unavailable"]
+async def test_an_item_is_read_from_cores_collection_by_entity_or_id(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    numbers: None,
+) -> None:
+    created = await _target(component_ws)
+    entity_registry.async_get_or_create("sensor", "template", "target")
+
+    by_entity = await _item(
+        component_ws, helper_type="input_number", entity_id="input_number.target"
+    )
+    by_id = await _item(component_ws, helper_type="input_number", item_id="target")
+    other_platform = await _item(
+        component_ws, helper_type="input_number", entity_id="sensor.target"
+    )
+
+    assert by_entity == {
+        "success": True,
+        "item_id": "target",
+        "entity_id": "input_number.target",
+        "item": created["item"],
+    }
+    assert by_id["entity_id"] == "input_number.target"
+    assert other_platform["error"]["code"] == "not_found"
+
+
+async def test_a_type_that_is_not_set_up_is_unavailable(
+    component_ws: MockHAClientWebSocket,
+) -> None:
+    item = await _item(component_ws, helper_type="counter", item_id="x")
+    write = await _write(
+        component_ws, helper_type="counter", action="create", data={"name": "X"}
+    )
+
+    assert item["error"]["code"] == write["error"]["code"] == "unavailable"
+
+
+async def test_schemas_describe_each_set_up_type_and_name_the_rest(
+    component_ws: MockHAClientWebSocket, numbers: None
+) -> None:
+    result = await ws_result(component_ws, hc.WS_HELPER_SCHEMAS)
+
+    assert set(result["types"]) == {"input_number"}
+    for action in ("create", "update"):
+        names = {field["name"] for field in result["types"]["input_number"][action]}
+        assert {"name", "min", "max"} <= names
     assert set(result["unavailable"]) == set(hc.SIMPLE_HELPER_TYPES) - {"input_number"}
+
+
+async def test_a_field_cores_serializer_cannot_express_keeps_its_name(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """input_select's options carry a check Core's serializer cannot express;
+    the type is still described, field by field, none dropped."""
+    assert await async_setup_component(hass, "input_select", {})
+
+    result = await ws_result(component_ws, hc.WS_HELPER_SCHEMAS)
+
+    described = {field["name"] for field in result["types"]["input_select"]["create"]}
+    assert described == {str(key) for key in SELECT_FIELDS}
 
 
 def test_server_and_component_list_the_same_storage_helpers() -> None:
     """The server's fallback list routes the types the component serves; a
     type in only one of them is described by one path and refused by the other.
     test_helper_domains_match_frontend.py pins the frontend part to the bundle."""
-    from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
-
     assert set(hc.SIMPLE_HELPER_TYPES) == SIMPLE_HELPER_TYPES
-    # The frontend part the E2E test compares with the bundle.
     own_page = {"zone", "person", "tag"}
     assert set(hc.FRONTEND_HELPER_DOMAINS) == SIMPLE_HELPER_TYPES - own_page
 
 
-def test_serialize_falls_back_per_field(monkeypatch) -> None:
-    def convert(schema):
-        (key,) = schema
-        if str(key) == "icon":
-            raise ValueError("unable to serialize schema: <function icon>")
-        return [{"name": str(key), "type": "float"}]
+async def test_a_write_stores_the_item_then_applies_its_registry_fields(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+    category_registry: cr.CategoryRegistry,
+    numbers: None,
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+    label = label_registry.async_create("Heating")
+    category = category_registry.async_create(name="Climate", scope="helpers")
 
-    monkeypatch.setattr(hc, "_convert", convert)
-    schema = {vol.Required("min"): float, vol.Optional("icon"): str}
-    assert hc._serialize(schema) == [
-        {"name": "min", "type": "float"},
-        {"name": "icon", "required": False},
-    ]
-
-
-def test_read_item_by_entity_and_by_id() -> None:
-    collection = FakeCollection({"t": {"id": "t", "name": "T", "min": 0}})
-    registry = FakeRegistry()
-    registry.add("input_number.t", "input_number", "t")
-    hass = _hass(collection)
-    by_entity = hc.read_item(hass, registry, "input_number", "input_number.t", None)
-    assert by_entity == {"success": True, "item_id": "t", "entity_id": "input_number.t",
-                         "item": {"id": "t", "name": "T", "min": 0}}  # fmt: skip
-    assert hc.read_item(hass, registry, "input_number", None, "t")["entity_id"] == (
-        "input_number.t"
-    )
-    registry.add("sensor.x", "template", "t")
-    missing = hc.read_item(hass, registry, "input_number", "sensor.x", None)
-    assert missing["error"]["code"] == "not_found"
-
-
-def test_write_creates_then_applies_registry_fields() -> None:
-    collection = FakeCollection()
-    registry = FakeRegistry()
-    registry.add("input_number.target", "input_number", "target")
-    msg = {
-        "helper_type": "input_number",
-        "action": "create",
-        "data": {"name": "Target", "min": 0, "max": 9},
-        "registry": {
-            "area_id": "kitchen",
-            "labels": ["a"],
-            "category": "c1",
+    result = await _write(
+        component_ws,
+        helper_type="input_number",
+        action="create",
+        data={"name": "Target", "min": 0, "max": 9},
+        registry={
+            "area_id": kitchen.id,
+            "labels": [label.label_id],
+            "category": category.category_id,
             "icon": "",
         },
-    }
-    result = asyncio.run(hc.async_write_item(_hass(collection), registry, msg))
-    assert result["success"] is True
-    assert result["entity_id"] == "input_number.target"
+    )
+
+    assert (result["success"], result["entity_id"]) == (True, "input_number.target")
     assert result["item"]["min"] == 0
     assert result["registry_applied"] == {
-        "icon": None, "area_id": "kitchen", "labels": ["a"], "category": "c1",
-    }  # fmt: skip
-    assert registry.updates == [(
-        "input_number.target",
-        {"icon": None, "area_id": "kitchen", "labels": {"a"},
-         "categories": {"automation": "a1", "helpers": "c1"}},
-    )]  # fmt: skip
-
-
-def test_invalid_errors_include_real_voluptuous(monkeypatch) -> None:
-    assert vol.Invalid in hc._invalid_errors()
-
-
-def test_invalid_reports_every_error(monkeypatch) -> None:
-    # The tuple is built at import, possibly while a sibling stubbed voluptuous.
-    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, vol.Invalid))
-    collection = FakeCollection()
-    collection.invalid = vol.MultipleInvalid(
-        [vol.Invalid("too low", path=["min"]),
-         vol.Invalid("not a mode", path=["mode"])]
-    )  # fmt: skip
-    msg = {"helper_type": "input_number", "action": "create", "data": {"name": "X"}}
-    result = asyncio.run(hc.async_write_item(_hass(collection), FakeRegistry(), msg))
-    message = result["error"]["message"]
-    assert "too low" in message and "not a mode" in message
-
-
-def test_write_clears_the_helpers_category() -> None:
-    collection = FakeCollection({"t": {"id": "t", "name": "T"}})
-    registry = FakeRegistry()
-    registry.add("input_number.t", "input_number", "t")
-    registry.entries["input_number.t"].categories = {
-        "automation": "a1",
-        "helpers": "c1",
+        "icon": None,
+        "area_id": kitchen.id,
+        "labels": [label.label_id],
+        "category": category.category_id,
     }
-    msg = {
-        "helper_type": "input_number",
-        "action": "update",
-        "item_id": "t",
-        "data": {"name": "T"},
-        "registry": {"category": ""},
-    }
-    result = asyncio.run(hc.async_write_item(_hass(collection), registry, msg))
-    assert result["registry_applied"] == {"category": None}
-    assert registry.updates == [
-        ("input_number.t", {"categories": {"automation": "a1"}})
-    ]
+    entry = entity_registry.async_get("input_number.target")
+    assert entry is not None
+    assert (entry.area_id, entry.labels) == (kitchen.id, {label.label_id})
+    assert entry.categories == {"helpers": category.category_id}
 
 
-class _CoreError(Exception):
-    pass
-
-
-def test_core_error_is_invalid_only_when_nothing_was_stored(monkeypatch) -> None:
-    monkeypatch.setattr(hc, "_home_assistant_error", lambda: _CoreError)
-    rejected = FakeCollection()
-    rejected.invalid = _CoreError("tag_id already exists")
-    msg = {"helper_type": "tag", "action": "create", "data": {"name": "T"}}
-    result = asyncio.run(
-        hc.async_write_item(_hass(rejected, "tag"), FakeRegistry(), msg)
-    )
-    assert result["error"] == {"code": "invalid", "message": "tag_id already exists"}
-
-    class StoredThenFailed(FakeCollection):
-        async def async_create_item(self, data):
-            self.data["t"] = {"id": "t", **data}
-            raise _CoreError("entity setup failed")
-
-    with pytest.raises(_CoreError):
-        asyncio.run(
-            hc.async_write_item(_hass(StoredThenFailed(), "tag"), FakeRegistry(), msg)
-        )
-
-
-@pytest.mark.parametrize("action", ["create", "update"])
-def test_listener_error_after_store_is_not_reported_as_invalid(
-    monkeypatch: pytest.MonkeyPatch, action: str
+async def test_clearing_the_helpers_category_keeps_the_other_scopes(
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    numbers: None,
 ) -> None:
-    # Core stores the item, then awaits its listeners (entity setup or update).
-    monkeypatch.setattr(hc, "_INVALID_ERRORS", (ValueError, vol.Invalid))
-    monkeypatch.setattr(hc, "_home_assistant_error", lambda: _CoreError)
-
-    class StoredThenFailed(FakeCollection):
-        async def async_create_item(self, data: dict[str, Any]) -> dict[str, Any]:
-            self.data["t"] = {"id": "t", **data}
-            raise ValueError("listener rejected the entity")
-
-        async def async_update_item(self, item_id: str, data: dict[str, Any]) -> dict:
-            self.data[item_id] = {"id": item_id, **data}
-            raise ValueError("listener rejected the entity")
-
-    collection = StoredThenFailed({"t": {"id": "t", "name": "Old"}})
-    msg = {"helper_type": "input_number", "action": action, "item_id": "t",
-           "data": {"name": "New"}}  # fmt: skip
-    # Raised as a Core error, so its message reaches the server's unknown outcome.
-    with pytest.raises(_CoreError, match="listener rejected the entity"):
-        asyncio.run(hc.async_write_item(_hass(collection), FakeRegistry(), msg))
-
-
-def test_write_reports_invalid_missing_and_unavailable() -> None:
-    collection = FakeCollection()
-    collection.invalid = ValueError("min must be below max")
-    hass = _hass(collection)
-    base = {"helper_type": "input_number", "data": {"name": "X"}}
-    invalid = asyncio.run(
-        hc.async_write_item(hass, FakeRegistry(), {**base, "action": "create"})
+    await _target(component_ws)
+    entity_registry.async_update_entity(
+        "input_number.target", categories={"automation": "a1", "helpers": "c1"}
     )
-    assert invalid["error"] == {"code": "invalid", "message": "min must be below max"}
-    missing = asyncio.run(
-        hc.async_write_item(
-            hass, FakeRegistry(), {**base, "action": "update", "item_id": "nope"}
-        )
+
+    result = await _write(
+        component_ws,
+        helper_type="input_number",
+        action="update",
+        item_id="target",
+        data={"name": "Target", "min": 0, "max": 9},
+        registry={"category": ""},
     )
+
+    assert result["registry_applied"] == {"category": None}
+    entry = entity_registry.async_get("input_number.target")
+    assert entry is not None
+    assert entry.categories == {"automation": "a1"}
+
+
+async def test_every_schema_error_is_reported(
+    component_ws: MockHAClientWebSocket, numbers: None
+) -> None:
+    """Like Core's own commands, every problem, not only the first."""
+    result = await _write(
+        component_ws,
+        helper_type="input_number",
+        action="create",
+        data={"name": "X", "min": "low", "max": 9, "mode": "dial"},
+    )
+
+    message = result["error"]["message"]
+    assert result["error"]["code"] == "invalid"
+    assert "min" in message and "mode" in message
+
+
+async def test_a_rejected_or_missing_item_is_reported_without_raising(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, numbers: None
+) -> None:
+    assert await async_setup_component(hass, "tag", {})
+    tag = {"helper_type": "tag", "action": "create", "data": {"tag_id": "abc"}}
+    await _write(component_ws, **tag)
+
+    duplicate = await _write(component_ws, **tag)
+    inverted = await _write(
+        component_ws,
+        helper_type="input_number",
+        action="create",
+        data={"name": "X", "min": 9, "max": 0},
+    )
+    missing = await _write(
+        component_ws,
+        helper_type="input_number",
+        action="update",
+        item_id="nope",
+        data={"name": "X", "min": 0, "max": 9},
+    )
+
+    assert duplicate["error"]["code"] == "invalid"
+    assert "already exists" in duplicate["error"]["message"]
+    assert inverted["error"]["code"] == "invalid"
     assert missing["error"]["code"] == "not_found"
-    unavailable = asyncio.run(
-        hc.async_write_item(FakeHass(), FakeRegistry(), {**base, "action": "create"})
+
+
+@pytest.mark.parametrize(
+    ("action", "error"),
+    [
+        ("create", ValueError("listener rejected the entity")),
+        ("update", ValueError("listener rejected the entity")),
+        ("create", HomeAssistantError("listener rejected the entity")),
+    ],
+)
+async def test_a_listener_failure_after_the_store_is_not_reported_as_invalid(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    numbers: None,
+    action: str,
+    error: Exception,
+) -> None:
+    """Core stores the item, then awaits its listeners; the item is stored,
+    so the failure reaches the server as an unknown outcome, not a rejection."""
+    await _target(component_ws)
+    owner = hc.collection_owner(hass, "input_number")
+
+    async def listener(change_type: str, item_id: str, config: Any) -> None:
+        raise error
+
+    owner.storage_collection.async_add_listener(listener)
+
+    reply = await ws_call(
+        component_ws,
+        hc.WS_HELPER_WRITE,
+        helper_type="input_number",
+        action=action,
+        item_id="target",
+        data={
+            "name": "Second" if action == "create" else "Target",
+            "min": 1,
+            "max": 9,
+        },
     )
-    assert unavailable["error"]["code"] == "unavailable"
+
+    assert reply["success"] is False
+    assert "listener rejected the entity" in reply["error"]["message"]
 
 
-def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F811
-    commands = {hc.WS_HELPER_SCHEMAS, hc.WS_HELPER_ITEM, hc.WS_HELPER_WRITE}
-    assert commands <= set(functional_ws.registered)
-    assert {"helper_schemas", "helper_item", "helper_write"} <= set(wsapi.CAPABILITIES)
+async def test_the_commands_are_registered_and_advertised(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    info = await ws_result(component_ws, "ha_mcp_tools/info")
+
+    assert {hc.WS_HELPER_SCHEMAS, hc.WS_HELPER_ITEM, hc.WS_HELPER_WRITE} <= set(
+        hass.data[core_websocket_api.DOMAIN]
+    )
+    assert {"helper_schemas", "helper_item", "helper_write"} <= set(
+        info["capabilities"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -330,111 +298,155 @@ def test_commands_registered_and_advertised(functional_ws) -> None:  # noqa: F81
     [
         (hc.WS_HELPER_SCHEMAS, {}),
         (hc.WS_HELPER_ITEM, {"helper_type": "zone", "item_id": "home"}),
-        (
-            hc.WS_HELPER_WRITE,
-            {"helper_type": "zone", "action": "create", "data": {}},
-        ),
+        (hc.WS_HELPER_WRITE, {"helper_type": "zone", "action": "create", "data": {}}),
     ],
 )
-def test_commands_are_admin_gated(functional_ws, command, extra) -> None:  # noqa: F811
-    handler = functional_ws.registered[command]
-    msg = {"id": 1, "type": command, **extra}
-    # The commands read Core's entity registry once past the gate.
-    hass = FakeHass(data={er.DATA_REGISTRY: MagicMock()})
-    with pytest.raises(_Unauthorized):
-        handler(hass, _FakeConnection(is_admin=False), msg)
-    connection = _FakeConnection()
-    handler(hass, connection, msg)
-    assert 1 in connection.results
+@pytest.mark.parametrize("admin", [False, True])
+async def test_the_commands_are_admin_only(
+    component_ws: MockHAClientWebSocket,
+    component_ws_read_only: MockHAClientWebSocket,
+    command: str,
+    extra: dict[str, Any],
+    admin: bool,
+) -> None:
+    reply = await ws_call(
+        component_ws if admin else component_ws_read_only, command, **extra
+    )
+
+    assert reply["success"] is admin
+    if not admin:
+        assert reply["error"]["code"] == "unauthorized"
 
 
 # --- server client --------------------------------------------------------------
+async def test_a_write_returns_the_components_result(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(hass, "input_boolean", {})
 
-
-@pytest.fixture
-def ws(monkeypatch):
-    sock = MagicMock()
-    sock.send_command = AsyncMock()
-    caps = ComponentCaps(1, "2.2.2", frozenset(client_mod.HELPER_CAPABILITIES), {})
-    monkeypatch.setattr(client_mod, "get_component_caps", AsyncMock(return_value=caps))
-    monkeypatch.setattr(
-        client_mod, "get_websocket_client", AsyncMock(return_value=sock)
+    result = await client_mod.write_helper_item(
+        component_core_client, "input_boolean", "create", {"name": "Guest"}
     )
-    invalidate = MagicMock()
-    monkeypatch.setattr(client_mod, "invalidate_caps", invalidate)
-    sock.invalidate = invalidate
-    return sock
+
+    assert result is not None
+    assert (result["success"], result["entity_id"]) == (True, "input_boolean.guest")
 
 
-class _Client:
-    base_url = "http://ha"
-    token = "t"
-
-
-def _client() -> Any:
-    return _Client()
-
-
-async def test_write_returns_result_and_falls_back_only_when_nothing_ran(ws) -> None:
-    ws.send_command.return_value = {
-        "success": True,
-        "result": {"success": True, "item": {}},
-    }
-    assert await client_mod.write_helper_item(_client(), "input_boolean", "create", {}) == {
-        "success": True, "item": {},
-    }  # fmt: skip
-
-    ws.send_command.side_effect = HomeAssistantCommandNotSent("down")
+async def test_a_write_falls_back_when_the_type_is_not_set_up(
+    component_core_client: HomeAssistantClient,
+) -> None:
     assert (
-        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
-        is None
-    )
-
-    ws.send_command.side_effect = HomeAssistantCommandError("x", code="unknown_command")
-    assert (
-        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
-        is None
-    )
-    ws.invalidate.assert_called_once()
-
-    ws.send_command.side_effect = None
-    ws.send_command.return_value = {"success": True, "result": {
-        "success": False, "error": {"code": "unavailable", "message": "none"}}}  # fmt: skip
-    assert (
-        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
-        is None
-    )
-
-
-async def test_write_after_dispatch_failure_is_outcome_unknown(ws) -> None:
-    ws.send_command.side_effect = TimeoutError("lost")
-    with pytest.raises(ToolError, match="outcome is unknown"):
-        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
-
-
-async def test_write_cancellation_propagates(ws) -> None:
-    ws.send_command.side_effect = asyncio.CancelledError()
-    with pytest.raises(asyncio.CancelledError):
-        await client_mod.write_helper_item(_client(), "input_boolean", "create", {})
-
-
-async def test_write_invalid_carries_error_context(ws) -> None:
-    ws.send_command.return_value = {"success": True, "result": {
-        "success": False, "error": {"code": "invalid", "message": "bad min"}}}  # fmt: skip
-    with pytest.raises(ToolError, match="bad min") as err:
         await client_mod.write_helper_item(
-            _client(),
+            component_core_client, "input_boolean", "create", {"name": "Guest"}
+        )
+        is None
+    )
+
+
+async def test_a_write_that_was_never_sent_falls_back(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    await client_mod.fetch_helper_schemas(component_core_client)
+    ws = await pooled(component_core_client)
+
+    with patch.object(
+        ws, "send_command", side_effect=HomeAssistantCommandNotSent("down")
+    ):
+        result = await client_mod.write_helper_item(
+            component_core_client, "input_boolean", "create", {}
+        )
+
+    assert result is None
+
+
+async def test_a_component_without_the_write_falls_back_and_is_probed_again(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    await client_mod.fetch_helper_schemas(component_core_client)
+    del hass.data[core_websocket_api.DOMAIN][hc.WS_HELPER_WRITE]
+
+    with patch.object(client_mod, "invalidate_caps", wraps=invalidate_caps) as drop:
+        result = await client_mod.write_helper_item(
+            component_core_client, "input_boolean", "create", {}
+        )
+
+    assert result is None
+    drop.assert_called_once_with(component_core_client)
+
+
+async def test_a_write_lost_after_dispatch_has_an_unknown_outcome(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    await client_mod.fetch_helper_schemas(component_core_client)
+    ws = await pooled(component_core_client)
+
+    with (
+        patch.object(ws, "send_command", side_effect=TimeoutError("lost")),
+        pytest.raises(ToolError, match="outcome is unknown"),
+    ):
+        await client_mod.write_helper_item(
+            component_core_client, "input_boolean", "create", {}
+        )
+
+
+async def test_a_cancelled_write_stays_cancelled(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The command is held unanswered while the caller is cancelled."""
+    assert await async_setup_component(hass, "input_boolean", {})
+    handler, schema = hass.data[core_websocket_api.DOMAIN][hc.WS_HELPER_WRITE]
+    started, release = asyncio.Event(), asyncio.Event()
+
+    def held(hass_: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+        started.set()
+
+        async def run_when_released() -> None:
+            await release.wait()
+            handler(hass_, connection, msg)
+
+        hass_.async_create_task(run_when_released())
+
+    core_websocket_api.async_register_command(hass, hc.WS_HELPER_WRITE, held, schema)
+    write = asyncio.create_task(
+        client_mod.write_helper_item(
+            component_core_client, "input_boolean", "create", {"name": "Guest"}
+        )
+    )
+    await started.wait()
+    write.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.gather(write)
+    release.set()
+    await hass.async_block_till_done()
+
+
+async def test_a_rejected_write_carries_the_callers_error_context(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(hass, "input_number", {})
+
+    with pytest.raises(ToolError, match="data_schema") as err:
+        await client_mod.write_helper_item(
+            component_core_client,
             "input_number",
             "create",
-            {},
+            {"name": "X", "min": 9, "max": 0},
             error_context={"data_schema": ["x"]},
         )
-    assert "data_schema" in str(err.value)
+
+    assert "Failed to create input_number" in str(err.value)
 
 
-async def test_schemas_are_cached(ws) -> None:
-    client = _client()
-    ws.send_command.return_value = {"success": True, "result": {"types": {"a": {}}}}
-    assert await client_mod.fetch_helper_schemas(client) == {"a": {}}
-    assert await client_mod.fetch_helper_schemas(client) == {"a": {}}
-    ws.send_command.assert_awaited_once()
+async def test_the_schemas_are_read_once_and_cached(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(hass, "input_boolean", {})
+    await client_mod.fetch_helper_schemas(component_core_client)
+    ws = await pooled(component_core_client)
+
+    with patch.object(ws, "send_command", wraps=ws.send_command) as send:
+        first = await client_mod.fetch_helper_schemas(component_core_client)
+
+    assert first is not None and "input_boolean" in first
+    assert send.await_count == 0

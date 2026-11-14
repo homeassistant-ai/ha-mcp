@@ -1,707 +1,330 @@
-"""Routing tests for ``ha_bulk_control`` (``bulk_device_control``) over the gate.
+"""``ha_bulk_control`` through the component's ``bulk_call_service``, or per op.
 
-The legacy bulk path dispatches each op through ``control_device_smart``, which
-POSTs then registers a uuid-keyed operation the caller polls via
-``ha_get_operation_status``. When the component advertises ``bulk_call_service`` the
-consumer resolves every op's domain/service SERVER-SIDE (D6), sends ONE
-register-before-fire batch frame that confirms every op inline, and maps the per-op
-transitions back into the legacy bulk response shape — ops come back already
-verified, ``operation_ids`` empty and ``follow_up`` None. These tests pin the
-component-served batch and the error-taxonomy fallbacks (capability miss,
-``unknown_command`` + invalidate, command error/timeout, establish failure, and an
-op that cannot be resolved server-side) all serving the unchanged legacy path.
+When the component has ``bulk_call_service`` the server resolves every op's
+service itself and sends one batch frame that confirms each op inline: no
+operation ids to poll. Without it, or whenever the frame provably never
+reached the component, each op is one REST POST. A batch frame that was sent
+but never answered is reported partial and never dispatched again.
 
-D9 (at-most-once, per batch) has its own class: a component result (even with a
-partial op) must NEVER re-dispatch through the legacy path; a ``None`` (nothing
-dispatched) DOES fall to the legacy dispatch.
+The services are handlers in Core's ``hass.services`` that switch entity
+states as a device would (``_switched_states``); the states, events and
+transitions are Core's.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
+    HomeAssistantClient,
     HomeAssistantCommandNotSent,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, device_control
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
+)
+from ha_mcp.tools import device_control
+from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
 from ha_mcp.tools.device_control import DeviceControlTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._command_faults import dropped_on, pooled_socket, received
+from ._operations import operations_without_listener  # noqa: F401
+from ._switched_states import SwitchedStates
 
-_CAPS_BULK = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["bulk_call_service"],
-    "limits": {},
-}
-_CAPS_NONE = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": [],
-    "limits": {},
-}
-
-
-def _state(entity_id: str, state: str, **attrs: Any) -> dict[str, Any]:
-    return {
-        "entity_id": entity_id,
-        "state": state,
-        "attributes": dict(attrs),
-        "last_changed": "2026-07-16T00:00:00+00:00",
-        "last_updated": "2026-07-16T00:00:00+00:00",
-        "context": {"id": "01ABC", "parent_id": None, "user_id": None},
-    }
-
-
-def _op_result(
-    domain: str,
-    service: str,
-    entity_id: str,
-    *,
-    dispatched: bool = True,
-    confirmed: bool = True,
-    partial: bool = False,
-    new_state: str = "on",
-    error: str | None = None,
-) -> dict[str, Any]:
-    op: dict[str, Any] = {
-        "domain": domain,
-        "service": service,
-        "entity_ids": [entity_id],
-        "dispatched": dispatched,
-        "confirmed": confirmed,
-        "partial": partial,
-        "transitions": [
-            {
-                "entity_id": entity_id,
-                "old_state": _state(entity_id, "off"),
-                "new_state": _state(entity_id, new_state),
-                "changed": True,
-                "attributes_changed": [],
-            }
-        ],
-    }
-    if error is not None:
-        op["error"] = error
-    return op
-
-
-def _bulk_result(op_results: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "operations": op_results,
-        "total": len(op_results),
-        "dispatched": sum(1 for r in op_results if r["dispatched"]),
-        "failed": sum(1 for r in op_results if r.get("error") is not None),
-    }
-
-
-class BulkRoutingClient:
-    """Credentialed HA client spy: tallies the legacy per-op REST POST dispatch."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.call_service_calls: list[dict[str, Any]] = []
-
-    async def call_service(
-        self,
-        domain: str,
-        service: str,
-        service_data: dict[str, Any],
-        return_response: bool = False,
-    ) -> Any:
-        self.call_service_calls.append(
-            {"domain": domain, "service": service, "service_data": dict(service_data)}
-        )
-        return [_state(service_data.get("entity_id") or "light.a", "on")]
-
-    async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
-        return {"entity_id": entity_id, "state": "off"}
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_legacy_infra(monkeypatch: Any) -> Any:
-    """Neutralize the legacy dispatch's global side effects for fallback tests.
-
-    The component path returns before any of these run; only the legacy fallback
-    starts the WS listener and registers operations, which the routing tests do not
-    assert on (they assert only that legacy dispatch DID or did NOT happen).
-    """
-    monkeypatch.setattr(
-        device_control, "start_websocket_listener", AsyncMock(return_value=False)
-    )
-    monkeypatch.setattr(
-        device_control, "store_pending_operation", lambda **kwargs: "op-legacy"
-    )
-    monkeypatch.setattr(device_control, "fail_pending_operation", lambda *a, **k: None)
-
-
-_TWO_OPS = [
+BULK = "ha_mcp_tools/bulk_call_service"
+TWO_OPS = [
     {"entity_id": "light.a", "action": "on"},
     {"entity_id": "switch.b", "action": "on"},
 ]
 
-_DUP_OPS = [
-    {"entity_id": "light.a", "action": "on"},
-    {"entity_id": "light.a", "action": "off"},
-]
+
+@pytest.fixture
+def devices(hass: HomeAssistant) -> SwitchedStates:
+    hass.states.async_set("light.a", "off")
+    hass.states.async_set("switch.b", "off")
+    return SwitchedStates(hass)
 
 
-def _bulk_frames(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/bulk_call_service"
+def _posts(client: HomeAssistantClient) -> Any:
+    return patch.object(client, "call_service", wraps=client.call_service)
+
+
+async def _bulk(
+    client: HomeAssistantClient, operations: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return await DeviceControlTools(client).bulk_device_control(
+        operations=[dict(op) for op in operations], parallel=True
+    )
+
+
+def _assert_ambiguous(resp: dict[str, Any]) -> None:
+    """Every op dispatched but unconfirmed: the batch may have landed."""
+    assert (resp["partial"], resp["total_operations"]) == (True, 2)
+    assert [(r["partial"], r["status"]) for r in resp["results"]] == [
+        (True, "dispatched_unconfirmed"),
+        (True, "dispatched_unconfirmed"),
     ]
 
 
-@pytest.mark.asyncio
-async def test_capability_hit_routes_and_maps_shape() -> None:
-    """A batch is component-served: server-resolved rows out, per-op transitions in."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=_bulk_result(
-            [
-                _op_result("light", "turn_on", "light.a"),
-                _op_result("switch", "turn_on", "switch.b"),
-            ]
-        ),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+# --- the component serves the batch --------------------------------------------------
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
 
-    assert resp["total_operations"] == 2
-    assert resp["successful_commands"] == 2
-    assert resp["failed_commands"] == 0
-    # Ops confirmed inline: no polling handles, no follow_up.
-    assert resp["operation_ids"] == []
-    assert resp["follow_up"] is None
+@pytest.mark.usefixtures("devices")
+async def test_a_batch_is_one_frame_of_server_resolved_rows_confirmed_inline(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    with received(hass, BULK) as seen, _posts(component_core_client) as post:
+        resp = await _bulk(component_core_client, TWO_OPS)
+
+    assert (resp["successful_commands"], resp["failed_commands"]) == (2, 0)
+    assert (resp["operation_ids"], resp["follow_up"]) == ([], None)
     first = resp["results"][0]
-    assert first["entity_id"] == "light.a"
-    assert first["action"] == "on"
-    assert first["command_sent"] is True
-    assert first["confirmed"] is True
-    assert first["final_state"] == "on"
+    assert (first["entity_id"], first["action"]) == ("light.a", "on")
+    assert (first["command_sent"], first["confirmed"], first["final_state"]) == (
+        True,
+        True,
+        "on",
+    )
     assert first["verification_method"] == "component_state_change"
-    # Legacy per-op dispatch never ran.
-    assert client.call_service_calls == []
-    # One batch frame, carrying the fully-resolved rows (D6: verb resolution
-    # server-side) + one shared wait.
-    frames = _bulk_frames(ws)
-    assert len(frames) == 1
-    kwargs = frames[0].kwargs
-    assert kwargs["parallel"] is True
-    assert kwargs["wait"] is True
-    rows = kwargs["operations"]
-    assert rows[0] == {
-        "domain": "light",
-        "service": "turn_on",
-        "service_data": {"entity_id": "light.a"},
-        "entity_ids": ["light.a"],
-        # Each resolved row carries its per-op confirmation hint
-        # (``_SERVICE_TO_STATE.get("turn_on") == "on"``).
-        "expected_state": "on",
-    }
-    assert rows[1]["service"] == "turn_on"
-    assert rows[1]["entity_ids"] == ["switch.b"]
-    assert rows[1]["expected_state"] == "on"
+    post.assert_not_awaited()
+    (frame,) = seen[BULK]
+    assert (frame["parallel"], frame["wait"]) == (True, True)
+    assert frame["operations"] == [
+        {
+            "domain": "light",
+            "service": "turn_on",
+            "service_data": {"entity_id": "light.a"},
+            "entity_ids": ["light.a"],
+            "expected_state": "on",
+        },
+        {
+            "domain": "switch",
+            "service": "turn_on",
+            "service_data": {"entity_id": "switch.b"},
+            "entity_ids": ["switch.b"],
+            "expected_state": "on",
+        },
+    ]
 
 
-@pytest.mark.asyncio
-async def test_no_capability_uses_legacy_dispatch() -> None:
-    """Component without bulk_call_service → legacy per-op dispatch, no batch frame."""
-    ws = make_ws("ha_mcp_tools/bulk_call_service", info_result=_CAPS_NONE)
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+@pytest.mark.usefixtures("devices")
+async def test_an_explicit_zero_timeout_reaches_the_frame(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """0 is a timeout the caller chose, not a missing one."""
+    ops = [{**op, "timeout_seconds": 0} for op in TWO_OPS]
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+    with received(hass, BULK) as seen:
+        await _bulk(component_core_client, ops)
+        await _bulk(component_core_client, [TWO_OPS[0], ops[1]])
 
-    assert resp["total_operations"] == 2
-    # Legacy dispatch fired one REST POST per op.
-    assert len(client.call_service_calls) == 2
-    assert not _bulk_frames(ws)
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_invalidates_and_falls_back() -> None:
-    """unknown_command on the batch frame → invalidate caps + legacy dispatch."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-    assert resp["total_operations"] == 2
-    assert len(client.call_service_calls) == 2
-    assert client not in component_api._CAPS_CACHE
+    timeouts = [frame["timeout"] for frame in seen[BULK]]
+    assert timeouts[0] == 0
+    assert timeouts[1] > 0
 
 
-@pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command-ERROR response on the batch (pre-dispatch) → legacy."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_exc=HomeAssistantCommandError("boom"),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws(ws, device_control):
-        await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-    assert len(client.call_service_calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish (after caps cached) → legacy dispatch."""
-    caps_ws = make_ws("ha_mcp_tools/bulk_call_service", info_result=_CAPS_BULK)
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        device_control,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-    assert len(client.call_service_calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_unresolvable_op_aborts_whole_batch_to_legacy() -> None:
-    """An op the server cannot resolve (invalid action) sends NO batch frame and
-    aborts the WHOLE batch to legacy, which surfaces the per-op error."""
-    ws = make_ws("ha_mcp_tools/bulk_call_service", info_result=_CAPS_BULK)
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(
-            operations=[{"entity_id": "light.a", "action": "frobnicate"}],
-            parallel=True,
-        )
-
-    # The invalid action never reached the component (no batch frame), and the
-    # legacy path produced the structured per-op failure instead.
-    assert not _bulk_frames(ws)
-    assert resp["failed_commands"] == 1
-    assert resp["successful_commands"] == 0
-
-
-@pytest.mark.asyncio
-async def test_validate_first_nonexistent_entity_maps_to_not_found() -> None:
-    """I3: a component op whose captured pre-state is null (nonexistent entity) maps
-    to a per-op ENTITY_NOT_FOUND failure when validate_first (default) is set — not a
-    phantom successful command counted in successful_commands."""
-    ghost_op = {
-        "domain": "light",
-        "service": "turn_on",
-        "entity_ids": ["light.ghost"],
-        "dispatched": True,
-        "confirmed": False,
-        "partial": True,
-        "transitions": [
-            {
-                "entity_id": "light.ghost",
-                "old_state": None,  # entity did not exist at pre-state capture
-                "new_state": None,
-                "changed": False,
-                "attributes_changed": [],
-            }
-        ],
-    }
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=_bulk_result([_op_result("light", "turn_on", "light.a"), ghost_op]),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(
-            operations=[
+@pytest.mark.usefixtures("devices")
+async def test_a_target_core_does_not_have_fails_alone_and_is_not_sent_again(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    with _posts(component_core_client) as post:
+        resp = await _bulk(
+            component_core_client,
+            [
                 {"entity_id": "light.a", "action": "on"},
                 {"entity_id": "light.ghost", "action": "on"},
             ],
-            parallel=True,
         )
 
-    assert resp["successful_commands"] == 1
-    assert resp["failed_commands"] == 1
+    assert (resp["successful_commands"], resp["failed_commands"]) == (1, 1)
     good, ghost = resp["results"]
     assert good["command_sent"] is True
-    # The nonexistent entity is a structured ENTITY_NOT_FOUND failure, not a success.
     assert ghost.get("command_sent") is not True
     assert ghost["error"]["code"] == "ENTITY_NOT_FOUND"
-    # And it is NOT re-dispatched via legacy (the batch already fired).
-    assert client.call_service_calls == []
+    post.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_empty_transitions_after_dispatch_does_not_report_not_found() -> None:
-    """CodeRabbit-flagged regression (mirrored from the single-call fix): an
-    unconfirmed op with an EMPTY transitions list (the
-    ``_dispatched_unconfirmed_bulk_result`` shape a post-dispatch formatting
-    failure produces — the write already landed, the entity demonstrably
-    exists) must NOT be misread as ENTITY_NOT_FOUND. A missing transition row
-    proves nothing about existence, unlike a present row with a null
-    ``old_state``."""
-    unconfirmed_op = {
-        "domain": "light",
-        "service": "turn_on",
-        "entity_ids": ["light.a"],
-        "dispatched": True,
-        "confirmed": False,
-        "partial": True,
-        "transitions": [],
-    }
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=_bulk_result([unconfirmed_op]),
+@pytest.mark.usefixtures("devices")
+async def test_without_validate_first_a_missing_target_is_an_unconfirmed_command(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    resp = await _bulk(
+        component_core_client,
+        [{"entity_id": "light.ghost", "action": "on", "validate_first": False}],
     )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(
-            operations=[{"entity_id": "light.a", "action": "on"}],
-            parallel=True,
-        )
-
-    assert resp["failed_commands"] == 0
-    (result,) = resp["results"]
-    assert "error" not in result
-    assert result["partial"] is True
+    assert (resp["successful_commands"], resp["failed_commands"]) == (1, 0)
+    assert (resp["results"][0]["command_sent"], resp["results"][0]["partial"]) == (
+        True,
+        True,
+    )
 
 
-@pytest.mark.asyncio
-async def test_validate_first_false_allows_null_prestate_op() -> None:
-    """With validate_first False, a null pre-state op is NOT forced to ENTITY_NOT_FOUND
-    — it maps as a normal dispatched (partial) op, mirroring the legacy skip."""
-    ghost_op = {
-        "domain": "light",
-        "service": "turn_on",
-        "entity_ids": ["light.ghost"],
-        "dispatched": True,
-        "confirmed": False,
-        "partial": True,
-        "transitions": [
-            {
-                "entity_id": "light.ghost",
-                "old_state": None,
-                "new_state": None,
-                "changed": False,
-                "attributes_changed": [],
-            }
+async def test_an_op_that_never_confirms_is_partial_and_not_sent_again(
+    component_core_client: HomeAssistantClient, devices: SwitchedStates
+) -> None:
+    devices.behaviour["switch.b"] = "stay"
+    ops = [{**op, "timeout_seconds": 0.5} for op in TWO_OPS]
+
+    with _posts(component_core_client) as post:
+        resp = await _bulk(component_core_client, ops)
+
+    assert resp["successful_commands"] == 2
+    assert resp["results"][1]["partial"] is True
+    post.assert_not_awaited()
+    assert len(devices.calls) == 2
+
+
+async def test_an_op_core_refused_in_the_batch_is_reported_not_sent_again(
+    component_core_client: HomeAssistantClient, devices: SwitchedStates
+) -> None:
+    devices.behaviour["switch.b"] = "fail_once"
+
+    with _posts(component_core_client) as post:
+        resp = await _bulk(component_core_client, TWO_OPS)
+
+    assert (resp["successful_commands"], resp["failed_commands"]) == (1, 1)
+    post.assert_not_awaited()
+
+
+# --- nothing reached the component: one REST POST per op --------------------------------
+
+
+@pytest.mark.usefixtures("devices")
+async def test_without_the_component_each_op_is_one_rest_post(
+    core_client: HomeAssistantClient,
+) -> None:
+    with _posts(core_client) as post:
+        resp = await _bulk(core_client, TWO_OPS)
+
+    assert resp["total_operations"] == 2
+    assert post.await_count == 2
+
+
+@pytest.mark.usefixtures("devices")
+@pytest.mark.parametrize(
+    "operations",
+    [
+        [
+            {"entity_id": "light.a", "action": "on"},
+            {"entity_id": "light.a", "action": "off"},
         ],
-    }
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=_bulk_result([ghost_op]),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+        [{"entity_id": "light.a", "action": "frobnicate"}],
+    ],
+    ids=["same-entity-twice", "unresolvable-action"],
+)
+async def test_a_batch_the_component_cannot_take_never_reaches_it(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    operations: list[dict[str, Any]],
+) -> None:
+    """One waiter per entity cannot confirm two ops on it; an action the server
+    cannot resolve is the per-op path's error to report."""
+    with received(hass, BULK) as seen:
+        resp = await _bulk(component_core_client, operations)
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(
-            operations=[
-                {"entity_id": "light.ghost", "action": "on", "validate_first": False}
-            ],
-            parallel=True,
-        )
-
-    # validate_first False → the op is not forced to ENTITY_NOT_FOUND.
-    assert resp["successful_commands"] == 1
-    assert resp["failed_commands"] == 0
-    assert resp["results"][0]["command_sent"] is True
-    assert resp["results"][0]["partial"] is True
+    assert seen[BULK] == []
+    assert resp["total_operations"] == len(operations)
+    if operations[0]["action"] == "frobnicate":
+        assert (resp["successful_commands"], resp["failed_commands"]) == (0, 1)
 
 
-@pytest.mark.asyncio
-async def test_malformed_envelope_length_drift_reports_partial_no_redispatch() -> None:
-    """A batch SUCCESS response whose op count drifts from the rows sent is produced
-    ONLY after every op's async_call fired, so the writes already landed: report the
-    batch partial (every op dispatched-but-unconfirmed) and NEVER re-dispatch (I2 — a
-    legacy re-dispatch would double-fire every landed op, inverting toggles)."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        # One op result for a two-row batch → length drift.
-        cmd_result=_bulk_result([_op_result("light", "turn_on", "light.a")]),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+async def test_a_downgraded_component_is_dropped_and_each_op_posted(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    devices: SwitchedStates,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await get_component_caps(component_core_client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], BULK)
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+    with (
+        patch.object(device_control, "invalidate_caps", wraps=invalidate_caps) as drop,
+        _posts(component_core_client) as post,
+    ):
+        await _bulk(component_core_client, TWO_OPS)
 
-    # I2: drift → ambiguous partial batch, ZERO legacy re-dispatch.
-    assert resp["partial"] is True
-    assert resp["total_operations"] == 2
-    for op_result in resp["results"]:
-        assert op_result["partial"] is True
-        assert op_result["status"] == "dispatched_unconfirmed"
-    assert client.call_service_calls == []
+    assert post.await_count == 2
+    drop.assert_called_once_with(component_core_client)
 
 
-@pytest.mark.asyncio
-async def test_malformed_non_dict_result_reports_partial_no_redispatch() -> None:
-    """A batch response whose ``result`` is not a dict is an unusable SUCCESS envelope
-    → ambiguous partial batch, ZERO legacy re-dispatch (I2 — the writes already
-    landed once the frame returned)."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=["not", "a", "dict"],  # unusable result shape
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+async def test_a_batch_core_refuses_before_any_dispatch_is_posted_per_op(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """Core has no ``switch.turn_on``: the component refuses the whole batch
+    before it fires anything, so each op is posted once."""
+    hass.states.async_set("light.a", "off")
+    hass.states.async_set("switch.b", "off")
+    devices = SwitchedStates(hass)
+    hass.services.async_remove("switch", "turn_on")
 
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
+    with _posts(component_core_client) as post:
+        await _bulk(component_core_client, TWO_OPS)
 
-    assert resp["partial"] is True
-    assert resp["total_operations"] == 2
-    assert client.call_service_calls == []
+    assert post.await_count == 2
+    assert len(devices.calls) == 1
 
 
-@pytest.mark.asyncio
-async def test_never_sent_falls_back_to_legacy() -> None:
-    """C1: a HomeAssistantCommandNotSent on the batch frame (the frame provably never
-    left the process) → legacy per-op dispatch. Nothing landed, so a legacy first fire
-    cannot double-fire."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_exc=HomeAssistantCommandNotSent("WebSocket not authenticated"),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+async def test_a_socket_that_cannot_connect_posts_each_op(
+    component_core_client: HomeAssistantClient, devices: SwitchedStates
+) -> None:
+    assert await get_component_caps(component_core_client) is not None
+    await websocket_manager.disconnect()
 
-    with patch_ws(ws, device_control):
-        await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-    # Never-sent → legacy re-dispatch of both ops (a safe first fire).
-    assert len(client.call_service_calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_post_send_connection_drop_is_ambiguous_no_re_dispatch() -> None:
-    """C1 (the other direction): a PLAIN HomeAssistantConnectionError on the batch
-    frame is a mid-await socket close AFTER the frame was sent — POST-SEND and
-    ambiguous for the whole batch. It reports a partial batch and NEVER re-dispatches;
-    only HomeAssistantCommandNotSent (a subclass) signals never-sent, so a bare
-    connection error is not misclassified as pre-send."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_exc=HomeAssistantConnectionError("socket closed mid-await"),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
-
-    with patch_ws(ws, device_control):
-        resp = await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-    assert resp["partial"] is True
-    assert resp["total_operations"] == 2
-    for op_result in resp["results"]:
-        assert op_result["partial"] is True
-        assert op_result["status"] == "dispatched_unconfirmed"
-    # THE C1 boundary assertion: a post-send drop is ambiguous → ZERO legacy dispatch.
-    assert client.call_service_calls == []
-
-
-@pytest.mark.asyncio
-async def test_duplicate_entity_ids_route_to_legacy() -> None:
-    """A batch with the SAME entity_id twice cannot be confirmed by the component's ONE
-    entity-keyed transition waiter (the first state_changed satisfies BOTH ops, so both
-    would report the same transition), so the WHOLE batch routes to legacy per-op
-    dispatch — no component frame is sent (nothing dispatched → safe first fire)."""
-    ws = make_ws(
-        "ha_mcp_tools/bulk_call_service",
-        info_result=_CAPS_BULK,
-        cmd_result=_bulk_result(
-            [
-                _op_result("light", "turn_on", "light.a"),
-                _op_result("light", "turn_off", "light.a"),
-            ]
+    with (
+        patch.object(
+            HomeAssistantWebSocketClient,
+            "connect",
+            AsyncMock(side_effect=HomeAssistantConnectionError("refused")),
         ),
-    )
-    client = BulkRoutingClient()
-    tools = DeviceControlTools(client)
+        _posts(component_core_client) as post,
+    ):
+        await _bulk(component_core_client, TWO_OPS)
 
-    with patch_ws(ws, device_control):
-        await tools.bulk_device_control(operations=list(_DUP_OPS), parallel=True)
-
-    # No component batch frame sent; both ops dispatched via the legacy path instead.
-    assert not _bulk_frames(ws)
-    assert len(client.call_service_calls) == 2
+    assert post.await_count == 2
+    assert len(devices.calls) == 2
 
 
-def test_bulk_frame_timeout_honors_explicit_zero() -> None:
-    """An explicit ``timeout_seconds`` of 0 is preserved (parity with legacy and the
-    component schema), NOT coerced to the 10s default — while an absent key still
-    defaults to 10."""
-    zero_ops: list[tuple[int, dict[str, Any], str, str]] = [
-        (0, {"timeout_seconds": 0}, "light.a", "on"),
-        (1, {"timeout_seconds": 0}, "switch.b", "on"),
-    ]
-    assert DeviceControlTools._bulk_frame_timeout(zero_ops) == 0.0
+async def test_a_frame_never_sent_posts_each_op(
+    component_core_client: HomeAssistantClient, devices: SwitchedStates
+) -> None:
+    assert await get_component_caps(component_core_client) is not None
+    socket = await pooled_socket(component_core_client)
 
-    # An absent key still defaults to 10 (max over the batch).
-    default_ops: list[tuple[int, dict[str, Any], str, str]] = [
-        (0, {}, "light.a", "on"),
-        (1, {"timeout_seconds": 0}, "switch.b", "on"),
-    ]
-    assert DeviceControlTools._bulk_frame_timeout(default_ops) == 10.0
+    with (
+        patch.object(
+            socket,
+            "send_command",
+            side_effect=HomeAssistantCommandNotSent("WebSocket not authenticated"),
+        ),
+        _posts(component_core_client) as post,
+    ):
+        await _bulk(component_core_client, TWO_OPS)
+
+    assert post.await_count == 2
+    assert len(devices.calls) == 2
 
 
-class TestD9AtMostOnce:
-    """The per-batch at-most-once boundary: result -> never re-dispatch; None -> legacy."""
+# --- the frame was sent: never dispatched again ------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_partial_op_result_does_not_re_dispatch(self) -> None:
-        """A component result containing a partial (dispatched, unconfirmed) op is
-        used as-is and NEVER re-dispatched through the legacy path."""
-        ws = make_ws(
-            "ha_mcp_tools/bulk_call_service",
-            info_result=_CAPS_BULK,
-            cmd_result=_bulk_result(
-                [
-                    _op_result("light", "turn_on", "light.a"),
-                    _op_result(
-                        "switch",
-                        "turn_on",
-                        "switch.b",
-                        confirmed=False,
-                        partial=True,
-                        new_state="off",
-                    ),
-                ]
-            ),
-        )
-        client = BulkRoutingClient()
-        tools = DeviceControlTools(client)
 
-        with patch_ws(ws, device_control):
-            resp = await tools.bulk_device_control(
-                operations=list(_TWO_OPS), parallel=True
-            )
+async def test_a_socket_that_drops_after_the_send_is_partial_and_never_posted(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    devices: SwitchedStates,
+) -> None:
+    """Re-dispatching a batch that may have landed would fire every op twice."""
+    assert await get_component_caps(component_core_client) is not None
+    socket = await pooled_socket(component_core_client)
 
-        # Both ops dispatched (confirmed + partial) → both counted successful.
-        assert resp["successful_commands"] == 2
-        assert resp["results"][1]["partial"] is True
-        # THE D9 assertion: the component dispatched, so NOT ONE legacy re-dispatch
-        # fires despite the partial op.
-        assert client.call_service_calls == []
+    with dropped_on(hass, BULK, socket), _posts(component_core_client) as post:
+        resp = await _bulk(component_core_client, TWO_OPS)
 
-    @pytest.mark.asyncio
-    async def test_failed_op_result_not_re_dispatched(self) -> None:
-        """A per-op dispatch failure in the batch result is reported (NOT
-        re-dispatched via legacy): the batch already fired."""
-        ws = make_ws(
-            "ha_mcp_tools/bulk_call_service",
-            info_result=_CAPS_BULK,
-            cmd_result=_bulk_result(
-                [
-                    _op_result("light", "turn_on", "light.a"),
-                    _op_result(
-                        "switch",
-                        "turn_on",
-                        "switch.b",
-                        dispatched=False,
-                        confirmed=False,
-                        error="HomeAssistantError: boom",
-                    ),
-                ]
-            ),
-        )
-        client = BulkRoutingClient()
-        tools = DeviceControlTools(client)
-
-        with patch_ws(ws, device_control):
-            resp = await tools.bulk_device_control(
-                operations=list(_TWO_OPS), parallel=True
-            )
-
-        assert resp["successful_commands"] == 1
-        assert resp["failed_commands"] == 1
-        # No legacy re-dispatch of any op — the batch is authoritative (D9).
-        assert client.call_service_calls == []
-
-    @pytest.mark.asyncio
-    async def test_pre_dispatch_none_falls_to_legacy(self) -> None:
-        """A None (capability miss — nothing dispatched) falls to legacy dispatch."""
-        ws = make_ws("ha_mcp_tools/bulk_call_service", info_result=_CAPS_NONE)
-        client = BulkRoutingClient()
-        tools = DeviceControlTools(client)
-
-        with patch_ws(ws, device_control):
-            await tools.bulk_device_control(operations=list(_TWO_OPS), parallel=True)
-
-        assert len(client.call_service_calls) == 2
-        assert not _bulk_frames(ws)
-
-    @pytest.mark.asyncio
-    async def test_post_send_timeout_is_ambiguous_no_re_dispatch(self) -> None:
-        """A response-wait timeout on the SENT batch frame is ambiguous for the whole
-        batch: some/all ops may have landed, so the consumer reports a partial batch
-        (every op dispatched-but-unconfirmed) and NEVER re-dispatches via legacy —
-        re-dispatch would double-fire every landed op."""
-        ws = make_ws(
-            "ha_mcp_tools/bulk_call_service",
-            info_result=_CAPS_BULK,
-            cmd_exc=HomeAssistantCommandTimeout("timeout"),
-        )
-        client = BulkRoutingClient()
-        tools = DeviceControlTools(client)
-
-        with patch_ws(ws, device_control):
-            resp = await tools.bulk_device_control(
-                operations=list(_TWO_OPS), parallel=True
-            )
-
-        # The batch is reported partial with every op dispatched-but-unconfirmed...
-        assert resp["partial"] is True
-        assert resp["total_operations"] == 2
-        for op_result in resp["results"]:
-            assert op_result["partial"] is True
-            assert op_result["status"] == "dispatched_unconfirmed"
-        # ...and — THE D9 assertion — ZERO legacy re-dispatch despite the timeout.
-        assert client.call_service_calls == []
+    _assert_ambiguous(resp)
+    post.assert_not_awaited()
+    assert devices.calls == []

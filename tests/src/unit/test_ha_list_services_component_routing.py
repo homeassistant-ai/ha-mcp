@@ -3,346 +3,234 @@
 The legacy path pays for a REST ``get_services()`` catalog fetch plus a WS
 ``frontend/get_translations`` round-trip on every call, regardless of the
 ``domain``/``query`` filters. When the component advertises ``services_list``
-one ``ha_mcp_tools/services_list`` frame returns both (coarse-filtered) in a
-single round-trip; the server still runs its own ``_process_services`` filter
-+ pagination unchanged over that payload. These tests pin: the
-component-preferred path (both legacy calls skipped), capability miss falls
-back, ``unknown_command`` invalidates caps and falls back, a command
-error/timeout falls back, and a connection error ALSO falls back to the REST
-legacy — a deliberate deviation from the uniform taxonomy, because this tool's
-legacy path is REST + a per-request WS bridge, NOT the shared pooled WS, so a WS
-outage must not kill the tool.
+one ``ha_mcp_tools/services_list`` frame returns both in a single round-trip;
+the server still runs its own filter and pagination over that payload. These
+tests pin: the component-preferred path (both legacy calls skipped), a missing
+component falls back, ``unknown_command`` invalidates caps and falls back, a
+command error falls back, and a connection error ALSO falls back to the REST
+legacy, because this tool's legacy path is REST + a per-request WS bridge, NOT
+the shared pooled WS, so a WS outage must not kill the tool.
+
+The tool runs on the server's own client against a real ``hass`` with
+``counter`` set up; Core answers every request.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.components.frontend import websocket_get_translations
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import service as core_service
+from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_services
-from ha_mcp.tools.tools_services import register_services_tools
-
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
 )
+from ha_mcp.tools import tools_services
+from ha_mcp.tools.component_api import component_supports, get_component_caps
+from ha_mcp.tools.tools_services import ServiceDiscoveryTools
 
-_CAPS_SERVICES_LIST = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["services_list"],
-    "limits": {},
-}
-_CAPS_NONE = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": [],
-    "limits": {},
-}
-
-_COMPONENT_SERVICES = [
-    {
-        "domain": "light",
-        "services": {
-            "turn_on": {"description": "Turn a light on"},
-            "turn_off": {"description": "Turn a light off"},
-        },
-    },
-]
-_COMPONENT_TRANSLATIONS = {
-    "component.light.services.turn_on.name": "Turn on",
-}
-
-_LEGACY_REST_SERVICES = [
-    {
-        "domain": "light",
-        "services": {
-            "turn_on": {"description": "Turn a light on"},
-            "turn_off": {"description": "Turn a light off"},
-        },
-    },
-]
+from ._client_spies import sent_commands, sent_messages
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy REST + WS translations fetch."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.legacy_rest_calls = 0
-        self.legacy_ws_calls = 0
-
-    async def get_services(self) -> list[dict[str, Any]]:
-        self.legacy_rest_calls += 1
-        return [dict(e) for e in _LEGACY_REST_SERVICES]
-
-    async def get_config(self) -> dict[str, Any]:
-        return {"language": "en"}
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "frontend/get_translations":
-            self.legacy_ws_calls += 1
-            return {"success": True, "result": {"resources": {}}}
-        raise AssertionError(f"unexpected ws message {msg.get('type')!r}")
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` on a ``hass`` with ``counter`` and Core's translations
+    command (the frontend cannot be set up here: its assets are not installed)."""
+    assert await async_setup_component(hass, "counter", {})
+    await hass.async_block_till_done()
+    websocket_api.async_register_command(hass, websocket_get_translations)
+    return core_client
 
 
-def _build_list_services(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_services_tools(mcp, client)
-    return registered["ha_list_services"]
+@pytest.fixture
+async def socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
+    """The pooled WebSocket client the component frame goes through."""
+    return await websocket_manager.get_client(
+        url=client.base_url, token=client.token, verify_ssl=False
+    )
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+@pytest.fixture
+def component(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The same client with the component's commands registered."""
+    return component_core_client
 
 
-def _services_list_calls(ws: Any) -> list[Any]:
+@contextmanager
+def _legacy_fetches(client: HomeAssistantClient) -> Iterator[tuple[AsyncMock, Any]]:
+    """Spies on the REST catalog read and the WS bridge (translations)."""
+    with (
+        patch.object(client, "get_services", wraps=client.get_services) as rest,
+        sent_messages(client) as bridge,
+    ):
+        yield rest, bridge
+
+
+def _translation_reads(bridge: AsyncMock) -> int:
+    return sum(
+        1
+        for call in bridge.await_args_list
+        if call.args[0].get("type") == "frontend/get_translations"
+    )
+
+
+def _services_list_frames(spy: AsyncMock) -> list[Any]:
     return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/services_list"
+        c for c in spy.call_args_list if c.args[0] == tools_services.WS_SERVICES_LIST
     ]
 
 
-@pytest.mark.asyncio
-async def test_component_preferred_skips_legacy_fetches() -> None:
-    """Capability present → one component frame, both legacy calls skipped."""
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_result={
-            "services": _COMPONENT_SERVICES,
-            "translations": _COMPONENT_TRANSLATIONS,
-        },
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
+def _served_by_legacy(rest: AsyncMock, bridge: AsyncMock) -> None:
+    rest.assert_awaited_once()
+    assert _translation_reads(bridge) == 1
 
-    with patch_ws(ws, tools_services):
-        resp = await list_services(domain="light")
+
+async def test_component_preferred_skips_legacy_fetches(
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    """Capability present → one component frame, both legacy calls skipped."""
+    with _legacy_fetches(client) as (rest, bridge), sent_commands(socket) as sent:
+        resp = await ServiceDiscoveryTools(client).ha_list_services(domain="counter")
 
     assert resp["success"] is True
-    assert "light.turn_on" in resp["services"]
-    # The component now reports names from Core's flat translation map.
-    assert resp["services"]["light.turn_on"]["name"] == "Turn on"
-    assert client.legacy_rest_calls == 0
-    assert client.legacy_ws_calls == 0
-    assert len(_services_list_calls(ws)) == 1
-    call = _services_list_calls(ws)[0]
-    assert call.kwargs["domain"] == "light"
-    # The component reads hass.config.language in-process, so the server no
-    # longer forces "en" over the wire.
+    assert "counter.increment" in resp["services"]
+    rest.assert_not_awaited()
+    assert _translation_reads(bridge) == 0
+    (call,) = _services_list_frames(sent)
+    assert call.kwargs["domain"] == "counter"
+    # The component reads hass.config.language in-process, so the server does
+    # not force a language over the wire.
     assert "language" not in call.kwargs
     assert "query" not in call.kwargs
 
 
-@pytest.mark.asyncio
-async def test_query_is_never_forwarded_but_still_filters() -> None:
+async def test_query_is_never_forwarded_but_still_filters(
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """``query`` is filtered server-side, never sent to the component's frame.
 
-    Forwarding ``query`` to the component would let its coarse per-domain pass
-    drop a whole domain from the payload when nothing under it matches — but
-    ``_process_services``'s ``domains`` field is populated purely from
-    ``domain_filter``, independent of ``query``, so a query-trimmed component
-    payload would silently omit domains legacy still lists. Only ``domain`` is
-    threaded; ``_process_services`` still applies the exact ``query`` filter
-    itself over the (domain-scoped, not query-scoped) component payload.
+    Forwarding ``query`` would let a coarse per-domain pass drop a whole domain
+    from the payload when nothing under it matches, while ``domains`` is
+    populated from ``domain_filter`` alone. The server's exact filter runs over
+    the full payload instead.
     """
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_result={
-            "services": _COMPONENT_SERVICES,
-            "translations": _COMPONENT_TRANSLATIONS,
-        },
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
+    with _legacy_fetches(client) as (rest, _), sent_commands(socket) as sent:
+        resp = await ServiceDiscoveryTools(client).ha_list_services(query="set_value")
 
-    with patch_ws(ws, tools_services):
-        resp = await list_services(query="turn_off")
-
-    # The exact server-side filter still narrows to the one matching service.
-    assert set(resp["services"]) == {"light.turn_off"}
-    assert client.legacy_rest_calls == 0
-    assert client.legacy_ws_calls == 0
-    call = _services_list_calls(ws)[0]
+    assert set(resp["services"]) == {"counter.set_value"}
+    rest.assert_not_awaited()
+    (call,) = _services_list_frames(sent)
     assert "query" not in call.kwargs
 
 
-@pytest.mark.asyncio
-async def test_no_capability_uses_legacy_fetches() -> None:
-    """Component without ``services_list`` → legacy REST + WS translations."""
-    ws = make_ws("ha_mcp_tools/services_list", info_result=_CAPS_NONE)
-    client = RoutingClient()
-    list_services = _build_list_services(client)
-
-    with patch_ws(ws, tools_services):
-        resp = await list_services()
-
-    assert resp["success"] is True
-    assert "light.turn_on" in resp["services"]
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    assert not _services_list_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_invalidates_and_falls_back() -> None:
-    """``unknown_command`` on the services_list frame → invalidate caps + legacy."""
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
-
-    with patch_ws(ws, tools_services):
-        resp = await list_services()
-
-    assert resp["success"] is True
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command error/timeout → legacy fetches, caps stay cached."""
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_exc=HomeAssistantCommandTimeout("timeout"),
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
-
-    with patch_ws(ws, tools_services):
-        resp = await list_services()
-
-    assert resp["success"] is True
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.parametrize(
-    "malformed",
-    [
-        pytest.param("not-a-dict", id="non_dict_result"),
-        pytest.param({"services": "nope", "translations": {}}, id="services_not_list"),
-        pytest.param(
-            {"services": [], "translations": "nope"}, id="translations_not_dict"
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_malformed_component_payload_falls_back_to_legacy(
-    malformed: Any,
+async def test_without_the_component_uses_legacy_fetches(
+    client: HomeAssistantClient, socket: HomeAssistantWebSocketClient
 ) -> None:
-    """A shape-drift component reply (non-dict result, ``services`` not a list, or
-    ``translations`` not a dict) routes to the legacy REST + WS fetches
-    (tools_services.py:314-320); caps stay cached (drift is not unknown_command)."""
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_result=malformed,
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
-
-    with patch_ws(ws, tools_services):
-        resp = await list_services()
+    """No component → legacy REST catalog + WS translations, no component frame."""
+    with _legacy_fetches(client) as (rest, bridge), sent_commands(socket) as sent:
+        resp = await ServiceDiscoveryTools(client).ha_list_services()
 
     assert resp["success"] is True
-    assert "light.turn_on" in resp["services"]
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    # The component WAS asked (one frame); its malformed reply fell back.
-    assert len(_services_list_calls(ws)) == 1
-    assert client in component_api._CAPS_CACHE
+    assert "counter.increment" in resp["services"]
+    _served_by_legacy(rest, bridge)
+    assert not _services_list_frames(sent)
 
 
-@pytest.mark.asyncio
-async def test_connection_error_falls_back_to_legacy() -> None:
+async def test_unknown_command_invalidates_and_falls_back(
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``unknown_command`` on the services_list frame → invalidate caps + legacy.
+
+    Core answers ``unknown_command`` for a command name it never registered,
+    as it does for a component that predates the command.
+    """
+    monkeypatch.setattr(
+        tools_services, "WS_SERVICES_LIST", "ha_mcp_tools/services_list_retired"
+    )
+    invalidated = MagicMock(wraps=tools_services.invalidate_caps)
+    monkeypatch.setattr(tools_services, "invalidate_caps", invalidated)
+
+    with _legacy_fetches(client) as (rest, bridge):
+        resp = await ServiceDiscoveryTools(client).ha_list_services()
+
+    assert resp["success"] is True
+    _served_by_legacy(rest, bridge)
+    invalidated.assert_called_once_with(client)
+
+
+async def test_command_error_falls_back_and_keeps_the_capability(
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A command error that is not ``unknown_command`` → legacy fetches, caps
+    stay cached. The component refuses a catalog Core could not describe; Core's
+    REST view holds its own binding of the function and still answers."""
+    monkeypatch.setattr(
+        core_service,
+        "async_get_all_descriptions",
+        AsyncMock(side_effect=HomeAssistantError("descriptions unavailable")),
+    )
+    invalidated = MagicMock(wraps=tools_services.invalidate_caps)
+    monkeypatch.setattr(tools_services, "invalidate_caps", invalidated)
+
+    with _legacy_fetches(client) as (rest, bridge):
+        resp = await ServiceDiscoveryTools(client).ha_list_services()
+
+    assert resp["success"] is True
+    assert "counter.increment" in resp["services"]
+    _served_by_legacy(rest, bridge)
+    invalidated.assert_not_called()
+
+
+async def test_connection_error_falls_back_to_legacy(
+    client: HomeAssistantClient,
+    component: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
     """A WS-down error on the component frame falls back to the REST legacy.
 
-    DEVIATION from the uniform taxonomy: this tool's legacy path is the REST
-    ``get_services()`` catalog + a per-request WS bridge for translations, NOT the
-    shared pooled WS, so ``_fetch_services_list_via_component`` catches
-    ``HomeAssistantConnectionError`` and returns ``None`` — the REST fallback then
-    serves the catalog rather than the tool erroring out.
+    This tool's legacy path is the REST ``get_services()`` catalog + a
+    per-request WS bridge for translations, NOT the shared pooled WS, so the
+    REST fallback serves the catalog rather than the tool erroring out, and the
+    transient error keeps the positive capability cached.
     """
-    ws = make_ws(
-        "ha_mcp_tools/services_list",
-        info_result=_CAPS_SERVICES_LIST,
-        cmd_exc=HomeAssistantConnectionError("down"),
-    )
-    client = RoutingClient()
-    list_services = _build_list_services(client)
+    assert component_supports(await get_component_caps(client), "services_list")
 
-    with patch_ws(ws, tools_services):
-        resp = await list_services()
-
-    assert resp["success"] is True
-    assert "light.turn_on" in resp["services"]
-    # The REST catalog + WS translations legacy fetch served the result.
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    # A transient connection error keeps the (positive) caps entry cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` falls back to REST.
-
-    After caps are cached, ``WebSocketManager`` raises
-    ``HomeAssistantConnectionError`` when it cannot (re)establish the pooled socket
-    for the read command. ``_fetch_services_list_via_component`` catches it and
-    returns ``None`` so the REST catalog + WS translations legacy fetch serves the
-    result rather than the tool erroring out.
-    """
-    caps_ws = make_ws("ha_mcp_tools/services_list", info_result=_CAPS_SERVICES_LIST)
-    client = RoutingClient()
-    list_services = _build_list_services(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        tools_services,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
+    with (
+        patch.object(
+            socket,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+        ),
+        _legacy_fetches(client) as (rest, bridge),
     ):
-        resp = await list_services()
+        resp = await ServiceDiscoveryTools(client).ha_list_services()
 
     assert resp["success"] is True
-    assert "light.turn_on" in resp["services"]
-    assert client.legacy_rest_calls == 1
-    assert client.legacy_ws_calls == 1
-    # A transient establish failure is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
+    assert "counter.increment" in resp["services"]
+    _served_by_legacy(rest, bridge)
+    assert component_supports(await get_component_caps(client), "services_list")

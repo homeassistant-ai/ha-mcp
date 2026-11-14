@@ -14,7 +14,6 @@ giving no answer, which the client's real retry and classification turn into
 the error the Supervisor call sees.
 """
 
-import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -95,31 +94,6 @@ async def _socket_not_ready(
         side_effect=HomeAssistantCommandNotSent("WebSocket not authenticated"),
     ):
         yield client
-
-
-@asynccontextmanager
-async def _rejected_after_a_sent_attempt(
-    hass: HomeAssistant, client: HomeAssistantClient
-) -> AsyncIterator[HomeAssistantClient]:
-    """A 403 retry after an attempt that got a client, whose reconnect Core
-    refuses because the token was revoked in between."""
-    pooled = await _pooled(client)
-    with patch.object(
-        pooled,
-        "send_command",
-        side_effect=HomeAssistantConnectionError("403 Forbidden"),
-    ) as send:
-
-        async def revoke_during_the_retry_delay() -> None:
-            # The call first yields in the retry delay, after its first attempt.
-            assert send.await_count == 1
-            _revoke(hass, client)
-            await websocket_manager.disconnect()
-
-        revoke = asyncio.create_task(revoke_during_the_retry_delay())
-        yield client
-        await asyncio.gather(revoke)
-    assert send.await_count == 1
 
 
 @asynccontextmanager
@@ -218,17 +192,6 @@ async def _call(
             None,
             False,
             id="unsent-socket-not-ready",
-        ),
-        # A 403 retry after an attempt that got a client keeps a plain
-        # connection error even when the retry's connect is rejected: the
-        # first attempt may have sent.
-        pytest.param(
-            _rejected_after_a_sent_attempt,
-            "POST",
-            "CONNECTION_FAILED",
-            "unknown",
-            True,
-            id="rejected-after-a-sent-attempt",
         ),
         pytest.param(
             _timeout,

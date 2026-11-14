@@ -1,278 +1,263 @@
-"""Cross-seam contract test for the ``info`` fields ``ha_report_issue`` reads.
+"""The ``info`` fields ``ha_report_issue`` reads, from the real component.
 
-Pipes the REAL component ``_do_info(hass)`` through the REAL server-side
-``get_component_caps`` negotiation and the fresh ``info`` read into the
-report's component version and server-entry line (#2584), so a name or shape
-drift between the component's fields and the report's readers fails here.
-Bridge pattern as in ``test_component_info_timezone_contract.py``.
+``ha_report_issue`` runs on the server's own client against a real ``hass``
+that answers the component's commands (``component_core_client``), so a name
+or shape drift between the component's ``info`` and the report's component
+version and server-entry line (#2584) fails here. The server entry is a real
+config entry; its webhook registration is the component's own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from types import SimpleNamespace
+from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant, ServiceRegistry
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
-from ha_mcp.tools import component_api
+from custom_components.ha_mcp_tools import mcp_webhook
+from custom_components.ha_mcp_tools.const import (
+    COMPONENT_VERSION,
+)
+from custom_components.ha_mcp_tools.websocket_api import system
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_INFO
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import get_websocket_client
+from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.tools_bug_report import BugReportTools
 
-from .test_component_ws_search import FakeConfigEntry, FakeHass, wsapi
+from ._component_core import ws_result
+from ._core_client import free_port
+from ._core_setup import set_up_tools_entry
+from ._server_entry import add_server_entry, replace_server, set_up
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+def _server(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
+    """The loaded server entry, with ``options``."""
+    entry = add_server_entry(hass, options=options)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
+    return entry
 
 
-DOMAIN = "ha_mcp_tools"
-SERVER_ROW = {"entry_id": "a1", "title": "HA-MCP Server", "state": "loaded"}
-UNKNOWN = HomeAssistantCommandError(
-    "Command failed: Unknown command.", "unknown_command"
-)
+@pytest.fixture
+async def reporting(hass: HomeAssistant) -> None:
+    """``config`` answers the report's ``config_entries/get``."""
+    assert await async_setup_component(hass, "config", {})
 
 
-def _report(
-    hass: FakeHass, edit_info: Callable[[dict[str, Any]], Any] | None = None
-) -> BugReportTools:
-    """``ha_report_issue``'s probes against a component serving ``hass``.
-
-    ``edit_info`` changes the real ``info`` reply, standing in for another
-    component version. ``info`` is served on the component WebSocket, which
-    both the caps probe and the fresh read use; ``send_websocket_message``
-    answers only ``config_entries/get``.
-    """
-
-    async def _info(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        assert command_type == "ha_mcp_tools/info"
-        result = wsapi._do_info(hass)
-        if edit_info is not None:
-            edit_info(result)
-        return {"success": True, "result": result}
-
-    async def _send(message: dict[str, Any]) -> dict[str, Any]:
-        assert message["type"] == "config_entries/get"
-        return {"success": True, "result": [SERVER_ROW]}
-
-    ws = AsyncMock()
-    ws.send_command = AsyncMock(side_effect=_info)
-    client = MagicMock(base_url="http://ha.local:8123", token="tok")
-    client.send_websocket_message = AsyncMock(side_effect=_send)
-    client.call_service = AsyncMock(side_effect=RuntimeError("no such service"))
-    client.ws = ws
-    return BugReportTools(client)
+@pytest.fixture
+async def webhook(hass: HomeAssistant) -> AsyncIterator[None]:
+    """Remove the webhook registration a test makes with ``_server``."""
+    assert await async_setup_component(hass, "webhook", {})
+    try:
+        yield
+    finally:
+        await mcp_webhook.async_unregister_webhook(hass)
 
 
-def _then(report: BugReportTools, *replies: Any) -> None:
-    """Answer the first ``info`` call for real, then with ``replies`` in turn
-    (an exception is raised, anything else returned)."""
-    serve = report._client.ws.send_command.side_effect
-    queue = list(replies)
-
-    async def _send_command(command_type: str, **kwargs: Any) -> Any:
-        if report._client.ws.send_command.await_count == 1 or not queue:
-            return await serve(command_type, **kwargs)
-        reply = queue.pop(0)
-        if isinstance(reply, BaseException):
-            raise reply
-        return reply
-
-    report._client.ws.send_command.side_effect = _send_command
-
-
-def _served(report: BugReportTools) -> Any:
-    """Serve the caps probe and the fresh reads from the same component."""
-    return patch.object(
-        component_api, "get_websocket_client", AsyncMock(return_value=report._client.ws)
+async def _registered(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Register the server's webhook the way bring-up does once it has started."""
+    await mcp_webhook.async_register_webhook(
+        hass,
+        entry,
+        port=free_port(),
+        secret_path="/private_x",
+        auth_mode="none",
+        register_endpoint=False,
     )
 
 
-async def _line(report: BugReportTools) -> str | None:
-    with _served(report):
-        info = await component_api.read_info(report._client)
-        return await report._detect_server_entry_status(info)
+async def _report(client: HomeAssistantClient) -> Any:
+    result = await BugReportTools(client).ha_report_issue(report_type="runtime_bug")
+    return result["diagnostic_info"]
 
 
-async def _version(report: BugReportTools) -> str | None:
-    with _served(report):
-        info = await component_api.read_info(report._client)
-        return await report._detect_component_version(info)
+def _call_service_spy(client: HomeAssistantClient) -> Any:
+    return patch.object(client, "call_service", wraps=client.call_service)
 
 
-def _server(options: dict[str, Any] | None = None) -> FakeConfigEntry:
-    return FakeConfigEntry(DOMAIN, data={"entry_type": "server"}, options=options)
-
-
-# What bring-up stores once it has registered the webhook.
-REGISTERED = {DOMAIN: {"webhook": {"auth_mode": "none"}}}
-
-
-def _versioned(running: dict[str, str]) -> BugReportTools:
-    return _report(
-        FakeHass(config_entries=[_server()]),
-        lambda r: r.update(component_version=running["version"]),
-    )
-
-
-@pytest.mark.asyncio
-async def test_updated_component_version_reaches_the_next_report() -> None:
+@pytest.mark.usefixtures("reporting")
+async def test_an_updated_component_version_reaches_the_next_report(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A component update keeps a long-lived server's client, and with it the
     caps snapshot; a later report must show the version now running."""
-    running = {"version": "2.1.0"}
-    report = _versioned(running)
-    assert await _version(report) == "2.1.0"
+    _server(hass)
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
+    first = await _report(component_core_client)
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "2.2.0")
 
-    running["version"] = "2.2.0"
+    second = await _report(component_core_client)
 
-    assert await _version(report) == "2.2.0"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    [RuntimeError("socket closed"), {"success": True, "result": []}, "garbage"],
-    ids=["raises", "result-not-a-dict", "reply-not-a-dict"],
-)
-async def test_failed_fresh_read_reports_the_snapshot_version(failure: Any) -> None:
-    """The snapshot still shows the component is installed; a failed fresh
-    read must not turn that into "not detected"."""
-    report = _versioned({"version": "2.1.0"})
-    _then(report, failure)
-
-    assert await _version(report) == "2.1.0"
-    report._client.call_service.assert_not_called()
+    assert (first["component_version"], second["component_version"]) == (
+        "2.1.0",
+        "2.2.0",
+    )
 
 
-@pytest.mark.asyncio
-async def test_downgraded_component_reports_its_running_version() -> None:
+@pytest.mark.usefixtures("reporting", "webhook")
+async def test_a_failed_fresh_read_keeps_the_snapshot_version_and_the_line(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The snapshot still shows the component is installed, and the entry
+    status came from ``config_entries/get``; a failing ``info`` takes neither
+    out of the report."""
+    await _registered(hass, _server(hass, webhook_auth="ha_auth"))
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
+    await get_component_caps(component_core_client)
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "2.2.0")
+
+    with (
+        patch.object(
+            ServiceRegistry, "has_service", side_effect=RuntimeError("core drift")
+        ),
+        _call_service_spy(component_core_client) as call_service,
+    ):
+        info = await _report(component_core_client)
+
+    assert info["component_version"] == "2.1.0"
+    assert info["server_entry_status"] == "added (loaded)"
+    call_service.assert_not_called()
+
+
+@pytest.mark.usefixtures("reporting")
+async def test_a_downgraded_component_reports_its_running_version(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A component downgraded below ``info`` answers ``unknown_command``: the
-    stale snapshot is dropped, so the version comes from the bootstrap service
-    rather than from the component that was running before."""
-    report = _versioned({"version": "2.1.0"})
-    _then(report, UNKNOWN, UNKNOWN)
-    report._client.call_service.side_effect = None
-    report._client.call_service.return_value = {
-        "service_response": {"version": "1.0.5"}
-    }
+    stale snapshot is dropped and the version comes from the bootstrap
+    service, not from the component that was running before."""
+    _server(hass)
+    await set_up_tools_entry(hass)
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
+    await get_component_caps(component_core_client)
+    del hass.data["websocket_api"][WS_INFO]
 
-    assert await _version(report) == "1.0.5"
+    info = await _report(component_core_client)
 
-
-@pytest.mark.asyncio
-async def test_component_without_a_version_field_reads_as_not_detected() -> None:
-    report = _report(
-        FakeHass(config_entries=[_server()]), lambda r: r.pop("component_version")
-    )
-
-    assert await _version(report) is None
-    report._client.call_service.assert_not_called()
+    assert info["component_version"] == COMPONENT_VERSION != "2.1.0"
 
 
-@pytest.mark.asyncio
-async def test_configured_mode_reaches_the_report() -> None:
-    tools = FakeConfigEntry(DOMAIN, data={"entry_type": "tools"})
-    hass = FakeHass(
-        config_entries=[tools, _server({"webhook_auth": "ha_auth"})], data=REGISTERED
-    )
+@pytest.mark.usefixtures("reporting")
+async def test_a_component_reporting_no_version_reads_as_not_detected(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _server(hass)
+    monkeypatch.setattr(system, "COMPONENT_VERSION", "")
 
-    assert await _line(_report(hass)) == "added (loaded), webhook auth: ha_auth"
+    with _call_service_spy(component_core_client) as call_service:
+        info = await _report(component_core_client)
+
+    assert info["component_version"] is None
+    call_service.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_changed_mode_reaches_the_next_report() -> None:
+@pytest.mark.usefixtures("reporting", "webhook")
+@pytest.mark.parametrize(
+    ("options", "line"),
+    [
+        ({"webhook_auth": "ha_auth"}, "added (loaded), webhook auth: ha_auth"),
+        # Bring-up's default when the option was never set.
+        ({}, "added (loaded), webhook auth: none"),
+        # Local-only mode keeps the auth option, but no webhook exists; "none"
+        # would read as an unauthenticated public webhook.
+        (
+            {"webhook_auth": "none", "enable_webhook": False},
+            "added (loaded), webhook auth: disabled",
+        ),
+    ],
+    ids=["configured", "unset", "disabled"],
+)
+async def test_the_webhook_mode_reaches_the_report(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    options: dict[str, Any],
+    line: str,
+) -> None:
+    await set_up_tools_entry(hass)
+    await _registered(hass, _server(hass, **options))
+
+    info = await _report(component_core_client)
+
+    assert info["server_entry_status"] == line
+
+
+@pytest.mark.usefixtures("reporting", "webhook")
+async def test_a_changed_mode_reaches_the_next_report(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
     """The mode is an entry option the user can change while a long-lived
     server keeps its client; a later report must not repeat the first answer."""
-    server = _server({"webhook_auth": "ha_auth"})
-    report = _report(FakeHass(config_entries=[server], data=REGISTERED))
-    await _line(report)
+    server = _server(hass, webhook_auth="ha_auth")
+    await _registered(hass, server)
+    await _report(component_core_client)
+    hass.config_entries.async_update_entry(server, options={"webhook_auth": "legacy"})
 
-    server.options = {"webhook_auth": "legacy"}
+    info = await _report(component_core_client)
 
-    assert await _line(report) == "added (loaded), webhook auth: legacy"
-
-
-@pytest.mark.asyncio
-async def test_unset_option_reads_as_the_bring_up_default() -> None:
-    hass = FakeHass(config_entries=[_server()], data=REGISTERED)
-
-    assert await _line(_report(hass)) == "added (loaded), webhook auth: none"
+    assert info["server_entry_status"] == "added (loaded), webhook auth: legacy"
 
 
-@pytest.mark.asyncio
-async def test_disabled_webhook_is_not_reported_as_open() -> None:
-    """Local-only mode keeps the configured auth option, but no webhook exists;
-    ``none`` would read as an unauthenticated public webhook."""
-    options = {"webhook_auth": "none", "enable_webhook": False}
-    hass = FakeHass(config_entries=[_server(options)], data=REGISTERED)
-
-    assert await _line(_report(hass)) == "added (loaded), webhook auth: disabled"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "edit_info",
-    [
-        pytest.param(lambda r: r.pop("webhook_auth"), id="field-missing"),
-        pytest.param(lambda r: r.update(webhook_auth=123), id="not-a-string"),
-    ],
-)
-async def test_component_without_a_usable_mode_leaves_the_line_unchanged(
-    edit_info: Callable[[dict[str, Any]], Any],
+@pytest.mark.usefixtures("reporting")
+async def test_an_install_without_the_component_is_asked_for_info_once(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """A component older than the field omits it; the report keeps the plain
-    entry status rather than inventing a mode."""
-    hass = FakeHass(
-        config_entries=[_server({"webhook_auth": "ha_auth"})], data=REGISTERED
+    """The caps probe found no ``info``; the report does not send it again."""
+    _server(hass)
+    ws = await get_websocket_client(
+        url=core_client.base_url, token=core_client.token, verify_ssl=False
     )
 
-    assert await _line(_report(hass, edit_info)) == "added (loaded)"
+    with patch.object(ws, "send_command", wraps=ws.send_command) as send:
+        info = await _report(core_client)
+
+    sent = [call.args[0] for call in send.call_args_list if call.args]
+    assert sent.count(WS_INFO) == 1
+    assert info["server_entry_status"] == "added (loaded)"
 
 
-@pytest.mark.asyncio
-async def test_component_without_info_is_not_asked_for_the_mode() -> None:
-    """A component the caps probe found no ``info`` on is not sent the
-    command a second time."""
-    report = _report(FakeHass(config_entries=[_server()], data=REGISTERED))
-    report._client.ws.send_command.side_effect = UNKNOWN
+@pytest.mark.usefixtures("webhook")
+async def test_a_registered_webhook_reports_its_mode(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    await _registered(hass, _server(hass, webhook_auth="none"))
 
-    assert await _line(report) == "added (loaded)"
-    assert report._client.ws.send_command.await_count == 1
+    assert (await ws_result(component_ws, WS_INFO))["webhook_auth"] == "none"
 
 
-@pytest.mark.asyncio
-async def test_failed_info_call_leaves_the_line_unchanged() -> None:
-    """The entry status came from ``config_entries/get``; a failing ``info``
-    call must not take it out of the report."""
-    report = _report(FakeHass(config_entries=[_server()], data=REGISTERED))
-    _then(report, RuntimeError("boom"))
-
-    assert await _line(report) == "added (loaded)"
-
-
-@pytest.mark.parametrize(
-    "data",
-    [{}, {DOMAIN: {"manager": SimpleNamespace(is_running=True)}}],
-    ids=["nothing-registered", "server-up-webhook-not-yet"],
-)
-def test_no_webhook_registration_reports_no_mode(data: dict[str, Any]) -> None:
+async def test_without_a_webhook_registration_no_mode_is_reported(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Bring-up registers the webhook after the server has started, and a
     failed bring-up leaves the entry loaded; the configured ``none`` would then
     read as an open webhook."""
-    hass = FakeHass(config_entries=[_server({"webhook_auth": "none"})], data=data)
+    replace_server(monkeypatch)
+    entry = add_server_entry(hass, options={"webhook_auth": "none"})
+    assert await set_up(hass, entry)
 
-    assert wsapi._do_info(hass)["webhook_auth"] is None
+    assert (await ws_result(component_ws, WS_INFO))["webhook_auth"] is None
 
 
-def test_no_server_entry_reports_no_mode() -> None:
+async def test_without_a_server_entry_no_mode_is_reported(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
     """Only the tools entry is set up (an external server): there is no
-    in-process webhook, so the field is None."""
-    tools = FakeConfigEntry(DOMAIN, data={"entry_type": "tools"})
+    in-process webhook."""
+    await set_up_tools_entry(hass)
 
-    assert wsapi._do_info(FakeHass(config_entries=[tools]))["webhook_auth"] is None
+    assert (await ws_result(component_ws, WS_INFO))["webhook_auth"] is None

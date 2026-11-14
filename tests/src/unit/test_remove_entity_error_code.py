@@ -22,6 +22,8 @@ from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._receipt_faults import revoke
+
 # Nothing listens on port 1, so a connection to it is refused.
 UNREACHABLE_URL = "http://127.0.0.1:1"
 
@@ -63,13 +65,6 @@ async def on_removal(
     yield register
     for unsubscribe in unsubscribes:
         unsubscribe()
-
-
-def _revoke(hass: HomeAssistant, access_token: str) -> None:
-    """Revoke the client's token; Core drops every connection it opened."""
-    refresh_token = hass.auth.async_validate_access_token(access_token)
-    assert refresh_token is not None
-    hass.auth.async_remove_refresh_token(refresh_token)
 
 
 async def test_failure_mentioning_not_found_is_not_an_absent_entity(
@@ -117,7 +112,7 @@ async def test_lost_connection_keeps_what_the_bulk_run_already_removed(
     """The removals that went through are reported, and the ids never reached
     are named so the caller can retry them."""
     # Core drops the connection while removing sensor.b, before it replies.
-    on_removal("sensor.b", lambda: _revoke(hass, hass_access_token))
+    on_removal("sensor.b", lambda: revoke(hass, hass_access_token))
 
     result = await tools.ha_remove_entity(
         entity_id=["sensor.a", "sensor.b", "sensor.c"]
@@ -140,7 +135,7 @@ async def test_token_rejected_on_reconnect_is_reported_as_auth(
     """A token rejected on connect arrives as a command that was never sent,
     raised from the auth error: the per-id error names the auth failure, and
     the failing id is listed as not attempted too."""
-    _revoke(hass, hass_access_token)
+    revoke(hass, hass_access_token)
 
     result = await tools.ha_remove_entity(entity_id=["sensor.a", "sensor.b"])
 

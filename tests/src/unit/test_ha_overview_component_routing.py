@@ -5,631 +5,381 @@ fetches the eight raw reads (states + services + the three registries + config +
 notifications + repairs) in one ``ha_mcp_tools/overview`` WebSocket call and
 feeds those slices into its unchanged assembly, skipping the legacy ~8-fetch
 pipeline. These tests pin that fast path, the error-taxonomy fallbacks (silent
-on ``unknown_command``; legacy + ``warnings[]`` on any other command error), the
-active-visibility bypass (an active filter keeps the legacy path), and
-byte-identical parity between the two serving paths (same assembly, different
-data source).
+on ``unknown_command``; legacy + ``warnings[]`` on a command timeout, a dropped
+connection or a degraded slice), the active-visibility routing (the filter is
+applied server-side, so the component still serves), and parity between the
+two serving paths over the same Core.
 
-Harness mirrors ``test_ha_search_component_routing.py``: the WS client is an
-``AsyncMock`` whose ``send_command`` dispatches on the command type, and the HA
-client is a spy that tallies every legacy fetch so a test can assert none ran on
-the component path.
+The tool runs on the server's own client against a real ``hass``; spies on
+the client's legacy reads let a test assert none ran on the component path.
 """
 
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools import websocket_api as component_ws_api
+from custom_components.ha_mcp_tools.websocket_api import system as component_system
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantWebSocketClient,
+    websocket_manager,
 )
-from ha_mcp.tools.search import overview as search_overview
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._client_spies import sent_commands
+from ._component_frames import drop_connection_on, held
 from ._search_tool import _setup_visibility_disabled
 
-_STATES = [
-    {
-        "entity_id": "light.kitchen",
-        "state": "on",
-        "attributes": {"friendly_name": "Kitchen"},
-    },
-    {
-        "entity_id": "sensor.kitchen_temp",
-        "state": "21",
-        "attributes": {"friendly_name": "Kitchen Temp", "device_class": "temperature"},
-    },
-]
-_SERVICES = [{"domain": "light", "services": {"turn_on": {}, "turn_off": {}}}]
-_AREA_REGISTRY = {
-    "success": True,
-    "result": [{"area_id": "kitchen", "name": "Kitchen"}],
-}
-_ENTITY_REGISTRY = {
-    "success": True,
-    "result": [
-        {"entity_id": "light.kitchen", "area_id": "kitchen", "entity_category": None},
-        {
-            "entity_id": "sensor.kitchen_temp",
-            "area_id": "kitchen",
-            "entity_category": None,
-        },
-    ],
-}
-_CONFIG = {
-    "version": "2026.7.0",
-    "location_name": "Home",
-    "time_zone": "UTC",
-    "language": "en",
-    "state": "RUNNING",
-}
-
-_CAPS_PRE_CHILD_SEMANTICS = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["overview"],
-    "limits": {},
-}
-_CAPS_OVERVIEW = {
-    **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": ["overview", "device_registry_child_semantics"],
-}
+_OVERVIEW = "ha_mcp_tools/overview"
+_FELL_BACK = "served via legacy path"
 
 
-class OverviewRoutingClient:
-    """Credentialed HA client spy: tallies every legacy fetch ha_get_overview makes."""
-
-    def __init__(self) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.get_states_calls = 0
-        self.get_services_calls = 0
-        self.get_config_calls = 0
-        self.ws_types: Counter[str] = Counter()
-
-    async def get_states(self) -> list[dict[str, Any]]:
-        self.get_states_calls += 1
-        return [dict(s) for s in _STATES]
-
-    async def get_services(self) -> list[dict[str, Any]]:
-        self.get_services_calls += 1
-        return [dict(s) for s in _SERVICES]
-
-    async def get_config(self) -> dict[str, Any]:
-        self.get_config_calls += 1
-        return dict(_CONFIG)
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type", "")
-        self.ws_types[msg_type] += 1
-        if msg_type == "config/area_registry/list":
-            return _AREA_REGISTRY
-        if msg_type == "config/entity_registry/list":
-            return _ENTITY_REGISTRY
-        if msg_type == "config/device_registry/list":
-            return {"success": True, "result": []}
-        if msg_type == "persistent_notification/get":
-            return {"success": True, "result": []}
-        if msg_type == "repairs/list_issues":
-            return {"success": True, "result": {"issues": []}}
-        return {"success": False}
-
-    def total_legacy_fetches(self) -> int:
-        return (
-            self.get_states_calls
-            + self.get_services_calls
-            + self.get_config_calls
-            + sum(self.ws_types.values())
-        )
-
-
-def _build_overview_tool(client: Any) -> Any:
-    mcp = MagicMock()
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp.add_tool = capture_add_tool
-    register_search_tools(mcp, client, smart_tools=SmartSearchTools(client=client))
-    return registered["ha_get_overview"]
-
-
-def _quiet_tail(monkeypatch: Any) -> None:
-    """Make the wrapper's server-side-only tail deterministic + I/O-free.
-
-    ``ha_mcp_update`` is already off (the unit conftest sets
-    ``HA_MCP_DISABLE_UPDATE_CHECK``); pin the sidecar / HTTP-mount lookups to
-    absent so a real settings sidecar on the host machine can't leak a
-    ``settings_url`` into the assertions.
-    """
+@pytest.fixture(autouse=True)
+def _quiet_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the wrapper's server-side tail: no settings sidecar or HTTP mount
+    on the host can leak a ``settings_url`` into the assertions."""
     monkeypatch.setattr("ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None)
     monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: None)
 
 
-def _overview_slices() -> dict[str, Any]:
-    """The component's BARE ``ha_mcp_tools/overview`` slices for the fixture data.
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` on a ``hass`` that answers every legacy overview read,
+    with a light and a temperature sensor in a Kitchen area."""
+    for domain in ("config", "persistent_notification", "repairs"):
+        assert await async_setup_component(hass, domain, {})
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    registry = er.async_get(hass)
+    for domain, object_id in (("light", "kitchen"), ("sensor", "kitchen_temp")):
+        entry = registry.async_get_or_create(
+            domain, "test", object_id, suggested_object_id=object_id
+        )
+        registry.async_update_entity(entry.entity_id, area_id=kitchen.id)
+    hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen"})
+    hass.states.async_set(
+        "sensor.kitchen_temp",
+        "21",
+        {"friendly_name": "Kitchen Temp", "device_class": "temperature"},
+    )
+    return core_client
 
-    Registries are bare lists (no ``{success, result}`` WS wrapper), config is
-    the bare ``get_config()`` dict, notifications/repairs are bare lists —
-    exactly the raw-slice response design § ha_mcp_tools/overview specifies. The
-    server wraps and assembles them into the overview envelope.
-    """
-    return {
-        "states": [dict(s) for s in _STATES],
-        "services": [dict(s) for s in _SERVICES],
-        "area_registry": [dict(a) for a in _AREA_REGISTRY["result"]],
-        "entity_registry": [dict(e) for e in _ENTITY_REGISTRY["result"]],
-        "device_registry": [],
-        "config": dict(_CONFIG),
-        "notifications": [],
-        "repairs": [],
-    }
+
+@pytest.fixture
+def component(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The same client with the component's commands registered."""
+    return component_core_client
 
 
-@pytest.mark.asyncio
-async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -> None:
-    """When the component serves overview, none of the ~8 legacy fetches run."""
+@pytest.fixture
+async def socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
+    return await websocket_manager.get_client(
+        url=client.base_url, token=client.token, verify_ssl=False
+    )
+
+
+@pytest.fixture
+def hidden(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An active visibility filter denying ``light.kitchen``."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True, exclude_categories=[], deny_entity_ids=["light.kitchen"]
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+@pytest.fixture
+def unfiltered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert resp["system_summary"]["total_entities"] == 2
-    assert resp["system_info"]["version"] == "2026.7.0"
-    # The legacy inventory is untouched: no states/services/config/registry/
-    # notification/repairs fetches.
-    assert client.total_legacy_fetches() == 0
-    # Exactly one component overview command was issued.
-    overview_calls = [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/overview"
-    ]
-    assert len(overview_calls) == 1
 
 
-@pytest.mark.asyncio
-async def test_pre_child_semantics_overview_capability_uses_legacy(
-    tmp_path, monkeypatch
-) -> None:
-    """A pre-fix component's overview cannot authorize device-registry slices."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_PRE_CHILD_SEMANTICS,
-        cmd_result=_overview_slices(),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.total_legacy_fetches() > 0
-    assert not any(
-        call.args[0] == "ha_mcp_tools/overview"
-        for call in ws.send_command.call_args_list
-    )
+def _tools(client: HomeAssistantClient) -> SearchTools:
+    return SearchTools(client, SmartSearchTools(client=client))
 
 
-@pytest.mark.asyncio
-async def test_caps_probed_once_across_overviews(tmp_path, monkeypatch) -> None:
-    """The info probe is cached: two overviews, one ha_mcp_tools/info call."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        await overview(detail_level="standard")
-        await overview(detail_level="standard")
-
-    info_calls = [
-        c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
-    ]
-    assert len(info_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_falls_back_silently(tmp_path, monkeypatch) -> None:
-    """unknown_command on the overview call → legacy path, no fallback warning."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_exc=HomeAssistantCommandError("Command failed: nope", "unknown_command"),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    # Legacy inventory served the request.
-    assert client.get_states_calls == 1
-    assert client.get_config_calls == 1
-    assert client.ws_types["config/entity_registry/list"] == 1
-    assert client.ws_types["repairs/list_issues"] == 1
-    # Silent fallback: no component-failure warning.
-    assert not any("served via legacy path" in w for w in resp.get("warnings", []))
-
-
-@pytest.mark.asyncio
-async def test_raised_command_falls_back_with_warning(tmp_path, monkeypatch) -> None:
-    """A non-unknown command error → legacy path AND a warnings[] entry."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_exc=HomeAssistantCommandError("Command failed: boom", "internal_error"),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.get_states_calls == 1
-    assert any(
-        "component overview path failed" in w and "served via legacy path" in w
-        for w in resp["warnings"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_command_timeout_falls_back_with_warning(tmp_path, monkeypatch) -> None:
-    """A component WS overview timeout → legacy path AND a warnings[] entry."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_exc=HomeAssistantCommandTimeout("Command timeout"),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.get_states_calls == 1
-    assert any(
-        "component overview path failed" in w and "served via legacy path" in w
-        for w in resp["warnings"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_with_warning(
-    tmp_path, monkeypatch
-) -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) → legacy path AND a ``warnings[]`` entry, not a propagated error.
-
-    The legacy overview reads REST states/services + the registry
-    bridge, so it does not die identically on a pooled-WS drop."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    caps_ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW)
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        search_overview,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
+@contextmanager
+def _legacy_reads(client: HomeAssistantClient) -> Iterator[list[AsyncMock]]:
+    """Spies on every legacy overview read; Core still answers each."""
+    with (
+        patch.object(client, "get_states", wraps=client.get_states) as states,
+        patch.object(client, "get_services", wraps=client.get_services) as services,
+        patch.object(client, "get_config", wraps=client.get_config) as config,
+        patch.object(
+            client, "send_websocket_message", wraps=client.send_websocket_message
+        ) as bridge,
     ):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.get_states_calls == 1
-    assert any(
-        "component overview connection error" in w and "served via legacy path" in w
-        for w in resp["warnings"]
-    )
+        yield [states, services, config, bridge]
 
 
-@pytest.mark.asyncio
-async def test_malformed_slice_falls_back_with_warning(tmp_path, monkeypatch) -> None:
-    """A required slice of the wrong type → legacy path AND a warnings[] entry.
-
-    ``_build_overview_slices`` returns None on a malformed required slice, so a
-    partial snapshot never serves a silently-degraded overview.
-    """
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    slices = _overview_slices()
-    slices["states"] = "not a list"  # malformed required slice
-    ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW, cmd_result=slices)
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    # Legacy inventory served the request instead of the malformed slices.
-    assert client.get_states_calls == 1
-    assert any(
-        "malformed slices" in w and "served via legacy path" in w
-        for w in resp["warnings"]
-    )
+def _total(spies: list[AsyncMock]) -> int:
+    return sum(spy.await_count for spy in spies)
 
 
-@pytest.mark.asyncio
-async def test_slice_errors_falls_back_with_warning(tmp_path, monkeypatch) -> None:
-    """A non-empty ``slice_errors`` list → legacy path AND a warnings[] entry."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    slices = _overview_slices()  # every required slice well-formed...
-    slices["slice_errors"] = ["entity_registry read failed"]  # ...but flagged bad
-    ws = make_ws("ha_mcp_tools/overview", info_result=_CAPS_OVERVIEW, cmd_result=slices)
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.get_states_calls == 1
-    assert any(
-        "malformed slices" in w and "served via legacy path" in w
-        for w in resp["warnings"]
-    )
+def _overview_frames(spy: AsyncMock) -> int:
+    return sum(1 for c in spy.call_args_list if c.args[0] == _OVERVIEW)
 
 
-@pytest.mark.asyncio
-async def test_capsless_client_uses_legacy(tmp_path, monkeypatch) -> None:
-    """info → unknown_command yields no caps, so overview runs the legacy path."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    assert resp["success"] is True
-    assert client.get_states_calls == 1
-    # The overview command must never be attempted without the capability.
-    assert not any(
-        c.args[0] == "ha_mcp_tools/overview" for c in ws.send_command.call_args_list
-    )
-
-
-@pytest.mark.asyncio
-async def test_visibility_active_still_routes_through_component(
-    tmp_path, monkeypatch
-) -> None:
-    """An ACTIVE entity-visibility filter still routes through the component.
-
-    Unlike ``ha_search``, the overview consumer applies the visibility filter
-    server-side over the component's slices: ``get_system_overview`` calls
-    ``load_hidden_set`` unconditionally and ``_build_overview_slices`` hands it
-    the same registry + states envelope the legacy fetch produces. So a
-    visibility-enabled install still takes the one-round-trip component path,
-    and the denied entity is excluded from the counts / samples all the same.
-    """
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            deny_entity_ids=["light.kitchen"],
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        resp = await overview(detail_level="standard")
-
-    # The component overview command runs even with the filter active.
-    assert any(
-        c.args[0] == "ha_mcp_tools/overview" for c in ws.send_command.call_args_list
-    ), "component overview should serve while the visibility filter is active"
-    # No legacy fetch, and the denied entity is gone from the
-    # (server-side visibility-filtered) domain stats.
-    assert client.total_legacy_fetches() == 0
-    assert resp["system_summary"]["total_entities"] == 1
-    assert "light" not in resp["domain_stats"]
-
-
-@pytest.mark.asyncio
-async def test_component_and_legacy_parity_visibility_active(
-    tmp_path, monkeypatch
-) -> None:
-    """With an ACTIVE filter, the component path is byte-identical to legacy.
-
-    The visibility filter is applied server-side over whichever data source
-    fed the assembly, so the two final responses must be equal even when a
-    hide dimension is active — pinning that routing an active-visibility
-    overview through the component drops or reshapes nothing.
-    """
-    save_visibility_config(
-        tmp_path,
-        VisibilityConfig(
-            enabled=True,
-            exclude_categories=[],
-            deny_entity_ids=["light.kitchen"],
-        ),
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    _quiet_tail(monkeypatch)
-
-    # Legacy run (info → unknown_command ⇒ no caps ⇒ legacy per-read fetch path).
-    ws_legacy = make_ws(
-        "ha_mcp_tools/overview",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    client_legacy = OverviewRoutingClient()
-    with patch_ws(ws_legacy, search_overview):
-        legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
-
-    # Component run: the same eight reads, delivered as raw slices in one call.
-    ws_component = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client_component = OverviewRoutingClient()
-    with patch_ws(ws_component, search_overview):
-        component = await _build_overview_tool(client_component)(
+async def _overview(
+    client: HomeAssistantClient,
+) -> tuple[dict[str, Any], list[AsyncMock]]:
+    with _legacy_reads(client) as spies:
+        resp: dict[str, Any] = await _tools(client).ha_get_overview(
             detail_level="standard"
         )
-
-    assert component == legacy
-    # The denied entity is excluded on both paths.
-    assert component["system_summary"]["total_entities"] == 1
-    assert client_component.total_legacy_fetches() == 0
+    assert resp["success"] is True
+    return resp, spies
 
 
-@pytest.mark.asyncio
-async def test_enabled_but_no_active_dimension_still_uses_component(
-    tmp_path, monkeypatch
-) -> None:
-    """enabled=True with every dimension cleared hides nothing → component serves."""
-    save_visibility_config(
-        tmp_path, VisibilityConfig(enabled=True, exclude_categories=[])
-    )
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    _quiet_tail(monkeypatch)
-    ws = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with patch_ws(ws, search_overview):
-        await overview(detail_level="standard")
-
-    assert any(
-        c.args[0] == "ha_mcp_tools/overview" for c in ws.send_command.call_args_list
-    ), "no active hide dimension → component should still serve"
-    assert client.total_legacy_fetches() == 0
+def _fell_back(resp: dict[str, Any], reason: str) -> bool:
+    return any(reason in w and _FELL_BACK in w for w in resp.get("warnings", []))
 
 
-@pytest.mark.asyncio
-async def test_component_and_legacy_response_parity(tmp_path, monkeypatch) -> None:
-    """The component (raw-slice) path is byte-identical to the legacy path.
+@pytest.mark.usefixtures("unfiltered")
+class TestRouting:
+    async def test_component_fast_path_skips_legacy_fetches(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """When the component serves overview, none of the legacy fetches run."""
+        with sent_commands(socket) as sent:
+            resp, spies = await _overview(client)
 
-    The component returns the same eight reads the legacy path fetches; the
-    server feeds them into its unchanged assembly. Over identical fixture data
-    the two final ha_get_overview responses must be equal — same assembly code,
-    only the data source differs. Pins that the raw-slice adaptation
-    (bare→wrapped registries/notifications/repairs + prefetched threading) drops
-    or reshapes nothing.
-    """
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
+        assert resp["system_summary"]["total_entities"] == len(hass.states.async_all())
+        assert resp["system_info"]["version"] == hass.config.as_dict()["version"]
+        assert _total(spies) == 0
+        assert _overview_frames(sent) == 1
 
-    # Legacy run (info → unknown_command ⇒ no caps ⇒ legacy per-read fetch path).
-    ws_legacy = make_ws(
-        "ha_mcp_tools/overview",
-        info_exc=HomeAssistantCommandError(
-            "Command failed: no info", "unknown_command"
-        ),
-    )
-    client_legacy = OverviewRoutingClient()
-    with patch_ws(ws_legacy, search_overview):
-        legacy = await _build_overview_tool(client_legacy)(detail_level="standard")
-
-    # Component run: the same eight reads, delivered as raw slices in one call.
-    ws_component = make_ws(
-        "ha_mcp_tools/overview",
-        info_result=_CAPS_OVERVIEW,
-        cmd_result=_overview_slices(),
-    )
-    client_component = OverviewRoutingClient()
-    with patch_ws(ws_component, search_overview):
-        component = await _build_overview_tool(client_component)(
-            detail_level="standard"
+    async def test_a_component_without_child_device_semantics_uses_legacy(
+        self,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A component predating the child-device fix advertises ``overview``
+        but cannot authorize its device-registry slices."""
+        monkeypatch.setattr(
+            component_system,
+            "CAPABILITIES",
+            [
+                c
+                for c in component_system.CAPABILITIES
+                if c != "device_registry_child_semantics"
+            ],
         )
 
+        with sent_commands(socket) as sent:
+            _, spies = await _overview(client)
+
+        assert _total(spies) > 0
+        assert _overview_frames(sent) == 0
+
+    async def test_caps_probed_once_across_overviews(
+        self,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """The info probe is cached: two overviews, one ha_mcp_tools/info call."""
+        with sent_commands(socket) as sent:
+            await _overview(client)
+            await _overview(client)
+
+        assert [c.args[0] for c in sent.call_args_list].count("ha_mcp_tools/info") == 1
+
+    async def test_without_the_component_uses_legacy(
+        self, client: HomeAssistantClient, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        """No component (``info`` is ``unknown_command``) → the legacy path, and
+        the overview command is never attempted."""
+        with sent_commands(socket) as sent:
+            _, spies = await _overview(client)
+
+        states = spies[0]
+        states.assert_awaited_once()
+        assert _overview_frames(sent) == 0
+
+
+@pytest.mark.usefixtures("unfiltered")
+class TestFallbacks:
+    async def test_unknown_command_falls_back_silently(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A component downgraded since the probe no longer registers the
+        command; Core answers ``unknown_command`` → legacy, no warning."""
+        monkeypatch.delitem(hass.data["websocket_api"], _OVERVIEW)
+
+        resp, (states, _, config, bridge) = await _overview(client)
+
+        states.assert_awaited_once()
+        config.assert_awaited_once()
+        sent = [c.args[0]["type"] for c in bridge.await_args_list]
+        assert sent.count("config/entity_registry/list") == 1
+        assert sent.count("repairs/list_issues") == 1
+        assert not any(_FELL_BACK in w for w in resp.get("warnings", []))
+
+    async def test_command_timeout_falls_back_with_warning(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The component's overview answering too late → legacy + a warning.
+        A command error other than ``unknown_command`` takes the same branch."""
+        async with held(hass, _OVERVIEW, monkeypatch, client=client):
+            resp, (states, *_) = await _overview(client)
+
+        states.assert_awaited_once()
+        assert _fell_back(resp, "component overview path failed")
+
+    async def test_connection_drop_falls_back_with_warning(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """A dropped connection on the overview command → legacy + a warning,
+        not a propagated error: the legacy overview reads REST states/services
+        and the registry bridge, which reconnects."""
+        drop_connection_on(hass, _OVERVIEW, socket)
+
+        resp, (states, *_) = await _overview(client)
+
+        states.assert_awaited_once()
+        assert _fell_back(resp, "component overview connection error")
+
+    async def test_a_degraded_slice_falls_back_with_warning(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A slice the component names in ``slice_errors`` → legacy + a warning,
+        so a partial snapshot never serves a silently degraded overview. Core
+        failing to compose an entity's name degrades the component's
+        ``entity_registry`` slice; Core's registry list does not compose it."""
+        monkeypatch.setattr(
+            er,
+            "async_get_full_entity_name",
+            MagicMock(side_effect=RuntimeError("name unreadable")),
+        )
+
+        resp, (states, *_) = await _overview(client)
+
+        states.assert_awaited_once()
+        assert _fell_back(resp, "malformed slices")
+
+
+class TestVisibility:
+    @pytest.mark.usefixtures("hidden")
+    async def test_visibility_active_still_routes_through_component(
+        self,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Unlike ``ha_search``, the overview applies the visibility filter
+        server-side over the component's slices, so a visibility-enabled install
+        still takes the one-round-trip component path, and the denied entity is
+        excluded from the counts all the same."""
+        with sent_commands(socket) as sent:
+            resp, spies = await _overview(client)
+
+        assert _overview_frames(sent) == 1
+        assert _total(spies) == 0
+        assert resp["system_summary"]["total_entities"] == 1
+        assert "light" not in resp["domain_stats"]
+
+    async def test_enabled_but_no_active_dimension_still_uses_component(
+        self,
+        client: HomeAssistantClient,
+        component: HomeAssistantClient,
+        socket: HomeAssistantWebSocketClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """enabled=True with every dimension cleared hides nothing → component."""
+        save_visibility_config(
+            tmp_path, VisibilityConfig(enabled=True, exclude_categories=[])
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        with sent_commands(socket) as sent:
+            _, spies = await _overview(client)
+
+        assert _overview_frames(sent) == 1
+        assert _total(spies) == 0
+
+
+@pytest.mark.parametrize(
+    "visibility", ["unfiltered", "hidden"], ids=["no-filter", "filter-active"]
+)
+async def test_component_and_legacy_responses_match(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    second_client: HomeAssistantClient,
+    request: pytest.FixtureRequest,
+    visibility: str,
+) -> None:
+    """The component path and the legacy path give the same overview of the
+    same Core: same assembly, only the data source differs, with or without an
+    active visibility filter."""
+    request.getfixturevalue(visibility)
+    # Probed before the component is registered: this client stays legacy.
+    legacy, _ = await _overview(client)
+    component_ws_api.async_register_commands(hass)
+
+    component, spies = await _overview(second_client)
+
+    assert _total(spies) == 0
     assert component == legacy
-    # And the component path did not touch the legacy fetch inventory.
-    assert client_component.total_legacy_fetches() == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("unfiltered")
 async def test_over_nested_domains_string_is_a_validation_error(
-    tmp_path, monkeypatch
+    client: HomeAssistantClient, component: HomeAssistantClient
 ) -> None:
     """``domains`` was the one list parameter parsed outside a ``ValueError``
     handler, so a string nested past the recursion limit escaped the tool as a
     bare exception and FastMCP reported generic tool text (Codex, PR #2375).
     It is refused as a structured validation error naming the parameter, and
     nothing is fetched."""
-    _setup_visibility_disabled(tmp_path, monkeypatch)
-    _quiet_tail(monkeypatch)
-    client = OverviewRoutingClient()
-    overview = _build_overview_tool(client)
-
-    with pytest.raises(ToolError) as exc:
-        await overview(domains="[" * 20_000)
+    with _legacy_reads(client) as spies, pytest.raises(ToolError) as exc:
+        await _tools(client).ha_get_overview(domains="[" * 20_000)
 
     payload = json.loads(str(exc.value))
     assert payload["error"]["code"].startswith("VALIDATION")
     assert payload.get("parameter") == "domains" or "domains" in str(payload)
-    assert client.total_legacy_fetches() == 0
+    assert _total(spies) == 0
