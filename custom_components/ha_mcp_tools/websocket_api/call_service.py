@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
@@ -409,9 +410,9 @@ async def _dispatch(
     msg: dict[str, Any],
 ) -> tuple[Any, dict[str, Any] | None]:
     """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
-    Core rejected the response, or when a call asking for one raised anything
-    (``error["failed"]``): the service may have run, so the server must not send
-    it again. Any other raise propagates (D9)."""
+    Core rejected the response, or when a call asking for one raised anything but
+    a schema error (``error["failed"]``): the service may have run, so the server
+    must not send it again. Any other raise propagates (D9)."""
     try:
         response = await hass.services.async_call(
             domain,
@@ -427,7 +428,8 @@ async def _dispatch(
             getattr(err, "translation_key", None),
         )
         rejected = isinstance(err, HomeAssistantError) and key == _RESPONSE_REJECTED
-        if not (rejected or return_response):
+        # Core checks the service schema before the handler runs.
+        if isinstance(err, vol.Invalid) or not (rejected or return_response):
             raise
         error: dict[str, Any] = {"translation_key": key[1], "message": str(err)}
         if not rejected:

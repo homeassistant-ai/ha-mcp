@@ -12,6 +12,7 @@ writes a state and returns nothing.
 from __future__ import annotations
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -129,3 +130,30 @@ async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
     state = hass.states.get("sensor.count")
     assert state is not None and state.state == "1"
     assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]
+
+
+async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """Core checks the schema before the service runs, so nothing ran."""
+    calls: list[ServiceCall] = []
+
+    async def _handle(call: ServiceCall) -> ServiceResponse:
+        calls.append(call)
+        return {}
+
+    hass.services.async_register(
+        "counter",
+        "strict",
+        _handle,
+        schema=vol.Schema({vol.Required("amount"): int}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(
+            component_core_client, DeviceControlTools(component_core_client)
+        ).ha_call_service(domain="counter", service="strict", return_response=True)
+
+    assert error_of(exc)["code"] == "VALIDATION_FAILED"
+    assert calls == []
