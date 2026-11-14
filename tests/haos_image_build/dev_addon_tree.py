@@ -12,7 +12,7 @@ from pathlib import Path
 if __package__:
     from .python_base import copy_addon_tree
 else:
-    from python_base import copy_addon_tree  # type: ignore[no-redef]
+    from python_base import copy_addon_tree
 
 # Files the dev addon's Dockerfile copies from the stable addon dir, staged at
 # the build-context root with their COPY lines rewritten to match.
