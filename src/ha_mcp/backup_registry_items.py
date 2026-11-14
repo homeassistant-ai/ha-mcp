@@ -8,8 +8,8 @@ at all, and the restore says so. A second restore takes the row whose fields all
 match the snapshot's as the one the first restore created. Names are unique in
 these registries, so returning that row is right, and the alternative is Core's
 "already in use" refusal. A restore Core refuses for that reason names the item
-that holds the name. The diff finds a deleted item's live counterpart by that
-name, and reports an id that differs.
+that holds the name, or says Core refused it. The diff finds the live item that
+holds a deleted item's name, and reports an id that differs.
 """
 
 from __future__ import annotations
@@ -116,18 +116,22 @@ async def _restore_item(
     id_key: str,
     item_id: str,
     payload: dict[str, Any],
-    tools: tuple[str, str],
+    edit_tool: str,
     extra_ids: dict[str, Any] | None = None,
 ) -> Any:
     """Update the item, or create it again when Core no longer holds its id.
 
     A row whose fields all match the payload stands for the item an earlier
-    restore created, and is returned as it is. A create leaves out a field that
-    is None: some create schemas (an area's icon and floor) take a string or
-    nothing, and nothing is the default. The row carries a warning when its id
-    is not the snapshot's. A create Core refuses because the name is taken
-    raises with the item that holds it and ``tools``, the calls that edit and
-    remove an item of this registry (``{id}`` stands for its id).
+    restore created, and is returned with its own fields. A create leaves out a
+    field that is None: some create schemas (an area's icon and floor) take a
+    string or nothing, and nothing is the default. The row carries a warning
+    when its id is not the snapshot's. A create Core refuses is raised as
+    ``not_applied``, since a refused write changes nothing. When the refusal is
+    Core's ``invalid_info`` and a row holds the name, the error names that row
+    and ``edit_tool``, the call that edits an item of this registry (``{id}``
+    stands for its id). Removing the holder is not suggested: it can be the item
+    an earlier restore of this backup created, and removing it takes it off
+    everything that carries it.
     """
     bm = _manager()
     extra_ids = extra_ids or {}
@@ -149,19 +153,27 @@ async def _restore_item(
                 client, {"type": f"config/{registry}/create", **extra_ids, **fields}
             )
         except HomeAssistantCommandError as err:
-            holder = _holding_name(rows, payload)
-            if holder is None:
-                raise
+            from .tools.helpers import core_error_message  # import cycle, as _rows
+
             noun = id_key.removesuffix("_id")
+            core = core_error_message(err)
+            holder = (
+                _holding_name(rows, payload) if err.code == "invalid_info" else None
+            )
+            if holder is None:
+                raise bm.BackupRestoreError(
+                    f"{core}: the removed {noun} {item_id} was not created again. "
+                    "Nothing was changed."
+                ) from err
             held_id = holder.get(id_key)
-            edit, remove = (call.format(id=held_id) for call in tools)
             raise bm.BackupRestoreError(
-                f"{err}: the {noun} {held_id} holds the name {payload.get('name')!r}, "
-                f"so the removed {noun} {item_id} was not created again. Nothing "
-                "was changed.",
+                f"{core}: the {noun} {held_id} holds the name {payload.get('name')!r}, "
+                f"so the removed {noun} {item_id} was not created again. It can be "
+                "the one an earlier restore of this backup created. Nothing was "
+                "changed.",
                 suggestions=[
-                    f"If {held_id} is the {noun} to keep, change it with {edit}",
-                    f"Otherwise remove it with {remove}, then restore this backup again",
+                    f"If {held_id} is the {noun} to keep, change it with "
+                    + edit_tool.format(id=held_id)
                 ],
             ) from err
     return _noting(row, *filter(None, [_other_id_warning(row, id_key, item_id)]))
@@ -182,7 +194,7 @@ async def restore_label(client: Any, entity_id: str, config: Any) -> Any:
         "label_id",
         entity_id,
         payload,
-        ("ha_config_set_label(label_id={id})", "ha_config_remove_label(label_id={id})"),
+        "ha_config_set_label(label_id={id})",
     )
 
 
@@ -208,10 +220,7 @@ async def restore_category(client: Any, entity_id: str, config: Any) -> Any:
         "category_id",
         cat_id,
         payload,
-        (
-            f"ha_config_set_category(scope={scope}, category_id={{id}})",
-            f"ha_config_remove_category(scope={scope}, category_id={{id}})",
-        ),
+        f"ha_config_set_category(scope={scope}, category_id={{id}})",
         {"scope": scope},
     )
 
@@ -241,10 +250,7 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
             f"{kind}_id",
             real_id,
             stored,
-            (
-                f"ha_set_area_or_floor(kind={kind}, id={{id}})",
-                f"ha_remove_area_or_floor(kind={kind}, id={{id}})",
-            ),
+            f"ha_set_area_or_floor(kind={kind}, id={{id}})",
         )
     if kind == "area":
         return _noting(row, *await _area_warnings(client, stored, row))
@@ -286,7 +292,8 @@ async def restored_item(client: Any, domain: str, entity_id: str, config: Any) -
     A restore of a deleted item creates it again under the id Core derives (a
     renamed label, area or floor) or picks (a category), so a lookup by the
     stored id finds nothing. Names are unique, so the row with the snapshot's
-    name is that item. Its id stays its own, so the diff reports that it differs;
+    name is the item a restore created, or another that took the name since
+    (which a restore refuses). Its id stays its own, so the diff reports that it differs;
     its read-only timestamps are the snapshot's, since they are no difference the
     snapshot can restore.
     """

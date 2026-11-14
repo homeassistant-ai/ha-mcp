@@ -126,6 +126,7 @@ async def test_label_update_with_a_blank_name_is_refused(
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "safeguard" in error["error"]["message"]
+    assert "frontend" not in error["error"]["message"]
     stored = lr.async_get(hass).async_get_label(label.label_id)
     assert stored is not None
     assert stored.name == "Security"
@@ -315,6 +316,7 @@ async def test_category_update_with_a_blank_name_is_refused(
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "safeguard" in error["error"]["message"]
+    assert "frontend" not in error["error"]["message"]
     stored = cr.async_get(hass).async_get_category(
         scope="automation", category_id=category.category_id
     )
