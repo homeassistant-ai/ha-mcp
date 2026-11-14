@@ -18,6 +18,7 @@ concurrently, and it is off-limits for this task.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -95,6 +96,9 @@ class _AreaFloorClient:
         raise AssertionError(f"legacy WS call should not fire: {msg}")
 
 
+_STAMP = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
 class TestRegistriesSeam:
     """One REAL ``_do_registries`` output drives ``ha_list_floors_areas`` and
     the auto-backup label/category/area/floor capture fetchers through their
@@ -118,7 +122,13 @@ class TestRegistriesSeam:
 
     def _floor(self) -> FakeFloor:
         return FakeFloor(
-            "f1", "Ground", level=0, icon="mdi:floor-plan", aliases={"downstairs"}
+            "f1",
+            "Ground",
+            level=0,
+            icon="mdi:floor-plan",
+            aliases={"downstairs"},
+            created_at=_STAMP,
+            modified_at=_STAMP,
         )
 
     @pytest.mark.asyncio
@@ -175,7 +185,13 @@ class TestRegistriesSeam:
         self, monkeypatch
     ) -> None:
         label = FakeLabel(
-            "lb1", "Favorites", color="red", description="fav", icon="mdi:star"
+            "lb1",
+            "Favorites",
+            color="red",
+            description="fav",
+            icon="mdi:star",
+            created_at=_STAMP,
+            modified_at=_STAMP,
         )
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(labels=[label])
@@ -189,19 +205,25 @@ class TestRegistriesSeam:
         assert client.legacy_calls == 0
         assert result == {
             "color": "red",
-            "created_at": None,
+            "created_at": _STAMP.timestamp(),
             "description": "fav",
             "icon": "mdi:star",
             "label_id": "lb1",
             "name": "Favorites",
-            "modified_at": None,
+            "modified_at": _STAMP.timestamp(),
         }
 
     @pytest.mark.asyncio
     async def test_category_capture_full_field_parity_from_real_component(
         self, monkeypatch
     ) -> None:
-        cat = FakeCategory("cat1", "Lights", icon="mdi:lightbulb")
+        cat = FakeCategory(
+            "cat1",
+            "Lights",
+            icon="mdi:lightbulb",
+            created_at=_STAMP,
+            modified_at=_STAMP,
+        )
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(
             wsapi,
@@ -218,9 +240,9 @@ class TestRegistriesSeam:
         assert result == {
             "scope": "automation",
             "category_id": "cat1",
-            "created_at": None,
+            "created_at": _STAMP.timestamp(),
             "icon": "mdi:lightbulb",
-            "modified_at": None,
+            "modified_at": _STAMP.timestamp(),
             "name": "Lights",
         }
 

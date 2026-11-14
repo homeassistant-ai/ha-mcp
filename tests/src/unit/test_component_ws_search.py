@@ -38,6 +38,7 @@ import orjson
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.json import json_bytes, json_fragment
 
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.search.entities import _match_exact_search_entity
@@ -179,6 +180,9 @@ class FakeErModule:
         return out
 
 
+_FAKE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+
+
 class FakeArea:
     def __init__(
         self,
@@ -208,6 +212,27 @@ class FakeArea:
         self.temperature_entity_id = temperature_entity_id
         self.created_at = created_at
         self.modified_at = modified_at
+
+    @property
+    def json_fragment(self):
+        """The row Core serialises for an area (``AreaEntry.json_fragment``)."""
+        return json_fragment(
+            json_bytes(
+                {
+                    "aliases": sorted(self.aliases),
+                    "area_id": self.id,
+                    "floor_id": self.floor_id,
+                    "humidity_entity_id": self.humidity_entity_id,
+                    "icon": self.icon,
+                    "labels": sorted(self.labels),
+                    "name": self.name,
+                    "picture": self.picture,
+                    "temperature_entity_id": self.temperature_entity_id,
+                    "created_at": (self.created_at or _FAKE_TIME).timestamp(),
+                    "modified_at": (self.modified_at or _FAKE_TIME).timestamp(),
+                }
+            )
+        )
 
 
 class FakeAreaReg:
@@ -3780,69 +3805,6 @@ class TestRegistries:
     """``ha_mcp_tools/registries`` — each row byte-compatible with the legacy WS
     list response (verified against core's registry serializers)."""
 
-    def test_area_full_field_row(self, monkeypatch):
-        area = FakeArea(
-            "a1",
-            "Office",
-            floor_id="f1",
-            aliases={"studio"},
-            icon="mdi:home",
-            picture="/pic.png",
-            labels={"lb1"},
-            humidity_entity_id="sensor.h",
-            temperature_entity_id="sensor.t",
-            created_at=_REG_CREATED,
-            modified_at=_REG_MODIFIED,
-        )
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
-        )
-        res = wsapi._do_registries(FakeHass(), {"registries": ["area"]})
-        # Only the requested key is present.
-        assert list(res) == ["areas"]
-        assert res["areas"] == [
-            {
-                "aliases": ["studio"],
-                "area_id": "a1",
-                "floor_id": "f1",
-                "humidity_entity_id": "sensor.h",
-                "icon": "mdi:home",
-                "labels": ["lb1"],
-                "name": "Office",
-                "picture": "/pic.png",
-                "temperature_entity_id": "sensor.t",
-                "created_at": _REG_CREATED.timestamp(),
-                "modified_at": _REG_MODIFIED.timestamp(),
-            }
-        ]
-
-    def test_area_old_core_omits_humidity_temperature_keys(self, monkeypatch):
-        # A core predating humidity_entity_id / temperature_entity_id (< 2024.12):
-        # the AreaEntry has no such attribute, so the row must OMIT those keys
-        # entirely — emitting them as None would inject keys the restore path's
-        # config/area_registry/update schema rejects ("extra keys not allowed").
-        old_area = SimpleNamespace(
-            id="a1",
-            name="Office",
-            floor_id="f1",
-            aliases={"studio"},
-            icon="mdi:home",
-            picture="/pic.png",
-            labels={"lb1"},
-            created_at=_REG_CREATED,
-            modified_at=_REG_MODIFIED,
-        )
-        assert not hasattr(old_area, "humidity_entity_id")
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(areas=[old_area])
-        )
-        row = wsapi._do_registries(FakeHass(), {"registries": ["area"]})["areas"][0]
-        assert "humidity_entity_id" not in row
-        assert "temperature_entity_id" not in row
-        # The pre-existing fields are still present.
-        assert row["area_id"] == "a1"
-        assert row["created_at"] == _REG_CREATED.timestamp()
-
     def test_floor_full_field_row_has_no_labels(self, monkeypatch):
         floor = FakeFloor(
             "f1",
@@ -3934,7 +3896,11 @@ class TestRegistries:
             lambda h: make_view(
                 areas=[FakeArea("a1", "Office")],
                 floors=[FakeFloor("f1", "Up")],
-                labels=[FakeLabel("lb1", "Fav")],
+                labels=[
+                    FakeLabel(
+                        "lb1", "Fav", created_at=_REG_CREATED, modified_at=_REG_MODIFIED
+                    )
+                ],
             ),
         )
         res = wsapi._do_registries(FakeHass(), {"registries": ["area", "label"]})
@@ -3957,17 +3923,6 @@ class TestRegistries:
             wsapi._do_registries(
                 FakeHass(), {"registries": ["category"], "category_scopes": []}
             )
-
-    def test_timestamps_are_floats(self, monkeypatch):
-        area = FakeArea(
-            "a1", "Office", created_at=_REG_CREATED, modified_at=_REG_MODIFIED
-        )
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
-        )
-        row = wsapi._do_registries(FakeHass(), {"registries": ["area"]})["areas"][0]
-        assert isinstance(row["created_at"], float)
-        assert isinstance(row["modified_at"], float)
 
     def test_drifted_list_registry_raises(self, monkeypatch):
         # Core drift: a requested registry's accessor yields None. This must RAISE

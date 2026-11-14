@@ -27,6 +27,17 @@ def resolve_clearable(value: Any) -> str | None:
     return str(value)
 
 
+def resolve_level(value: Any) -> Any:
+    """Keep a floor level that was passed: ``UNSET`` when omitted, ``None`` to clear.
+
+    Core's floor create and update take ``level=None`` as "no level", unlike the
+    string params above, which the builders still read as None=keep, ""=clear.
+    """
+    if isinstance(value, FieldInfo):
+        return UNSET
+    return value
+
+
 _AREA_PARAMS = (
     "name, id, floor_id, icon, aliases, picture, labels, "
     "temperature_entity_id, humidity_entity_id"
@@ -47,7 +58,7 @@ def validate_cross_kind_params(
     # (e.g., kind='floor' with picture='...' previously dropped the picture
     # without a diagnostic). Floors have no labels in HA core.
     cross_kind_params: list[str] = []
-    if kind == "area" and level is not None:
+    if kind == "area" and level is not UNSET:
         cross_kind_params.append("level")
     elif kind == "floor":
         if floor_id is not None:
@@ -155,7 +166,7 @@ def build_floor_update_message(
     }
     if name is not None:
         message["name"] = name
-    if level is not None:
+    if level is not UNSET:
         message["level"] = level
     if icon is not None:
         message["icon"] = icon if icon else None
@@ -175,7 +186,7 @@ def build_floor_create_message(
         "type": "config/floor_registry/create",
         "name": name,
     }
-    if level is not None:
+    if level is not None and level is not UNSET:
         message["level"] = level
     if icon:
         message["icon"] = icon

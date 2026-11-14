@@ -23,15 +23,19 @@ from .area_messages import (
     build_floor_create_message,
     build_floor_update_message,
     resolve_clearable,
+    resolve_level,
     validate_cross_kind_params,
 )
+from .area_reorder import reorder_area_or_floor, require_id_not_blank
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, UNSET, parse_string_list_param
 from .component_registries import fetch_registries_via_component
 from .config_helpers.registry import validate_registry_ids
 from .helpers import (
+    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
@@ -110,23 +114,6 @@ def _partition_areas_by_floor(
     return floor_map, unassigned_areas, orphaned_areas
 
 
-# Sort by level ascending; coerce defensively so a malformed
-# string `level` cannot raise TypeError mid-sort and get
-# flattened by the broad `except Exception` in the caller.
-def _floor_sort_key(floor: dict[str, Any]) -> int:
-    raw = floor.get("level")
-    if raw is None:
-        return 0
-    try:
-        return int(raw)
-    except TypeError, ValueError:
-        logger.warning(
-            f"Floor {floor.get('floor_id')!r} has non-numeric "
-            f"level {raw!r}; treating as 0 for sort"
-        )
-        return 0
-
-
 class AreaTools:
     """Area and floor management tools for Home Assistant."""
 
@@ -163,18 +150,20 @@ class AreaTools:
                     "Project each area record (in floors[].areas, unassigned_areas, and "
                     'orphaned_areas) to only the specified keys. E.g. ["area_id", "name"] '
                     "returns slim area records. None = full records. Unknown keys yield "
-                    "empty records. Available keys: area_id, name, icon, floor_id, aliases,"
-                    " picture, labels."
+                    "empty records. Keys are those of Home Assistant's area registry "
+                    "row: area_id, name, icon, floor_id, aliases, picture, labels, "
+                    "temperature_entity_id, humidity_entity_id, created_at, "
+                    "modified_at."
                 ),
             ),
         ] = None,
     ) -> dict[str, Any]:
         """
-        List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+        List floors in the order Home Assistant keeps them, each with their assigned areas nested, plus areas without a floor.
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
 
-        Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
+        Floors are not sorted by level: the order is the one set in Home Assistant's area settings. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
         """
         # Validate projection params before any WS round-trips so a bad shape
         # fails fast without burning two registry reads.
@@ -197,8 +186,6 @@ class AreaTools:
             )
             progress["phase"] = "partitioned"
 
-            # Build nested hierarchy, preserving all floor-registry fields for
-            # forward compatibility with future HA Core additions
             topology = [
                 {
                     **floor,
@@ -208,9 +195,6 @@ class AreaTools:
                 }
                 for floor in floors
             ]
-
-            topology.sort(key=_floor_sort_key)
-            progress["phase"] = "sorted"
 
             # Apply per-area projection across all 3 buckets uniformly.
             # Snapshot pre-projection areas for the typo-guard warning.
@@ -429,6 +413,35 @@ class AreaTools:
             id_key = "floor_id"
         return message, result_key, id_key, operation, name
 
+    async def _require_existing(self, kind: str, identifier: str) -> None:
+        """Raise RESOURCE_NOT_FOUND when an update names an area or floor Core lacks.
+
+        Core's update commands do not catch the ``KeyError`` for an unknown id,
+        so the refusal reaches the caller as an opaque "Unknown error". A failed
+        read lets the write go on: Core then answers it in its own words.
+        """
+        id_key = f"{kind}_id"
+        listed = await self._client.send_websocket_message(
+            {"type": f"config/{kind}_registry/list"}
+        )
+        rows = listed.get("result") if listed.get("success") else None
+        if not isinstance(rows, list) or any(
+            isinstance(r, dict) and r.get(id_key) == identifier for r in rows
+        ):
+            return
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"{kind.capitalize()} not found: {identifier}",
+                context={"kind": kind, id_key: identifier},
+                suggestions=[
+                    f"To create a new {kind}, omit id",
+                    f"To update an existing {kind}, pass its exact {id_key} "
+                    "(list them with ha_list_floors_areas())",
+                ],
+            )
+        )
+
     @staticmethod
     def _label_verify_context(
         *,
@@ -451,6 +464,25 @@ class AreaTools:
         if name:
             ctx["name"] = name
         return ctx
+
+    async def _validate_write_targets(
+        self,
+        kind: str,
+        identifier: str | None,
+        labels: list[str] | None,
+        floor_id: str | None,
+    ) -> None:
+        """Refuse a write whose id, floor or labels the registries do not hold."""
+        if identifier is not None:
+            await self._require_existing(kind, identifier)
+        await validate_registry_ids(
+            self._client,
+            None,
+            labels,
+            None,
+            floor_id=floor_id,
+            fail_closed=True,
+        )
 
     async def _verify_area_labels_written(
         self,
@@ -635,10 +667,9 @@ class AreaTools:
         level: Annotated[
             int | None,
             Field(
-                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement).",
-                default=None,
+                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement; null to clear; omit to leave unchanged).",
             ),
-        ] = None,
+        ] = Field(default_factory=lambda: UNSET),
         icon: Annotated[
             str | None,
             Field(
@@ -691,13 +722,26 @@ class AreaTools:
                 ),
             ),
         ] = Field(default_factory=lambda: UNSET),
+        order: Annotated[
+            str | list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Reorder every area or floor of this kind: all existing ids in "
+                    "the new order, each exactly once (Core refuses anything else). "
+                    "Passed alone; no other parameter may accompany it."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Create or update a Home Assistant area or floor.
+        """Create, update or reorder Home Assistant areas or floors.
 
         Pass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,
         humidity_entity_id) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
+        Pass order alone to set the order Home Assistant lists areas or floors in.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
@@ -706,7 +750,23 @@ class AreaTools:
         ha_set_area_or_floor(kind="area", id="kitchen", temperature_entity_id="sensor.kitchen_temp", humidity_entity_id=None)
         ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
         ha_set_area_or_floor(kind="floor", id="ground_floor", level=0)
+        ha_set_area_or_floor(kind="floor", order=["first_floor", "ground_floor"])
         """
+        if order is not None:
+            return await reorder_area_or_floor(
+                self._client,
+                kind,
+                order,
+                {"name": name, "id": id, "aliases": aliases, "labels": labels},
+                {
+                    "floor_id": floor_id,
+                    "level": level,
+                    "icon": icon,
+                    "picture": picture,
+                    "temperature_entity_id": temperature_entity_id,
+                    "humidity_entity_id": humidity_entity_id,
+                },
+            )
         operation = "create"
         try:
             try:
@@ -736,6 +796,7 @@ class AreaTools:
             picture = resolve_clearable(picture)
             temperature_entity_id = resolve_clearable(temperature_entity_id)
             humidity_entity_id = resolve_clearable(humidity_entity_id)
+            level = resolve_level(level)
 
             validate_cross_kind_params(
                 kind,
@@ -747,19 +808,7 @@ class AreaTools:
                 humidity_entity_id,
             )
 
-            # ``None`` stays the documented "create-new" sentinel; explicit
-            # empty/whitespace would silently route to the ``if id:`` create
-            # branch below and lose update intent.
-            if id is not None:
-                validate_identifier_not_empty(
-                    id,
-                    "id",
-                    suggestions=[
-                        "Omit id entirely to create a new entry",
-                        "Pass a real area_id/floor_id to update an existing entry",
-                    ],
-                    context={"kind": kind},
-                )
+            require_id_not_blank(kind, id)
 
             message, result_key, id_key, operation, name = (
                 self._build_area_or_floor_message(
@@ -787,14 +836,7 @@ class AreaTools:
                 # validate before writing. ``validate_cross_kind_params`` already
                 # rejected floor_id/labels for kind='floor', so this only ever
                 # runs for areas; None and "" / [] (clear) skip the lookup.
-                await validate_registry_ids(
-                    self._client,
-                    None,
-                    parsed_labels,
-                    None,
-                    floor_id=floor_id,
-                    fail_closed=True,
-                )
+                await self._validate_write_targets(kind, id, parsed_labels, floor_id)
 
                 result = await self._client.send_websocket_message(message)
 
@@ -810,24 +852,12 @@ class AreaTools:
                         parsed_labels=parsed_labels,
                     )
 
-            error = result.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
             ctx: dict[str, Any] = {"operation": operation, "kind": kind}
             if name:
                 ctx["name"] = name
             if id:
                 ctx[id_key] = id
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {operation} {kind}: {error_msg}",
-                    context=ctx,
-                )
-            )
+            raise_core_refusal(f"Failed to {operation} {kind}", result, context=ctx)
 
         except ToolError:
             raise
@@ -913,19 +943,24 @@ class AreaTools:
                     "message": f"Successfully removed {kind}: {id}",
                 }
 
-            error = result.get("error", {})
-            error_msg = (
-                error.get("message", str(error))
-                if isinstance(error, dict)
-                else str(error)
-            )
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to remove {kind}: {error_msg}",
-                    context={"kind": kind, id_key: id},
+            context = {"kind": kind, id_key: id}
+            # Core answers an unknown id with the generic ``invalid_info`` code, so
+            # its exact message is what tells it from any other refusal.
+            if core_error_message(result.get("error", "")) == (
+                f"{kind.capitalize()} ID doesn't exist"
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"{kind.capitalize()} not found: {id}",
+                        context={**context, "ha_error_code": result.get("error_code")},
+                        suggestions=[
+                            "Use ha_list_floors_areas() to see the existing "
+                            "areas and floors",
+                        ],
+                    )
                 )
-            )
+            raise_core_refusal(f"Failed to remove {kind}", result, context=context)
 
         except ToolError:
             raise
