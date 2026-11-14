@@ -128,7 +128,6 @@ ignores:
   - "tests/src/unit/test_rest_client_get_error_log.py"
   - "tests/src/unit/test_rest_client_scenes.py"
   - "tests/src/unit/test_rest_client_scripts.py"
-  - "tests/src/unit/test_rest_client_ws_transport_failure.py"
   - "tests/src/unit/test_search_fields_projection.py"
   - "tests/src/unit/test_search_related_graph.py"
   - "tests/src/unit/test_set_dashboard_metadata.py"

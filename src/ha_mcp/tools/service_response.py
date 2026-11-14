@@ -32,14 +32,6 @@ COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
     "and lost with the confirmation. Re-read state to confirm the outcome."
 )
 
-#: Added when a non-administrator's token sends the call over WebSocket, whose
-#: answer lists no changed states.
-STATES_NOT_LISTED_WARNING = (
-    "This token's user is not a Home Assistant administrator, so the call went "
-    "over WebSocket, which lists no changed states: an empty 'result' does not "
-    "mean nothing changed. Read the entity's state to confirm."
-)
-
 #: Added to a failed ``return_response`` call without the component: Core checks
 #: the response only after the service ran, and only the component's answer says
 #: whether the service ran before a refusal.
