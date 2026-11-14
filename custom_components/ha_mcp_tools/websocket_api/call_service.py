@@ -85,10 +85,11 @@ async def _call_service_prep(
     Raised exceptions PROPAGATE — the WS handler turns them into a command error the
     server maps (D7). Two distinct classes propagate: the D1 domain block and
     ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
-    landed). A ``HomeAssistantError`` from ``async_call`` itself is MID-dispatch (the
-    handler may mutate state and THEN raise), so it is not raised: it comes back
-    as ``service_error`` (``response_error`` when Core rejected the response) and
-    the server reports it without sending the call again. A confirmation timeout is caught and reported as
+    landed); an ``async_call`` error is MID-dispatch (the handler may mutate state
+    and THEN raise — the documented D9 at-most-once residual). For a call asking
+    for a response it is not raised: it comes back as ``service_error``
+    (``response_error`` when Core rejected the response), and the server reports
+    it without sending the call again. A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
 
     The whole POST-dispatch section — the immediate-match re-read, the wait, and the
@@ -408,9 +409,9 @@ async def _dispatch(
     msg: dict[str, Any],
 ) -> tuple[Any, dict[str, Any] | None]:
     """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
-    it raised. ``error["failed"]`` marks a raise other than Core rejecting the
-    response; either way the service may have run, so the server must not send
-    the call again."""
+    Core rejected the response, or when a call asking for one raised
+    (``error["failed"]``): the service may have run, so the server must not send
+    it again. Any other raise propagates (D9)."""
     try:
         response = await hass.services.async_call(
             domain,
@@ -421,11 +422,14 @@ async def _dispatch(
             context=msg.get("ha_mcp_context"),
         )
     except HomeAssistantError as err:
+        rejected = (err.translation_domain, err.translation_key) == _RESPONSE_REJECTED
+        if not (rejected or return_response):
+            raise
         error: dict[str, Any] = {
             "translation_key": err.translation_key,
             "message": str(err),
         }
-        if (err.translation_domain, err.translation_key) != _RESPONSE_REJECTED:
+        if not rejected:
             error["failed"] = True
         return None, error
     return response, None
