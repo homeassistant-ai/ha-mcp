@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "Entität abrufen",
-      "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Entitäts-Sichtbarkeit abrufen",
-      "description": "Zeigt, welche Entitäten für Sprachassistenten freigegeben sind."
+      "description": "Ruft Entitätsregister-Einträge ab oder ohne Entität die Registereinstellungen und freigegebenen Entitäten."
     },
     "ha_get_hacs_info": {
       "title": "HACS-Informationen abrufen",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "Entität aktualisieren",
-      "description": "Aktualisiert Name, Bereich, Labels und andere Entitätseigenschaften."
+      "description": "Aktualisiert Entitätsregister-Einträge oder ohne entity_id die registerweiten Einstellungen."
     },
     "ha_set_integration": {
       "title": "Integration aktualisieren",

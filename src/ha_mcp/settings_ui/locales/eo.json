@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Akiri Enton",
-      "description": "Akiru entan registran informon por unu aŭ pluraj entoj."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Akiri Entan Eksponon",
-      "description": "Akiru agordojn de enta ekspono - listigu ĉiujn aŭ akiru agordojn por specifa ento."
+      "description": "Akiri entajn registro-enirojn, aŭ sen ento la registragordojn kaj elmetitajn entojn."
     },
     "ha_get_hacs_info": {
       "title": "Akiri HACS-Informon",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Agordi Enton",
-      "description": "Ĝisdatigi entajn ecojn en la enta registro."
+      "description": "Ĝisdatigi entajn registro-enirojn, aŭ sen entity_id la tutregistragordojn."
     },
     "ha_set_integration": {
       "title": "Agordi Integriĝon",

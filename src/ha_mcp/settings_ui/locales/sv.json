@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Hämta Entitet",
-      "description": "Hämta entitetsregisterinformation för en eller flera entiteter."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Hämta Entitetsexponering",
-      "description": "Hämta inställningar för entitetsexponering - lista alla eller hämta inställningar för en specifik entitet."
+      "description": "Hämta poster i enhetsregistret, eller utan en entitet, registerinställningar och exponerade entiteter."
     },
     "ha_get_hacs_info": {
       "title": "Hämta HACS-info",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Ställ in entitet",
-      "description": "Uppdatera entitetsegenskaper i entitetsregistret."
+      "description": "Uppdatera poster i enhetsregistret, eller utan entity_id de registeromfattande inställningarna."
     },
     "ha_set_integration": {
       "title": "Ställ in integration",

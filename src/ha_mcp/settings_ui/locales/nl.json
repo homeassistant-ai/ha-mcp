@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Haal Entiteit op",
-      "description": "Haal entiteitsregisterinformatie op voor één of meer entiteiten."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Haal Entiteitsblootstelling op",
-      "description": "Haal entiteitsblootstellingsinstellingen op - lijst alle of haal instellingen op voor een specifieke entiteit."
+      "description": "Haal entiteitsregistervermeldingen op, of zonder een entiteit de registerinstellingen en blootgestelde entiteiten."
     },
     "ha_get_hacs_info": {
       "title": "Haal HACS Info op",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Entiteit Instellen",
-      "description": "Werk entiteitseigenschappen bij in het entiteitregister."
+      "description": "Werk entiteitsregistervermeldingen bij, of zonder entity_id de registerbrede instellingen."
     },
     "ha_set_integration": {
       "title": "Integratie Instellen",

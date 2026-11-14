@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "获取实体",
-      "description": "获取一个或多个实体的实体注册表信息。"
-    },
-    "ha_get_entity_exposure": {
-      "title": "获取实体暴露设置",
-      "description": "获取实体暴露（exposure）设置——列出全部或获取特定实体的设置。"
+      "description": "获取实体注册表条目，如果不指定实体，则获取注册表设置和公开的实体。"
     },
     "ha_get_hacs_info": {
       "title": "获取 HACS 信息",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "设置实体",
-      "description": "更新实体注册表中的实体属性。"
+      "description": "更新实体注册表条目，如果不指定 entity_id，则更新整个注册表的设置。"
     },
     "ha_set_integration": {
       "title": "设置集成",

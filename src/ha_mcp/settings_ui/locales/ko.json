@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "엔티티 조회",
-      "description": "엔티티 하나 또는 여러 개의 엔티티 레지스트리 정보를 가져옵니다."
-    },
-    "ha_get_entity_exposure": {
-      "title": "엔티티 노출 설정 조회",
-      "description": "엔티티 노출 설정을 가져옵니다. 전체를 나열하거나 특정 엔티티의 설정을 확인합니다."
+      "description": "엔티티 레지스트리 항목을 가져오거나, 엔티티가 없는 경우 레지스트리 설정 및 노출된 엔티티를 가져옵니다."
     },
     "ha_get_hacs_info": {
       "title": "HACS 정보 조회",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "엔티티 설정",
-      "description": "엔티티 레지스트리에서 엔티티 속성을 수정합니다."
+      "description": "엔티티 레지스트리 항목을 업데이트하거나, entity_id가 없는 경우 레지스트리 전체 설정을 업데이트합니다."
     },
     "ha_set_integration": {
       "title": "통합 구성요소 설정",

@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Získat entitu",
-      "description": "Získat informace z registru entit pro jednu nebo více entit."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Získat expozici entity",
-      "description": "Získat nastavení expozice entity – vypsat všechna nebo získat nastavení pro konkrétní entitu."
+      "description": "Získat položky registru entit, nebo bez entity nastavení registru a vystavené entit."
     },
     "ha_get_hacs_info": {
       "title": "Získat informace o HACS",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Nastavit entitu",
-      "description": "Aktualizovat vlastnosti entity v registru entit."
+      "description": "Aktualizovat položки registru entit, nebo bez entity_id nastavení pro celý registr."
     },
     "ha_set_integration": {
       "title": "Nastavit integraci",

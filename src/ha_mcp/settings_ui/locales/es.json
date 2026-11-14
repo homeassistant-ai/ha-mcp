@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "Obtener entidad",
-      "description": "Consulta la información del registro de entidades de una o varias entidades."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Obtener exposición de entidades",
-      "description": "Muestra los ajustes de exposición de todas las entidades o de una concreta."
+      "description": "Obtiene las entradas del registro de entidades, o sin una entidad, la configuración del registro y las entidades expuestas."
     },
     "ha_get_hacs_info": {
       "title": "Obtener información de HACS",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "Modificar entidad",
-      "description": "Actualiza propiedades de una entidad en el registro de entidades."
+      "description": "Actualiza las entradas del registro de entidades, o sin entity_id, la configuración de todo el registro."
     },
     "ha_set_integration": {
       "title": "Modificar integración",
