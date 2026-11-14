@@ -1295,9 +1295,11 @@ class ServiceTools(EventCallMixin):
           (``get_websocket_client`` raising before the frame is sent) all mean the
           component never dispatched. A command-ERROR RESPONSE is also ``None``: it is
           pre-dispatch for the component's own guards (the D1 domain block and
-          ``ServiceNotFound`` raise before any ``async_call``); an ``async_call`` that
-          raised comes back as ``service_error`` instead, and is reported, never
-          re-POSTed.
+          ``ServiceNotFound`` raise before any ``async_call``), and for a non-unknown
+          command error it is the ONE documented residual — an ``async_call`` that
+          mutated state and THEN raised could double-apply on the legacy re-POST.
+          A call asking for a response gets ``service_error`` instead, and is
+          reported, never re-POSTed.
         * POST-SEND → never retried: a confirmation that lapsed comes back as a
           normal result dict (``partial=True`` / ``dispatched=True``). A response-wait
           TIMEOUT (``HomeAssistantCommandTimeout`` — the frame was sent) or any
@@ -1377,8 +1379,8 @@ class ServiceTools(EventCallMixin):
             return None
         except HomeAssistantCommandError as exc:
             # unknown_command means the command vanished: invalidate the cached caps so
-            # the next call re-probes. Any other command error is pre-dispatch → legacy
-            # (see D9 above).
+            # the next call re-probes. Any other command error → legacy re-POST (the
+            # documented at-most-once residual, see D9 above).
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
             else:

@@ -117,7 +117,7 @@ async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
             component_core_client, DeviceControlTools(component_core_client)
         ).ha_call_service(domain="counter", service="fail", return_response=True)
 
-    assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]
+    assert counter.calls == 1
     state = hass.states.get("sensor.count")
     assert state is not None and state.state == "1"
-    assert counter.calls == 1
+    assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]

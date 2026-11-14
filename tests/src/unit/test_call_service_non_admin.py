@@ -21,13 +21,11 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantClient,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandTimeout
 from ha_mcp.tools.service_response import STATES_NOT_LISTED_WARNING
 from ha_mcp.tools.tools_service import ServiceTools
+
+from ._command_faults import pooled_socket
 
 
 class Bumps:
@@ -88,15 +86,11 @@ async def test_a_service_that_fails_after_it_ran_is_not_sent_again(
 
 
 async def test_an_unanswered_call_is_reported_as_dispatched(
-    read_only_client: HomeAssistantClient,
-    tools: ServiceTools,
-    monkeypatch: pytest.MonkeyPatch,
+    read_only_client: HomeAssistantClient, tools: ServiceTools
 ) -> None:
-    assert await read_only_client.token_is_admin() is False
-    no_answer = HomeAssistantConnectionError("Command timed out")
-    no_answer.__cause__ = HomeAssistantCommandTimeout("no answer in time")
-    monkeypatch.setattr(
-        read_only_client, "send_websocket_message", AsyncMock(side_effect=no_answer)
+    socket = await pooled_socket(read_only_client)
+    socket.send_command = AsyncMock(  # type: ignore[method-assign]
+        side_effect=HomeAssistantCommandTimeout("no answer in time")
     )
 
     resp = await tools.ha_call_service(domain="counter", service="bump")
