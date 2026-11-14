@@ -5,6 +5,40 @@ server feature that depends on the component. The HACS component and the
 `ha-mcp` server ship through separate installation paths; see
 [Compatibility](#compatibility) for which version skew matters.
 
+## Release ZIP
+
+Stable and development releases carry `ha_mcp_tools.zip`. Its root contains
+the integration files, without an enclosing repository or domain directory.
+Build it with `uv run -s scripts/build_component_zip.py`; tracked working-tree
+files include the release stamps, while untracked files are excluded.
+
+Both HACS manifests select that asset in the same release that introduces it.
+SemVer creates the stamped stable ZIP and a draft GitHub release. Release
+Publish uploads the Python distribution, waits for PyPI to serve its version,
+then makes the GitHub release public. Docker promotion follows that job.
+Publication checks for a completed ZIP first and advances `stable` only after
+the GitHub release is public, so independent site rebuilds keep the published version.
+Development already waits for its package before publishing its stamped ZIP.
+There is no separate activation release.
+
+The mirror follows the public stable release or the published dev build and
+copies its upstream ZIP when creating the mirror release. It does not rebuild
+the ZIP. A rerun leaves an existing public release and its download history
+alone; an incomplete draft fails visibly and requires inspection before retry.
+If the mirror tag exists but its release is missing, rerun the failed **Release
+on tag** workflow in the mirror while the upstream asset is available. A source
+sync dispatch skips an existing tag and does not create a new tag-push event.
+Do not overlap manual stable releases: finish or recover the current publisher
+before cutting the next one. Queued mirror runs converge on the public stable
+release. The site rebuilds after a successful Release Publish run.
+The publisher builds the version tag even when ordinary PRs have advanced
+master; automatic no-op SemVer runs are gated by their input commit's ancestry.
+
+Existing component E2E fixtures install this ZIP. The update-path suite keeps
+its released archive baseline and checks ZIP install, update, reinstall over
+an existing configuration, restart, selected server/entry preservation and MCP.
+Download counts measure release-asset downloads, not distinct installations.
+
 ## Version cycle
 
 The component shares the server's version and pins the server build it runs

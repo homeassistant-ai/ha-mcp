@@ -187,6 +187,17 @@ jobs:
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
 
+    - name: Install uv for the integration archive
+      if: steps.semantic.outputs.released == 'true'
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        # renovate: datasource=github-releases depName=astral-sh/uv
+        version: "0.13.4"
+
+    - name: Build the integration ZIP
+      if: steps.semantic.outputs.released == 'true'
+      run: uv run -s scripts/build_component_zip.py
+
     - name: Create draft GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
@@ -206,8 +217,9 @@ jobs:
           echo "Release v${VERSION}" > release_notes.md
         fi
 
-        # A draft until the last step of this job publishes it.
-        gh release create "$TAG" \
+        # Release Publish makes this public only after PyPI serves its pin.
+        gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
+          --verify-tag \
           --title "$TAG" \
           --notes-file release_notes.md \
           --draft
@@ -242,32 +254,6 @@ jobs:
         echo "::error::Could not push addon changelog sync after 5 attempts."
         exit 1
 
-
-    - name: Update stable git tag
-      if: steps.semantic.outputs.released == 'true'
-      run: |
-        # Move the 'stable' tag to point to the new release
-        VERSION="${{ steps.semantic.outputs.version }}"
-        echo "Updating 'stable' tag to point to v$VERSION"
-
-        # Delete existing stable tag (local and remote)
-        git tag -d stable 2>/dev/null || true
-        git push origin :refs/tags/stable 2>/dev/null || true
-
-        # Create new stable tag pointing to the release commit
-        git tag stable "v$VERSION"
-        git push origin stable
-
-        echo "✓ 'stable' tag now points to v$VERSION"
-
-    - name: Publish GitHub release
-      if: steps.semantic.outputs.released == 'true'
-      env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-      run: |
-        # Last, so a failed changelog push or stable-tag update leaves a draft
-        # instead of a public release with no PyPI or Docker publish behind it.
-        gh release edit "v${{ steps.semantic.outputs.version }}" --draft=false
 
   # Build and push addon Docker images
   build-addon:

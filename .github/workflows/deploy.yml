@@ -13,7 +13,7 @@ name: Deploy to GitHub Pages
 # workflow and never trigger a deploy.
 on:
   workflow_run:
-    workflows: ["SemVer Release"]
+    workflows: ["Release Publish"]
     types: [completed]
   push:
     branches: [master]
@@ -37,8 +37,8 @@ concurrency:
 
 jobs:
   build:
-    # SemVer Release moves `stable` before it publishes the release and app
-    # config; a run that fails after that point must not publish the site.
+    # Rebuild after the stable publisher completes; a failed publisher leaves
+    # the existing site usable until its retry succeeds.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read

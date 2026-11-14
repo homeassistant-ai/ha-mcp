@@ -223,6 +223,15 @@ jobs:
             --version "${VERSION%.dev*}" --pin "$VERSION" --dist ha-mcp-dev
           git commit --quiet -am "chore(internal): stamp the component for dev build ${VERSION} [skip ci]"
 
+      - name: Install uv for the integration archive
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          version: "0.13.4"
+
+      - name: Build the integration ZIP
+        run: uv run -s scripts/build_component_zip.py
+
       - name: Create pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -230,6 +239,21 @@ jobs:
           SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
         run: |
           TAG="v${VERSION}"
+
+          RELEASE=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { isDraft } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -f tag="$TAG" \
+            --jq '.data.repository.release | if . == null then "absent" elif .isDraft then "draft" else "published" end')
+          if [ "$RELEASE" = published ]; then
+            echo "release already published; preserving its assets"
+            exit 0
+          elif [ "$RELEASE" = draft ]; then
+            echo "::error::An incomplete draft exists for ${TAG}; inspect it before retrying."
+            exit 1
+          elif [ "$RELEASE" != absent ]; then
+            echo "::error::Unexpected release lookup result: ${RELEASE}"
+            exit 1
+          fi
 
           # One line per pull request merged since the previous dev build,
           # then the other ways to install this build.
@@ -246,15 +270,11 @@ jobs:
           **PyPI (dev channel):** \`pip install ha-mcp-dev\`
           EOF
 
-          # Delete old pre-release with same tag if exists
-          gh release delete "$TAG" --yes 2>/dev/null || true
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
-
-          # Forced both ways: a re-run holds this tag from the checkout's
-          # fetch, and the remote one stays if its deletion above failed.
+          # Retry an unpublished tag left by a failed create. Public releases
+          # exit above so their assets and download history are preserved.
           git tag -f "$TAG" HEAD
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
-          gh release create "$TAG" \
+          gh release create "$TAG" dist/integration/ha_mcp_tools.zip \
             --verify-tag \
             --title "Dev Build $VERSION" \
             --notes-file release_notes.md \

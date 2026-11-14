@@ -1,4 +1,6 @@
 {
     "name": "HA-MCP — Manage Home Assistant with AI",
-    "render_readme": true
+    "render_readme": true,
+    "zip_release": true,
+    "filename": "ha_mcp_tools.zip"
 }

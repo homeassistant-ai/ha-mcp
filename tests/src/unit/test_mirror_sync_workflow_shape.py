@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,6 +32,199 @@ _STAMP = _REPO_ROOT / "scripts" / "stamp_component_version.py"
 _DEV_VERSION = _REPO_ROOT / "scripts" / "dev_version.sh"
 
 
+@pytest.mark.parametrize(
+    ("tag", "source_tag"),
+    [("v1.0.0", "v1.0.0"), ("v1.1.0-dev.42", "v1.1.0.dev42")],
+)
+def test_new_mirror_release_attaches_the_upstream_zip(tmp_path, tag, source_tag):
+    (tmp_path / "hacs.json").write_text('{"zip_release":true}')
+    payload = tmp_path / "source.zip"
+    payload.write_bytes(b"upstream integration archive")
+    calls = tmp_path / "calls"
+    attached = tmp_path / "attached"
+    stub = r"""
+gh() {
+  printf '%s\n' "$*" >> "$CALLS"
+  case "$1 $2" in
+    'api graphql') echo absent ;;
+    'release download')
+      [ "$3" = "$SOURCE_TAG" ] || return 2
+      destination=.
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = --dir ]; then destination="$2"; shift; fi
+        shift
+      done
+      mkdir -p "$destination"
+      cp "$PAYLOAD" "$destination/ha_mcp_tools.zip" ;;
+    'release create')
+      for argument in "$@"; do
+        case "$argument" in *.zip) cp "$argument" "$ATTACHED" ;; esac
+      done
+      [ -s "$ATTACHED" ] ;;
+    *) return 2 ;;
+  esac
+}
+"""
+    step = next(
+        s
+        for s in _workflow(_RELEASE_ON_TAG)["jobs"]["release"]["steps"]
+        if s.get("name") == "Create release for tag"
+    )
+    result = subprocess.run(
+        [
+            shutil.which("bash") or "bash",
+            "-e",
+            "-c",
+            stub
+            + step["run"].replace(
+                "python3 ", shlex.quote(Path(sys.executable).as_posix()) + " "
+            ),
+        ],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "GITHUB_REF_NAME": tag,
+            "GITHUB_REPOSITORY": "owner/mirror",
+            "SOURCE_TAG": source_tag,
+            "PAYLOAD": payload.as_posix(),
+            "CALLS": calls.as_posix(),
+            "ATTACHED": attached.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert attached.read_bytes() == payload.read_bytes()
+    creation = next(
+        c for c in calls.read_text().splitlines() if c.startswith("release create")
+    )
+    assert ("--prerelease" in creation) is ("-dev." in tag)
+
+
+@pytest.mark.parametrize("draft", [False, True])
+@pytest.mark.parametrize("mirror", [False, True])
+def test_existing_public_release_is_not_republished(tmp_path, draft, mirror):
+    mutations = tmp_path / "mutations"
+    workflow = _RELEASE_ON_TAG if mirror else _WORKFLOWS / "publish-dev.yml"
+    job = "release" if mirror else "create-prerelease"
+    step_name = "Create release for tag" if mirror else "Create pre-release"
+    step = next(
+        s
+        for s in _workflow(workflow)["jobs"][job]["steps"]
+        if s.get("name") == step_name
+    )
+    result = subprocess.run(
+        [
+            shutil.which("bash") or "bash",
+            "-e",
+            "-c",
+            'gh() { if [ "$1 $2" != "api graphql" ]; then printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; fi; '
+            'echo "lookup warning" >&2; printf "%s\\n" "$RELEASE_STATE"; };\n'
+            'git() { printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; };\n'
+            'python3() { printf "%s\\n" "$*" >> "$MUTATIONS"; return 99; };\n'
+            + step["run"],
+        ],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "GITHUB_REF_NAME": "v1.0.0",
+            "GITHUB_REPOSITORY": "owner/mirror",
+            "VERSION": "1.0.0",
+            "RELEASE_STATE": "draft" if draft else "published",
+            "MUTATIONS": mutations.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert (result.returncode == 0) is (not draft), result.stderr
+    assert not mutations.exists(), (
+        "Existing public or draft releases must not be mutated"
+    )
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("error", ["HTTP 403: API rate limit", "release not found"])
+def test_release_lookup_failure_stops_before_any_release_or_tag_write(
+    tmp_path, mirror, error
+):
+    workflow = _RELEASE_ON_TAG if mirror else _WORKFLOWS / "publish-dev.yml"
+    job = "release" if mirror else "create-prerelease"
+    name = "Create release for tag" if mirror else "Create pre-release"
+    step = next(
+        s for s in _workflow(workflow)["jobs"][job]["steps"] if s.get("name") == name
+    )
+    mutations = tmp_path / "mutations"
+    stub = (
+        'gh() { if [ "$1 $2" = "api graphql" ]; then '
+        'echo "$LOOKUP_ERROR" >&2; return 1; fi; '
+        'printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
+        'git() { printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
+        'python3() { printf "%s\\n" "$*" >> "$MUTATIONS"; };\n'
+    )
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", "-e", "-c", stub + step["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "VERSION": "1.0.0",
+            "GITHUB_REF_NAME": "v1.0.0",
+            "GITHUB_REPOSITORY": "owner/repo",
+            "MUTATIONS": mutations.as_posix(),
+            "LOOKUP_ERROR": error,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode != 0
+    assert not mutations.exists(), (
+        "An unreadable release lookup must stop before writes"
+    )
+
+
+@pytest.mark.parametrize("created", ["success", "failure", None])
+def test_dev_mirror_waits_for_the_published_integration_zip(tmp_path, created):
+    jobs = [{"name": "Publish PyPI (dev channel)", "conclusion": "success"}]
+    if created is not None:
+        jobs.append({"name": "Create GitHub pre-release", "conclusion": created})
+    script = _workflow(_MIRROR)["jobs"]["gate"]["steps"][0]["run"]
+    script = script.replace("${{ github.repository }}", "owner/repo")
+    output = tmp_path / "output"
+    result = subprocess.run(
+        [
+            shutil.which("bash") or "bash",
+            "-e",
+            "-c",
+            'gh() { printf "%s\\n" "$JOB_DATA" | jq -r "$4"; };\n' + script,
+        ],
+        env={
+            **os.environ,
+            "BASH_ENV": os.devnull,
+            "EVENT": "workflow_run",
+            "TRIGGER_WORKFLOW": "Publish Dev Channel",
+            "TRIGGER_CONCLUSION": "failure",
+            "TRIGGER_RUN_ID": "123",
+            "TRIGGER_BRANCH": "master",
+            "GITHUB_OUTPUT": output.as_posix(),
+            "JOB_DATA": json.dumps({"jobs": jobs}),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ("channel=dev" in output.read_text().splitlines()) is (created == "success")
+
+
 def _workflow(path: Path) -> dict[Any, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -43,7 +238,7 @@ class TestMirrorSyncShape:
         # yaml reads the bare `on` key as True.
         triggers = _workflow(_MIRROR)[True]
         assert triggers["workflow_run"]["workflows"] == [
-            "SemVer Release",
+            "Release Publish",
             "Publish Dev Channel",
         ]
         # A dispatched dev build from another branch must never be mirrored.
@@ -58,15 +253,21 @@ class TestMirrorSyncShape:
             job["name"]
             for path in (
                 _WORKFLOWS / "publish-dev.yml",
-                _WORKFLOWS / "semver-release.yml",
+                _WORKFLOWS / "release-publish.yml",
             )
             for job in _workflow(path)["jobs"].values()
             if "name" in job
         }
-        assert "Semantic Release" in jobs
-        assert "Publish PyPI (dev channel)" in jobs
-        assert 'job="Semantic Release"' in gate
-        assert 'job="Publish PyPI (dev channel)"' in gate
+        assert "Publish PyPI package" in jobs
+        assert "Create GitHub pre-release" in jobs
+        assert 'job="Publish PyPI package"' in gate
+        assert 'job="Create GitHub pre-release"' in gate
+        assert (
+            "publish-pypi-dev"
+            in _workflow(_WORKFLOWS / "publish-dev.yml")["jobs"]["create-prerelease"][
+                "needs"
+            ]
+        )
 
     def test_dev_leg_pins_the_version_the_dev_build_uploaded(self) -> None:
         # Recomputing the number in the mirror could name a build PyPI never
@@ -117,14 +318,11 @@ class TestMirrorSyncShape:
         # hacs.json's Home Assistant minimum ships with the snapshot's component.
         assert 'cp "$SRC/hacs.json" "$SRC/LICENSE" /tmp/mirror/' in stage["run"]
 
-    @pytest.mark.parametrize(
-        ("trigger", "expected"), [("release-of-c0", "1.0.0"), ("", "1.1.0")]
-    )
-    def test_stable_leg_syncs_the_release_its_trigger_cut(
-        self, tmp_path: Path, trigger: str, expected: str
+    def test_stable_leg_syncs_the_public_release_not_a_newer_draft_tag(
+        self, tmp_path: Path
     ) -> None:
-        # Runs queue: a run for release 1.0.0 that waits while 1.1.0 lands must
-        # still tag 1.0.0. A recovery dispatch (no trigger) re-tags the newest.
+        # A newer tag can still be an unpublished draft. The public stable
+        # release, not the newest Git tag, is the installation source.
         repo = tmp_path / "repo"
         repo.mkdir()
 
@@ -146,10 +344,8 @@ class TestMirrorSyncShape:
             ).stdout.strip()
 
         git("init", "-q", "-b", "master")
-        shas = []
         for n, tag in enumerate(["", "v1.0.0", "", "v1.1.0"]):
             git("commit", "-q", "--allow-empty", "-m", str(n))
-            shas.append(git("rev-parse", "HEAD"))
             if tag:
                 git("tag", tag)
         resolve = next(
@@ -159,21 +355,28 @@ class TestMirrorSyncShape:
         )
         output = tmp_path / "out"
         result = subprocess.run(
-            ["bash", "-e", "-c", resolve["run"]],
+            [
+                shutil.which("bash") or "bash",
+                "-e",
+                "-c",
+                'gh() { printf "%s\\n" "$PUBLISHED_TAG"; };\n' + resolve["run"],
+            ],
             cwd=repo,
             env={
-                "PATH": "/usr/bin:/bin",
+                **os.environ,
+                "BASH_ENV": os.devnull,
                 "CHANNEL": "stable",
-                "TRIGGER_SHA": shas[0] if trigger else "",
-                "RUNNER_TEMP": str(tmp_path),
-                "GITHUB_OUTPUT": str(output),
+                "TRIGGER_SHA": "",
+                "PUBLISHED_TAG": "v1.0.0",
+                "RUNNER_TEMP": tmp_path.as_posix(),
+                "GITHUB_OUTPUT": output.as_posix(),
             },
             capture_output=True,
             text=True,
             check=False,
         )
         assert result.returncode == 0, result.stderr
-        assert f"version={expected}" in output.read_text().splitlines()
+        assert "version=1.0.0" in output.read_text().splitlines()
 
     def test_snapshot_is_stamped(self) -> None:
         stage = next(

@@ -246,12 +246,12 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
-| `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | HACS mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
+| `sync-integration-mirror.yml` | `workflow_run` after Release Publish or Publish Dev Channel; docs pushes; manual | HACS mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), with the upstream ZIP copied onto each new mirror release. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
-| `semver-release.yml` | Biweekly or manual; this repository only | Stable version tag and GitHub release. |
-| `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |
+| `semver-release.yml` | Biweekly or manual; this repository only | Stable version tag and draft GitHub release containing the stamped integration ZIP. |
+| `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Publish PyPI, wait for package visibility, publish the prepared GitHub release, then promote stable container images and the MCP registry. |
 | `addon-publish.yml` | Called by `semver-release.yml`, or manual | Home Assistant app publishing. |
-| `deploy.yml` | `workflow_run` after SemVer Release; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
+| `deploy.yml` | `workflow_run` after Release Publish; push to `master` touching the workflow; weekly; or manual with a `ref` | Build the docs site from the `stable` tag (or the dispatched `ref`) and deploy it to GitHub Pages. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py`, or manual; this repository only | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `sync-ratchet-baselines.yml` | Push to `master` touching counted sources or `pyproject.toml`, or manual; this repository only | Lower the module-size and duplicate-code baselines, which pull requests only check. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |

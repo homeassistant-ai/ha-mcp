@@ -71,9 +71,27 @@ jobs:
           # notes file) as already-exists and reported green with no release
           # published (review finding). Now only a genuine duplicate no-ops;
           # a real create failure fails the job visibly.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release exists"
+          RELEASE=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { isDraft } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -f tag="$GITHUB_REF_NAME" \
+            --jq '.data.repository.release | if . == null then "absent" elif .isDraft then "draft" else "published" end')
+          if [ "$RELEASE" = published ]; then
+            echo "release already published; preserving its assets"
             exit 0
+          elif [ "$RELEASE" = draft ]; then
+            echo "::error::An incomplete draft exists for ${GITHUB_REF_NAME}; inspect it before retrying."
+            exit 1
+          elif [ "$RELEASE" != absent ]; then
+            echo "::error::Unexpected release lookup result: ${RELEASE}"
+            exit 1
+          fi
+          ASSETS=()
+          if python3 -c 'import json,sys; sys.exit(not json.load(open("hacs.json")).get("zip_release", False))'; then
+            SOURCE_TAG="${GITHUB_REF_NAME/-dev./.dev}"
+            mkdir -p dist/integration
+            gh release download "$SOURCE_TAG" --repo homeassistant-ai/ha-mcp \
+              --pattern ha_mcp_tools.zip --dir dist/integration
+            ASSETS=(dist/integration/ha_mcp_tools.zip)
           fi
           # -dev. tags are the dev channel: the prerelease flag is what keeps
           # them away from stable HACS users (HACS filters on it unless the
@@ -83,7 +101,7 @@ jobs:
           case "$GITHUB_REF_NAME" in
             *-dev.*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
             --title "$VER" -F /tmp/notes.md $PRERELEASE_FLAG
 
       - name: Retire superseded dev pre-releases

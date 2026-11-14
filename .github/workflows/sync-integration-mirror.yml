@@ -4,7 +4,7 @@ name: Sync Integration Mirror
 # in lockstep. The component shares the server's version and pins the server
 # build it runs (#2427), so every mirror release is a component + server pair:
 #
-# - stable: after "SemVer Release", the release tag's component (stamped by
+# - stable: after "Release Publish", the public release's component (stamped by
 #   semantic-release with the release version and its ha-mcp== pin) is tagged
 #   vX.Y.Z once PyPI serves that ha-mcp build.
 # - dev: after "Publish Dev Channel", the snapshot of the commit it built is
@@ -39,7 +39,7 @@ on:
       - "scripts/build_mirror_readme.py"
       - ".github/integration-mirror-workflows/**"
   workflow_run:
-    workflows: ["SemVer Release", "Publish Dev Channel"]
+    workflows: ["Release Publish", "Publish Dev Channel"]
     types: [completed]
     # Publish Dev Channel also runs on dispatch from any branch; only master
     # builds may reach the mirror.
@@ -71,10 +71,8 @@ jobs:
   # overall conclusion skipped the mirror tag whenever any UNRELATED leg
   # failed (v7.12.2: an app image cache flake failed the release run and HACS
   # never got the component tag), so each leg keys on the one job it needs:
-  # "Semantic Release" for stable, the ha-mcp-dev PyPI publish for dev (the
-  # pin must exist on PyPI). Both legs are idempotent, so the stable leg fails
-  # OPEN on an unreadable job list: a spurious run re-confirms the existing
-  # tag, while a suppressed one strands HACS on the previous release.
+  # The PyPI job publishes the stable GitHub release before finishing; dev
+  # creation requires PyPI and attaches its ZIP. Unreadable jobs prove nothing.
   gate:
     runs-on: ubuntu-latest
     permissions:
@@ -123,29 +121,26 @@ jobs:
             echo "channel=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$TRIGGER_WORKFLOW" = "SemVer Release" ]; then
-            job="Semantic Release"; leg=stable
+          if [ "$TRIGGER_WORKFLOW" = "Release Publish" ]; then
+            job="Publish PyPI package"; leg=stable
           else
-            job="Publish PyPI (dev channel)"; leg=dev
+            job="Create GitHub pre-release"; leg=dev
           fi
           if ! conclusion=$(gh api \
             "repos/${{ github.repository }}/actions/runs/${TRIGGER_RUN_ID}/jobs?per_page=100" \
             --jq "[.jobs[] | select(.name == \"$job\") | .conclusion] | first // empty"); then
-            if [ "$leg" = stable ]; then
-              echo "::warning::Could not query the triggering run's jobs; failing open."
-              echo "channel=stable" >> "$GITHUB_OUTPUT"
-            elif [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$EVENT" = workflow_dispatch ]; then
               # A maintainer asked for this pre-release: fail and say why.
               echo "::error::Could not query Publish Dev Channel run ${TRIGGER_RUN_ID}'s jobs."
               exit 1
             else
-              echo "::warning::Could not query the triggering run's jobs; skipping this dev build."
+              echo "::warning::Could not query the triggering run's jobs; skipping this build."
               echo "channel=skip" >> "$GITHUB_OUTPUT"
             fi
             exit 0
           fi
           echo "'$job' conclusion: ${conclusion:-<job absent>}"
-          if [ "$conclusion" = success ] || { [ "$leg" = stable ] && [ -z "$conclusion" ]; }; then
+          if [ "$conclusion" = success ]; then
             echo "channel=$leg" >> "$GITHUB_OUTPUT"
             echo "dev_run=$TRIGGER_RUN_ID" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT" = workflow_dispatch ]; then
@@ -192,24 +187,13 @@ jobs:
         id: release
         env:
           TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           case "$CHANNEL" in
             stable)
-              # The release semantic-release cut from the triggering commit is
-              # the first stable tag that contains it; the newest tag could be
-              # a later release when this run waited in the queue. A recovery
-              # dispatch has no trigger and re-tags the newest. That commit
-              # carries the stamped manifest: snapshot ITS component, not
-              # master's tip. A separate worktree keeps this workflow's own
-              # scripts: a recovery dispatch may target an older tag.
-              stable_tags() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V; }
-              VER=""
-              if [ -n "$TRIGGER_SHA" ]; then
-                VER=$(git tag -l 'v*' --contains "$TRIGGER_SHA" | stable_tags | head -n 1)
-              fi
-              if [ -z "$VER" ]; then
-                VER=$(git tag -l 'v*' | stable_tags | tail -n 1)
-              fi
+              # Follow the current public stable release, never an unpublished
+              # tag or master's unstamped tip. Queued/recovery runs converge.
+              VER=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
               VER="${VER#v}"
               SRC="$RUNNER_TEMP/release-src"
               git worktree add --quiet --detach "$SRC" "v${VER}"
