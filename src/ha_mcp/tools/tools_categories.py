@@ -354,8 +354,9 @@ class CategoryTools:
         """
         Delete a Home Assistant category.
 
-        Removes the category from the category registry for the given scope.
-        This will also remove the category assignment from all entities in that scope.
+        Removes the category from the category registry for the given scope, and
+        from every entity in that scope that had it. The auto-backup of this call
+        restores the category itself, under a new id, not the entities that had it.
 
         To move one entity to another category or out of its category and keep the
         category, use ha_set_entity(categories=...) instead.
@@ -364,10 +365,6 @@ class CategoryTools:
         - Delete category: ha_config_remove_category("automation", "my_category_id")
 
         Use ha_config_get_category() to find category IDs.
-
-        **WARNING:** Deleting a category will remove it from all assigned entities.
-        The auto-backup of this call restores the category itself, under a new id,
-        not the entities that had it.
         """
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.

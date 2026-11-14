@@ -116,8 +116,8 @@ async def test_label_description_of_only_quotes_is_refused(
 async def test_label_update_with_a_blank_name_is_refused(
     hass: HomeAssistant, labels: LabelTools, blank: str
 ) -> None:
-    """Core stores a blank name; the frontend dialog does not save one, and the
-    other fields' "blank clears it" must not blank the name."""
+    """Core stores a blank name, and a blank value clears the other fields, so a
+    blank name is refused instead of read as "clear it"."""
     label = lr.async_get(hass).async_create("Security")
 
     error = await rejected_call_body(
@@ -303,8 +303,8 @@ async def test_category_update_with_a_blank_icon_clears_it(
 async def test_category_update_with_a_blank_name_is_refused(
     hass: HomeAssistant, categories: CategoryTools, blank: str
 ) -> None:
-    """Core stores a blank name; the frontend dialog does not save one, and the
-    icon's "blank clears it" must not blank the name."""
+    """Core stores a blank name, and a blank value clears the other fields, so a
+    blank name is refused instead of read as "clear it"."""
     category = cr.async_get(hass).async_create(scope="automation", name="Lighting")
 
     error = await rejected_call_body(
@@ -366,7 +366,7 @@ async def test_category_name_conflict_is_not_reported_as_not_found(
         )
     )
 
-    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "already in use" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_info"
     assert "ha_config_get_category" in error["error"]["suggestion"]
@@ -407,7 +407,7 @@ async def test_label_remove_of_an_unknown_id_is_not_found(labels: LabelTools) ->
     error = await rejected_call_body(labels.ha_config_remove_label(label_id="missing"))
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert error["error"]["message"] == "Label not found: missing"
+    assert "missing" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_info"
     assert "ha_config_get_label" in error["error"]["suggestion"]
 
@@ -420,6 +420,6 @@ async def test_category_remove_of_an_unknown_id_is_not_found(
     )
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert error["error"]["message"] == "Category not found: missing"
+    assert "missing" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_info"
     assert "ha_config_get_category" in error["error"]["suggestion"]

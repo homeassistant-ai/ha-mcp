@@ -4,10 +4,12 @@ Core refuses an update of an id it no longer holds (a label's, an area's and a
 floor's with "Unknown error"), so a deleted item is created again. A created
 label, area or floor gets the id Core derives from its name, a created category
 an id Core picks: neither is the snapshot's after a rename, or for a category
-at all. A second restore therefore takes the row whose fields all match the
-snapshot's as the one the first restore created. Names are unique in these
-registries, so returning that row is right, and the alternative is Core's
-"already in use" refusal.
+at all, and the restore says so. A second restore takes the row whose fields all
+match the snapshot's as the one the first restore created. Names are unique in
+these registries, so returning that row is right, and the alternative is Core's
+"already in use" refusal. A restore Core refuses for that reason names the item
+that holds the name. The diff finds a deleted item's live counterpart by that
+name, and reports an id that differs.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from .backup_entity_ids import _manager
+from .client.rest_client import HomeAssistantCommandError
 
 
 async def _rows(client: Any, kind: str) -> list[Any]:
@@ -72,26 +75,38 @@ def _has_fields(row: dict[str, Any], fields: dict[str, Any]) -> bool:
 
 
 def _like(rows: list[Any], payload: dict[str, Any]) -> Any:
-    """The row whose fields all match the payload, None when there is none.
-
-    A payload without a name matches nothing: every capture holds one, and
-    without it any row would match.
-    """
-    if not payload.get("name"):
-        return None
+    """The row whose fields all match the payload, None when there is none."""
     return next((r for r in rows if _has_fields(r, payload)), None)
 
 
-async def _with_existing_labels(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    """The payload with the label ids Core no longer holds left out.
+def _holding_name(rows: list[Any], payload: dict[str, Any]) -> Any:
+    """The row that has the payload's name, None when there is none.
 
-    Core drops those from a created or updated area and still answers success,
-    so the row a restore leaves has only the others.
+    Names are unique in these registries. The match is on the name as the
+    snapshot holds it, which is the name a restore sends; a row Core takes for
+    the same name under its own normalisation is not found, and Core's text
+    stands alone then.
     """
-    if "labels" not in payload:
-        return payload
-    held = {row.get("label_id") for row in await _rows(client, "label")}
-    return {**payload, "labels": [x for x in payload["labels"] or [] if x in held]}
+    return next((r for r in rows if r.get("name") == payload.get("name")), None)
+
+
+def _noting(row: Any, *warnings: str) -> Any:
+    """The row with the warnings added to the ones it already carries."""
+    if not warnings:
+        return row
+    return {**row, "warnings": [*(row.get("warnings") or []), *warnings]}
+
+
+def _other_id_warning(row: Any, id_key: str, item_id: str) -> str | None:
+    """The warning for a restore that gave the item an id other than its own."""
+    new_id = row.get(id_key)
+    if new_id == item_id:
+        return None
+    noun = id_key.removesuffix("_id")
+    return (
+        f"The {noun} came back as {new_id}, not {item_id}: anything that refers "
+        f"to the {noun} by {item_id} still matches nothing."
+    )
 
 
 async def _restore_item(
@@ -101,6 +116,7 @@ async def _restore_item(
     id_key: str,
     item_id: str,
     payload: dict[str, Any],
+    tools: tuple[str, str],
     extra_ids: dict[str, Any] | None = None,
 ) -> Any:
     """Update the item, or create it again when Core no longer holds its id.
@@ -108,7 +124,10 @@ async def _restore_item(
     A row whose fields all match the payload stands for the item an earlier
     restore created, and is returned as it is. A create leaves out a field that
     is None: some create schemas (an area's icon and floor) take a string or
-    nothing, and nothing is the default.
+    nothing, and nothing is the default. The row carries a warning when its id
+    is not the snapshot's. A create Core refuses because the name is taken
+    raises with the item that holds it and ``tools``, the calls that edit and
+    remove an item of this registry (``{id}`` stands for its id).
     """
     bm = _manager()
     extra_ids = extra_ids or {}
@@ -122,13 +141,30 @@ async def _restore_item(
                 **payload,
             },
         )
-    like = _like(rows, payload)
-    if like is not None:
-        return like
-    fields = {k: v for k, v in payload.items() if v is not None}
-    return await bm._ws_send(
-        client, {"type": f"config/{registry}/create", **extra_ids, **fields}
-    )
+    row = _like(rows, payload)
+    if row is None:
+        fields = {k: v for k, v in payload.items() if v is not None}
+        try:
+            row = await bm._ws_send(
+                client, {"type": f"config/{registry}/create", **extra_ids, **fields}
+            )
+        except HomeAssistantCommandError as err:
+            holder = _holding_name(rows, payload)
+            if holder is None:
+                raise
+            noun = id_key.removesuffix("_id")
+            held_id = holder.get(id_key)
+            edit, remove = (call.format(id=held_id) for call in tools)
+            raise bm.BackupRestoreError(
+                f"{err}: the {noun} {held_id} holds the name {payload.get('name')!r}, "
+                f"so the removed {noun} {item_id} was not created again. Nothing "
+                "was changed.",
+                suggestions=[
+                    f"If {held_id} is the {noun} to keep, change it with {edit}",
+                    f"Otherwise remove it with {remove}, then restore this backup again",
+                ],
+            ) from err
+    return _noting(row, *filter(None, [_other_id_warning(row, id_key, item_id)]))
 
 
 async def fetch_label(client: Any, entity_id: str) -> Any:
@@ -140,7 +176,13 @@ async def restore_label(client: Any, entity_id: str, config: Any) -> Any:
     rows = await _rows(client, "label")
     payload = _manager()._strip_readonly(config, "label_id")
     return await _restore_item(
-        client, rows, "label_registry", "label_id", entity_id, payload
+        client,
+        rows,
+        "label_registry",
+        "label_id",
+        entity_id,
+        payload,
+        ("ha_config_set_label(label_id={id})", "ha_config_remove_label(label_id={id})"),
     )
 
 
@@ -166,6 +208,10 @@ async def restore_category(client: Any, entity_id: str, config: Any) -> Any:
         "category_id",
         cat_id,
         payload,
+        (
+            f"ha_config_set_category(scope={scope}, category_id={{id}})",
+            f"ha_config_remove_category(scope={scope}, category_id={{id}})",
+        ),
         {"scope": scope},
     )
 
@@ -194,48 +240,67 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
             f"{kind}_registry",
             f"{kind}_id",
             real_id,
-            await _with_existing_labels(client, stored),
+            stored,
+            (
+                f"ha_set_area_or_floor(kind={kind}, id={{id}})",
+                f"ha_remove_area_or_floor(kind={kind}, id={{id}})",
+            ),
         )
-    # Core drops a label id it no longer holds and still answers success.
+    if kind == "area":
+        return _noting(row, *await _area_warnings(client, stored, row))
+    return row
+
+
+async def _area_warnings(client: Any, stored: dict[str, Any], row: Any) -> list[str]:
+    """What Core accepted without complaint, read from the area it answered with.
+
+    Core drops a label id it no longer holds from an area and still answers
+    success. It does not check an area's ``floor_id`` either, so the check for a
+    floor that is gone is an HA-MCP safeguard, not a Core rule.
+    """
+    warnings = []
     missing = sorted(set(stored.get("labels") or []) - set(row.get("labels") or []))
     if missing:
-        return {
-            **row,
-            "warnings": [
-                f"The area was restored without the labels {', '.join(missing)}: "
-                "they no longer exist."
-            ],
-        }
-    return row
+        warnings.append(
+            f"The area was restored without the labels {', '.join(missing)}: "
+            "they no longer exist."
+        )
+    floor_id = row.get("floor_id")
+    if floor_id and floor_id not in {
+        f.get("floor_id") for f in await _rows(client, "floor")
+    }:
+        warnings.append(
+            f"The area is on floor {floor_id}, which no longer exists, and Core "
+            "accepted it: give the area another floor with ha_set_area_or_floor."
+        )
+    return warnings
 
 
 REGISTRY_ITEM_DOMAINS = frozenset({"label", "category", "area_or_floor"})
 
 
 async def restored_item(client: Any, domain: str, entity_id: str, config: Any) -> Any:
-    """The live item a snapshot's restore created under another id, as a diff
+    """The live item that holds a deleted snapshot item's name, as a diff
     compares it, None when there is none.
 
     A restore of a deleted item creates it again under the id Core derives (a
     renamed label, area or floor) or picks (a category), so a lookup by the
-    stored id finds nothing. The row that matches the snapshot's fields is that
-    item, found as the restore finds it. Its id and its read-only timestamps
-    are the snapshot's, since neither is a difference the snapshot can restore.
+    stored id finds nothing. Names are unique, so the row with the snapshot's
+    name is that item. Its id stays its own, so the diff reports that it differs;
+    its read-only timestamps are the snapshot's, since they are no difference the
+    snapshot can restore.
     """
     bm = _manager()
     keep = {k: v for k, v in config.items() if k in bm._REGISTRY_READONLY_KEYS}
     if domain == "label":
-        payload = bm._strip_readonly(config, "label_id")
-        row = _like(await _rows(client, "label"), payload)
-        return row and {**row, "label_id": entity_id, **keep}
+        row = _holding_name(await _rows(client, "label"), config)
+        return row and {**row, **keep}
     if domain == "category":
-        scope, _, cat_id = entity_id.partition(":")
-        payload = bm._strip_readonly(config, "category_id", "scope")
-        row = _like(await _category_rows(client, scope), payload)
-        return row and {"scope": scope, **row, "category_id": cat_id, **keep}
-    kind, _, real_id = entity_id.partition(":")
+        scope = entity_id.partition(":")[0]
+        row = _holding_name(await _category_rows(client, scope), config)
+        return row and {"scope": scope, **row, **keep}
+    kind = entity_id.partition(":")[0]
     if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
         return None
-    payload = bm._strip_readonly(config, "kind", f"{kind}_id")
-    row = _like(await _rows(client, kind), await _with_existing_labels(client, payload))
-    return row and {"kind": kind, **row, f"{kind}_id": real_id, **keep}
+    row = _holding_name(await _rows(client, kind), config)
+    return row and {"kind": kind, **row, **keep}

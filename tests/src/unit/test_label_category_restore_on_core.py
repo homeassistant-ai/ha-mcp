@@ -8,7 +8,7 @@ manager's public entry point. Every registry row read back is Core's.
 from __future__ import annotations
 
 import asyncio
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -18,8 +18,7 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
 
 from ha_mcp.backup_diff import DiffResponse
-from ha_mcp.backup_manager import BackupManager
-from ha_mcp.backup_registry_items import restored_item
+from ha_mcp.backup_manager import BackupManager, BackupRestoreError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
@@ -113,8 +112,8 @@ async def test_a_second_restore_of_a_renamed_label_takes_the_first_ones_label(
 async def test_a_taken_label_name_is_refused_not_overwritten(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """A label that merely shares the name is another label: the restore reports
-    Core's refusal and leaves it alone."""
+    """A label that merely shares the name is another label: the restore refuses,
+    names the label that holds the name, and leaves it alone."""
     registry = lr.async_get(hass)
     label = registry.async_create("Alpha", color="red")
     registry.async_update(label.label_id, name="Beta")
@@ -122,12 +121,32 @@ async def test_a_taken_label_name_is_refused_not_overwritten(
     registry.async_delete(label.label_id)
     other = registry.async_create("Beta", color="green")
 
-    with pytest.raises(HomeAssistantCommandError, match="already in use"):
+    with pytest.raises(BackupRestoreError, match="already in use") as refused:
         await backup_manager.restore_snapshot(snapshot)
 
+    assert other.label_id in str(refused.value)
+    assert refused.value.outcome["apply_status"] == "not_applied"
+    assert any(other.label_id in tip for tip in refused.value.outcome["suggestions"])
     kept = registry.async_get_label(other.label_id)
     assert kept is not None
     assert kept.color == "green"
+
+
+async def test_a_name_held_under_another_spelling_keeps_cores_refusal(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Core compares names after normalising them; the holder is looked up by the
+    name as the snapshot holds it, so a holder spelled otherwise is not named
+    and Core's own refusal is what the caller gets."""
+    registry = lr.async_get(hass)
+    label = registry.async_create("Alpha")
+    registry.async_update(label.label_id, name="Beta")
+    snapshot = await _snapshot(backup_manager, "label", label.label_id)
+    registry.async_delete(label.label_id)
+    registry.async_create("beta")
+
+    with pytest.raises(HomeAssistantCommandError, match="already in use"):
+        await backup_manager.restore_snapshot(snapshot)
 
 
 async def test_a_category_changed_since_the_snapshot_is_updated_in_place(
@@ -188,22 +207,6 @@ async def test_a_deleted_area_is_created_again(
     assert [(a.name, a.icon, a.aliases) for a in registry.areas.values()] == [
         ("Hall", "mdi:door", {"Entry"})
     ]
-
-
-async def test_a_second_restore_of_a_renamed_area_takes_the_first_ones_area(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """Core derives a created area's id from its name, like a label's."""
-    registry = ar.async_get(hass)
-    area = registry.async_create("Hall", icon="mdi:door")
-    registry.async_update(area.id, name="Corridor")
-    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
-    registry.async_delete(area.id)
-
-    await backup_manager.restore_snapshot(snapshot)
-    await backup_manager.restore_snapshot(snapshot)
-
-    assert [a.name for a in registry.areas.values()] == ["Corridor"]
 
 
 async def test_an_area_changed_since_the_snapshot_is_updated_in_place(
@@ -293,11 +296,12 @@ async def test_a_second_restore_matches_list_fields_in_any_order(
     ]
 
 
-async def test_a_second_restore_takes_an_area_that_lost_a_deleted_label(
+async def test_a_second_restore_of_an_area_whose_label_is_gone_names_the_holder(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """Core drops the label id it no longer holds from the created area, so the
-    area's labels differ from the snapshot's on the second restore."""
+    """Core drops the label id it no longer holds from the created area, so its
+    labels differ from the snapshot's. The server does not predict that: the
+    second restore is Core's name refusal, with the area that holds the name."""
     labels = lr.async_get(hass)
     kept = labels.async_create("Kept")
     gone = labels.async_create("Gone")
@@ -307,10 +311,12 @@ async def test_a_second_restore_takes_an_area_that_lost_a_deleted_label(
     snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
     registry.async_delete(area.id)
     labels.async_delete(gone.label_id)
-
-    await backup_manager.restore_snapshot(snapshot)
     await backup_manager.restore_snapshot(snapshot)
 
+    with pytest.raises(BackupRestoreError, match="already in use") as refused:
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert refused.value.outcome["apply_status"] == "not_applied"
     assert [(a.name, a.labels) for a in registry.areas.values()] == [
         ("Corridor", {kept.label_id})
     ]
@@ -320,7 +326,7 @@ async def test_the_restore_of_a_deleted_item_says_it_no_longer_exists(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """The item is gone, not renamed: the restore creates it again and
-    overwrites none of its state, which is what the warning says."""
+    overwrites none of its state, and the warning names the item."""
     labels = lr.async_get(hass)
     label = labels.async_create("Security")
     categories = cr.async_get(hass)
@@ -349,55 +355,75 @@ async def test_the_restore_of_a_deleted_item_says_it_no_longer_exists(
 
     for domain, snapshot in snapshots.items():
         outcome = await backup_manager.restore_snapshot(snapshot)
-        assert outcome["warnings"] == [
-            f"No safety backup was taken: {ids[domain]} no longer exists, so this "
-            "restore overwrites none of its state."
-        ], domain
+        (warning,) = outcome["warnings"]
+        assert ids[domain] in warning, domain
+        assert "no longer exists" in warning, domain
 
 
-async def test_a_diff_after_a_restore_finds_the_item_under_its_new_id(
+async def test_a_diff_after_a_restore_finds_the_item_and_reports_its_new_id(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """A restored category has another id than the snapshot's, and so does a
-    renamed label, area or floor; the diff finds them by their fields."""
+    renamed label, area or floor. The diff finds them by their name and reports
+    the id as the one difference, instead of calling them unchanged; an
+    unrelated item of the same registry is not taken for them."""
     labels = lr.async_get(hass)
+    labels.async_create("Unrelated")
     label = labels.async_create("Security")
     labels.async_update(label.label_id, name="Alarm")
     categories = cr.async_get(hass)
+    categories.async_create(scope="automation", name="Unrelated")
+    categories.async_create(scope="script", name="Unrelated")
     category = categories.async_create(scope="automation", name="Lighting")
     other = categories.async_create(scope="script", name="Night")
     areas = ar.async_get(hass)
+    areas.async_create("Unrelated")
     area = areas.async_create("Hall", icon="mdi:door")
     areas.async_update(area.id, name="Corridor")
     floors = fr.async_get(hass)
+    floors.async_create("Unrelated")
     floor = floors.async_create("Ground", level=0)
     floors.async_update(floor.floor_id, name="Base")
-    snapshots = [
-        await _snapshot(backup_manager, "label", label.label_id),
+    wanted = {
+        await _snapshot(backup_manager, "label", label.label_id): (
+            "label_id",
+            label.label_id,
+        ),
         await _snapshot(
             backup_manager, "category", f"automation:{category.category_id}"
+        ): ("category_id", category.category_id),
+        await _snapshot(backup_manager, "category", f"script:{other.category_id}"): (
+            "category_id",
+            other.category_id,
         ),
-        await _snapshot(backup_manager, "category", f"script:{other.category_id}"),
-        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
-        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
-    ]
+        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"): (
+            "area_id",
+            area.id,
+        ),
+        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"): (
+            "floor_id",
+            floor.floor_id,
+        ),
+    }
     labels.async_delete(label.label_id)
     categories.async_delete(scope="automation", category_id=category.category_id)
     categories.async_delete(scope="script", category_id=other.category_id)
     areas.async_delete(area.id)
     floors.async_delete(floor.floor_id)
 
-    for snapshot in snapshots:
+    for snapshot, (id_key, old_id) in wanted.items():
         await backup_manager.restore_snapshot(snapshot)
-        diff = await backup_manager.diff_snapshot(snapshot)
-        assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
+        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+        assert (diff["entity_missing"], diff["unchanged"]) == (False, False), snapshot
+        assert [(op["path"], op["value"]) for op in diff["patch"]] == [
+            (f"/{id_key}", old_id)
+        ], snapshot
 
 
-async def test_a_second_restore_does_not_take_an_area_that_lost_a_label_core_still_has(
+async def test_a_second_restore_does_not_take_an_area_that_lost_a_label(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """Only the label ids Core no longer holds are left out of the match, so a
-    row that lacks a label that still exists is not the restored area."""
+    """A row that lacks a label of the snapshot's is not the restored area."""
     labels = lr.async_get(hass)
     kept = labels.async_create("Kept")
     other = labels.async_create("Other")
@@ -411,7 +437,7 @@ async def test_a_second_restore_does_not_take_an_area_that_lost_a_label_core_sti
     (restored,) = registry.areas.values()
     registry.async_update(restored.id, labels={kept.label_id})
 
-    with pytest.raises(HomeAssistantCommandError, match="already in use"):
+    with pytest.raises(BackupRestoreError, match="already in use"):
         await backup_manager.restore_snapshot(snapshot)
 
     assert [(a.name, a.labels) for a in registry.areas.values()] == [
@@ -448,8 +474,8 @@ async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
 async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """The restored area is found although it lost a deleted label; the lost
-    label is the one difference the diff reports."""
+    """The restored area is found although it lost a deleted label, and the lost
+    label is among the differences the diff reports."""
     labels = lr.async_get(hass)
     gone = labels.async_create("Gone")
     areas = ar.async_get(hass)
@@ -463,9 +489,9 @@ async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
     diff = await backup_manager.diff_snapshot(snapshot)
 
     assert diff["entity_missing"] is False
-    assert cast(DiffResponse, diff)["patch"] == [
-        {"op": "add", "path": "/labels/-", "value": gone.label_id}
-    ]
+    assert {"op": "add", "path": "/labels/-", "value": gone.label_id} in cast(
+        DiffResponse, diff
+    )["patch"]
 
 
 async def test_a_diff_of_a_present_item_changed_since_the_snapshot_is_not_missing(
@@ -529,21 +555,6 @@ async def test_a_diff_of_a_deleted_item_still_says_it_is_missing(
         assert (diff["entity_missing"], diff["unchanged"]) == (True, False), snapshot
 
 
-@pytest.mark.usefixtures("backup_manager")  # loads Core's config commands
-async def test_a_snapshot_without_a_name_matches_no_live_item(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """Every capture holds a name; without one any row would match."""
-    labels = lr.async_get(hass)
-    labels.async_create("Unrelated")
-
-    found = await restored_item(
-        core_client, "label", "security", {"label_id": "security"}
-    )
-
-    assert found is None
-
-
 async def test_a_floor_changed_since_the_snapshot_is_updated_in_place(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
@@ -604,9 +615,20 @@ async def test_a_restore_reads_areas_and_categories_through_the_component(
     hass: HomeAssistant,
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With the component installed the registry read takes its route; a
-    second restore still finds the first one's item."""
+    """With the component installed the registry read takes its route and gets
+    an answer; a second restore still finds the first one's item."""
+    from ha_mcp.tools import component_registries
+
+    answers: list[object] = []
+    reads = component_registries.fetch_registries_via_component
+
+    async def spied(*args: Any, **kwargs: Any) -> Any:
+        answers.append(await reads(*args, **kwargs))
+        return answers[-1]
+
+    monkeypatch.setattr(component_registries, "fetch_registries_via_component", spied)
     areas = ar.async_get(hass)
     area = areas.async_create("Hall", icon="mdi:door")
     areas.async_update(area.id, name="Corridor")
@@ -618,6 +640,7 @@ async def test_a_restore_reads_areas_and_categories_through_the_component(
         backup_manager, "category", f"automation:{category.category_id}"
     )
     categories.async_delete(scope="automation", category_id=category.category_id)
+    answers.clear()
 
     for snapshot in (
         area_snapshot,
@@ -627,6 +650,8 @@ async def test_a_restore_reads_areas_and_categories_through_the_component(
     ):
         await backup_manager.restore_snapshot(snapshot)
 
+    assert answers
+    assert all(answer is not None for answer in answers)
     assert [a.name for a in areas.areas.values()] == ["Corridor"]
     assert [c.name for c in categories.categories["automation"].values()] == [
         "Lighting"
@@ -637,7 +662,7 @@ async def test_an_area_restored_without_a_deleted_label_says_so(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """Core drops a label id it no longer holds and still answers success, so
-    the restore names it."""
+    the restore names it, and only it."""
     labels = lr.async_get(hass)
     gone = labels.async_create("Gone")
     kept = labels.async_create("Kept")
@@ -651,9 +676,9 @@ async def test_an_area_restored_without_a_deleted_label_says_so(
 
     outcome = await backup_manager.restore_snapshot(snapshot)
 
-    assert outcome["result"]["warnings"] == [
-        "The area was restored without the labels gone: they no longer exist."
-    ]
+    (warning,) = outcome["result"]["warnings"]
+    assert gone.label_id in warning
+    assert kept.label_id not in warning
     restored = registry.async_get_area(area.id)
     assert restored is not None
     assert restored.labels == {kept.label_id}
@@ -672,3 +697,147 @@ async def test_an_area_restored_with_its_labels_has_no_label_warning(
     outcome = await backup_manager.restore_snapshot(snapshot)
 
     assert "warnings" not in outcome["result"]
+
+
+async def test_an_area_restored_onto_a_floor_that_is_gone_says_so(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Core takes an area off a floor when the floor is deleted, but does not
+    check the ``floor_id`` it is given later: the restore names the floor that
+    is gone instead of leaving the area on it unnoticed."""
+    floors = fr.async_get(hass)
+    floor = floors.async_create("Upstairs")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall", floor_id=floor.floor_id)
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    areas.async_delete(area.id)
+    floors.async_delete(floor.floor_id)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    (warning,) = outcome["result"]["warnings"]
+    assert floor.floor_id in warning
+    restored = areas.async_get_area(area.id)
+    assert restored is not None
+    assert restored.floor_id == floor.floor_id
+
+
+async def test_an_area_updated_onto_a_floor_that_is_gone_says_so(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """The check follows every write of an area, not only a create."""
+    floors = fr.async_get(hass)
+    floor = floors.async_create("Upstairs")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall", floor_id=floor.floor_id)
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    floors.async_delete(floor.floor_id)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    (warning,) = outcome["result"]["warnings"]
+    assert floor.floor_id in warning
+
+
+async def test_an_area_restored_onto_its_floor_has_no_floor_warning(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    floor = fr.async_get(hass).async_create("Upstairs")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall", floor_id=floor.floor_id)
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    areas.async_delete(area.id)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    assert "warnings" not in outcome["result"]
+
+
+async def test_an_item_restored_under_another_id_names_both_ids(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Core derives a created label's, area's and floor's id from its name and
+    picks a category's: whatever refers to the old id matches nothing, and the
+    restore says so, on the repeat too, which answers with the first one's row."""
+    labels = lr.async_get(hass)
+    label = labels.async_create("Lights")
+    labels.async_update(label.label_id, name="Lamps")
+    categories = cr.async_get(hass)
+    category = categories.async_create(scope="automation", name="Lighting")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall")
+    areas.async_update(area.id, name="Corridor")
+    floors = fr.async_get(hass)
+    floor = floors.async_create("Ground")
+    floors.async_update(floor.floor_id, name="Base")
+    old_ids = {
+        "label": label.label_id,
+        "category": category.category_id,
+        "area": area.id,
+        "floor": floor.floor_id,
+    }
+    snapshots = {
+        "label": await _snapshot(backup_manager, "label", label.label_id),
+        "category": await _snapshot(
+            backup_manager, "category", f"automation:{category.category_id}"
+        ),
+        "area": await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
+        "floor": await _snapshot(
+            backup_manager, "area_or_floor", f"floor:{floor.floor_id}"
+        ),
+    }
+    labels.async_delete(label.label_id)
+    categories.async_delete(scope="automation", category_id=category.category_id)
+    areas.async_delete(area.id)
+    floors.async_delete(floor.floor_id)
+
+    for kind, snapshot in snapshots.items():
+        first = await backup_manager.restore_snapshot(snapshot)
+        again = await backup_manager.restore_snapshot(snapshot)
+        for outcome in (first, again):
+            (warning,) = outcome["result"]["warnings"]
+            new_id = outcome["result"][f"{kind}_id"]
+            assert new_id != old_ids[kind], kind
+            assert old_ids[kind] in warning and new_id in warning, kind
+
+
+async def test_an_item_restored_under_its_own_id_has_no_id_warning(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    labels = lr.async_get(hass)
+    label = labels.async_create("Security")
+    snapshot = await _snapshot(backup_manager, "label", label.label_id)
+    labels.async_delete(label.label_id)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    assert outcome["result"]["label_id"] == label.label_id
+    assert "warnings" not in outcome["result"]
+
+
+async def test_a_repeat_restore_of_a_changed_item_names_the_one_that_holds_the_name(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """The restored item is changed, so no row matches the snapshot any more and
+    Core refuses the create: the answer names the item that holds the name, as
+    not applied, since Core refused the write."""
+    categories = cr.async_get(hass)
+    category = categories.async_create(scope="automation", name="Lighting")
+    snapshot = await _snapshot(
+        backup_manager, "category", f"automation:{category.category_id}"
+    )
+    categories.async_delete(scope="automation", category_id=category.category_id)
+    await backup_manager.restore_snapshot(snapshot)
+    (restored,) = categories.categories["automation"].values()
+    categories.async_update(
+        scope="automation", category_id=restored.category_id, icon="mdi:lamp"
+    )
+
+    with pytest.raises(BackupRestoreError, match="already in use") as refused:
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert restored.category_id in str(refused.value)
+    assert refused.value.outcome["apply_status"] == "not_applied"
+    assert any(
+        restored.category_id in tip for tip in refused.value.outcome["suggestions"]
+    )

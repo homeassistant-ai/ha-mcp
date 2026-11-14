@@ -851,8 +851,8 @@ def raise_core_refusal(
 def refuse_blank_name(name: str | None, context: dict[str, Any]) -> None:
     """Refuse a blank ``name`` of a label or category (``None`` leaves it as is).
 
-    An HA-MCP safeguard: Core stores a blank name, the frontend dialogs do not
-    save one, and the other fields' "blank clears it" must not blank the name.
+    An HA-MCP safeguard: Core stores a blank name, and a blank value clears the
+    other fields, so a blank name is refused instead of read as "clear it".
     """
     if name is not None:
         validate_identifier_not_empty(
@@ -860,7 +860,7 @@ def refuse_blank_name(name: str | None, context: dict[str, Any]) -> None:
             "name",
             message=(
                 "name must not be blank (an HA-MCP safeguard: Core accepts a "
-                "blank name, the frontend does not save one)"
+                "blank name, and a blank value clears the other fields)"
             ),
             suggestions=["Pass a non-empty name, or omit name on update to keep it"],
             context=context,
