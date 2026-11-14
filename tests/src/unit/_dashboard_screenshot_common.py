@@ -5,8 +5,11 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp import config
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 PNG = b"\x89PNG\r\n\x1a\nunit"
 
@@ -110,3 +113,24 @@ def set_settings(monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
     settings = config.get_global_settings()
     for name, value in fields.items():
         monkeypatch.setattr(settings, name, value)
+
+
+async def wall_panel(hass: HomeAssistant, client: HomeAssistantClient) -> None:
+    """A storage dashboard "wall-panel" with a view "home", saved through Core."""
+    assert await async_setup_component(hass, "lovelace", {})
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": "wall-panel",
+            "title": "Wall",
+        }
+    )
+    assert created["success"], created
+    saved = await client.send_websocket_message(
+        {
+            "type": "lovelace/config/save",
+            "url_path": "wall-panel",
+            "config": {"views": [{"title": "Home", "path": "home"}]},
+        }
+    )
+    assert saved["success"], saved

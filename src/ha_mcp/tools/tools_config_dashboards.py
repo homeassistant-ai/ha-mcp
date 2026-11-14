@@ -2651,7 +2651,7 @@ class DashboardConfigTools:
                 )
 
             if python_transform is not None:
-                return await self.run_dashboard_python_transform(
+                return await self._run_dashboard_python_transform(
                     url_path,
                     config_hash,
                     python_transform,
@@ -2852,7 +2852,7 @@ class DashboardConfigTools:
             return transformed_config, None, warning
         return post_save_config, new_config_hash, None
 
-    async def run_dashboard_python_transform(
+    async def _run_dashboard_python_transform(
         self,
         url_path: str,
         config_hash: str | None,

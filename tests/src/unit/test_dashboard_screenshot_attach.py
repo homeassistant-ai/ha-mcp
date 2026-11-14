@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Literal
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import ToolResult
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 
 from ._dashboard_screenshot_common import (
     PNG,
     clear_screenshot_env,
     fake_dashboard_capture,
     set_settings,
+    wall_panel,
 )
+from ._held_command import held_command
 
 
 @pytest.fixture(autouse=True)
@@ -426,175 +432,155 @@ class TestMaybeAttachScreenshot:
         )
 
 
-async def test_post_write_render_path_fetch_failure_is_only_a_warning(
-    monkeypatch: Any,
+@pytest.mark.parametrize(
+    "fallback",
+    [None, {"views": [{"title": "Home", "path": "submitted"}]}],
+    ids=["no-fallback", "submitted-fallback"],
+)
+async def test_post_write_readback_without_answer_is_only_a_warning(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    fallback: dict[str, Any] | None,
 ) -> None:
+    """A landed write stays a success when its readback gets no answer; with
+    no readback there are no render paths, only a screenshot fallback."""
     from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-    async def boom(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("websocket disconnected")
-
-    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
+    await wall_panel(hass, core_client)
+    monkeypatch.setattr(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("websocket disconnected")),
+    )
     result: dict[str, Any] = {"success": True, "action": "update"}
 
     config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
-        object(), result, "wall-panel"
+        core_client, result, "wall-panel", fallback
     )
 
-    assert config_result is None
+    assert config_result is fallback
     assert result["success"] is True
     assert "render_paths" not in result
     assert any("websocket disconnected" in warning for warning in result["warnings"])
 
 
-async def test_post_write_render_paths_use_authoritative_readback(
-    monkeypatch: Any,
+async def test_post_write_render_paths_come_from_cores_readback(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
+    """Render paths name the views Core stored, not the ones submitted."""
     from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
+    await wall_panel(hass, core_client)
     submitted = {"views": [{"title": "Home", "path": "submitted"}]}
-    authoritative = {"views": [{"title": "Home", "path": "normalized"}]}
-
-    async def readback(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], str]:
-        return authoritative, "hash"
-
-    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", readback)
     result: dict[str, Any] = {"success": True, "action": "update"}
 
     config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
-        object(), result, "wall-panel", submitted
+        core_client, result, "wall-panel", submitted
     )
 
-    assert config_result is authoritative
-    assert result["render_paths"][0]["render_path"] == "wall-panel/normalized"
+    assert config_result is not None
+    assert config_result["views"][0]["path"] == "home"
+    assert result["render_paths"][0]["render_path"] == "wall-panel/home"
 
 
-async def test_post_write_readback_failure_keeps_only_screenshot_fallback(
-    monkeypatch: Any,
+async def _transform_hash(client: HomeAssistantClient) -> str:
+    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
+
+    read = await dashboard_tools.DashboardConfigTools(client).ha_config_get_dashboard(
+        url_path="wall-panel"
+    )
+    assert isinstance(read, dict), read
+    config_hash: str = read["config_hash"]
+    return config_hash
+
+
+async def test_python_transform_screenshot_shows_the_saved_config(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-    fallback = {"views": [{"title": "Home", "path": "submitted"}]}
-
-    async def boom(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("readback failed")
-
-    monkeypatch.setattr(dashboard_tools, "_get_dashboard_config_internal", boom)
-    result: dict[str, Any] = {"success": True, "action": "update"}
-
-    config_result = await dashboard_tools.attach_dashboard_render_paths_after_write(
-        object(), result, "wall-panel", fallback
+    set_settings(
+        monkeypatch, enable_dashboard_screenshot=True, enable_mandatory_bps=False
     )
-
-    assert config_result is fallback
-    assert "render_paths" not in result
-    assert any("readback failed" in warning for warning in result["warnings"])
-
-
-async def test_python_transform_can_return_screenshot_from_post_save_config(
-    monkeypatch: Any,
-) -> None:
-    from ha_mcp.tools import tools_config_dashboards as dashboard_tools
-
-    tools = dashboard_tools.DashboardConfigTools(object())
-    current = {"views": [{"title": "Old", "path": "home"}]}
-    transformed = {"views": [{"title": "New", "path": "home"}]}
+    await wall_panel(hass, core_client)
+    config_hash = await _transform_hash(core_client)
     seen: dict[str, Any] = {}
 
-    async def fetch_and_verify(_url_path: str, _config_hash: str) -> dict[str, Any]:
-        return current
-
-    def apply_transform(
-        _url_path: str, _expression: str, _config: dict[str, Any]
-    ) -> dict[str, Any]:
-        return transformed
-
-    async def save_transform(
-        _url_path: str, _config: dict[str, Any], *, action: str
-    ) -> tuple[dict[str, Any], str, str | None]:
-        assert action == "python_transform"
-        return transformed, "new-hash", None
-
     async def attach(
-        result: dict[str, Any],
-        url_path: str,
-        requested: bool,
-        **kwargs: Any,
+        result: dict[str, Any], url_path: str, requested: bool, **kwargs: Any
     ) -> dict[str, Any]:
-        seen.update(
-            result=result,
-            url_path=url_path,
-            requested=requested,
-            config=kwargs["config"],
-        )
+        seen.update(url_path=url_path, requested=requested, config=kwargs["config"])
         return result
 
-    monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)
-    monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
-    monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
     monkeypatch.setattr(dashboard_tools, "maybe_attach_screenshot", attach)
 
-    result = await tools.run_dashboard_python_transform(
-        "wall-panel",
-        "old-hash",
-        "config['views'][0]['title'] = 'New'",
-        None,
-        False,
+    result = await dashboard_tools.DashboardConfigTools(
+        core_client
+    ).ha_config_set_dashboard(
+        url_path="wall-panel",
+        config_hash=config_hash,
+        python_transform="config['views'][0]['title'] = 'New'",
         return_screenshot=True,
-        screenshot_options=dashboard_tools.DashboardScreenshotOptions(view_path="home"),
+        view_path="home",
     )
 
-    assert result["config_hash"] == "new-hash"
+    stored = await core_client.send_websocket_message(
+        {"type": "lovelace/config", "url_path": "wall-panel"}
+    )
+    assert isinstance(result, dict), result
     assert result["render_paths"][0]["render_path"] == "wall-panel/home"
     assert seen == {
-        "result": result,
         "url_path": "wall-panel",
         "requested": True,
-        "config": transformed,
+        "config": stored["result"],
     }
+    assert seen["config"]["views"][0]["title"] == "New"
 
 
-async def test_python_transform_post_save_read_failure_reports_committed_write(
-    monkeypatch: Any,
+async def test_python_transform_without_post_save_answer_reports_committed_write(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
-    tools = dashboard_tools.DashboardConfigTools(object())
-    transformed = {"views": [{"title": "New", "path": "home"}]}
+    set_settings(monkeypatch, enable_mandatory_bps=False)
+    await wall_panel(hass, core_client)
+    config_hash = await _transform_hash(core_client)
+    tools = dashboard_tools.DashboardConfigTools(core_client)
 
-    async def fetch_and_verify(_url_path: str, _config_hash: str) -> dict[str, Any]:
-        return {"views": [{"title": "Old", "path": "home"}]}
+    async with held_command(hass, "lovelace/config/save") as held:
+        edit = asyncio.create_task(
+            tools.ha_config_set_dashboard(
+                url_path="wall-panel",
+                config_hash=config_hash,
+                python_transform="config['views'][0]['title'] = 'New'",
+            )
+        )
+        await asyncio.wait_for(held.arrived.wait(), 2)
+        with monkeypatch.context() as no_answer:
+            # The save reached Core; its readback then gets no answer.
+            no_answer.setattr(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+            )
+            held.release.set()
+            result = await edit
 
-    def apply_transform(
-        _url_path: str, _expression: str, _config: dict[str, Any]
-    ) -> dict[str, Any]:
-        return transformed
-
-    async def save_transform(
-        _url_path: str, _config: dict[str, Any], *, action: str
-    ) -> tuple[dict[str, Any], str | None, str | None]:
-        assert action == "python_transform"
-        return transformed, None, "authoritative reload failed"
-
-    monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)
-    monkeypatch.setattr(tools, "_apply_dashboard_python_transform", apply_transform)
-    monkeypatch.setattr(tools, "_save_dashboard_python_transform", save_transform)
-
-    result = await tools.run_dashboard_python_transform(
-        "wall-panel",
-        "old-hash",
-        "config['views'][0]['title'] = 'New'",
-        None,
-        False,
-        return_screenshot=False,
-        screenshot_options=dashboard_tools.DashboardScreenshotOptions(),
+    stored = await core_client.send_websocket_message(
+        {"type": "lovelace/config", "url_path": "wall-panel"}
     )
-
+    assert stored["result"]["views"][0]["title"] == "New"
+    assert isinstance(result, dict), result
     assert result["success"] is True
     assert result["write_committed"] is True
     assert result["post_write_verified"] is False
     assert result["config_hash"] is None
-    assert "authoritative reload failed" in result["warnings"][0]
+    assert "could not be reloaded" in result["warnings"][0]
     assert "render_paths" not in result
 
 
@@ -663,27 +649,6 @@ class TestAttachScreenshotToolError:
         assert "warnings" not in result["screenshot_error"]
 
 
-async def _wall_panel(hass: HomeAssistant, client: HomeAssistantClient) -> None:
-    """A storage dashboard "wall-panel" with a view "home", saved through Core."""
-    assert await async_setup_component(hass, "lovelace", {})
-    created = await client.send_websocket_message(
-        {
-            "type": "lovelace/dashboards/create",
-            "url_path": "wall-panel",
-            "title": "Wall",
-        }
-    )
-    assert created["success"], created
-    saved = await client.send_websocket_message(
-        {
-            "type": "lovelace/config/save",
-            "url_path": "wall-panel",
-            "config": {"views": [{"title": "Home", "path": "home"}]},
-        }
-    )
-    assert saved["success"], saved
-
-
 class TestPublicScreenshotOptionForwarding:
     """Public dashboard get/set methods forward view_path only.
 
@@ -730,7 +695,7 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
-        await _wall_panel(hass, core_client)
+        await wall_panel(hass, core_client)
 
         result = await dashboard_tools.DashboardConfigTools(
             core_client
@@ -763,7 +728,7 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
-        await _wall_panel(hass, core_client)
+        await wall_panel(hass, core_client)
         dashboard_config = {
             "views": [{"title": "Home", "path": "home"}],
         }
@@ -798,7 +763,7 @@ class TestPublicScreenshotOptionForwarding:
             return [fake_dashboard_capture()]
 
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
-        await _wall_panel(hass, core_client)
+        await wall_panel(hass, core_client)
 
         result = await dashboard_tools.DashboardConfigTools(
             core_client
