@@ -34,7 +34,8 @@ from ._tool_errors import error_of
 
 class Counter:
     """``light.turn_on`` and ``counter.bump``: each writes ``light.a`` / ``sensor.count``
-    and returns no response. ``counter.fail`` writes ``sensor.count`` and fails."""
+    and returns no response. ``counter.fail`` and ``counter.crash`` write
+    ``sensor.count``, then raise a ``HomeAssistantError`` / a ``ValueError``."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -43,6 +44,7 @@ class Counter:
             ("light", "turn_on"),
             ("counter", "bump"),
             ("counter", "fail"),
+            ("counter", "crash"),
         ):
             hass.services.async_register(
                 domain,
@@ -61,6 +63,8 @@ class Counter:
             self.hass.states.async_set("sensor.count", str(self.calls))
         if call.service == "fail":
             raise HomeAssistantError("upstream failed")
+        if call.service == "crash":
+            raise ValueError("library bug")
         return None
 
 
@@ -108,14 +112,18 @@ async def test_without_the_component_a_rejected_response_is_not_called_again(
     assert counter.calls == 1
 
 
+@pytest.mark.parametrize("service", ["fail", "crash"])
 async def test_a_response_call_that_fails_after_it_ran_is_not_sent_again(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, counter: Counter
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    counter: Counter,
+    service: str,
 ) -> None:
     """The component dispatched it, so the error is reported, not re-posted."""
     with pytest.raises(ToolError) as exc:
         await ServiceTools(
             component_core_client, DeviceControlTools(component_core_client)
-        ).ha_call_service(domain="counter", service="fail", return_response=True)
+        ).ha_call_service(domain="counter", service=service, return_response=True)
 
     assert counter.calls == 1
     state = hass.states.get("sensor.count")

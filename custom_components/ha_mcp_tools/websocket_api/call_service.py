@@ -87,7 +87,7 @@ async def _call_service_prep(
     ``ServiceNotFound`` are PRE-dispatch (they raise before ``async_call``, so nothing
     landed); an ``async_call`` error is MID-dispatch (the handler may mutate state
     and THEN raise — the documented D9 at-most-once residual). For a call asking
-    for a response it is not raised: it comes back as ``service_error``
+    for a response no exception is raised: it comes back as ``service_error``
     (``response_error`` when Core rejected the response), and the server reports
     it without sending the call again. A confirmation timeout is caught and reported as
     ``partial`` (never re-raised): the call already landed.
@@ -409,7 +409,7 @@ async def _dispatch(
     msg: dict[str, Any],
 ) -> tuple[Any, dict[str, Any] | None]:
     """Fire the one ``async_call``: ``(response, None)``, or ``(None, error)`` when
-    Core rejected the response, or when a call asking for one raised
+    Core rejected the response, or when a call asking for one raised anything
     (``error["failed"]``): the service may have run, so the server must not send
     it again. Any other raise propagates (D9)."""
     try:
@@ -421,14 +421,15 @@ async def _dispatch(
             return_response=return_response,
             context=msg.get("ha_mcp_context"),
         )
-    except HomeAssistantError as err:
-        rejected = (err.translation_domain, err.translation_key) == _RESPONSE_REJECTED
+    except Exception as err:  # a response call reports any raise
+        key = (
+            getattr(err, "translation_domain", None),
+            getattr(err, "translation_key", None),
+        )
+        rejected = isinstance(err, HomeAssistantError) and key == _RESPONSE_REJECTED
         if not (rejected or return_response):
             raise
-        error: dict[str, Any] = {
-            "translation_key": err.translation_key,
-            "message": str(err),
-        }
+        error: dict[str, Any] = {"translation_key": key[1], "message": str(err)}
         if not rejected:
             error["failed"] = True
         return None, error
