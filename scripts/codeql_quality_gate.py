@@ -175,7 +175,8 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "
-        "the parent-cancellation tests: awaiting the "
+        "test_parent_cancellation_settles_the_dashboard_leg and "
+        "test_parent_cancellation_during_fallback_settle_propagates: awaiting the "
         "cancelled ha_search task IS the effect (it drives the call to "
         "completion and raises the CancelledError the context manager "
         "asserts).",

@@ -307,8 +307,6 @@ def _flow_failure_reason(step: str, error: BaseException) -> str:
         return "invalid_snapshot"
     if isinstance(error, MandatoryBackupError):
         return "backup_capture_failed"
-    if step == "safety_backup" and isinstance(error, OSError):
-        return "backup_storage_failed"
     return "upstream_error"
 
 
@@ -321,10 +319,6 @@ def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
         # HA's structured code, not its message: unknown_command is the
         # ha_mcp_tools component being absent.
         return f"{type(error).__name__} ({error.code})"
-    # The safety stage wraps remote fetch failures in MandatoryBackupError;
-    # a raw OSError here comes from retained-file I/O. Other stages call HA.
-    if step == "safety_backup" and isinstance(error, OSError):
-        return str(error)
     return None
 
 
