@@ -19,7 +19,6 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -62,7 +61,7 @@ from .helpers import (
 from .response_helpers import compact_service_result, project_entity_record
 from .service_response import (
     COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
-    legacy_call,
+    RESPONSE_CALL_FAILED_HINT,
     note_rejected_response,
     split_return_response_envelope,
 )
@@ -1065,9 +1064,7 @@ class ServiceTools(EventCallMixin):
         # Check if this is a timeout - for service calls, timeouts typically
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
-        if isinstance(
-            error.__cause__, (httpx.TimeoutException, HomeAssistantCommandTimeout)
-        ):
+        if isinstance(error.__cause__, httpx.TimeoutException):
             return self._build_timeout_response(
                 domain, service, entity_id, data, return_response=return_response
             )
@@ -1090,9 +1087,13 @@ class ServiceTools(EventCallMixin):
         domain: str,
         service: str,
         entity_id: str | None,
+        return_response: bool = False,
     ) -> NoReturn:
         """Raise a structured ToolError for an unexpected ha_call_service failure."""
         suggestions = _build_service_suggestions(domain, service, entity_id)
+        if return_response:
+            # Core checks a requested response only after the service ran.
+            suggestions.insert(0, RESPONSE_CALL_FAILED_HINT)
         if entity_id:
             suggestions.append(
                 f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')"
@@ -1938,8 +1939,8 @@ class ServiceTools(EventCallMixin):
             if should_wait:
                 initial_state = await self._validate_entity_before_wait(entity_id)
 
-            result, rejected, ws_warnings = await legacy_call(
-                self._client, domain, service, service_data, return_response_bool
+            result = await self._client.call_service(
+                domain, service, service_data, return_response=return_response_bool
             )
 
             # Peel the return_response envelope apart BEFORE projection so the
@@ -1968,13 +1969,12 @@ class ServiceTools(EventCallMixin):
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            call_warnings = [*projection_warnings, *envelope_warnings, *ws_warnings]
+            call_warnings = [*projection_warnings, *envelope_warnings]
             if call_warnings:
                 response.setdefault("warnings", []).extend(call_warnings)
 
             if has_response_envelope:
                 response["service_response"] = service_response
-            note_rejected_response(response, rejected)
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:
@@ -2002,7 +2002,11 @@ class ServiceTools(EventCallMixin):
             raise
         except Exception as error:  # noqa: BLE001
             self._raise_unexpected_call_service_error(
-                error, domain=domain, service=service, entity_id=entity_id
+                error,
+                domain=domain,
+                service=service,
+                entity_id=entity_id,
+                return_response=return_response,
             )
             return (
                 None  # unreachable: _raise_unexpected_call_service_error always raises

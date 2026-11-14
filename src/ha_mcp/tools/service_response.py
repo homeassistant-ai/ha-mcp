@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .component_api import COMPONENT_INSTALL_HINT
-from .helpers import core_error_message, raise_core_refusal
-
-if TYPE_CHECKING:
-    from ..client.rest_client import HomeAssistantClient
 
 #: Emitted when a ``return_response=true`` reply is not HA's
 #: ``{"changed_states": [...], "service_response": ...}`` envelope. Without it an
@@ -36,14 +32,13 @@ COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
     "and lost with the confirmation. Re-read state to confirm the outcome."
 )
 
-# The (translation_domain, translation_key) Core raises when a requested
-# response is not a mapping, checked only after the service ran
-# (``ServiceRegistry.async_call``); the key's spelling is Core's.
-RESPONSE_REJECTED = ("homeassistant", "service_reponse_invalid")
-
-STATES_NOT_LISTED_WARNING = (
-    "The states this call changed are not listed: for a call that asks for a "
-    f"response, that list needs the ha_mcp_tools component. {COMPONENT_INSTALL_HINT}"
+#: Added to a failed ``return_response`` call without the component: Core checks
+#: the response only after the service ran, and only the component's answer says
+#: whether the service ran before a refusal.
+RESPONSE_CALL_FAILED_HINT = (
+    "The service may have run before Home Assistant refused its response: check "
+    "its effect before calling it again. The ha_mcp_tools component reports a "
+    f"refused response as such. {COMPONENT_INSTALL_HINT}"
 )
 
 
@@ -63,65 +58,6 @@ def note_rejected_response(
         "The service ran, but Home Assistant rejected the response it returned "
         f"({error.get('message')}). Do not call it again to get a response."
     )
-
-
-async def legacy_call(
-    client: HomeAssistantClient,
-    domain: str,
-    service: str,
-    service_data: dict[str, Any],
-    return_response: bool,
-) -> tuple[Any, dict[str, Any] | None, list[str]]:
-    """The call without the component: REST, or Core's WebSocket
-    ``call_service`` when it asks for a response. Returns Core's reply, a
-    rejected response, and the warnings the transport adds."""
-    if not return_response:
-        return await client.call_service(domain, service, service_data), None, []
-    result, rejected = await call_service_for_response(
-        client, domain, service, service_data
-    )
-    return result, rejected, [STATES_NOT_LISTED_WARNING]
-
-
-async def call_service_for_response(
-    client: HomeAssistantClient,
-    domain: str,
-    service: str,
-    service_data: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """A call asking for its response, through Core's WebSocket ``call_service``.
-
-    REST words a response Core rejected after the service ran only in its
-    500 text; the WebSocket error names it. Returns REST's envelope (Core's
-    WebSocket answer carries no changed states) and the rejection, if any.
-    """
-    reply = await client.send_websocket_message(
-        {
-            "type": "call_service",
-            "domain": domain,
-            "service": service,
-            "service_data": service_data,
-            "return_response": True,
-            # The client's own request timeout, as on the REST POST.
-            "_wait_timeout": client.timeout,
-        }
-    )
-    if not reply.get("success"):
-        if (reply.get("translation_domain"), reply.get("translation_key")) == (
-            RESPONSE_REJECTED
-        ):
-            return {"changed_states": [], "service_response": None}, {
-                "translation_key": reply["translation_key"],
-                "message": core_error_message(reply.get("error")),
-            }
-        raise_core_refusal(
-            f"Failed to call {domain}.{service}",
-            reply,
-            {"domain": domain, "service": service},
-        )
-    answer = reply.get("result") or {}
-    response = answer.get("response") if isinstance(answer, dict) else None
-    return {"changed_states": [], "service_response": response}, None
 
 
 def split_return_response_envelope(

@@ -1,9 +1,9 @@
 """ha_call_service places a service's response data once (issue #2085).
 
-Without the component a call asking for its response goes through Core's
-WebSocket ``call_service``, whose answer holds the response but no changed
-states; ``service_response`` appears exactly once, at the top level. A call
-that asks for none is Core's REST POST and returns its changed states.
+Without the component a call is Core's REST POST, whose answer lists the
+changed states and, when asked for, the response data; ``service_response``
+appears exactly once, at the top level. With the component, a call asking for
+a response lists the states written under its context the same way.
 
 Every reply below is Core's own: a test service registered on the real
 ``hass`` changes states under the call's context and returns response data.
@@ -25,7 +25,6 @@ from homeassistant.core import (
 from homeassistant.util.json import JsonValueType
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.tools_service import ServiceTools
 
 SHELL_RESPONSE: dict[str, JsonValueType] = {
@@ -66,12 +65,11 @@ def tools(core_client: HomeAssistantClient) -> ServiceTools:
 
 
 @pytest.mark.parametrize("verbose", [False, True], ids=["compact", "verbose"])
-async def test_service_response_is_top_level_once(
+async def test_without_the_component_the_post_lists_its_states_and_response_once(
     hass: HomeAssistant, tools: ServiceTools, verbose: bool
 ) -> None:
-    """Core's WebSocket call_service answers the response alone, so ``result``
-    is empty and a warning says the changed states need the component; verbose
-    must not resurrect the duplicate either."""
+    """Core's REST POST answers the changed states and the response; the
+    response appears once, top level, and verbose does not repeat it."""
     _register_echo(hass, "light.x")
 
     response = await tools.ha_call_service(
@@ -79,12 +77,9 @@ async def test_service_response_is_top_level_once(
     )
 
     assert response["service_response"] == SHELL_RESPONSE
-    assert response["result"] == []
+    assert [record["entity_id"] for record in response["result"]] == ["light.x"]
     assert _occurrences(response, "stdout") == 1, response
-    (warning,) = response["warnings"]
-    assert COMPONENT_INSTALL_HINT in warning
-    state = hass.states.get("light.x")
-    assert state is not None and state.state == "on"
+    assert "warnings" not in response, response
 
 
 async def test_the_component_lists_a_confirmed_calls_changed_state_once(

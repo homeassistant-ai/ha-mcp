@@ -1,7 +1,0 @@
-{
-  "reason": "#3023 marks test_service_response_keeps_payload_and_projected_mutation_together (tests/src/e2e/continuity/test_user_workflows.py) requires_component_surface: without the component a call asking for a response lists no changed states. It skips on the two no-tools lanes without an active component entry.",
-  "deltas": {
-    "container_no_tools": 1,
-    "haos_inaddon_no_tools": 1
-  }
-}
