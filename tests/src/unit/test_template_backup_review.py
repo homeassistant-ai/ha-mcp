@@ -1,6 +1,7 @@
 """Regressions for Template capture trust, write coordination and identity."""
 
 import asyncio
+import dataclasses
 from typing import Any
 
 import pytest
@@ -28,14 +29,6 @@ from ._template_helper_core import (
     set_template_state,
     state_template,
 )
-
-
-async def _until(predicate: Any) -> None:
-    for _ in range(1000):
-        if predicate():
-            return
-        await asyncio.sleep(0)
-    raise AssertionError("condition never held")
 
 
 def _rename(
@@ -121,6 +114,16 @@ async def test_alias_capture_refetches_after_canonical_lock(
     """An alias capture that waited on the canonical lock reads the entry again."""
     _rename(entity_registry, template_entry, "sensor.renamed_example")
     monkeypatch.setattr(settings, "auto_backup_throttle_minutes", 0)
+    template = manager.handler_for("helper_template")
+    assert template is not None
+    alias_read = asyncio.Event()
+
+    async def read_then_note(*args: Any, **kwargs: Any) -> Any:
+        config = await template.fetch(*args, **kwargs)
+        alias_read.set()  # the canonical read is held, so this is the alias's
+        return config
+
+    manager.register(dataclasses.replace(template, fetch=read_then_note))
     async with held_command(hass, "ha_mcp_tools/helpers_list", first_only=True) as held:
         # The canonical capture's read is held while it owns the lock.
         canonical = asyncio.create_task(
@@ -130,10 +133,8 @@ async def test_alias_capture_refetches_after_canonical_lock(
         alias = asyncio.create_task(
             manager.maybe_snapshot("helper_template", "sensor.renamed_example")
         )
-        # The alias capture's own read is answered; it then waits for the lock.
-        await _until(lambda: held.calls >= 2)
-        for _ in range(20):
-            await asyncio.sleep(0)
+        # The alias capture's own read has returned; it then waits for the lock.
+        await asyncio.wait_for(alias_read.wait(), 2)
         await set_template_state(hass, template_entry, "after-lock")
         held.release.set()
         await asyncio.wait_for(canonical, 2)

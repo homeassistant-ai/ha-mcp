@@ -52,7 +52,6 @@ async def _input_select_and_select_services(hass: HomeAssistant) -> None:
     assert await async_setup_component(hass, "select", {})
 
 
-@pytest.mark.anyio
 async def test_select_option_on_an_input_select_is_reported_with_cores_offer(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
@@ -70,7 +69,6 @@ async def test_select_option_on_an_input_select_is_reported_with_cores_offer(
     assert "references_unchecked" not in result
 
 
-@pytest.mark.anyio
 async def test_the_same_entity_with_the_action_core_offers_is_not_reported(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
@@ -92,7 +90,6 @@ async def test_the_same_entity_with_the_action_core_offers_is_not_reported(
     assert result == {"warnings": []}
 
 
-@pytest.mark.anyio
 async def test_a_service_home_assistant_does_not_have_is_reported(
     component_core_client: HomeAssistantClient,
 ) -> None:
@@ -114,7 +111,6 @@ async def test_a_service_home_assistant_does_not_have_is_reported(
     ]
 
 
-@pytest.mark.anyio
 async def test_a_config_core_refuses_leaves_the_references_unchecked(
     component_core_client: HomeAssistantClient,
 ) -> None:
@@ -129,7 +125,6 @@ async def test_a_config_core_refuses_leaves_the_references_unchecked(
     assert result["references_unchecked"]
 
 
-@pytest.mark.anyio
 async def test_without_the_component_the_references_are_reported_unchecked(
     core_client: HomeAssistantClient,
 ) -> None:
@@ -139,7 +134,6 @@ async def test_without_the_component_the_references_are_reported_unchecked(
     assert "not installed" in result["references_unchecked"]
 
 
-@pytest.mark.anyio
 async def test_an_outdated_component_is_told_apart_from_an_absent_one(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -158,7 +152,6 @@ async def test_an_outdated_component_is_told_apart_from_an_absent_one(
     assert "update it" in result["references_unchecked"]
 
 
-@pytest.mark.anyio
 async def test_a_component_that_does_not_know_the_check_is_asked_again_after_update(
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -180,7 +173,6 @@ async def test_a_component_that_does_not_know_the_check_is_asked_again_after_upd
     invalidated.assert_called_once_with(core_client)
 
 
-@pytest.mark.anyio
 async def test_a_dropped_connection_never_aborts_the_write_and_says_why(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -197,7 +189,6 @@ async def test_a_dropped_connection_never_aborts_the_write_and_says_why(
     assert result == {"warnings": [], "references_unchecked": "closed"}
 
 
-@pytest.mark.anyio
 async def test_a_timed_out_check_never_aborts_the_write_and_says_why(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,

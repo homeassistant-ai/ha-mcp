@@ -13,13 +13,22 @@ from ha_mcp.client import supervisor_client
 from ha_mcp.dashboard_screenshot import provision
 from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential
 
-from ._dashboard_screenshot_common import _puppet_info, set_settings
+from ._dashboard_screenshot_common import (
+    _puppet_info,
+    clear_screenshot_env,
+    set_settings,
+)
 
 _WPE_SCHEMA = [
     {"name": "home_assistant_url"},
     {"name": "home_assistant_token"},
     {"name": "dashboard_path"},
 ]
+
+
+@pytest.fixture(autouse=True)
+def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_screenshot_env(monkeypatch)
 
 
 def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
