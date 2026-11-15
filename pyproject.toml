@@ -553,8 +553,9 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-timeout>=2.3.0",
     # Exercise the component's real sandbox thread affinity in focused unit tests.
-    # The version the component installs (card_runtime.QUICKJS_VERSION); its
-    # runtime check refuses any other, and test_card_review_regressions.py says so.
+    # The version the component installs (card_runtime.QUICKJS_VERSION);
+    # Renovate moves both together (renovate.json).
+    # renovate: datasource=pypi depName=quickjs-ng
     "quickjs-ng==0.17.0.1",
     "pytest-rerunfailures>=15.0",
     # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts

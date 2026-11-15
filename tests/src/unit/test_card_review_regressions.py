@@ -573,40 +573,60 @@ def _requirements(monkeypatch: pytest.MonkeyPatch, hass: HomeAssistant) -> Async
     return install
 
 
-@pytest.mark.parametrize(
-    ("provider", "reason"),
-    [
-        ("quickjs", "already owns the quickjs module"),
-        ("quickjs-ng", "must not be replaced"),
-    ],
-)
-async def test_a_provider_that_does_not_fit_is_never_replaced(
+async def test_the_other_quickjs_provider_is_never_replaced(
     hass: HomeAssistant,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    provider: str,
-    reason: str,
 ) -> None:
     install = _requirements(monkeypatch, hass)
 
-    with installed_packages(monkeypatch, tmp_path, {provider: "0.16.2.1"}):
+    with installed_packages(monkeypatch, tmp_path, {"quickjs": "1.19.4"}):
         assert await runtime.async_ensure_runtime(hass) is False
 
     install.assert_not_awaited()
-    assert reason in caplog.text
+    assert "already owns the quickjs module" in caplog.text
 
 
+async def test_an_older_pin_nothing_else_needs_moves_to_the_components(
+    hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An updated component finds the quickjs-ng its last version installed;
+    refusing it would turn the card advice off for every user who had it."""
+    install = _requirements(monkeypatch, hass)
+
+    with installed_packages(
+        monkeypatch, tmp_path, {"quickjs-ng": "0.16.2.1"}
+    ) as installed:
+
+        async def provide(*args: Any, **kwargs: Any) -> None:
+            installed["quickjs-ng"] = runtime.QUICKJS_VERSION
+
+        install.side_effect = provide
+        assert await runtime.async_ensure_runtime(hass) is True
+
+    install.assert_awaited_once_with(
+        hass,
+        "ha_mcp_tools_dashboard_cards",
+        [runtime.QUICKJS_REQUIREMENT],
+        is_built_in=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "installed", [{}, {"quickjs-ng": "0.16.2.1"}], ids=["missing", "older"]
+)
 async def test_a_package_that_needs_another_provider_keeps_the_runtime_off(
     hass: HomeAssistant,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    installed: dict[str, str],
 ) -> None:
     install = _requirements(monkeypatch, hass)
 
     with installed_packages(
-        monkeypatch, tmp_path, {}, requires=["quickjs-ng==0.16.2.1"]
+        monkeypatch, tmp_path, installed, requires=["quickjs-ng==0.16.2.1"]
     ):
         assert await runtime.async_ensure_runtime(hass) is False
 
