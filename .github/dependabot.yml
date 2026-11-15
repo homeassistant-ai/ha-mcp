@@ -51,6 +51,9 @@ updates:
       # there is no narrower update-type that holds the line.
       # Drop this entry when tools_code.py is ported to the pool API.
       - dependency-name: "pydantic-monty"
+      # Held at the version the component installs for its users
+      # (custom_components/ha_mcp_tools/card_runtime.py). Move both together.
+      - dependency-name: "quickjs-ng"
       # A shared mcp stays on HA Core's 1.x line; ha-mcp's own 2.x SDK is
       # vendored under src/ha_mcp/_vendor.
       - dependency-name: "mcp"
