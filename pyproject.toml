@@ -234,7 +234,6 @@ module = [
     "tests.src.unit.test_oauth",
     "tests.src.unit.test_oauth_consent_binding",
     "tests.src.unit.test_oauth_core_forward_tls",
-    "tests.src.unit.test_oauth_dcr",
     "tests.src.unit.test_oauth_ha_auth",
     "tests.src.unit.test_oidc_compat",
     "tests.src.unit.test_overview_system_info",
