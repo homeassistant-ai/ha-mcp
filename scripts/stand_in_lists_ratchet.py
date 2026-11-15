@@ -4,10 +4,11 @@
 The unit and app (add-on) tests run on real Home Assistant Core
 (tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core"). Files written
 before each check are listed with it: the ``ignores`` of the ast-grep rules
-that scan the tests, ``_GRANDFATHERED`` in ``tests/core_stand_in_guard.py``,
-the ``SLF001`` entries of the two test ``ruff.toml`` files and the mypy
-overrides that name a ``tests.`` module in ``pyproject.toml``. The lists are
-plain files, so a pull request could add its own new test to one and every
+that scan the tests, the ``SLF001`` entries of the two test ``ruff.toml`` files
+and the mypy overrides that name a ``tests.`` module in ``pyproject.toml``.
+``tests/core_stand_in_guard.py`` had such a list, ``_GRANDFATHERED``; it was
+emptied and removed, and one brought back is held to the same rules. The lists
+are plain files, so a pull request could add its own new test to one and every
 check would pass. With ``--base`` this compares them with the base commit.
 
 Two rules decide every added entry:
@@ -148,8 +149,11 @@ def _guard_entries(text: str) -> set[str]:
             continue
         if any(isinstance(t, ast.Name) and t.id == "_GRANDFATHERED" for t in targets):
             values.append(node)
+    if not values:
+        # The guard has no list, so it exempts no file.
+        return set()
     if len(values) != 1 or isinstance(values[0], ast.AugAssign):
-        raise ValueError(f"{GUARD} must assign _GRANDFATHERED exactly once")
+        raise ValueError(f"{GUARD} may assign _GRANDFATHERED only once")
     value = values[0].value
     if value is None:
         raise ValueError(f"{GUARD} declares _GRANDFATHERED without a value")

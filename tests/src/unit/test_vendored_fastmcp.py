@@ -31,7 +31,10 @@ _VENDORED_DISTRIBUTIONS = {"fastmcp", "fastmcp-slim", "mcp", "mcp-types"}
 _NOT_DECLARED = {"websockets"}
 # These drive the component's LLM-API client, which uses HA's shared SDK.
 _SHARED_SDK_USERS = {
-    "tests/src/unit/test_llm_api.py",
+    "tests/src/unit/_llm_api_server.py",
+    "tests/src/unit/test_llm_api_instance.py",
+    "tests/src/unit/test_llm_api_sdk_lines.py",
+    "tests/src/unit/test_llm_api_tool_call.py",
     "tests/src/unit/test_llm_tool_metadata.py",
     "tests/src/e2e/workflows/embedded/test_embedded_server.py",
 }

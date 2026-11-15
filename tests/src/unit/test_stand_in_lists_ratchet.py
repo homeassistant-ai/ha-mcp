@@ -285,6 +285,15 @@ def test_an_exempted_test_is_reported(
         ),
         pytest.param(
             {
+                _RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', ""),
+                _GUARD_PATH: "_CORE_ROOTS = frozenset()\n",
+                _RUFF_PATH: _ADDON_RUFF,
+                "pyproject.toml": _PYPROJECT.split("\n\n", maxsplit=1)[0] + "\n",
+            },
+            id="last-file-converted-and-the-guard-list-deleted",
+        ),
+        pytest.param(
+            {
                 _RULE_PATH: _listed(_RULE, _CLEAN).replace(
                     "kind: assignment", "kind: call"
                 )
@@ -414,6 +423,27 @@ def test_a_base_file_git_cannot_read_fails_instead_of_counting_as_absent(
 
     with pytest.raises(RuntimeError, match="cannot read"):
         ratchet.problems_since(repo, "HEAD")
+
+
+@pytest.mark.parametrize(
+    ("listed", "reported"),
+    [
+        pytest.param(_CLEAN, f"{_CLEAN} was added to the list", id="older-file"),
+        pytest.param(_NEW, f"lists the new file {_NEW}", id="new-file"),
+    ],
+)
+def test_a_guard_list_brought_back_is_not_a_new_check(
+    ratchet: ModuleType, tmp_path: Path, listed: str, reported: str
+) -> None:
+    """The guard's list was deleted once empty; a pull request that writes it
+    again exempts a file from a check that already ran on it."""
+    base = {**_BASE, _GUARD_PATH: "_CORE_ROOTS = frozenset()\n"}
+    guard = f'_GRANDFATHERED = frozenset({{"{listed}"}})\n'
+    repo = _pull_request(tmp_path, {_GUARD_PATH: guard}, base)
+
+    problems = ratchet.problems_since(repo, "HEAD")
+
+    assert any(reported in problem for problem in problems), problems
 
 
 def test_a_guard_list_that_names_a_file_indirectly_fails(
