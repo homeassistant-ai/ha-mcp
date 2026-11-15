@@ -10,6 +10,7 @@ variables every unit test starts with.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import sys
@@ -214,6 +215,22 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
         for thread in set(threading.enumerate()) - threads_before:
             if thread.name == "AnyIO worker thread":
                 thread.join(timeout=5)
+
+
+@pytest.fixture(autouse=True)
+def _logging_put_back() -> Iterator[None]:
+    """The CLI entry points (``main_oauth``, ``main_oidc``) reconfigure the root
+    logger and set the ``ha_mcp`` and ``fastmcp`` levels process-wide; a later
+    test on the same worker would lose its DEBUG records."""
+    root = logging.getLogger()
+    names = ("ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider", "fastmcp")
+    levels = {name: logging.getLogger(name).level for name in names}
+    root_level, root_handlers = root.level, root.handlers[:]
+    yield
+    root.setLevel(root_level)
+    root.handlers[:] = root_handlers
+    for name, level in levels.items():
+        logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(autouse=True)

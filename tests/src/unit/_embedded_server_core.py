@@ -90,9 +90,16 @@ def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
         if name == "ha_mcp" or name.startswith("ha_mcp.")
     }
     yield audited_roots
-    for worker in threading.enumerate():
-        if worker.name == WORKER_THREAD:
-            worker.join(timeout=_WORKER_JOIN_SECONDS)
+    workers = [w for w in threading.enumerate() if w.name == WORKER_THREAD]
+    for worker in workers:
+        worker.join(timeout=_WORKER_JOIN_SECONDS)
+    if any(worker.is_alive() for worker in workers):
+        # Restoring the module cache under a worker still importing breaks it.
+        pytest.fail(
+            f"an {WORKER_THREAD} worker still runs after {_WORKER_JOIN_SECONDS}s; "
+            "the ha_mcp module cache is left as it is",
+            pytrace=False,
+        )
     reset_embedded_connection()
     reset_global_settings()
     for name in [n for n in sys.modules if n == "ha_mcp" or n.startswith("ha_mcp.")]:
