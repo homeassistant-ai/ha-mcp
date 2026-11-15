@@ -23,9 +23,6 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-# Files written before the unit tests ran on real Home Assistant Core. They are
-# to be converted and removed from this list; never add a file to it.
-ignores:
 message: |
   Use the real `hass` fixture from Core's test plugin (with `MockConfigEntry`,
   the registry fixtures and `hass_ws_client`) instead of a hand-made Home

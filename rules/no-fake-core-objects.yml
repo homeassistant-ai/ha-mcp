@@ -8,9 +8,6 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-# Files written before the unit tests ran on real Home Assistant Core. They are
-# to be converted and removed from this list; never add a file to it.
-ignores:
 message: |
   Do not write a stand-in for a Home Assistant object (hass, a registry or its
   entries, a state, a config entry, a WebSocket connection, a store, ...).

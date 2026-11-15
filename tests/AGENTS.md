@@ -202,13 +202,15 @@ fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
 which is why the fourth rule exists.
 
-Test files written before a check are listed with it: in the rule's `ignores`
-and in the guard. Converting a file removes it from every list it is on: the
-ast-grep `ignores`, the guard, `SLF001` and the mypy list below. A file taken
-off one list and left on another fails the ratchet below.
-`src/unit/test_core_reply_rules.py` keeps the lists of the hass, reply,
-shared-client, suppression and fixture-annotation rules exact: a listed file that no longer
-violates fails it, as does a violating file that is not listed.
+Test files written before a check are listed with it, in the rule's `ignores`.
+Only the reply and shared-client rules still have a list; the hand-made
+`hass`, fake Core object, suppression and fixture-annotation rules and the
+`sys.modules` guard have none, so every test complies with them. Converting a
+file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
+the mypy list below. A file taken off one list and left on another fails the
+ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
+listed file that no longer violates fails it, as does a violating file that is
+not listed) and fails any file that violates a rule without a list.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
