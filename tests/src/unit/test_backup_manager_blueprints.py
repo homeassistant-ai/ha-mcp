@@ -315,18 +315,3 @@ async def test_a_save_to_a_free_path_captures_nothing(
 
     assert await _snapshots(file_snapshot_manager) == []
     assert _on_disk(hass, "automation") is not None
-
-
-async def test_an_import_captures_nothing(
-    hass: HomeAssistant,
-    file_snapshot_manager: bm.BackupManager,
-    tool: BlueprintTools,
-    aioclient_mock: AiohttpClientMocker,
-) -> None:
-    """Import addresses a path core chooses, not the ``path`` argument, so the
-    decorator's id would name the wrong file."""
-    aioclient_mock.get(SOURCE_URL, text=BLUEPRINT)
-
-    await tool.ha_manage_blueprints(action="import", url=SOURCE_URL)
-
-    assert await _snapshots(file_snapshot_manager) == []

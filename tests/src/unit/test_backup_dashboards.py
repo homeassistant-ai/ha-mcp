@@ -314,7 +314,8 @@ async def _old_body_only_snapshot(manager: bm.BackupManager) -> str:
     assert path is not None
 
     def body_only(payload: dict[str, Any]) -> None:
-        assert payload.pop("kind") == "dashboard_settings"
+        kind = payload.pop("kind")
+        assert kind == "dashboard_settings"
         payload["config"] = payload["config"]["config"]
 
     rewrite_snapshot(path, body_only)

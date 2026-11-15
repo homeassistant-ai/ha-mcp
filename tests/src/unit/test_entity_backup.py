@@ -61,6 +61,15 @@ def _edit(**fields: Any) -> Edit:
     return lambda registry, desk: registry.async_update_entity(desk.entity_id, **fields)
 
 
+def _edit_with(fields: Callable[[Desk], dict[str, Any]]) -> Edit:
+    """An edit whose values are the desk's own area or categories."""
+
+    def edit(registry: er.EntityRegistry, desk: Desk) -> Any:
+        return registry.async_update_entity(desk.entity_id, **fields(desk))
+
+    return edit
+
+
 def _options(domain: str, options: dict[str, Any] | None) -> Edit:
     return lambda registry, desk: registry.async_update_entity_options(
         desk.entity_id, domain, options
@@ -79,17 +88,17 @@ EDITS: dict[str, Edit] = {
     "name": _edit(name="Desk"),
     "use_device_name": _edit(name=""),
     "icon": _edit(icon="mdi:lamp"),
-    "area": lambda registry, desk: _edit(area_id=desk.kitchen)(registry, desk),
+    "area": _edit_with(lambda desk: {"area_id": desk.kitchen}),
     "no_area": _edit(area_id=None),
     "device_class": _edit(device_class="outlet"),
     "aliases": _edit(aliases=[er.COMPUTED_NAME, "lamp"]),
     "no_labels": _edit(labels=set()),
-    "category_moved": lambda registry, desk: _edit(
-        categories={"automation": desk.cat_b}
-    )(registry, desk),
-    "category_added": lambda registry, desk: _edit(
-        categories={"automation": desk.cat_a, "script": desk.cat_s}
-    )(registry, desk),
+    "category_moved": _edit_with(
+        lambda desk: {"categories": {"automation": desk.cat_b}}
+    ),
+    "category_added": _edit_with(
+        lambda desk: {"categories": {"automation": desk.cat_a, "script": desk.cat_s}}
+    ),
     "category_cleared": _edit(categories={}),
     "hidden": _edit(hidden_by=er.RegistryEntryHider.USER),
     "disabled": _edit(disabled_by=er.RegistryEntryDisabler.USER),

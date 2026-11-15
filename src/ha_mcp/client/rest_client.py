@@ -21,7 +21,6 @@ from .error_log_journald import (
     container_page,
     first_cursor,
     journald_page,
-    range_header,
 )
 from .exceptions import (
     HomeAssistantAdminRequiredError as HomeAssistantAdminRequiredError,
@@ -1059,7 +1058,6 @@ class HomeAssistantClient:
         self,
         path: str,
         lines: int | None = None,
-        offset: int | None = None,
     ) -> str:
         """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
@@ -1070,14 +1068,7 @@ class HomeAssistantClient:
           multicast}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
-        param; omitted → Supervisor's 100-line default window. Adding
-        ``offset`` switches the same window to a ``Range: entries=`` header
-        (see ``_journald_range_header``), which is the only form that can
-        address an older window. The two forms are mutually exclusive on the
-        wire — Supervisor tests ``if "lines" in request.query`` first and
-        ignores a ``Range`` header whenever that query param is present — so
-        the offset form sends the window in the header and no query param,
-        rather than a pair that could contradict each other.
+        param; omitted → Supervisor's 100-line default window.
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
@@ -1107,17 +1098,11 @@ class HomeAssistantClient:
         params: dict[str, Any] = {"no_colors": "true"}
         if lines is not None:
             params["lines"] = lines
-        if offset is not None:
-            # An offset window with no size asked for falls back to the
-            # smallest one the Range syntax can express.
-            size = lines if lines is not None else MIN_LOG_WINDOW_LINES
-            headers["Range"] = range_header(size, offset)
-            params.pop("lines", None)
         logger.debug(
-            "Fetching %s/%s/logs via Supervisor direct (%s)",
+            "Fetching %s/%s/logs via Supervisor direct (lines=%s)",
             get_supervisor_base_url(),
             path,
-            f"range={headers['Range']}" if offset is not None else f"lines={lines}",
+            lines,
         )
         response = await self._supervisor_logs_response(path, headers, params)
         return response.text

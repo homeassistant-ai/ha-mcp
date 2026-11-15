@@ -6,8 +6,11 @@ The endpoint is bound by the component's own webhook registration on a real
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable, Coroutine
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from aiohttp.test_utils import TestClient
@@ -154,6 +157,26 @@ async def test_register_rejects_deeply_nested_json_body(
     assert resp.status == 400
     body = await resp.json()
     assert body["error"] == "invalid_client_metadata"
+
+
+async def test_register_answers_a_parser_stack_overflow_with_400(
+    registered: Registered, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where ``json.loads`` gives up on nesting depends on the interpreter's
+    stack, so the overflow is forced through the module's own ``json`` name:
+    an anonymous endpoint calls it malformed metadata, never a 500."""
+    client = await registered()
+    overflowing = SimpleNamespace(
+        loads=Mock(side_effect=RecursionError), dumps=json.dumps
+    )
+    monkeypatch.setattr(oauth_dcr, "json", overflowing)
+
+    resp = await client.post(REGISTER_URL, data="[[]]", headers=JSON_HEADERS)
+
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    assert body["error_description"] == "body must be JSON"
 
 
 async def test_register_survives_a_bogus_content_type_charset(

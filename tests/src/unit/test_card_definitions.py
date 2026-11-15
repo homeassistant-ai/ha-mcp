@@ -165,7 +165,7 @@ def test_header_and_a_custom_cards_children_are_checked_but_not_its_metadata(
     assert definitions.validate(config) == [
         "views[0].header.card: unknown card type 'markdown-x'",
         'views[0].cards[0].custom_fields["nested"].card.states["on"]: '
-        "unknown card type 'tyle'",
+        + "unknown card type 'tyle'",
     ]
 
 
@@ -589,8 +589,8 @@ def test_custom_cards_report_their_own_problems_and_unknown_ones_are_named(
     assert warnings == [
         "views[0].cards[1] (custom:picky-card): picky-card needs an entity",
         "views[0].cards[2] (custom:not-installed-card): not found in dashboard "
-        "resources; check the type spelling or whether it loads through extra "
-        "JavaScript.",
+        + "resources; check the type spelling or whether it loads through extra "
+        + "JavaScript.",
     ]
 
 

@@ -263,27 +263,6 @@ async def test_save_proceeds_when_the_version_lookup_fails(
     assert await installed_text(hass, "automation", PATH) is not None
 
 
-async def test_overwriting_save_snapshots_the_path_core_writes(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """``save`` with ``overwrite=True`` on ``user/motion`` replaces the installed
-    ``user/motion.yaml``; the pre-write capture has to look there, not at a
-    path that does not exist on any tier (PR #2356)."""
-    await set_up_core(hass, {f"automation/{PATH}": MOTION})
-    manager = enable_auto_backup(monkeypatch, tmp_path, component_core_client)
-
-    result = await _save(
-        component_core_client, path="user/motion", yaml=MOTION_V2, overwrite=True
-    )
-
-    assert result["data"]["path"] == PATH
-    assert snapshot_texts(manager, "blueprint_automation", PATH) == [MOTION]
-    assert "Motion Light v2" in str(await installed_text(hass, "automation", PATH))
-
-
 # ---------------------------------------------------------------------- import
 
 

@@ -39,6 +39,8 @@ from custom_components.ha_mcp_tools.mcp_webhook import (
     async_unregister_webhook,
 )
 
+from ._garbled_upstream import garbled_upstream
+
 # The HTTP surface the boot page, the session endpoint and the proxy share.
 _BASE = "/api/ha_mcp_tools/ui"
 _BOOT = f"{_BASE}/boot"
@@ -114,9 +116,15 @@ async def running_server(
     hass: HomeAssistant, panel_views: None, settings_server: _SettingsServer
 ) -> AsyncIterator[_SettingsServer]:
     """The server is up: its forwarding config is stored the way setup stores it."""
-    entry = MockConfigEntry(domain=DOMAIN, data={DATA_WEBHOOK_ID: "wh-ui-panel"})
     port = settings_server.server.port
     assert port is not None
+    await _forward_to(hass, port)
+    yield settings_server
+    await async_unregister_webhook(hass)
+
+
+async def _forward_to(hass: HomeAssistant, port: int) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data={DATA_WEBHOOK_ID: "wh-ui-panel"})
     await async_register_webhook(
         hass,
         entry,
@@ -125,8 +133,6 @@ async def running_server(
         auth_mode=WEBHOOK_AUTH_NONE,
         register_endpoint=False,
     )
-    yield settings_server
-    await async_unregister_webhook(hass)
 
 
 async def _mint(
@@ -507,21 +513,26 @@ class TestProxyForwarding:
         cookie = running_server.seen[0].headers.get("cookie")
         assert cookie == (f"{_LOCALE_COOKIE}={locale}" if forwarded else None)
 
-    async def test_unreachable_server_maps_to_502_without_the_secret_path(
+    async def test_failed_upstream_maps_to_502_without_the_secret_path(
         self,
-        running_server: _SettingsServer,
+        hass: HomeAssistant,
         admin_cookies: dict[str, str],
         hass_client_no_auth: ClientSessionGenerator,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        await running_server.server.close()
-        client = await hass_client_no_auth()
+        """The proxy's error quotes the target URL, whose path is the server's
+        secret; neither the reply nor the log may repeat it."""
+        await async_unregister_webhook(hass)
+        async with garbled_upstream() as port:
+            await _forward_to(hass, port)
+            client = await hass_client_no_auth()
 
-        resp = await client.get(_APP + "settings", cookies=admin_cookies)
+            resp = await client.get(_APP + "settings", cookies=admin_cookies)
 
         assert resp.status == 502
         assert "upstream request failed" in caplog.text
         assert _SECRET not in caplog.text
+        assert _SECRET not in await resp.text()
 
     async def test_unexpected_error_maps_to_500(
         self,

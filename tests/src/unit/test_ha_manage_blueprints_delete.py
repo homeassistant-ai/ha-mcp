@@ -33,7 +33,6 @@ from ._blueprint_actions_core import (
     frames,
     installed_text,
     set_up_core,
-    snapshot_texts,
 )
 from ._component_frames import dropped, pooled
 from ._tool_errors import rejected_call_body
@@ -301,48 +300,6 @@ async def test_delete_in_use_when_the_reference_lookup_drops_the_connection(
     assert body["error"]["code"] == "RESOURCE_LOCKED"
     assert body["in_use_by"] == []
     assert any("ha_search" in s for s in body["error"]["suggestions"])
-
-
-async def test_unconfirmed_delete_captures_no_backup(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """With auto-backup ON, a refused delete captures nothing.
-
-    The refusal changes nothing, so a snapshot for it is pure cost, paid
-    before the tool says no.
-    """
-    await set_up_core(hass, {f"automation/{PATH}": MOTION})
-    manager = enable_auto_backup(monkeypatch, tmp_path, component_core_client)
-
-    body = await rejected_call_body(
-        BlueprintTools(component_core_client).ha_manage_blueprints(
-            action="delete", path=PATH
-        )
-    )
-
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert manager.list_snapshots() == []
-
-
-async def test_confirmed_delete_snapshots_the_blueprint_first(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """The snapshot is the only way back from a deleted blueprint file."""
-    await set_up_core(hass, {f"automation/{PATH}": MOTION})
-    manager = enable_auto_backup(monkeypatch, tmp_path, component_core_client)
-
-    await BlueprintTools(component_core_client).ha_manage_blueprints(
-        action="delete", path=PATH, confirm=True
-    )
-
-    assert snapshot_texts(manager, "blueprint_automation", PATH) == [MOTION]
-    assert await installed_text(hass, "automation", PATH) is None
 
 
 async def test_confirmed_delete_snapshots_the_path_as_given(

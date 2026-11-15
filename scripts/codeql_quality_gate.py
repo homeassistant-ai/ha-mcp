@@ -83,6 +83,17 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "single-pass dead-store analysis misses the next-call read at the top "
         "of install(), so the assignment looks dead.",
     ),
+    *(
+        (
+            "py/unused-global-variable",
+            "tests/src/unit/_config_flow_core.py",
+            name,
+            "",
+            "Cross-module use: helper module of the config flow tests; the "
+            "test_config_flow_*.py modules import and read it.",
+        )
+        for name in ("MANIFEST_VERSION", "STRINGS_COMMON", "GERMAN_COMMON")
+    ),
     # NOTE: CodeQL emits the same generic message for every instance of
     # py/ineffectual-statement, so the entries below carry a code substring:
     # the gate reads the flagged line out of the checkout and suppresses only

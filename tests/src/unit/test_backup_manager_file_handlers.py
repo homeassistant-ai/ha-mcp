@@ -223,9 +223,6 @@ async def test_a_yaml_restore_with_no_key_is_refused(
         )
 
 
-_ALERTS = "alert2:\n  defaults:\n    severity: low\n"
-
-
 @pytest.fixture
 def extra_key(
     backup_settings: config.Settings, monkeypatch: pytest.MonkeyPatch

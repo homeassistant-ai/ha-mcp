@@ -83,7 +83,7 @@ async def test_a_rename_between_lookup_and_lock_writes_nothing(
                 )
 
         with pytest.raises(bm.BackupRestoreError) as err:
-            await restore
+            await asyncio.wait_for(restore, timeout=60)
 
     assert err.value.outcome["reason"] == "entity_identity_mismatch"
     assert write_count(seen) == 0
@@ -261,7 +261,7 @@ async def test_a_cancel_during_the_lock_lookup_writes_nothing(
                 await until(lambda: bool(looked[lookup_command]))
                 restore.cancel()
                 with pytest.raises(asyncio.CancelledError):
-                    await restore
+                    await asyncio.wait_for(restore, timeout=60)
 
     assert write_count(seen) == 0
 

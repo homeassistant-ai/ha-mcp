@@ -362,19 +362,19 @@ class BlueprintTools:
     @staticmethod
     def _require(value: str | None, name: str, action: str) -> str:
         """Return a required parameter, or raise VALIDATION_MISSING_PARAMETER."""
-        if value:
-            return value
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                f"'{name}' is required for action='{action}'.",
-                context={"action": action, "missing_parameter": name},
-                suggestions=[
-                    f"Pass {name} to ha_manage_blueprints(action='{action}', ...)",
-                    'Use ha_manage_blueprints(action="list") to see installed blueprints',
-                ],
+        if not value:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    f"'{name}' is required for action='{action}'.",
+                    context={"action": action, "missing_parameter": name},
+                    suggestions=[
+                        f"Pass {name} to ha_manage_blueprints(action='{action}', ...)",
+                        'Use ha_manage_blueprints(action="list") to see installed blueprints',
+                    ],
+                )
             )
-        )
+        return value
 
     async def _fetch_blueprints(self, domain: str) -> dict[str, Any]:
         """Return the installed blueprint map for ``domain`` via blueprint/list."""

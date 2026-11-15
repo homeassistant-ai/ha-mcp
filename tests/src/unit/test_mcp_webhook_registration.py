@@ -6,6 +6,7 @@ through Core's HTTP server and the relay forwards to a real loopback upstream.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -337,6 +338,32 @@ async def test_failed_endpoint_registration_leaves_nothing_forwarding(
     await register(WEBHOOK_AUTH_NONE)
     assert (await client.post(WEBHOOK_PATH, data=b"{}")).status == 200
     assert len(upstream.requests) == 1
+
+
+@pytest.mark.parametrize("auth_mode", [WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA])
+async def test_failed_endpoint_registration_closes_the_sessions_it_opened(
+    register: Register, monkeypatch: pytest.MonkeyPatch, auth_mode: str
+) -> None:
+    """A registration that fails after opening its relay session (and, for
+    ha_auth, its client-metadata session) must not leave one open for the life
+    of Home Assistant."""
+    opened: list[aiohttp.ClientSession] = []
+    session_class = aiohttp.ClientSession
+
+    def opening(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
+        opened.append(session_class(*args, **kwargs))
+        return opened[-1]
+
+    with monkeypatch.context() as failing:
+        failing.setattr(aiohttp, "ClientSession", opening)
+        failing.setattr(
+            mw, "async_register", MagicMock(side_effect=RuntimeError("duplicate"))
+        )
+        with pytest.raises(RuntimeError, match="duplicate"):
+            await register(auth_mode)
+
+    assert opened
+    assert all(session.closed for session in opened)
 
 
 async def test_unregistering_stops_forwarding_and_closes_the_relay_session(

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -136,7 +137,8 @@ async def test_registration_answers_a_deeply_nested_body_with_400(
     start_proxy_in_mode: ProxyStarter,
 ) -> None:
     """#2218: an anonymous endpoint must call a body nested thousands deep
-    malformed metadata, never a 500."""
+    malformed metadata, never a 500. Whether the parser overflows or returns a
+    list depends on the interpreter's stack, so only the 400 is pinned."""
     proxy = await start_proxy_in_mode("ha_auth")
     payload = b"[" * 32000 + b"]" * 32000
     assert len(payload) < proxy.module("oauth_dcr").MAX_DCR_BODY_BYTES
@@ -146,8 +148,24 @@ async def test_registration_answers_a_deeply_nested_body_with_400(
     body = await response.json()
     assert response.status == 400
     assert body["error"] == "invalid_client_metadata"
-    # The size guard answers the same code, so only this names the shape.
-    assert body["error_description"] == "body must be an object"
+
+
+async def test_registration_answers_a_parser_stack_overflow_with_400(
+    start_proxy_in_mode: ProxyStarter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overflow is forced through the module's own ``json`` name: the
+    endpoint calls it malformed metadata, never a 500."""
+    proxy = await start_proxy_in_mode("ha_auth")
+    overflowing = SimpleNamespace(
+        loads=Mock(side_effect=RecursionError), dumps=json.dumps
+    )
+    monkeypatch.setattr(proxy.module("oauth_dcr"), "json", overflowing)
+
+    response = await proxy.client.post(proxy.url("register"), data=b"[[]]")
+
+    body = await response.json()
+    assert response.status == 400
+    assert body["error_description"] == "body must be JSON"
 
 
 async def test_registration_rejects_text_that_is_not_json(

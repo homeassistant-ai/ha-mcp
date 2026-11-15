@@ -194,7 +194,7 @@ async def serve(
         yield state
     finally:
         uvicorn_server.should_exit = True
-        await task
+        await asyncio.wait_for(task, timeout=60)
 
 
 def unused_port() -> int:

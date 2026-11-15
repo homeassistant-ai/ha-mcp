@@ -335,7 +335,7 @@ class TestPatchRefusals:
             assert reply["success"] is True, reply
             held.release.set()
             with pytest.raises(ToolError) as exc_info:
-                await patch
+                await asyncio.wait_for(patch, timeout=60)
 
         assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
         assert await _rows(core_client) == []
@@ -434,7 +434,7 @@ class TestWriteSerialization:
                 )
             await asyncio.wait_for(held.arrived.wait(), timeout=10)
             held.release.set()
-            await restore
+            await asyncio.wait_for(restore, timeout=60)
 
         assert await _stored(core_client, resource_id) == CARD
 

@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock
 import aiohttp
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import unused_port
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import ClientSessionGenerator
 
@@ -23,6 +22,7 @@ from custom_components.ha_mcp_tools.const import (
     WEBHOOK_AUTH_NONE,
 )
 
+from ._garbled_upstream import garbled_upstream
 from ._mcp_webhook_core import (
     SECRET_PATH,
     WEBHOOK_PATH,
@@ -241,18 +241,23 @@ async def test_stream_cut_by_the_server_is_logged_and_ended_cleanly(
     assert f"dropped mid-stream after {len(chunk)} bytes" in caplog.text
 
 
-async def test_unreachable_server_is_a_502_that_names_no_secret_path(
+async def test_failed_relay_is_a_502_that_names_no_secret_path(
     register: Register,
     hass_client_no_auth: ClientSessionGenerator,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    await register(WEBHOOK_AUTH_NONE, port=unused_port())
-    client = await hass_client_no_auth()
+    """The relay's error quotes the target URL, whose path is the credential;
+    neither the reply nor the log may repeat it."""
+    async with garbled_upstream() as port:
+        await register(WEBHOOK_AUTH_NONE, port=port)
+        client = await hass_client_no_auth()
 
-    resp = await client.post(WEBHOOK_PATH, data=b"{}")
+        resp = await client.post(WEBHOOK_PATH, data=b"{}")
 
     assert resp.status == 502
+    assert "upstream request failed" in caplog.text
     assert SECRET_PATH not in caplog.text
+    assert SECRET_PATH not in await resp.text()
 
 
 async def test_unexpected_relay_error_is_a_500_not_a_crash(

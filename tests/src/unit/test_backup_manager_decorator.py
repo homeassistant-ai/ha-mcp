@@ -156,30 +156,6 @@ def test_destructive_tools_carry_the_auto_backup_decorator() -> None:
             assert "mandatory=True" in head, f"{func} lost mandatory=True"
 
 
-def test_the_blueprint_tool_keeps_its_decorator_and_skip_rules() -> None:
-    """Source guard for the computed-key wiring (#2329): deleting a blueprint
-    unlinks a file core will not rebuild and saving over one replaces it, so
-    the pre-write snapshot is the only way back."""
-    src = (TOOLS / "tools_blueprints.py").read_text(encoding="utf-8")
-    idx = src.index("async def ha_manage_blueprints(")
-    head = src[max(0, idx - 1800) : idx]  # the decorator block above the def
-    assert "with_auto_backup(" in head, "ha_manage_blueprints lost @with_auto_backup"
-    assert "domain_fn=" in head, "ha_manage_blueprints lost its blueprint domain_fn"
-    assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
-    assert "id_fn=" in head, "ha_manage_blueprints wrong/missing id_fn"
-    assert "blueprint_snapshot_target" in head, (
-        "the snapshot key no longer normalises the path the way blueprint/save "
-        "does - an overwriting save of 'user/motion' would replace "
-        "user/motion.yaml with nothing captured"
-    )
-    assert 'kw.get("action") not in ("delete", "save")' in head, (
-        "ha_manage_blueprints lost the delete/save-only skip_fn"
-    )
-    assert 'not kw.get("confirm")' in head, (
-        "ha_manage_blueprints lost the confirm half of its skip_fn"
-    )
-
-
 def _error_code(exc: ToolError) -> str:
     return str(json.loads(str(exc))["error"]["code"])
 

@@ -15,7 +15,7 @@ import socket
 import sys
 import threading
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Any
 
@@ -74,8 +74,7 @@ async def wait_for_log(caplog: pytest.LogCaptureFixture, text: str) -> None:
 
 async def cancelled(task: asyncio.Task[Any]) -> None:
     task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    await asyncio.gather(task, return_exceptions=True)
 
 
 @asynccontextmanager
@@ -94,7 +93,7 @@ async def importing_worker(
     finally:
         hook.release.set()
         try:
-            await start
+            await asyncio.wait_for(start, timeout=60)
         finally:
             await mgr.async_stop()
 
@@ -147,7 +146,7 @@ async def test_a_worker_left_behind_blocks_the_next_managers_purge_until_it_died
     start = asyncio.create_task(blocked.async_start())
     await wait_for_log(caplog, SKIPPING)
     import_hook.release.set()
-    await start
+    await asyncio.wait_for(start, timeout=60)
     await blocked.async_stop()
     assert generation() is wedged
 
@@ -172,7 +171,7 @@ async def test_a_worker_still_importing_blocks_the_purge_of_the_next_manager(
         start = asyncio.create_task(second.async_start())
         await wait_for_log(caplog, SKIPPING)
         import_hook.release.set()
-        await start
+        await asyncio.wait_for(start, timeout=60)
         await second.async_stop()
 
     assert generation() is held
@@ -344,7 +343,7 @@ async def test_a_start_waits_for_the_job_a_cancelled_start_left_on_the_executor(
     assert len(package_index.calls) == 1, "the next start touched the package"
     held.release.set()
     with pytest.raises(es.EmbeddedServerError) as err:
-        await next_start
+        await asyncio.wait_for(next_start, timeout=60)
 
     assert err.value.kind == "token"
     assert package_index.dists[STABLE] == INDEX_VERSION
@@ -453,7 +452,7 @@ async def test_progress_keeps_a_slow_start_alive_past_the_stall_budget(
             await asyncio.sleep(1.5)
             assert not start.done(), "gave up while the start was progressing"
             import_hook.release.set()
-            await start
+            await asyncio.wait_for(start, timeout=60)
         assert mgr.is_running
         await mgr.async_stop()
 
