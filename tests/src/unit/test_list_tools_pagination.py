@@ -1,40 +1,40 @@
-"""Pagination contract for the three collection-listing tools (issue #1869).
+"""Pagination of the three collection-listing tools (issue #1869).
 
-``ha_config_list_groups`` / ``ha_config_list_dashboard_resources`` /
-``ha_config_list_helpers`` returned their whole collection on every call. They
-now take ``limit``/``offset`` and emit the shared ``build_pagination_metadata``
-envelope, joining ``ha_get_history`` / ``ha_list_services`` / ``ha_search``.
+``ha_config_list_groups``, ``ha_config_list_dashboard_resources`` and
+``ha_config_list_helpers`` take ``limit``/``offset`` and emit the shared
+pagination envelope: ``count`` is the page size, ``total_count`` the size of the
+whole collection, and the summaries that describe the whole collection
+(``inline_count``, ``by_type``) do not shrink to the page.
 
-Pinned here because the contract is cross-tool and easy to break in one place
-only: ``count`` is the page size (``total_count`` carries the full size), the
-records below the default limit stay exactly what they were, and the aggregate
-summaries that describe the whole collection (``inline_count`` / ``by_type``)
-must NOT shrink to the page.
-
-The helper suite covers each envelope builder that can serve a listing — the
-legacy ``{type}/list`` body, the component's single-type route (storage and
-flow, via ``_shape_component_helpers_response``) and its merged all-types mode
-— because each builds its own envelope and the slice is applied at one shared
-normalization point rather than in each builder.
+Every helper route builds its own envelope (the ``{type}/list`` body, the
+component's single-type answer for storage and flow types, and its all-types
+listing merged with tags), and the slice is applied once after them, so each
+route is paged here. The collections are Core's own: states, Lovelace
+resources, storage helpers created through Core's commands and config entries.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import MagicMock
+import logging
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp.tools import component_api, tools_config_helpers
-from ha_mcp.tools.config_helpers import listing as helper_listing
-from ha_mcp.tools.config_helpers import registry as helper_registry
-from ha_mcp.tools.config_helpers.schemas import SIMPLE_HELPER_TYPES
-from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_groups import GroupTools
 from ha_mcp.tools.tools_resources import ResourceTools
 
-from ._component_routing_helpers import make_ws, patch_ws
-from ._core_helper_flows import CORE_HELPER_FLOWS
+from ._client_spies import sent_commands
+from ._routing_core import (
+    list_helpers,
+    pooled_socket,
+    sent_types,
+    setup_every_simple_type,
+    setup_storage_booleans,
+)
 
 _PAGINATION_KEYS = {
     "total_count",
@@ -46,542 +46,340 @@ _PAGINATION_KEYS = {
 }
 
 
-def _group_states(count: int) -> list[dict[str, Any]]:
-    """``get_states``-shaped payload with ``count`` groups, sorted by name."""
+def _groups(hass: HomeAssistant, count: int) -> None:
+    for i in range(count):
+        hass.states.async_set(
+            f"group.g{i:03d}",
+            "on",
+            {"friendly_name": f"Group {i:03d}", "entity_id": []},
+        )
+
+
+async def _booleans(client: HomeAssistantClient, count: int) -> list[str]:
+    """``count`` storage input_booleans, in creation order; returns their ids."""
+    ids = []
+    for i in range(count):
+        created = await client.send_websocket_message(
+            {"type": "input_boolean/create", "name": f"Bool {i:03d}"}
+        )
+        ids.append(created["result"]["id"])
+    return ids
+
+
+def _template_helpers(hass: HomeAssistant, count: int) -> None:
+    registry = er.async_get(hass)
+    for i in range(count):
+        entry = MockConfigEntry(
+            domain="template",
+            title=f"Templated {i:03d}",
+            options={"state": "{{ 1 + 1 }}"},
+        )
+        entry.add_to_hass(hass)
+        registry.async_get_or_create(
+            "sensor", "template", f"templated_{i:03d}", config_entry=entry
+        )
+
+
+def _ours(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The warnings this server logged (Core's own setup may log too)."""
     return [
-        {
-            "entity_id": f"group.g{i:03d}",
-            "state": "on",
-            "attributes": {"friendly_name": f"Group {i:03d}", "entity_id": []},
-        }
-        for i in range(count)
+        r
+        for r in caplog.records
+        if r.name.startswith("ha_mcp") and r.levelno >= logging.WARNING
     ]
 
 
-def _resource_records(count: int) -> list[dict[str, Any]]:
-    return [
-        {"id": f"res{i:03d}", "url": f"/local/card{i:03d}.js", "type": "module"}
-        for i in range(count)
+@pytest.fixture
+async def helpers_core(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Core's registry API and storage input_booleans."""
+    await setup_storage_booleans(hass)
+
+
+# --- groups ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def groups(core_client: HomeAssistantClient) -> GroupTools:
+    return GroupTools(core_client)
+
+
+async def test_groups_below_the_limit_are_listed_whole_with_metadata(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 3)
+
+    result = await groups.ha_config_list_groups()
+
+    assert [g["entity_id"] for g in result["groups"]] == [
+        "group.g000",
+        "group.g001",
+        "group.g002",
     ]
+    assert (result["count"], result["total_count"]) == (3, 3)
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
 
 
-def _legacy_helper_items(count: int) -> list[dict[str, Any]]:
-    return [{"id": f"h{i:03d}", "name": f"Helper {i:03d}"} for i in range(count)]
+async def test_the_first_page_of_groups_reports_more(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 250)
+
+    result = await groups.ha_config_list_groups()
+
+    assert len(result["groups"]) == result["count"] == 100
+    assert result["total_count"] == 250
+    assert (result["limit"], result["offset"]) == (100, 0)
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
 
 
-class _LegacyHelperClient:
-    """Uncredentialed HA client: no base_url/token ⇒ caps probe returns None.
+async def test_an_offset_selects_the_next_window_of_groups(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 250)
 
-    That pins ``ha_config_list_helpers`` to its legacy ``{type}/list`` body
-    without patching the WS layer — the component path is negotiated only for a
-    credentialed client (``component_api.get_component_caps``).
-    """
+    result = await groups.ha_config_list_groups(limit=100, offset=100)
 
-    def __init__(self, items: list[dict[str, Any]]) -> None:
-        self._items = items
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "config/entity_registry/list":
-            return {"success": True, "result": []}
-        if msg.get("type") == "input_boolean/list":
-            return {"success": True, "result": [dict(i) for i in self._items]}
-        return {"success": False, "error": "unexpected list type"}
+    assert result["groups"][0]["entity_id"] == "group.g100"
+    assert result["count"] == 100
+    assert result["next_offset"] == 200
 
 
-def _build_list_helpers(client: Any) -> Any:
-    registered: dict[str, Any] = {}
+async def test_the_last_page_of_groups_is_short_and_final(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 250)
 
-    def capture_add_tool(method: Any) -> None:
-        registered[method.__fastmcp__.name] = method
+    result = await groups.ha_config_list_groups(limit=100, offset=200)
 
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_config_helper_tools(mcp, client)
-    return registered["ha_config_list_helpers"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+    assert result["count"] == 50
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
 
 
-class TestListGroupsPagination:
-    def _tools(self, count: int) -> GroupTools:
-        client = MagicMock()
+async def test_an_offset_past_the_end_is_an_empty_final_page(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 5)
 
-        async def _get_states() -> list[dict[str, Any]]:
-            return _group_states(count)
+    result = await groups.ha_config_list_groups(offset=500)
 
-        client.get_states = _get_states
-        return GroupTools(client)
-
-    async def test_collection_below_limit_is_unchanged_plus_metadata(self):
-        result = await self._tools(3).ha_config_list_groups()
-
-        assert [g["entity_id"] for g in result["groups"]] == [
-            "group.g000",
-            "group.g001",
-            "group.g002",
-        ]
-        assert result["count"] == 3
-        assert result["total_count"] == 3
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
-
-    async def test_first_page_reports_more(self):
-        result = await self._tools(250).ha_config_list_groups()
-
-        assert len(result["groups"]) == 100
-        assert result["count"] == 100
-        assert result["total_count"] == 250
-        assert result["limit"] == 100
-        assert result["offset"] == 0
-        assert result["has_more"] is True
-        assert result["next_offset"] == 100
-
-    async def test_offset_selects_the_next_window(self):
-        result = await self._tools(250).ha_config_list_groups(limit=100, offset=100)
-
-        assert result["groups"][0]["entity_id"] == "group.g100"
-        assert result["count"] == 100
-        assert result["next_offset"] == 200
-
-    async def test_last_page_is_short_and_final(self):
-        result = await self._tools(250).ha_config_list_groups(limit=100, offset=200)
-
-        assert result["count"] == 50
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
-
-    async def test_offset_past_the_end_yields_an_empty_final_page(self):
-        result = await self._tools(5).ha_config_list_groups(offset=500)
-
-        assert result["groups"] == []
-        assert result["count"] == 0
-        assert result["total_count"] == 5
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
-
-    async def test_message_reports_the_full_collection_not_the_page(self):
-        result = await self._tools(250).ha_config_list_groups()
-
-        assert result["message"] == "Found 250 group(s)"
+    assert result["groups"] == []
+    assert (result["count"], result["total_count"]) == (0, 5)
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
 
 
-class TestListDashboardResourcesPagination:
-    def _tools(self, count: int) -> ResourceTools:
-        client = MagicMock()
+async def test_the_groups_message_counts_the_whole_collection(
+    hass: HomeAssistant, groups: GroupTools
+) -> None:
+    _groups(hass, 250)
 
-        async def _send(msg: dict[str, Any]) -> dict[str, Any]:
-            return {"result": _resource_records(count)}
+    result = await groups.ha_config_list_groups()
 
-        client.send_websocket_message = _send
-        return ResourceTools(client)
-
-    async def test_first_page_reports_more(self):
-        result = await self._tools(250).ha_config_list_dashboard_resources()
-
-        assert len(result["resources"]) == 100
-        assert result["count"] == 100
-        assert result["total_count"] == 250
-        assert result["has_more"] is True
-        assert result["next_offset"] == 100
-
-    async def test_offset_selects_the_next_window(self):
-        result = await self._tools(250).ha_config_list_dashboard_resources(
-            limit=10, offset=100
-        )
-
-        assert [r["id"] for r in result["resources"]][:2] == ["res100", "res101"]
-        assert result["count"] == 10
-
-    async def test_aggregate_summaries_describe_the_whole_collection(self):
-        """``by_type``/``inline_count`` must not shrink to the returned page."""
-        result = await self._tools(250).ha_config_list_dashboard_resources(limit=10)
-
-        assert len(result["resources"]) == 10
-        assert result["by_type"]["module"] == 250
-        assert result["inline_count"] == 0
+    assert result["message"] == "Found 250 group(s)"
 
 
-class _ComponentClient:
-    """Credentialed HA client: caps probe succeeds ⇒ the component path runs."""
-
-    base_url = "http://ha.local:8123"
-    token = "tok"
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "config/entity_registry/list":
-            return {"success": True, "result": []}
-        raise AssertionError(f"legacy fetch must not run: {msg!r}")
+# --- dashboard resources ---------------------------------------------------------
 
 
-def _component_collection_result(count: int) -> dict[str, Any]:
-    return {
-        "helpers": [
+@pytest.fixture
+async def resources(hass: HomeAssistant, core_client: HomeAssistantClient) -> list[str]:
+    """120 module resources in Core's Lovelace storage; returns their ids."""
+    assert await async_setup_component(hass, "lovelace", {})
+    for i in range(120):
+        await core_client.send_websocket_message(
             {
-                "helper_type": "input_boolean",
-                "object_id": f"b{i:03d}",
-                "entity_id": f"input_boolean.b{i:03d}",
-                "name": f"Bool {i:03d}",
-                "kind": "collection",
-                "config": {"id": f"b{i:03d}", "name": f"Bool {i:03d}"},
+                "type": "lovelace/resources/create",
+                "res_type": "module",
+                "url": f"/local/card{i:03d}.js",
             }
-            for i in range(count)
-        ],
-        "count": count,
-        "covered_types": ["input_boolean"],
-    }
-
-
-def _component_flow_result(count: int) -> dict[str, Any]:
-    return {
-        "helpers": [
-            {
-                "helper_type": "template",
-                "entry_id": f"cfg{i:03d}",
-                "entity_id": f"sensor.templated_{i:03d}",
-                "name": f"Templated {i:03d}",
-                "kind": "flow",
-                "options": {"state": "{{ 1 + 1 }}"},
-            }
-            for i in range(count)
-        ],
-        "count": count,
-        "covered_types": ["template"],
-    }
-
-
-class TestFlattenHelperListResult:
-    """An unrecognised {type}/list shape must not pass as an empty collection.
-
-    The flattened list feeds ``count`` and the record lists, so a shape that
-    yields nothing reaches the caller as a legitimate-looking "0 helpers".
-    """
-
-    def test_unrecognised_result_type_is_logged(self, caplog):
-        with caplog.at_level("WARNING"):
-            items = helper_registry._flatten_helper_list_result("not a shape")
-
-        assert items == []
-        assert any("Cannot flatten" in rec.message for rec in caplog.records)
-
-    def test_split_shape_without_the_expected_lists_is_logged(self, caplog):
-        with caplog.at_level("WARNING"):
-            items = helper_registry._flatten_helper_list_result(
-                {"result": {"unexpected": [{"id": "p1"}]}}
-            )
-
-        assert items == []
-        assert any("neither a 'storage'" in rec.message for rec in caplog.records)
-
-    def test_empty_person_split_is_not_flagged(self, caplog):
-        """A person type with no entries is legitimately empty, not malformed."""
-        with caplog.at_level("WARNING"):
-            items = helper_registry._flatten_helper_list_result(
-                {"result": {"storage": [], "config": []}}
-            )
-
-        assert items == []
-        assert not caplog.records, f"empty is not a defect: {caplog.records}"
-
-    def test_known_shapes_are_not_flagged(self, caplog):
-        with caplog.at_level("WARNING"):
-            flat = helper_registry._flatten_helper_list_result(
-                {"result": [{"id": "h1"}]}
-            )
-            split = helper_registry._flatten_helper_list_result(
-                {"result": {"storage": [{"id": "p1"}], "config": [{"id": "p2"}]}}
-            )
-
-        assert flat == [{"id": "h1"}]
-        assert [h["id"] for h in split] == ["p1", "p2"]
-        assert not caplog.records
-
-
-class TestPaginateHelpersGuard:
-    """The guard for a builder handing the slice something other than a list.
-
-    Unreachable through the tool once every builder flattens, so it is driven
-    directly. It must not stay quiet: the caller is an agent that never sees
-    server logs, and an envelope without pagination metadata reads as "the
-    collection fits on one page".
-    """
-
-    def test_non_list_is_returned_unpaginated_but_warns(self):
-        envelope = {
-            "success": True,
-            "helper_type": "person",
-            "count": 2,
-            "helpers": {"storage": [], "config": []},
-        }
-
-        result = helper_listing._paginate_helpers_response(envelope, 0, 100)
-
-        assert result["helpers"] == envelope["helpers"]
-        assert set(result) & _PAGINATION_KEYS == {"count"}, (
-            f"an unpaginated envelope must not claim pagination metadata: {result}"
         )
-        assert any("could not be paginated" in w for w in result["warnings"])
-        assert "dict" in result["warnings"][0]
+    listed = await core_client.send_websocket_message({"type": "lovelace/resources"})
+    return [r["id"] for r in listed["result"]]
 
-    def test_existing_warnings_are_kept_and_not_mutated(self):
-        envelope = {
-            "success": True,
-            "helper_type": "person",
-            "helpers": {},
-            "warnings": ["served via legacy path"],
-        }
 
-        result = helper_listing._paginate_helpers_response(envelope, 0, 100)
+async def test_the_first_page_of_resources_reports_more(
+    resources: list[str], core_client: HomeAssistantClient
+) -> None:
+    result = await ResourceTools(core_client).ha_config_list_dashboard_resources()
 
-        assert result["warnings"][0] == "served via legacy path"
-        assert len(result["warnings"]) == 2
-        assert envelope["warnings"] == ["served via legacy path"], (
-            "the caller's warnings list must not be mutated"
+    assert len(result["resources"]) == result["count"] == 100
+    assert result["total_count"] == 120
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
+
+
+async def test_an_offset_selects_the_next_window_of_resources(
+    resources: list[str], core_client: HomeAssistantClient
+) -> None:
+    result = await ResourceTools(core_client).ha_config_list_dashboard_resources(
+        limit=10, offset=100
+    )
+
+    assert [r["id"] for r in result["resources"]] == resources[100:110]
+    assert result["count"] == 10
+
+
+async def test_resource_summaries_describe_the_whole_collection(
+    resources: list[str], core_client: HomeAssistantClient
+) -> None:
+    """``by_type``/``inline_count`` must not shrink to the returned page."""
+    result = await ResourceTools(core_client).ha_config_list_dashboard_resources(
+        limit=10
+    )
+
+    assert len(result["resources"]) == 10
+    assert result["by_type"]["module"] == 120
+    assert result["inline_count"] == 0
+
+
+# --- helpers: the legacy {type}/list body -----------------------------------------
+
+
+async def test_the_legacy_helper_list_is_paged(
+    helpers_core: None, core_client: HomeAssistantClient
+) -> None:
+    ids = await _booleans(core_client, 120)
+
+    result = await list_helpers(
+        core_client, helper_type="input_boolean", limit=50, offset=50
+    )
+
+    assert [h["id"] for h in result["helpers"]] == ids[50:100]
+    assert (result["count"], result["total_count"]) == (50, 120)
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
+
+
+async def test_a_short_legacy_helper_list_is_unchanged_plus_metadata(
+    helpers_core: None, core_client: HomeAssistantClient
+) -> None:
+    ids = await _booleans(core_client, 2)
+
+    result = await list_helpers(core_client, helper_type="input_boolean")
+
+    assert [h["id"] for h in result["helpers"]] == ids
+    assert (result["count"], result["total_count"]) == (2, 2)
+    assert result["has_more"] is False
+    assert set(result) >= _PAGINATION_KEYS
+
+
+async def test_persons_from_storage_and_yaml_are_both_listed_unflagged(
+    hass: HomeAssistant,
+    helpers_core: None,
+    core_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``person/list`` answers ``{"storage": [...], "config": [...]}``: both
+    halves are listed, and a shape Core gives is not logged as malformed."""
+    assert await async_setup_component(
+        hass, "person", {"person": [{"id": "bob", "name": "Bob"}]}
+    )
+    created = await core_client.send_websocket_message(
+        {"type": "person/create", "name": "Alice"}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp"):
+        result = await list_helpers(core_client, helper_type="person")
+
+    assert sorted(h["id"] for h in result["helpers"]) == sorted(
+        [created["result"]["id"], "bob"]
+    )
+    assert result["total_count"] == 2
+    assert not _ours(caplog), [r.getMessage() for r in _ours(caplog)]
+
+
+async def test_an_empty_person_list_is_not_flagged(
+    hass: HomeAssistant,
+    helpers_core: None,
+    core_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No persons at all is legitimately empty, not a malformed answer."""
+    assert await async_setup_component(hass, "person", {})
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp"):
+        result = await list_helpers(core_client, helper_type="person")
+
+    assert result["helpers"] == []
+    assert result["total_count"] == 0
+    assert "warnings" not in result
+    assert not _ours(caplog), [r.getMessage() for r in _ours(caplog)]
+
+
+# --- helpers: the component's answers ---------------------------------------------
+
+
+async def test_the_component_helper_list_is_paged(
+    helpers_core: None, component_core_client: HomeAssistantClient
+) -> None:
+    """The component's single-type answer has its own envelope builder; the
+    legacy list is never read."""
+    ids = await _booleans(component_core_client, 120)
+    socket = await pooled_socket(component_core_client)
+
+    with sent_commands(socket) as sent:
+        result = await list_helpers(
+            component_core_client, helper_type="input_boolean", limit=50, offset=50
         )
 
+    assert "input_boolean/list" not in sent_types(sent)
+    assert [h["id"] for h in result["helpers"]] == ids[50:100]
+    assert (result["count"], result["total_count"]) == (50, 120)
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
 
-class TestListHelpersPagination:
-    async def test_legacy_path_paginates(self):
-        client = _LegacyHelperClient(_legacy_helper_items(250))
-        list_helpers = _build_list_helpers(client)
 
-        result = await list_helpers("input_boolean", limit=100, offset=100)
+async def test_a_flow_helper_list_is_paged(
+    hass: HomeAssistant, helpers_core: None, component_core_client: HomeAssistantClient
+) -> None:
+    """Flow types are served only by the component; a large set is still paged."""
+    _template_helpers(hass, 120)
 
-        assert len(result["helpers"]) == 100
-        assert result["helpers"][0]["id"] == "h100"
-        assert result["count"] == 100
-        assert result["total_count"] == 250
-        assert result["has_more"] is True
-        assert result["next_offset"] == 200
+    result = await list_helpers(
+        component_core_client, helper_type="template", limit=50, offset=100
+    )
 
-    async def test_legacy_path_below_limit_is_unchanged_plus_metadata(self):
-        client = _LegacyHelperClient(_legacy_helper_items(2))
-        list_helpers = _build_list_helpers(client)
+    assert len(result["helpers"]) == result["count"] == 20
+    assert result["total_count"] == 120
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
 
-        result = await list_helpers("input_boolean")
 
-        assert [h["id"] for h in result["helpers"]] == ["h000", "h001"]
-        assert result["count"] == 2
-        assert result["total_count"] == 2
-        assert result["has_more"] is False
-        assert set(result) >= _PAGINATION_KEYS
+@pytest.fixture
+async def all_types(
+    hass: HomeAssistant, helpers_core: None, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """Every storage helper type set up, 120 input_booleans and one tag."""
+    await setup_every_simple_type(hass)
+    await _booleans(component_core_client, 120)
+    await component_core_client.send_websocket_message(
+        {"type": "tag/create", "tag_id": "tag-42"}
+    )
+    return component_core_client
 
-    async def test_component_storage_path_paginates(self):
-        """The component route is preferred for storage types when installed.
 
-        Its envelope comes from ``_shape_component_helpers_response`` — a
-        different builder than the legacy body — so the shared slice has to
-        cover it too. The client raises on any legacy fetch, pinning that this
-        really went through the component.
-        """
-        caps = {
-            "schema_version": 1,
-            "component_version": "1.1.0",
-            "capabilities": ["helpers_list"],
-            "limits": {},
-        }
-        ws = make_ws(
-            "ha_mcp_tools/helpers_list",
-            info_result=caps,
-            cmd_result=_component_collection_result(250),
-        )
-        with patch_ws(ws, tools_config_helpers):
-            list_helpers = _build_list_helpers(_ComponentClient())
-            result = await list_helpers("input_boolean", limit=100, offset=100)
+async def test_all_types_pages_the_listing_merged_with_tags(
+    all_types: HomeAssistantClient,
+) -> None:
+    """Tags are merged in after the component's listing, so the slice runs
+    after the merge: 120 helpers + 1 tag, paged."""
+    result = await list_helpers(all_types, helper_type="all", limit=100)
 
-        assert len(result["helpers"]) == 100
-        assert result["helpers"][0]["entity_id"] == "input_boolean.b100"
-        assert result["count"] == 100
-        assert result["total_count"] == 250
-        assert result["has_more"] is True
-        assert result["next_offset"] == 200
+    assert result["total_count"] == 121
+    assert len(result["helpers"]) == result["count"] == 100
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
 
-    async def test_component_flow_path_paginates(self):
-        """Flow types are served ONLY through the component — no legacy route.
 
-        If the slice missed this envelope, a large template-helper set would
-        stay unbounded with no fallback path to fix it.
-        """
-        caps = {
-            "schema_version": 1,
-            "component_version": "1.1.0",
-            "capabilities": ["helpers_list"],
-            "limits": {},
-        }
-        ws = make_ws(
-            "ha_mcp_tools/helpers_list",
-            info_result=caps,
-            cmd_result=_component_flow_result(250),
-        )
-        with patch_ws(ws, tools_config_helpers):
-            list_helpers = _build_list_helpers(_ComponentClient())
-            result = await list_helpers("template", limit=50, offset=200)
+async def test_the_last_all_types_page_holds_the_merged_tag(
+    all_types: HomeAssistantClient,
+) -> None:
+    result = await list_helpers(all_types, helper_type="all", limit=100, offset=100)
 
-        assert len(result["helpers"]) == 50
-        assert result["count"] == 50
-        assert result["total_count"] == 250
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
-
-    async def test_all_types_mode_paginates_the_merged_listing(self):
-        """All-types is component-served and merges legacy ``tag`` records in.
-
-        The slice must therefore run after that merge, not inside the component
-        response — otherwise the merged-in records would land outside the page.
-        """
-        component_result = {
-            "helpers": [
-                {
-                    "helper_type": "input_boolean",
-                    "object_id": f"b{i:03d}",
-                    "entity_id": f"input_boolean.b{i:03d}",
-                    "name": f"Bool {i:03d}",
-                    "kind": "collection",
-                    "config": {"id": f"b{i:03d}"},
-                }
-                for i in range(120)
-            ],
-            "count": 120,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | CORE_HELPER_FLOWS),
-        }
-        caps = {
-            "schema_version": 1,
-            "component_version": "1.1.0",
-            "capabilities": ["helpers_list"],
-            "limits": {},
-        }
-
-        class _AllClient:
-            base_url = "http://ha.local:8123"
-            token = "tok"
-
-            async def send_websocket_message(
-                self, msg: dict[str, Any]
-            ) -> dict[str, Any]:
-                if msg.get("type") == "tag/list":
-                    return {
-                        "success": True,
-                        "result": [{"id": "tag-42", "name": "Front Door"}],
-                    }
-                return {"success": True, "result": []}
-
-        client = _AllClient()
-        ws = make_ws(
-            "ha_mcp_tools/helpers_list",
-            info_result=caps,
-            cmd_result=component_result,
-        )
-        with patch_ws(ws, tools_config_helpers):
-            list_helpers = _build_list_helpers(client)
-            result = await list_helpers("all", limit=100)
-
-        # 120 component records + 1 legacy-merged tag = 121 total, page of 100.
-        assert result["total_count"] == 121
-        assert result["count"] == 100
-        assert len(result["helpers"]) == 100
-        assert result["has_more"] is True
-        assert result["next_offset"] == 100
-
-    async def test_all_types_merge_reports_records_it_cannot_use(self, caplog):
-        """A legacy record the merge cannot use must not vanish quietly.
-
-        The merge keeps only dict records. That check is what silently ate the
-        person listing while its split shape went unflattened, so if it ever
-        drops something again it has to say so.
-        """
-        caps = {
-            "schema_version": 1,
-            "component_version": "1.1.0",
-            "capabilities": ["helpers_list"],
-            "limits": {},
-        }
-        component_result = {
-            "helpers": [],
-            "count": 0,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | CORE_HELPER_FLOWS),
-        }
-
-        class _MalformedTagClient:
-            base_url = "http://ha.local:8123"
-            token = "tok"
-
-            async def send_websocket_message(
-                self, msg: dict[str, Any]
-            ) -> dict[str, Any]:
-                if msg.get("type") == "tag/list":
-                    # A record the merge cannot use, next to a usable one.
-                    return {
-                        "success": True,
-                        "result": ["not-a-record", {"id": "tag-42"}],
-                    }
-                return {"success": True, "result": []}
-
-        ws = make_ws(
-            "ha_mcp_tools/helpers_list", info_result=caps, cmd_result=component_result
-        )
-        with patch_ws(ws, tools_config_helpers), caplog.at_level("WARNING"):
-            list_helpers = _build_list_helpers(_MalformedTagClient())
-            result = await list_helpers("all")
-
-        assert [h["id"] for h in result["helpers"]] == ["tag-42"]
-        assert any(
-            "Dropped 1 unrecognised item" in rec.message for rec in caplog.records
-        ), f"the dropped record must be reported: {[r.message for r in caplog.records]}"
-
-    async def test_all_types_mode_last_page_holds_the_merged_tag_record(self):
-        """The legacy-merged record is reachable via offset, not stranded."""
-        component_result = {
-            "helpers": [
-                {
-                    "helper_type": "input_boolean",
-                    "object_id": f"b{i:03d}",
-                    "entity_id": f"input_boolean.b{i:03d}",
-                    "name": f"Bool {i:03d}",
-                    "kind": "collection",
-                    "config": {"id": f"b{i:03d}"},
-                }
-                for i in range(120)
-            ],
-            "count": 120,
-            "covered_types": sorted(SIMPLE_HELPER_TYPES - {"tag"} | CORE_HELPER_FLOWS),
-        }
-        caps = {
-            "schema_version": 1,
-            "component_version": "1.1.0",
-            "capabilities": ["helpers_list"],
-            "limits": {},
-        }
-
-        class _AllClient:
-            base_url = "http://ha.local:8123"
-            token = "tok"
-
-            async def send_websocket_message(
-                self, msg: dict[str, Any]
-            ) -> dict[str, Any]:
-                if msg.get("type") == "tag/list":
-                    return {
-                        "success": True,
-                        "result": [{"id": "tag-42", "name": "Front Door"}],
-                    }
-                return {"success": True, "result": []}
-
-        ws = make_ws(
-            "ha_mcp_tools/helpers_list",
-            info_result=caps,
-            cmd_result=component_result,
-        )
-        with patch_ws(ws, tools_config_helpers):
-            list_helpers = _build_list_helpers(_AllClient())
-            result = await list_helpers("all", limit=100, offset=100)
-
-        assert result["count"] == 21
-        assert result["helpers"][-1]["id"] == "tag-42"
-        assert result["has_more"] is False
-        assert result["next_offset"] is None
+    assert result["count"] == 21
+    assert result["helpers"][-1]["id"] == "tag-42"
+    assert result["has_more"] is False
+    assert result["next_offset"] is None

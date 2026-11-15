@@ -13,10 +13,12 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE, __version__
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -45,11 +47,13 @@ def _raise(
     ignored: bool = False,
     fixable: bool = True,
     persistent: bool = False,
+    config_entry_id: str | None = None,
 ) -> None:
     ir.async_create_issue(
         hass,
         "demo",
         issue_id,
+        config_entry_id=config_entry_id,
         is_fixable=fixable,
         is_persistent=persistent,
         severity=ir.IssueSeverity.WARNING,
@@ -157,6 +161,25 @@ async def test_repairs_left_inactive_by_a_restart_are_not_counted(
 
     assert result["repair_count"] == 2
     assert _ids(result) == {"active_one", "dismissed_one"}
+
+
+async def test_a_disabled_entrys_repairs_stay_hidden_with_the_component(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    repairs: None,
+) -> None:
+    """Core's repairs list leaves out the issues of a disabled config entry;
+    served by the component, the overview listed and counted them."""
+    entry = MockConfigEntry(domain="demo", disabled_by=ConfigEntryDisabler.USER)
+    entry.add_to_hass(hass)
+    _raise(hass, "shown")
+    _raise(hass, "hidden", config_entry_id=entry.entry_id)
+
+    result = await _overview(component_core_client)
+
+    assert not any("legacy path" in w for w in result.get("warnings", []))
+    assert _ids(result) == {"shown"}
+    assert result["repair_count"] == 1
 
 
 async def test_no_repairs_yields_zero_count_and_empty_list(

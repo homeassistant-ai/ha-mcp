@@ -1,84 +1,49 @@
-"""Routing tests for the dashboard tools over the ``ha_mcp_tools`` gate.
+"""The dashboard reads through the component's ``dashboards`` command, or Core's.
 
-The dashboard reads (``ha_config_get_dashboard`` list / get / cross-dashboard
-search, plus the shared ``fetch_dashboards_list`` that the set/delete
-existence-checks funnel through) prefer a single in-process
-``ha_mcp_tools/dashboards`` frame when the component advertises the
-``dashboards`` capability, and otherwise fall back to the legacy
-``lovelace/dashboards/list`` / ``lovelace/config`` WS reads. These tests pin the
-component-served shapes (list keeps YAML metadata rows — matching legacy —, get
-body, search matches), the per-call YAML fallback (a ``yaml_excluded`` get drops
-to legacy), the legacy search walk never reading a YAML dashboard's body, and the
-error-taxonomy fallbacks — capability miss, ``unknown_command`` (invalidate caps +
-legacy), a command error/timeout, and a transport failure (both a
-``HomeAssistantConnectionError`` off the frame and the same error from
-``get_websocket_client()`` failing to establish the socket) → ``None`` (legacy):
-the legacy dashboards path rides the WS bridge and the auto-backup
-capture consumer must not be blocked, so a transport failure falls back rather
-than propagating.
+``ha_config_get_dashboard`` (list, get, search) and ``fetch_dashboards_list``
+prefer one ``ha_mcp_tools/dashboards`` frame; without the component, or when
+the frame fails, they read Core's ``lovelace/dashboards/list`` and
+``lovelace/config``. A YAML dashboard's body is never searched without the
+component and its matched values never shown, since Core resolves
+``!secret`` when it loads one.
+
+Core's lovelace integration holds a storage dashboard saved through
+``lovelace/config/save`` and a YAML dashboard from its file; what each read
+sent is what Core received.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from homeassistant.util.yaml import dump
 
+from custom_components.ha_mcp_tools import websocket_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools import component_api, tools_config_dashboards
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import tools_config_dashboards
+from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
 from ha_mcp.tools.tools_config_dashboards import (
     DashboardConfigTools,
-    register_config_dashboard_tools,
+    compute_config_hash,
+    fetch_dashboards_list,
 )
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
-)
+from ._command_faults import dropped_on, pooled_socket, received, unanswered
+from ._config_dir_yaml import write_config_files
+from ._tool_errors import error_of
 
-_CAPS_DASHBOARDS = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["dashboards"],
-    "limits": {},
-}
-_CAPS_NONE = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": [],
-    "limits": {},
-}
-
-# One storage + one YAML row, as the component's ``list`` mode returns them
-# (every runtime dashboard tagged with an additive ``mode``).
-_STORAGE_ROW = {
-    "id": "id-home",
-    "url_path": "home",
-    "title": "Home",
-    "icon": "mdi:home",
-    "show_in_sidebar": True,
-    "require_admin": False,
-    "mode": "storage",
-}
-_YAML_ROW = {
-    "id": "id-yaml",
-    "url_path": "yaml-dash",
-    "title": "YAML",
-    "icon": None,
-    "show_in_sidebar": True,
-    "require_admin": False,
-    "mode": "yaml",
-}
-
-_HOME_BODY = {
+DASHBOARDS = "ha_mcp_tools/dashboards"
+LIST = "lovelace/dashboards/list"
+CONFIG = "lovelace/config"
+HOME = "dash-home"
+YAML = "yaml-dash"
+UNTAGGED = "old-dash"
+HOME_BODY = {
     "title": "Home",
     "views": [
         {
@@ -87,800 +52,499 @@ _HOME_BODY = {
         }
     ],
 }
-_YAML_BODY = {"views": [{"cards": [{"type": "markdown", "content": "yaml only"}]}]}
-
-
-class RoutingClient:
-    """Credentialed HA client spy: serves the legacy lovelace WS reads."""
-
-    def __init__(
-        self,
-        *,
-        dashboards_list: list[dict[str, Any]] | None = None,
-        configs: dict[str | None, dict[str, Any]] | None = None,
-        no_config: frozenset[str] = frozenset(),
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self._dashboards_list = list(dashboards_list or [])
-        self._configs = dict(configs or {})
-        self._no_config = no_config
-        self.list_calls = 0
-        self.config_calls: list[str | None] = []
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        t = msg.get("type")
-        if t == "lovelace/dashboards/list":
-            self.list_calls += 1
-            return {"success": True, "result": list(self._dashboards_list)}
-        if t == "lovelace/config":
-            url_path = msg.get("url_path")
-            self.config_calls.append(url_path)
-            if url_path in self._configs:
-                return {"success": True, "result": self._configs[url_path]}
-            if url_path in self._no_config:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "config_not_found",
-                        "message": "No config found.",
-                    },
-                }
-            return {
-                "success": False,
-                "error": {"message": f"Unknown config specified: {url_path}"},
-            }
-        raise AssertionError(f"unexpected ws message {t!r}")
-
-
-def _build_get_dashboard(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_config_dashboard_tools(mcp, client)
-    return registered["ha_config_get_dashboard"]
-
-
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    component_api._NEGATIVE_CACHE_TS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    component_api._NEGATIVE_CACHE_TS.clear()
-
-
-def _dash_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/dashboards"
-    ]
-
-
-# --- list ---------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_list_served_via_component_keeps_yaml() -> None:
-    """list_only served from the component ``list`` frame keeps YAML metadata rows.
-
-    Listing metadata is safe (only bodies carry resolved ``!secret``), and the
-    legacy ``lovelace/dashboards/list`` includes YAML rows too — dropping them
-    here diverged the two paths.
-    """
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "list",
-            "available": True,
-            "dashboards": [_STORAGE_ROW, _YAML_ROW],
-        },
-    )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(list_only=True)
-
-    assert resp["dashboards"] == [_STORAGE_ROW, _YAML_ROW]
-    assert resp["count"] == 2
-    assert client.list_calls == 0
-    assert _dash_calls(ws)[0].kwargs == {"mode": "list"}
-
-
-@pytest.mark.asyncio
-async def test_list_capability_miss_uses_legacy() -> None:
-    """No ``dashboards`` capability → the legacy lovelace/dashboards/list read."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW])
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(list_only=True)
-
-    assert resp["dashboards"] == [_STORAGE_ROW]
-    assert client.list_calls == 1
-    assert not _dash_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_list_unknown_command_invalidates_and_falls_back() -> None:
-    """unknown_command on the dashboards frame → invalidate caps + legacy list."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW])
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(list_only=True)
-
-    assert resp["dashboards"] == [_STORAGE_ROW]
-    assert client.list_calls == 1
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_list_command_error_falls_back_to_legacy() -> None:
-    """A non-unknown command error/timeout → legacy list, caps NOT invalidated."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_exc=HomeAssistantCommandTimeout("slow"),
-    )
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW])
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(list_only=True)
-
-    assert resp["dashboards"] == [_STORAGE_ROW]
-    assert client.list_calls == 1
-    # A transient command error keeps the (positive) caps entry cached.
-    assert client in component_api._CAPS_CACHE
-
-
-# --- get ----------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_get_served_via_component() -> None:
-    """Get served from the component ``get`` frame (status ok), no legacy read."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "ok",
-            "url_path": "home",
-            "config": _HOME_BODY,
-        },
-    )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="home")
-
-    assert resp["action"] == "get"
-    assert resp["url_path"] == "home"
-    assert resp["config"] == _HOME_BODY
-    assert resp["config_hash"] is not None
-    assert client.config_calls == []
-    assert _dash_calls(ws)[0].kwargs == {"mode": "get", "url_path": "home"}
-
-
-@pytest.mark.asyncio
-async def test_get_default_dashboard_sends_no_url_path() -> None:
-    """url_path omitted/'default' maps to the component's None (default) dashboard."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "ok",
-            "url_path": None,
-            "config": _HOME_BODY,
-        },
-    )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="default")
-
-    assert resp["config"] == _HOME_BODY
-    # The tool's "default" alias resolves to the component default (no url_path).
-    assert _dash_calls(ws)[0].kwargs == {"mode": "get"}
-    assert client.config_calls == []
-
-
-@pytest.mark.asyncio
-async def test_get_yaml_dashboard_falls_back_to_legacy() -> None:
-    """A ``yaml_excluded`` component get drops to the legacy lovelace/config read."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "yaml_excluded",
-            "url_path": "yaml-dash",
-            "config": None,
-        },
-    )
-    client = RoutingClient(configs={"yaml-dash": _YAML_BODY})
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="yaml-dash")
-
-    # The component refused the YAML body; the legacy read served it.
-    assert resp["config"] == _YAML_BODY
-    assert client.config_calls == ["yaml-dash"]
-
-
-@pytest.mark.asyncio
-async def test_get_not_found_falls_back_to_legacy() -> None:
-    """A ``not_found`` component get lets the legacy path produce the real error."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "not_found",
-            "url_path": "ghost",
-            "config": None,
-        },
-    )
-    client = RoutingClient()  # legacy lovelace/config → config_not_found
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError) as exc:
-        await get_dashboard(url_path="ghost")
-    assert client.config_calls == ["ghost"]
-    assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
-
-
-class _ForceCapturingClient(RoutingClient):
-    """Records the ``force`` flag on each ``lovelace/config`` read."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.config_force_flags: list[Any] = []
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "lovelace/config":
-            self.config_force_flags.append(msg.get("force"))
-        return await super().send_websocket_message(msg)
-
-
-@pytest.mark.asyncio
-async def test_get_force_reload_bypasses_component() -> None:
-    """``force_reload=True`` skips the component ``get`` fast path entirely.
-
-    The component ``get`` carries no force semantic, so a forced read must go
-    straight to the legacy ``lovelace/config`` request with ``force=True`` to bust
-    HA's Lovelace cache. Even though the component WOULD serve the body, it is never
-    consulted (no dashboards frame at all — not even the caps probe).
-    """
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "get",
-            "available": True,
-            "status": "ok",
-            "url_path": "home",
-            "config": _HOME_BODY,  # component would serve this if consulted
-        },
-    )
-    client = _ForceCapturingClient(configs={"home": _HOME_BODY})
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="home", force_reload=True)
-
-    assert resp["config"] == _HOME_BODY
-    # The component was bypassed entirely; the legacy forced read served it.
-    assert not _dash_calls(ws)
-    assert client.config_calls == ["home"]
-    assert client.config_force_flags == [True]
-
-
-# --- search across dashboards -------------------------------------------------
-_CAPS_DASHBOARDS_DOCS = {
-    **_CAPS_DASHBOARDS,
-    "capabilities": ["dashboards", "dashboards_docs"],
+YAML_BODY = {
+    "views": [{"cards": [{"type": "entities", "entities": ["light.kitchen"]}]}]
 }
 
 
-@pytest.mark.asyncio
-async def test_search_reads_configs_from_one_component_frame() -> None:
-    """An unscoped search reads every storage config from one ``docs`` frame."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS_DOCS,
-        cmd_result={
-            "mode": "docs",
-            "available": True,
-            "docs": [{"url_path": "home", "config": _HOME_BODY}],
-            "load_failed": 0,
+async def _save(client: HomeAssistantClient, url_path: str, body: Any) -> None:
+    """A storage dashboard whose saved config is ``body``."""
+    for message in (
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": url_path,
+            "title": url_path,
+            "mode": "storage",
+        },
+        {"type": "lovelace/config/save", "url_path": url_path, "config": body},
+    ):
+        reply = await client.send_websocket_message(message)
+        assert reply["success"], reply
+
+
+async def _lovelace(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> HomeAssistantClient:
+    await write_config_files(hass, {f"{YAML}.yaml": dump(YAML_BODY)})
+    assert await async_setup_component(
+        hass,
+        "lovelace",
+        {
+            "lovelace": {
+                "dashboards": {
+                    YAML: {"mode": "yaml", "filename": f"{YAML}.yaml", "title": "Y"}
+                }
+            }
         },
     )
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
+    await _save(client, HOME, HOME_BODY)
+    return client
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
 
-    assert resp["action"] == "search"
-    assert resp["search_criteria"]["query"] == "light.kitchen"
-    assert resp["match_count"] == 1
-    assert resp["truncated"] is False
-    m = resp["matches"][0]
-    assert m["url_path"] == "home"
-    assert m["jq_path"] == ".views[0].cards[0]"
-    assert m["python_path"] == "['views'][0]['cards'][0]"
-    assert m["matched"] == [{"field": "entities", "value": "light.kitchen"}]
-    assert m["config_hash"] == tools_config_dashboards.compute_config_hash(_HOME_BODY)
-    assert client.list_calls == 0
-    assert client.config_calls == []
-    assert _dash_calls(ws)[0].kwargs == {"mode": "docs"}
+@pytest.fixture
+async def component(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return await _lovelace(hass, component_core_client)
+
+
+@pytest.fixture
+async def legacy(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return await _lovelace(hass, core_client)
+
+
+@pytest.fixture
+def untagged(hass_storage: dict[str, Any]) -> None:
+    """A storage dashboard Core stored before it tagged every row with ``mode``."""
+    hass_storage["lovelace_dashboards"] = {
+        "version": 1,
+        "key": "lovelace_dashboards",
+        "data": {
+            "items": [
+                {
+                    "id": "old_dash",
+                    "url_path": UNTAGGED,
+                    "title": "Old",
+                    "icon": None,
+                    "show_in_sidebar": True,
+                    "require_admin": False,
+                }
+            ]
+        },
+    }
+    hass_storage["lovelace.old_dash"] = {
+        "version": 1,
+        "key": "lovelace.old_dash",
+        "data": {"config": HOME_BODY},
+    }
+
+
+def _get(client: HomeAssistantClient) -> Any:
+    return DashboardConfigTools(client).ha_config_get_dashboard
+
+
+def _by_url(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {row["url_path"]: row for row in rows}
+
+
+def _spy_invalidate() -> Any:
+    return patch.object(
+        tools_config_dashboards, "invalidate_caps", wraps=invalidate_caps
+    )
+
+
+# --- list ---------------------------------------------------------------------
+
+
+async def test_the_component_list_keeps_the_yaml_rows_core_lists(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    """Listing metadata is safe (only bodies carry resolved ``!secret``), so
+    the component lists the same rows as Core's own list."""
+    cores = (await _get(legacy)(list_only=True))["dashboards"]
+    websocket_api.async_register_commands(hass)
+    invalidate_caps(legacy)
+
+    with received(hass, DASHBOARDS, LIST) as seen:
+        resp = await _get(legacy)(list_only=True)
+
+    assert resp["dashboards"] == cores
+    assert resp["count"] == len(cores)
+    assert (_by_url(cores)[HOME]["mode"], _by_url(cores)[YAML]["mode"]) == (
+        "storage",
+        "yaml",
+    )
+    assert [{k: v for k, v in m.items() if k != "id"} for m in seen[DASHBOARDS]] == [
+        {"type": DASHBOARDS, "mode": "list"}
+    ]
+    assert seen[LIST] == []
+
+
+async def test_without_the_component_the_list_is_cores(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    with received(hass, LIST) as seen:
+        resp = await _get(legacy)(list_only=True)
+
+    assert {HOME, YAML} <= set(_by_url(resp["dashboards"]))
+    assert len(seen[LIST]) == 1
+
+
+async def test_a_downgraded_component_is_dropped_and_cores_list_serves(
+    hass: HomeAssistant, component: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert await get_component_caps(component) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], DASHBOARDS)
+
+    with _spy_invalidate() as drop, received(hass, LIST) as seen:
+        resp = await _get(component)(list_only=True)
+
+    assert HOME in _by_url(resp["dashboards"])
+    assert len(seen[LIST]) == 1
+    drop.assert_called_once_with(component)
+
+
+async def test_a_list_core_never_answers_falls_back_and_keeps_the_component(
+    hass: HomeAssistant, component: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _spy_invalidate() as drop, received(hass, LIST) as seen:
+        async with unanswered(hass, DASHBOARDS, monkeypatch):
+            resp = await _get(component)(list_only=True)
+
+    assert HOME in _by_url(resp["dashboards"])
+    assert len(seen[LIST]) == 1
+    drop.assert_not_called()
+
+
+async def test_a_dropped_socket_falls_back_and_keeps_the_component(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    """The legacy reads reconnect, and the auto-backup capture of a write that
+    funnels through this list must not be blocked by an escaping error."""
+    assert await get_component_caps(component) is not None
+    socket = await pooled_socket(component)
+
+    with (
+        _spy_invalidate() as drop,
+        dropped_on(hass, DASHBOARDS, socket),
+        received(hass, LIST) as seen,
+    ):
+        rows = await fetch_dashboards_list(component)
+
+    assert rows is not None and HOME in _by_url(rows)
+    assert len(seen[LIST]) == 1
+    drop.assert_not_called()
+
+
+async def test_the_shared_list_comes_from_the_component(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    """The set and delete tools check existence against this list."""
+    with received(hass, LIST) as seen:
+        rows = await fetch_dashboards_list(component)
+
+    assert rows is not None
+    assert (_by_url(rows)[HOME]["mode"], _by_url(rows)[YAML]["mode"]) == (
+        "storage",
+        "yaml",
+    )
+    assert seen[LIST] == []
+
+
+@pytest.mark.parametrize("url_path", ["lovelace", HOME])
+async def test_a_write_finds_an_existing_dashboard_in_the_component_list(
+    hass: HomeAssistant, component: HomeAssistantClient, url_path: str
+) -> None:
+    """The built-in default dashboard exists even where no list row names it."""
+    create = "lovelace/dashboards/create"
+
+    with received(hass, LIST, create) as seen:
+        resp = await DashboardConfigTools(component).ha_config_set_dashboard(
+            url_path=url_path, config={"views": []}
+        )
+
+    assert resp["dashboard_created"] is False
+    assert seen == {LIST: [], create: []}
+
+
+# --- get ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url_path", "sent"), [(HOME, {"url_path": HOME}), ("default", {})]
+)
+async def test_a_get_is_one_component_frame(
+    hass: HomeAssistant,
+    component: HomeAssistantClient,
+    url_path: str,
+    sent: dict[str, str],
+) -> None:
+    """ "default" is the component's default dashboard: no url_path."""
+    reply = await component.send_websocket_message(
+        {"type": "lovelace/config/save", "config": HOME_BODY}
+    )
+    assert reply["success"], reply
+
+    with received(hass, DASHBOARDS, CONFIG) as seen:
+        resp = await _get(component)(url_path=url_path)
+
+    assert (resp["action"], resp["config"]) == ("get", HOME_BODY)
+    assert resp["config_hash"] == compute_config_hash(HOME_BODY)
+    assert [
+        {k: v for k, v in m.items() if k not in ("id", "type")}
+        for m in seen[DASHBOARDS]
+    ] == [{"mode": "get", **sent}]
+    assert seen[CONFIG] == []
+
+
+async def test_a_yaml_dashboard_is_read_through_cores_config(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    """The component never hands out a YAML body; Core's own read does."""
+    with received(hass, CONFIG) as seen:
+        resp = await _get(component)(url_path=YAML)
+
+    assert resp["config"] == YAML_BODY
+    assert [m["url_path"] for m in seen[CONFIG]] == [YAML]
+
+
+async def test_an_unknown_dashboard_is_not_found_by_cores_read(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    with received(hass, CONFIG) as seen, pytest.raises(ToolError) as exc:
+        await _get(component)(url_path="ghost-dash")
+
+    assert error_of(exc)["code"] == "RESOURCE_NOT_FOUND"
+    assert [m["url_path"] for m in seen[CONFIG]] == ["ghost-dash"]
+
+
+async def test_a_forced_reload_skips_the_component(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    """The component read has no force: only Core's read busts its cache."""
+    with received(hass, DASHBOARDS, CONFIG) as seen:
+        resp = await _get(component)(url_path=HOME, force_reload=True)
+
+    assert resp["config"] == HOME_BODY
+    assert seen[DASHBOARDS] == []
+    assert [(m["url_path"], m.get("force")) for m in seen[CONFIG]] == [(HOME, True)]
+
+
+# --- search across dashboards -------------------------------------------------
+
+
+async def test_a_search_reads_every_storage_config_in_one_frame(
+    hass: HomeAssistant, component: HomeAssistantClient
+) -> None:
+    with received(hass, DASHBOARDS, LIST, CONFIG) as seen:
+        resp = await _get(component)(query="light.kitchen")
+
+    assert (resp["action"], resp["match_count"], resp["truncated"]) == (
+        "search",
+        1,
+        False,
+    )
+    match = resp["matches"][0]
+    assert (match["url_path"], match["jq_path"]) == (HOME, ".views[0].cards[0]")
+    assert match["python_path"] == "['views'][0]['cards'][0]"
+    assert match["matched"] == [{"field": "entities", "value": "light.kitchen"}]
+    assert match["config_hash"] == compute_config_hash(HOME_BODY)
+    assert [m["mode"] for m in seen[DASHBOARDS]] == ["docs"]
+    assert (seen[LIST], seen[CONFIG]) == ([], [])
     # The component read covers the default dashboard: nothing to disclose.
     assert "warnings" not in resp
 
 
-@pytest.mark.asyncio
-async def test_search_falls_back_when_the_component_docs_read_is_unavailable() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS_DOCS,
-        cmd_result={"mode": "docs", "available": False, "docs": []},
-    )
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
+async def test_a_search_names_how_many_dashboards_core_could_not_load(
+    component: HomeAssistantClient,
+) -> None:
+    for url_path in ("dash-broken", "dash-bad"):
+        # Core stores a string config as given; its load is no dashboard config.
+        await _save(component, url_path, "boom")
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await _build_get_dashboard(client)(query="light.kitchen")
+    resp = await _get(component)(query="light.kitchen")
 
-    assert resp["match_count"] == 1
-    assert client.config_calls == ["home"]
-    assert any("url_path='default'" in w for w in resp["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_search_reports_unreadable_component_dashboards() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS_DOCS,
-        cmd_result={"mode": "docs", "available": True, "docs": [], "load_failed": 2},
-    )
-    get_dashboard = _build_get_dashboard(RoutingClient())
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
-
-    assert resp["match_count"] == 0
     unread = [w for w in resp["warnings"] if "2 storage dashboard(s)" in w]
     assert len(unread) == 1
     assert "log" not in unread[0]
 
 
-@pytest.mark.asyncio
-async def test_search_capability_miss_uses_legacy_reads() -> None:
-    """No ``dashboards_docs`` capability → list + one get per storage dashboard."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(
-        dashboards_list=[_STORAGE_ROW],
-        configs={"home": _HOME_BODY},
+async def test_without_the_component_a_search_reads_each_storage_dashboard(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    """Never the YAML dashboard's body; the default dashboard only the
+    component reads, which the warnings say."""
+    with received(hass, LIST, CONFIG) as seen:
+        resp = await _get(legacy)(query="light.kitchen")
+
+    assert (resp["action"], resp["match_count"]) == ("search", 1)
+    match = resp["matches"][0]
+    assert (match["url_path"], match["card_type"], match["jq_path"]) == (
+        HOME,
+        "entities",
+        ".views[0].cards[0]",
     )
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
-
-    assert resp["action"] == "search"
-    assert resp["match_count"] == 1
-    m = resp["matches"][0]
-    assert m["url_path"] == "home"
-    assert m["card_type"] == "entities"
-    assert m["jq_path"] == ".views[0].cards[0]"
-    assert m["matched"] == [{"field": "entities", "value": "light.kitchen"}]
-    assert client.list_calls == 1
-    assert client.config_calls == ["home"]
-    assert not _dash_calls(ws)
-    # Only the component can read the default dashboard; the gap is disclosed.
+    assert match["matched"] == [{"field": "entities", "value": "light.kitchen"}]
+    assert len(seen[LIST]) == 1
+    assert [m["url_path"] for m in seen[CONFIG]] == [HOME]
     assert any("url_path='default'" in w for w in resp["warnings"])
     assert not any("Could not read" in w for w in resp["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_search_with_url_path_searches_only_that_dashboard() -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
-    get_dashboard = _build_get_dashboard(client)
+@pytest.mark.usefixtures("untagged")
+async def test_a_search_never_reads_a_row_core_did_not_tag_storage(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    """An untagged row is not provably storage, and a YAML body resolves
+    ``!secret``: its config is never requested."""
+    with received(hass, CONFIG) as seen:
+        resp = await _get(legacy)(query="light.kitchen")
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(url_path="home", query="light.kitchen")
+    assert UNTAGGED not in [m["url_path"] for m in seen[CONFIG]]
+    assert [m["url_path"] for m in resp["matches"]] == [HOME]
 
-    assert resp["url_path"] == "home"
-    assert resp["config_hash"] == tools_config_dashboards.compute_config_hash(
-        _HOME_BODY
-    )
+
+async def test_a_search_of_one_dashboard_reads_only_it(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    with received(hass, CONFIG) as seen:
+        resp = await _get(legacy)(url_path=HOME, query="light.kitchen")
+
+    assert resp["url_path"] == HOME
+    assert resp["config_hash"] == compute_config_hash(HOME_BODY)
     assert resp["match_count"] == 1
-    m = resp["matches"][0]
-    assert m["url_path"] == "home"
-    assert m["config_hash"] == resp["config_hash"]
-    assert client.config_calls == ["home"]
+    assert resp["matches"][0]["config_hash"] == resp["config_hash"]
+    assert [m["url_path"] for m in seen[CONFIG]] == [HOME]
 
 
-@pytest.mark.asyncio
-async def test_search_with_older_component_reads_dashboards_one_by_one() -> None:
-    """A component without ``dashboards_docs`` is never sent the ``docs`` mode."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={"mode": "list", "available": True, "dashboards": [_STORAGE_ROW]},
+async def test_a_search_names_a_broken_dashboard_but_not_an_unconfigured_one(
+    legacy: HomeAssistantClient,
+) -> None:
+    created = await legacy.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": "dash-fresh",
+            "title": "Fresh",
+            "mode": "storage",
+        }
     )
-    client = RoutingClient(configs={"home": _HOME_BODY})
-    get_dashboard = _build_get_dashboard(client)
+    assert created["success"], created
+    await _save(legacy, "dash-broken", "boom")
 
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
-
-    assert resp["match_count"] == 1
-    assert all(c.kwargs.get("mode") != "docs" for c in _dash_calls(ws))
-
-
-@pytest.mark.asyncio
-async def test_legacy_search_names_broken_not_unconfigured_dashboards() -> None:
-    """A dashboard with nothing stored yet is not a read failure; a broken one is."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    rows = [
-        _STORAGE_ROW,
-        {**_STORAGE_ROW, "id": "id-new", "url_path": "fresh"},
-        {**_STORAGE_ROW, "id": "id-bad", "url_path": "broken"},
-    ]
-    client = RoutingClient(
-        dashboards_list=rows,
-        configs={"home": _HOME_BODY},
-        no_config=frozenset({"fresh"}),
-    )
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
+    resp = await _get(legacy)(query="light.kitchen")
 
     assert resp["match_count"] == 1
-    unread = [w for w in resp["warnings"] if "Could not read" in w]
-    assert len(unread) == 1
-    assert "broken" in unread[0]
-    assert "fresh" not in unread[0]
+    (unread,) = [w for w in resp["warnings"] if "Could not read" in w]
+    assert "dash-broken" in unread
+    assert "dash-fresh" not in unread
 
 
-class _ListErrorClient(RoutingClient):
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "lovelace/dashboards/list":
-            return {"success": False, "error": {"message": "boom"}}
-        return await super().send_websocket_message(msg)
-
-
-@pytest.mark.asyncio
-async def test_legacy_search_reports_an_unreadable_dashboards_list() -> None:
-    """A failed list read is reported, not answered as a clean "no matches"."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    get_dashboard = _build_get_dashboard(_ListErrorClient())
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
+async def test_a_search_without_lovelace_says_the_list_could_not_be_read(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component reports no dashboards to read; Core refuses its own list
+    too. That is no clean "no matches"."""
+    resp = await _get(component_core_client)(query="light.kitchen")
 
     assert resp["match_count"] == 0
     assert any("dashboards list could not be read" in w for w in resp["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_badge_search_by_heading_is_rejected() -> None:
-    """View badges have no heading, so card_type='badge' with heading can't match."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient()
-
+async def test_a_badge_cannot_be_searched_by_heading(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    """View badges have no heading."""
     with (
-        patch_ws(ws, tools_config_dashboards),
+        received(hass, LIST) as seen,
         pytest.raises(ToolError, match="cannot be combined with heading"),
     ):
-        await _build_get_dashboard(client)(card_type="badge", heading="Lights")
-    assert client.list_calls == 0
+        await _get(legacy)(card_type="badge", heading="Lights")
+
+    assert seen[LIST] == []
 
 
-@pytest.mark.asyncio
-async def test_list_only_with_search_parameters_says_it_searched() -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(list_only=True, query="light.kitchen")
+async def test_list_only_with_search_criteria_says_it_searched(
+    legacy: HomeAssistantClient,
+) -> None:
+    resp = await _get(legacy)(list_only=True, query="light.kitchen")
 
     assert resp["action"] == "search"
     assert any("list_only was ignored" in w for w in resp["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_search_trims_the_query() -> None:
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(dashboards_list=[_STORAGE_ROW], configs={"home": _HOME_BODY})
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(
-            url_path="home", query="  light.kitchen ", entity_id="light.kitchen "
-        )
+async def test_search_criteria_are_trimmed(legacy: HomeAssistantClient) -> None:
+    resp = await _get(legacy)(
+        url_path=HOME, query="  light.kitchen ", entity_id="light.kitchen "
+    )
 
     assert resp["match_count"] == 1
-    assert resp["search_criteria"]["query"] == "light.kitchen"
-    assert resp["search_criteria"]["entity_id"] == "light.kitchen"
-
-
-@pytest.mark.asyncio
-async def test_legacy_search_walk_skips_yaml_body() -> None:
-    """The component-less search walk never reads a YAML dashboard's config body.
-
-    HA resolves ``!secret`` when it loads a YAML Lovelace config, so fetching one
-    for the walk could surface resolved secrets in a match. The walk must skip any
-    row tagged ``mode == "yaml"`` WITHOUT a ``lovelace/config`` read (the same
-    exclusion the component applies in-process).
-    """
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    client = RoutingClient(
-        dashboards_list=[_STORAGE_ROW, _YAML_ROW],
-        configs={"home": _HOME_BODY},  # deliberately no body for the YAML dash
+    criteria = resp["search_criteria"]
+    assert (criteria["query"], criteria["entity_id"]) == (
+        "light.kitchen",
+        "light.kitchen",
     )
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
-
-    assert resp["action"] == "search"
-    assert resp["match_count"] == 1
-    assert resp["matches"][0]["url_path"] == "home"
-    # Only the storage dashboard's body was read; the YAML row was skipped.
-    assert client.config_calls == ["home"]
-    assert "yaml-dash" not in client.config_calls
 
 
-@pytest.mark.asyncio
-async def test_legacy_search_walk_skips_untagged_row() -> None:
-    """Fail-closed: a legacy row with NO ``mode`` key is skipped WITHOUT a body read.
-
-    Core's schemas normally stamp ``mode`` on every ``lovelace/dashboards/list``
-    row (storage items default ``mode: storage``; YAML entries require
-    ``mode: yaml``), but a storage item persisted before core's mode default
-    existed can surface untagged. An untagged row is not provably storage, and
-    reading a YAML body resolves ``!secret`` to plaintext, so the walk reads a
-    body ONLY when the row is EXPLICITLY tagged ``mode == "storage"`` — the
-    untagged row's ``lovelace/config`` is never requested.
-    """
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    untagged_row = {k: v for k, v in _STORAGE_ROW.items() if k != "mode"}
-    client = RoutingClient(
-        dashboards_list=[untagged_row],
-        configs={"home": _HOME_BODY},  # a body the walk must NOT reach
-    )
-    get_dashboard = _build_get_dashboard(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        resp = await get_dashboard(query="light.kitchen")
-
-    assert resp["action"] == "search"
-    assert resp["match_count"] == 0
-    # The untagged row's body was NEVER requested (fail-closed).
-    assert client.config_calls == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("criterion", ["query", "entity_id", "card_type", "heading"])
-async def test_blank_search_criteria_are_rejected_not_searched(criterion: str) -> None:
-    """A search given only blank criteria is a validation error, not a get."""
-    ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
-    client = RoutingClient()
-    get_dashboard = _build_get_dashboard(client)
-
+async def test_blank_search_criteria_are_refused_not_searched(
+    hass: HomeAssistant, component: HomeAssistantClient, criterion: str
+) -> None:
     with (
-        patch_ws(ws, tools_config_dashboards),
+        received(hass, DASHBOARDS, LIST, CONFIG) as seen,
         pytest.raises(ToolError, match="Search needs a non-blank"),
     ):
-        await get_dashboard(**{criterion: "   "})
-    assert not _dash_calls(ws)
-    assert client.list_calls == 0
-    assert client.config_calls == []
+        await _get(component)(**{criterion: "   "})
+
+    assert seen == {DASHBOARDS: [], LIST: [], CONFIG: []}
 
 
-# --- transport failure falls back to legacy ----------------------------------
-@pytest.mark.asyncio
-async def test_connection_error_falls_back_to_legacy() -> None:
-    """A WS-down error on the dashboards frame returns ``None`` (legacy fallback),
-    not a raise — the legacy dashboards path rides the WS bridge, so it
-    does not die identically, and the auto-backup capture consumer must not be
-    blocked from its write by an escaping transport error."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_exc=HomeAssistantConnectionError("ws down"),
+# --- matched-card config of one dashboard -----------------------------------------
+# With include_config the matched cards' bodies come back, so they are shown
+# only for a dashboard its list row proves storage: a YAML body can carry
+# resolved !secret values.
+
+
+async def _matched_cards(
+    client: HomeAssistantClient, url_path: str, *, include_config: bool = True
+) -> dict[str, Any]:
+    resp: dict[str, Any] = await _get(client)(
+        url_path=url_path, entity_id="light.kitchen", include_config=include_config
     )
-    client = RoutingClient()
-
-    with patch_ws(ws, tools_config_dashboards):
-        result = await tools_config_dashboards._dashboards_via_component(client, "list")
-
-    assert result is None
-    # A transient connection error is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) returns ``None`` (legacy fallback), not a raise."""
-    caps_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
-    client = RoutingClient()
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        tools_config_dashboards,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        result = await tools_config_dashboards._dashboards_via_component(client, "list")
-
-    assert result is None
-    assert client in component_api._CAPS_CACHE
-
-
-# --- shared existence check (set/delete funnel through fetch_dashboards_list) --
-@pytest.mark.asyncio
-async def test_existence_check_uses_component_list() -> None:
-    """``_lookup_existing_dashboards`` resolves existence from the component list."""
-    ws = make_ws(
-        "ha_mcp_tools/dashboards",
-        info_result=_CAPS_DASHBOARDS,
-        cmd_result={
-            "mode": "list",
-            "available": True,
-            "dashboards": [_STORAGE_ROW, _YAML_ROW],
-        },
-    )
-    client = RoutingClient()
-    tools = DashboardConfigTools(client)
-
-    with patch_ws(ws, tools_config_dashboards):
-        exists_home, rows = await tools._lookup_existing_dashboards("home", None)
-        missing, _ = await tools._lookup_existing_dashboards("nope", None)
-        # The built-in "lovelace" default is special-cased as always existing.
-        builtin, _ = await tools._lookup_existing_dashboards("lovelace", None)
-
-    assert exists_home is True
-    # YAML rows are kept in the list (metadata), matching the legacy row set.
-    assert rows == [_STORAGE_ROW, _YAML_ROW]
-    assert missing is False
-    assert builtin is True
-    assert client.list_calls == 0
-
-
-# --- MODE-2 single-dashboard search: storage-mode config guard ---------------
-# The single-dashboard search (entity_id / card_type / heading) fetches the
-# target dashboard's lovelace/config directly. With include_config=True the
-# matched-card config bodies would surface — a YAML dashboard's body can carry
-# HA-resolved !secret plaintext — so the guard withholds them unless the target
-# is PROVABLY storage-mode (its dashboards-list row is tagged mode="storage").
-_MODE2_BODY = {
-    "title": "Home",
-    "views": [
-        {
-            "title": "Living",
-            "cards": [{"type": "entities", "entities": ["light.kitchen"]}],
-        }
-    ],
-}
-
-
-async def _run_mode2_search(client: Any, url_path: str) -> dict[str, Any]:
-    """Run the single-dashboard search (include_config=True) over the legacy path."""
-    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    with patch_ws(legacy_ws, tools_config_dashboards):
-        return await _build_get_dashboard(client)(
-            url_path=url_path, entity_id="light.kitchen", include_config=True
-        )
-
-
-@pytest.mark.asyncio
-async def test_mode2_search_storage_dashboard_surfaces_config() -> None:
-    """A storage-mode dashboard surfaces matched-card config (include_config=True)."""
-    client = RoutingClient(
-        dashboards_list=[_STORAGE_ROW], configs={"home": _MODE2_BODY}
-    )
-
-    resp = await _run_mode2_search(client, "home")
-
     assert resp["match_count"] == 1
+    return resp
+
+
+async def test_a_storage_dashboards_matched_cards_come_back(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    with received(hass, LIST) as seen:
+        resp = await _matched_cards(legacy, HOME)
+
     assert "card_config" in resp["matches"][0]
     assert "warnings" not in resp
-    # The storage-mode resolution paid one list read.
-    assert client.list_calls == 1
+    assert len(seen[LIST]) == 1
 
 
-@pytest.mark.asyncio
-async def test_mode2_search_yaml_dashboard_suppresses_config() -> None:
-    """A YAML dashboard's matched-card config is withheld (it may carry resolved
-    !secret plaintext); the match location is still reported, with a note."""
-    client = RoutingClient(
-        dashboards_list=[_YAML_ROW], configs={"yaml-dash": _MODE2_BODY}
-    )
+@pytest.mark.parametrize("url_path", [YAML, UNTAGGED], ids=["yaml", "untagged"])
+@pytest.mark.usefixtures("untagged")
+async def test_a_dashboard_not_proven_storage_withholds_its_matched_cards(
+    legacy: HomeAssistantClient, url_path: str
+) -> None:
+    """The match location is still reported, with a note."""
+    resp = await _matched_cards(legacy, url_path)
 
-    resp = await _run_mode2_search(client, "yaml-dash")
-
-    assert resp["match_count"] == 1
     assert "card_config" not in resp["matches"][0]
-    assert any("withheld" in w for w in resp.get("warnings", []))
+    assert any("withheld" in w for w in resp["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_query_on_yaml_dashboard_withholds_matched_values() -> None:
-    """A query match on a YAML dashboard names the matched fields but not their
-    values, which may be resolved !secret plaintext."""
-    client = RoutingClient(
-        dashboards_list=[_YAML_ROW], configs={"yaml-dash": _MODE2_BODY}
-    )
-
-    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    with patch_ws(legacy_ws, tools_config_dashboards):
-        resp = await _build_get_dashboard(client)(url_path="yaml-dash", query="kitchen")
+async def test_a_query_on_a_yaml_dashboard_names_fields_not_values(
+    legacy: HomeAssistantClient,
+) -> None:
+    resp = await _get(legacy)(url_path=YAML, query="kitchen")
 
     assert resp["matches"][0]["matched"] == [{"field": "entities"}]
     assert any("withheld" in w for w in resp["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_mode2_search_untagged_dashboard_suppresses_config() -> None:
-    """A dashboard whose list row carries no mode tag is not provably storage, so
-    its matched-card config is withheld (fail-closed)."""
-    untagged_row = {"url_path": "untagged", "title": "Untagged"}
-    client = RoutingClient(
-        dashboards_list=[untagged_row], configs={"untagged": _MODE2_BODY}
-    )
+async def test_without_matched_cards_the_storage_check_is_skipped(
+    hass: HomeAssistant, legacy: HomeAssistantClient
+) -> None:
+    """Nothing to withhold, so the list is not read for it."""
+    with received(hass, LIST) as seen:
+        resp = await _matched_cards(legacy, YAML, include_config=False)
 
-    resp = await _run_mode2_search(client, "untagged")
-
-    assert resp["match_count"] == 1
     assert "card_config" not in resp["matches"][0]
-    assert any("withheld" in w for w in resp.get("warnings", []))
-
-
-@pytest.mark.asyncio
-async def test_mode2_search_include_config_false_skips_storage_resolution() -> None:
-    """include_config=False already strips card_config, so the storage-mode
-    resolution (an extra list read) is skipped and no note is added."""
-    client = RoutingClient(configs={"yaml-dash": _MODE2_BODY})  # no dashboards_list
-
-    legacy_ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_NONE)
-    with patch_ws(legacy_ws, tools_config_dashboards):
-        resp = await _build_get_dashboard(client)(
-            url_path="yaml-dash", entity_id="light.kitchen", include_config=False
-        )
-
-    assert resp["match_count"] == 1
-    assert "card_config" not in resp["matches"][0]
-    assert client.list_calls == 0
     assert "warnings" not in resp
+    assert seen[LIST] == []

@@ -5,10 +5,8 @@ Pipes the REAL component ``ha_mcp_tools/info`` command (answered by a real
 ``get_component_caps`` negotiation and ``fetch_ha_timezone`` /
 ``add_timezone_metadata``, over the server's own client, so a vocabulary/shape
 drift between the component's additive ``timezone`` field and the server's
-``ComponentCaps`` parsing fails here, mirroring
-``test_component_readapi_contract.py``'s bridge pattern for the other component
-commands (that file is not edited here; this seam has no cap-gated follow-up
-command to add to its ``_REAL_FNS`` map).
+``ComponentCaps`` parsing fails here, as ``test_component_read_tools_real_core.py``
+does for the other component read commands.
 """
 
 from __future__ import annotations
