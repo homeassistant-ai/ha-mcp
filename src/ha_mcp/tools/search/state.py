@@ -17,7 +17,7 @@ from ...client.rest_client import (
 from ...client.websocket_client import get_websocket_client
 from ...errors import create_validation_error
 from ..component_api import (
-    COMPONENT_INSTALL_HINT,
+    REST_LAST_REPORTED_WARNING,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -32,13 +32,6 @@ from ..response_helpers import project_entity_record as _project_entity
 from .base import SearchToolsBase
 
 logger = logging.getLogger(__name__)
-
-_REST_LAST_REPORTED_WARNING = (
-    "last_reported comes from Home Assistant's REST API, which can keep an "
-    "older time while an entity reports an unchanged state "
-    "(home-assistant/core#181392); the ha_mcp_tools component serves the live "
-    f"value. {COMPONENT_INSTALL_HINT}"
-)
 
 
 def _missing_entity_exc(entity_id: str) -> HomeAssistantAPIError:
@@ -151,7 +144,7 @@ class StateMixin(SearchToolsBase):
             if attr_warn:
                 wrapped.setdefault("warnings", []).append(attr_warn)
             if not live and "last_reported" in (entity_record or {}):
-                wrapped.setdefault("warnings", []).append(_REST_LAST_REPORTED_WARNING)
+                wrapped.setdefault("warnings", []).append(REST_LAST_REPORTED_WARNING)
             return wrapped
         except ToolError:
             raise
@@ -214,7 +207,7 @@ class StateMixin(SearchToolsBase):
                 unique_ids, results, parsed_fields, parsed_attribute_keys
             )
             if not live and any("last_reported" in (s or {}) for s in states.values()):
-                attr_warns.append(_REST_LAST_REPORTED_WARNING)
+                attr_warns.append(REST_LAST_REPORTED_WARNING)
             response = _build_bulk_states_response(
                 states, errors, attr_warns, attribute_keys_no_effect
             )

@@ -21,6 +21,7 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
+from .component_api import REST_LAST_REPORTED_WARNING, ask_component
 from .helpers import (
     core_error_message,
     exception_to_structured_error,
@@ -135,12 +136,26 @@ class GroupTools:
         members as `entity_ids`, and its object_id. `auto` is true for a group
         created by ha_config_set_group (group.set) and false for a YAML group.
         Core does not expose a group's all/any mode.
+        Without the ha_mcp_tools component, `last_reported` comes from Core's
+        REST API, can lag the live time, and the reply says so.
 
         EXAMPLE: ha_config_list_groups(offset=100)
         """
         try:
-            # Get all entity states and filter for groups
-            states = await self._client.get_states()
+            # The component's snapshot carries the live last_reported; Core's
+            # REST states can hold an older one (home-assistant/core#181392).
+            snapshot = await ask_component(
+                self._client,
+                "system_snapshot",
+                include_issues=False,
+                include_config_entries=False,
+                include_entities=False,
+                include_states=True,
+            )
+            states = snapshot.get("states") if snapshot else None
+            live = isinstance(states, list)
+            if not isinstance(states, list):
+                states = await self._client.get_states()
 
             groups = []
             for state in states:
@@ -181,6 +196,11 @@ class GroupTools:
                     total_count, offset, limit, len(paginated_groups)
                 ),
                 "message": f"Found {total_count} group(s)",
+                **(
+                    {"warnings": [REST_LAST_REPORTED_WARNING]}
+                    if groups and not live
+                    else {}
+                ),
             }
 
         except Exception as e:  # noqa: BLE001

@@ -633,6 +633,15 @@ COMPONENT_INSTALL_HINT = (
 )
 
 
+# Said where a state's last_reported comes from REST rather than the component.
+REST_LAST_REPORTED_WARNING = (
+    "last_reported comes from Home Assistant's REST API, which can keep an "
+    "older time while an entity reports an unchanged state "
+    "(home-assistant/core#181392); the ha_mcp_tools component serves the live "
+    f"value. {COMPONENT_INSTALL_HINT}"
+)
+
+
 def component_unusable_warning(caps: ComponentCaps | None, without: str) -> str:
     """Why a read came without the component's part, and how to get it.
 
