@@ -32,8 +32,9 @@ _IDS = [
 
 def test_every_test_runs_on_exactly_one_runner() -> None:
     """A shard list with a gap or a repeat would skip tests or run them twice."""
+    shards = _shards()
     for nodeid in _IDS:
-        assert [in_shard(nodeid, shard) for shard in _shards()].count(True) == 1
+        assert [in_shard(nodeid, shard) for shard in shards].count(True) == 1
 
 
 def test_the_runners_take_similar_shares() -> None:
