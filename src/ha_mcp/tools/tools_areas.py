@@ -493,33 +493,38 @@ class AreaTools:
         expected = set(parsed_labels)
         if _label_id_set(data) == expected:
             return
-        try:
-            listed = await self._client.send_websocket_message(
-                {"type": "config/area_registry/list"}
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Write already succeeded; a transport failure on re-read must
-            # not look like a failed create (retry would duplicate the area).
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Area write succeeded, but label verification failed",
-                    details=str(exc),
-                    context=self._label_verify_context(
-                        parsed_labels=parsed_labels,
-                        kind=kind,
-                        returned_id=returned_id,
-                        operation=operation,
-                        name=name,
-                        write_committed=True,
-                    ),
-                    suggestions=[
-                        "The area write already committed; do not retry create.",
-                        "Re-read with ha_list_floors_areas() before retrying labels.",
-                    ],
+        rows: Any
+        via_component = await fetch_registries_via_component(self._client, ["area"])
+        if via_component is not None:
+            rows = via_component["areas"]
+        else:
+            try:
+                listed = await self._client.send_websocket_message(
+                    {"type": "config/area_registry/list"}
                 )
-            )
-        rows = listed.get("result") if listed.get("success") else None
+            except Exception as exc:  # noqa: BLE001
+                # Write already succeeded; a transport failure on re-read must
+                # not look like a failed create (retry would duplicate the area).
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Area write succeeded, but label verification failed",
+                        details=str(exc),
+                        context=self._label_verify_context(
+                            parsed_labels=parsed_labels,
+                            kind=kind,
+                            returned_id=returned_id,
+                            operation=operation,
+                            name=name,
+                            write_committed=True,
+                        ),
+                        suggestions=[
+                            "The area write already committed; do not retry create.",
+                            "Re-read with ha_list_floors_areas() before retrying labels.",
+                        ],
+                    )
+                )
+            rows = listed.get("result") if listed.get("success") else None
         found: dict[str, Any] | None = None
         if isinstance(rows, list):
             found = next(

@@ -152,6 +152,7 @@ async def test_a_question_the_component_does_not_answer_fails_the_comparison(
     hass: HomeAssistant,
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A question that was sent and got no answer is not a missing component:
     the comparison fails rather than report an order the component may rule
@@ -160,8 +161,10 @@ async def test_a_question_the_component_does_not_answer_fails_the_comparison(
     snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
     data, current = await backup_manager.snapshot_comparison(snapshot)
     reordered = {**current, "labels": current["labels"][::-1]}
-    component_core_client.send_websocket_message = AsyncMock(
-        side_effect=HomeAssistantConnectionError("no answer")
+    monkeypatch.setattr(
+        component_core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
     )
 
     with pytest.raises(HomeAssistantConnectionError, match="no answer"):

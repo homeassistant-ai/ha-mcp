@@ -22,6 +22,7 @@ from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .component_registries import fetch_registries_via_component
 from .helpers import (
     clearable_value,
     core_error_message,
@@ -77,6 +78,10 @@ class LabelTools:
         to an empty registry, or callers would confidently report a real label
         as missing (mirrors ``backup_manager._require_list``).
         """
+        via_component = await fetch_registries_via_component(self._client, ["label"])
+        if via_component is not None:
+            rows: list[dict[str, Any]] = via_component["labels"]
+            return rows
         result = await self._client.send_websocket_message(
             {"type": "config/label_registry/list"}
         )
@@ -138,6 +143,10 @@ class LabelTools:
         self, *, context: dict[str, Any]
     ) -> list[dict[str, Any]]:
         """Return the area registry, failing closed on a degraded envelope."""
+        via_component = await fetch_registries_via_component(self._client, ["area"])
+        if via_component is not None:
+            rows: list[dict[str, Any]] = via_component["areas"]
+            return rows
         list_result = await self._client.send_websocket_message(
             {"type": "config/area_registry/list"}
         )

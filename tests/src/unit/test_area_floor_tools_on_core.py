@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.json import json_bytes, json_fragment
 from homeassistant.setup import async_setup_component
 
@@ -236,6 +237,32 @@ async def test_an_unknown_id_is_looked_up_through_the_component(
     assert WS_REGISTRIES in _types(sent)
 
 
+async def test_labels_core_dropped_are_read_back_through_the_component(
+    hass: HomeAssistant,
+    component_tools: AreaTools,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core drops a label that was removed after the tool checked it and still
+    answers success; the read that confirms the loss asks the component."""
+    label = lr.async_get(hass).async_create("Guests")
+    area = ar.async_get(hass).async_create("Hall")
+    # Core's answer once the label is gone: every label asked for is missing.
+    monkeypatch.setattr(
+        lr, "async_get_missing_label_ids", lambda hass, label_ids: set(label_ids)
+    )
+
+    with await _sent(component_core_client) as sent:
+        error = await rejected_call_body(
+            component_tools.ha_set_area_or_floor(
+                kind="area", id=area.id, labels=[label.label_id]
+            )
+        )
+
+    assert error["write_committed"] is True
+    assert "config/area_registry/list" not in _types(sent)
+
+
 async def test_an_update_core_refuses_with_a_code_of_its_own_reads_no_registry(
     hass: HomeAssistant,
     component_tools: AreaTools,
@@ -277,6 +304,25 @@ async def test_an_unknown_error_for_an_area_core_holds_stays_cores_refusal(
 
     assert error["error"]["code"] != "RESOURCE_NOT_FOUND"
     assert error["ha_error_code"] == "unknown_error"
+
+
+async def test_a_registry_that_cannot_be_read_after_unknown_error_is_what_is_reported(
+    tools: AreaTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the read that tells an unknown id from another "Unknown error"
+    fails, the caller gets that failure, not a "not found" nobody established."""
+
+    def refuse(self: ar.AreaRegistry) -> Any:
+        raise HomeAssistantError("area registry is not readable")
+
+    monkeypatch.setattr(ar.AreaRegistry, "async_list_areas", refuse)
+
+    error = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", id="missing", name="Attic")
+    )
+
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "area registry is not readable" in error["error"]["message"]
 
 
 async def test_floors_are_reordered_with_cores_reorder(
