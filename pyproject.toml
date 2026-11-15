@@ -203,7 +203,6 @@ module = [
     "tests.src.unit.test_bulk_device_control",
     "tests.src.unit.test_bulk_selector",
     "tests.src.unit.test_call_service_ws_command",
-    "tests.src.unit.test_card_definitions",
     "tests.src.unit.test_card_review_round6",
     "tests.src.unit.test_component_api",
     "tests.src.unit.test_config_flow_server",
