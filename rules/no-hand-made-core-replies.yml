@@ -121,7 +121,6 @@ ignores:
   - "tests/src/unit/test_stdio_settings_sidecar.py"
   - "tests/src/unit/test_template_deleted_recovery.py"
   - "tests/src/unit/test_template_helper_backup.py"
-  - "tests/src/unit/test_template_restore_safety.py"
   - "tests/src/unit/test_tool_error_signaling.py"
   - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_areas.py"
