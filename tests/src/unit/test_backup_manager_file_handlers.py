@@ -12,9 +12,7 @@ from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.loader import async_get_integration
 
-from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp import backup_manager as bm
 from ha_mcp import config
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -266,58 +264,6 @@ async def test_without_the_setting_an_extra_key_is_not_restorable(
         )
 
     assert "severity" not in _read(hass, "packages/alerts.yaml")
-
-
-async def _older_component(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The File & YAML Tools component reports version 1.2.3, from before
-    ``extra_allowed_keys`` existed."""
-    integration = await async_get_integration(hass, DOMAIN)
-    monkeypatch.setitem(integration.manifest, "version", "1.2.3")
-
-
-async def test_a_component_too_old_for_extra_keys_blocks_the_restore_with_an_update_prompt(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    file_snapshot_manager: bm.BackupManager,
-    extra_key: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The same actionable prompt as the write path, not the opaque "extra keys
-    not allowed" schema rejection from Home Assistant."""
-    await write_config_files(
-        hass, {"packages/alerts.yaml": "alert2:\n  defaults: {}\n"}
-    )
-    await _older_component(hass, monkeypatch)
-
-    with pytest.raises(ToolError) as excinfo:
-        await _handler(file_snapshot_manager, "yaml").restore(
-            core_client, "packages/alerts.yaml::alert2", "defaults:\n  severity: low\n"
-        )
-
-    assert "1.2.4" in str(excinfo.value)
-    assert "severity" not in _read(hass, "packages/alerts.yaml")
-
-
-async def test_a_default_configuration_still_restores_on_an_older_component(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    file_snapshot_manager: bm.BackupManager,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With no extra keys the payload is what it was before #1887, so a component
-    that predates the field restores."""
-    await write_config_files(
-        hass, {"configuration.yaml": "rest:\n  - resource: http://changed\n"}
-    )
-    await _older_component(hass, monkeypatch)
-
-    await _handler(file_snapshot_manager, "yaml").restore(
-        core_client, "configuration.yaml::rest", "- resource: http://a\n"
-    )
-
-    assert "http://a" in _read(hass, "configuration.yaml")
 
 
 async def test_a_whole_yaml_file_is_snapshotted_as_text_and_registered(

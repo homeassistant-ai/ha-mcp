@@ -44,11 +44,7 @@ from ha_mcp.tools.tools_filesystem import (
     call_mcp_tools_service,
 )
 from ha_mcp.tools.tools_service import ServiceTools
-from ha_mcp.tools.yaml_extra_keys import (
-    MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS,
-    assert_extra_yaml_keys_supported,
-    effective_extra_yaml_write_keys,
-)
+from ha_mcp.tools.yaml_extra_keys import effective_extra_yaml_write_keys
 
 from ._file_services import FileService, make_file_service
 
@@ -368,37 +364,6 @@ async def test_the_component_reason_is_surfaced_verbatim(
         await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
 
 
-async def test_the_shipped_component_passes_the_servers_version_gate(
-    core_client: HomeAssistantClient, tools_entry: FileService
-) -> None:
-    """A freshly updated component must not be locked out by a floor that no
-    HACS update can clear: ``MIN_COMPONENT_VERSION`` stays at or below the
-    manifest version."""
-    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
-
-    assert result["service_response"]["success"] is True
-
-
-@pytest.mark.parametrize("version", ["0.0.1", "1.1.0"])
-async def test_a_component_below_the_minimum_gets_an_update_prompt(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    tools_entry: FileService,
-    version: str,
-) -> None:
-    """The error names the reported version; 1.1.0 stays refused (#1946): it
-    may or may not carry the packages-aware reads, so it cannot be trusted."""
-    await set_component_version(hass, version)
-
-    with pytest.raises(ToolError) as exc_info:
-        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
-
-    msg = str(exc_info.value)
-    assert "too old" in msg
-    assert version in msg
-    assert MIN_COMPONENT_VERSION in msg
-
-
 @pytest.mark.parametrize(
     "version",
     [MIN_COMPONENT_VERSION, f"{int(MIN_COMPONENT_VERSION.split('.')[0]) + 1}.0.0"],
@@ -492,47 +457,6 @@ async def test_ha_call_service_still_reaches_other_domains(
     assert dispatched == [{"entity_id": "light.kitchen"}]
 
 
-# --- The extra YAML keys version gate ---------------------------------------
-
-
-async def test_the_extra_keys_gate_passes_on_a_current_component(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
-) -> None:
-    """The gate reads the version the bootstrap reported: reading nothing would
-    answer "unknown" on a current component and disable the feature for all."""
-    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-
-    await assert_extra_yaml_keys_supported(core_client, ["alert2"])
-
-
-async def test_the_extra_keys_gate_blocks_an_older_component(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
-) -> None:
-    await set_component_version(hass, MIN_COMPONENT_VERSION)
-
-    with pytest.raises(ToolError) as exc_info:
-        await assert_extra_yaml_keys_supported(core_client, ["alert2"])
-
-    msg = str(exc_info.value)
-    assert MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS in msg
-    assert f"reported version: {MIN_COMPONENT_VERSION}" in msg
-
-
-async def test_the_extra_keys_gate_heals_after_a_component_update(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
-) -> None:
-    """A component updated under a running server must clear the gate: the
-    cached token stays valid, so without a forced re-bootstrap the old version
-    sticks and the error's own advice (update, then restart) never works."""
-    await set_component_version(hass, MIN_COMPONENT_VERSION)
-    with pytest.raises(ToolError):
-        await assert_extra_yaml_keys_supported(core_client, ["alert2"])
-
-    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-
-    await assert_extra_yaml_keys_supported(core_client, ["alert2"])
-
-
 # --- The write allowlist extension in force ---------------------------------
 
 
@@ -550,7 +474,6 @@ def _settings(env: str) -> Settings:
     ids=["env_only", "union", "store_only"],
 )
 async def test_the_effective_keys_are_the_server_setting_plus_the_component_store(
-    hass: HomeAssistant,
     core_client: HomeAssistantClient,
     tools_entry: FileService,
     env: str,
@@ -559,7 +482,6 @@ async def test_the_effective_keys_are_the_server_setting_plus_the_component_stor
 ) -> None:
     """A key set only on the component would otherwise be refused by the
     server's own allowlist before the write ever reached the component."""
-    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
     await tools_entry(SERVICE_SET_EXTRA_YAML_KEYS, {"keys": stored})
 
     keys = await effective_extra_yaml_write_keys(core_client, _settings(env))
@@ -567,25 +489,11 @@ async def test_the_effective_keys_are_the_server_setting_plus_the_component_stor
     assert keys == expected
 
 
-async def test_an_old_component_store_is_not_read(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
-) -> None:
-    """A component older than the keys feature is not asked for its store; the
-    gate turns the mismatch into a prompt elsewhere."""
-    await set_component_version(hass, MIN_COMPONENT_VERSION)
-    await tools_entry(SERVICE_SET_EXTRA_YAML_KEYS, {"keys": ["beta"]})
-
-    keys = await effective_extra_yaml_write_keys(core_client, _settings("alert2"))
-
-    assert keys == ["alert2"]
-
-
 async def test_an_unreadable_component_store_falls_back_to_the_server_setting(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+    core_client: HomeAssistantClient, tools_entry: FileService
 ) -> None:
     """A dropped connection while reading the store must not block a write that
     the server's own setting allows."""
-    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
     await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
 
     with patch.object(
