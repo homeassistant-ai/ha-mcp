@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -28,6 +27,7 @@ from custom_components.ha_mcp_tools.const import (
     WEBHOOK_AUTH_LEGACY,
 )
 from custom_components.ha_mcp_tools.oauth_legacy import LegacyOAuthProvider
+from tests.addon.webhook_proxy._proxy import UpstreamRequest as Received
 
 WEBHOOK_ID = "mcp_0123456789abcdef0123456789abcdef"
 SECRET_PATH = "/private_aaaaaaaaaaaaaaaa"
@@ -40,16 +40,6 @@ READONLY_PATH = f"{WEBHOOK_PATH}/readonly"
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 Register = Callable[..., Awaitable[bool]]
-
-
-@dataclass
-class Received:
-    """One request the upstream was sent."""
-
-    method: str
-    path: str
-    headers: dict[str, str]
-    body: bytes
 
 
 class Upstream:

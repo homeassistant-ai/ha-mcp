@@ -25,10 +25,7 @@ _CORE_ROOTS = frozenset({"homeassistant", "aiohttp", "voluptuous", "probatio", "
 
 # Test files written before the unit tests ran on real Home Assistant Core.
 # They are to be converted and removed from this list; never add a file to it.
-_GRANDFATHERED = frozenset(
-    {
-    }
-)
+_GRANDFATHERED: frozenset[str] = frozenset()
 
 
 def core_module_stand_ins() -> list[str]:

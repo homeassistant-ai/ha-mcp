@@ -39,7 +39,13 @@ from pytest_homeassistant.typing import ClientSessionGenerator
 
 from tests.addon.webhook_proxy._auth_modes import HA_AUTH, proxy_config
 from tests.addon.webhook_proxy._legacy_oauth import legacy_config
-from tests.addon.webhook_proxy._proxy import STATE_ROOTS, start_proxy, state_path
+from tests.addon.webhook_proxy._proxy import (
+    STATE_ROOTS,
+    forget_package,
+    make_fs_root,
+    start_proxy,
+    state_path,
+)
 from tests.addon.webhook_proxy._variants import VARIANTS
 
 DEV = VARIANTS[1]
@@ -70,17 +76,7 @@ def proxy_components_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def fs_root(tmp_path: Path) -> Path:
     """Where the component's ``/config`` and ``/data`` files live."""
-    root = tmp_path / "fs"
-    for state_root in STATE_ROOTS:
-        (root / state_root.lstrip("/")).mkdir(parents=True)
-    return root
-
-
-def _forget(package_name: str) -> None:
-    for name in [
-        m for m in sys.modules if m == package_name or m.startswith(f"{package_name}.")
-    ]:
-        del sys.modules[name]
+    return make_fs_root(tmp_path)
 
 
 @pytest.fixture
@@ -94,7 +90,7 @@ def component(
     """
     monkeypatch.syspath_prepend(str(proxy_components_root))
     package_name = f"custom_components.{DEV.component}"
-    _forget(package_name)
+    forget_package(package_name)
     package = importlib.import_module(package_name)
     modules = [package] + [
         importlib.import_module(f"{package_name}.{path.stem}")
@@ -109,7 +105,7 @@ def component(
     assert isinstance(heartbeat, Path)
     heartbeat.touch()
     yield package
-    _forget(package_name)
+    forget_package(package_name)
 
 
 def submodule(component: ModuleType, name: str) -> ModuleType:

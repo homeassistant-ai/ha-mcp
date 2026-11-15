@@ -47,6 +47,14 @@ async def _allow(files: FileService, *paths: str) -> dict[str, Any]:
     return await files(SERVICE_SET_ALLOWED_PATHS, {"paths": list(paths)})
 
 
+async def _dropped(files: FileService, entry: str) -> None:
+    """The entry is refused and nothing is granted."""
+    result = await _allow(files, entry)
+
+    assert result["paths"] == []
+    assert result["rejected"] == [entry]
+
+
 class TestBuiltInFolders:
     @pytest.mark.parametrize(
         "folder",
@@ -241,10 +249,7 @@ class TestExtraDirectories:
     async def test_a_folder_that_leaves_the_config_directory_or_hits_the_floor_is_dropped(
         self, files: FileService, entry: str
     ) -> None:
-        result = await _allow(files, entry)
-
-        assert result["paths"] == []
-        assert result["rejected"] == [entry]
+        await _dropped(files, entry)
 
     async def test_a_granted_folder_can_be_read_written_and_listed(
         self, hass: HomeAssistant, files: FileService
@@ -363,10 +368,7 @@ class TestVolumes:
     ) -> None:
         """``/shared`` is not ``/share``, and a ``..`` that leaves the volume
         leaves it."""
-        result = await _allow(files, entry)
-
-        assert result["paths"] == []
-        assert result["rejected"] == [entry]
+        await _dropped(files, entry)
 
     async def test_a_configured_volume_can_be_read_written_and_listed(
         self,
