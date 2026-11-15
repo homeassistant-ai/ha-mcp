@@ -104,15 +104,14 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
-from .backup_registry_items import REGISTRY_ITEM_DOMAINS as _REGISTRY_ITEM_DOMAINS
+from .backup_registry_items import COMPARED_ROW_DOMAINS as _COMPARED_ROW_DOMAINS
+from .backup_registry_items import compared_row as _compared_row
 from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
 from .backup_registry_items import fetch_category as _fetch_category
 from .backup_registry_items import fetch_label as _fetch_label
-from .backup_registry_items import in_snapshot_order as _in_snapshot_order
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
-from .backup_registry_items import restored_item as _restored_item
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -1698,19 +1697,6 @@ class BackupManager:
             return todo_current_key(target, data["config"])
         return target
 
-    async def _registry_item_current(
-        self, domain: str, entity_id: str, config: dict[str, Any], current: Any
-    ) -> Any:
-        """The live label, category, area or floor, as a diff compares it."""
-        if current is None:
-            # A restored item can carry another id.
-            return await _restored_item(self._client, domain, entity_id, config)
-        if isinstance(current, dict):
-            # A restore cannot set the timestamps, so they differ by nature.
-            keep = {k: v for k, v in config.items() if k in _REGISTRY_READONLY_KEYS}
-            return {**_in_snapshot_order(current, config), **keep}
-        return current
-
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity."""
         data = await asyncio.to_thread(self.read_snapshot, name)
@@ -1735,9 +1721,9 @@ class BackupManager:
             live = await _dashboard_resource_like(self._client, data["config"])
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
-        elif domain in _REGISTRY_ITEM_DOMAINS and isinstance(data["config"], dict):
-            current = await self._registry_item_current(
-                domain, data["entity_id"], data["config"], current
+        elif domain in _COMPARED_ROW_DOMAINS and isinstance(data["config"], dict):
+            current = await _compared_row(
+                self._client, domain, data["entity_id"], data["config"], current
             )
         if (
             isinstance(current, dict)

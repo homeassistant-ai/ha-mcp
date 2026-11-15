@@ -9,13 +9,15 @@ match the snapshot's as the one the first restore created. Names are unique in
 these registries, so returning that row is right, and the alternative is Core's
 "already in use" refusal. A restore Core refuses for that reason names the item
 that holds the name, or says Core refused it. The diff finds the live item that
-holds a deleted item's name, and reports an id that differs.
+holds a deleted item's name, and reports an id that differs. It compares the
+row of an entity and of a device through ``compared_row`` as well.
 """
 
 from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Collection
 from typing import Any
 
 from .backup_entity_ids import _manager
@@ -77,16 +79,21 @@ def _same(a: Any, b: Any) -> bool:
 
 
 def in_snapshot_order(
-    current: dict[str, Any], stored: dict[str, Any]
+    current: dict[str, Any],
+    stored: dict[str, Any],
+    keys: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Give the live row's lists the snapshot's order where both hold the same items.
 
-    Core lists the aliases and labels it keeps in sets in hash order, which differs
-    between runs, and a diff compares lists position by position.
+    Core lists what it keeps in a set in hash order, which differs between runs,
+    and a diff compares lists position by position. ``keys`` names the lists Core
+    keeps in a set, for a row that also holds a list it keeps in order; None
+    means every list.
     """
     return {
         key: stored[key]
-        if isinstance(value, list)
+        if (keys is None or key in keys)
+        and isinstance(value, list)
         and isinstance(stored.get(key), list)
         and _same(value, stored[key])
         else value
@@ -309,29 +316,46 @@ async def _area_warnings(client: Any, stored: dict[str, Any], row: Any) -> list[
 REGISTRY_ITEM_DOMAINS = frozenset({"label", "category", "area_or_floor"})
 
 
-async def restored_item(client: Any, domain: str, entity_id: str, config: Any) -> Any:
-    """The live item that holds a deleted snapshot item's name, as a diff
-    compares it, None when there is none.
+async def _restored_item(client: Any, domain: str, entity_id: str, config: Any) -> Any:
+    """The live item that holds a deleted snapshot item's name, None when there
+    is none.
 
     A restore of a deleted item creates it again under the id Core derives (a
     renamed label, area or floor) or picks (a category), so a lookup by the
     stored id finds nothing. Names are unique, so the row with the snapshot's
     name is the item a restore created, or another that took the name since
-    (which a restore refuses). Its id stays its own, so the diff reports that it differs;
-    its read-only timestamps are the snapshot's, since they are no difference the
-    snapshot can restore.
+    (which a restore refuses). Its id stays its own, so the diff reports that it
+    differs.
     """
-    bm = _manager()
-    keep = {k: v for k, v in config.items() if k in bm._REGISTRY_READONLY_KEYS}
     if domain == "label":
-        row = _holding_name(await _rows(client, "label"), config)
-        return row and {**row, **keep}
+        return _holding_name(await _rows(client, "label"), config)
     if domain == "category":
         scope = entity_id.partition(":")[0]
         row = _holding_name(await _category_rows(client, scope), config)
-        return row and {"scope": scope, **row, **keep}
+        return row and {"scope": scope, **row}
     kind = entity_id.partition(":")[0]
     if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
         return None
     row = _holding_name(await _rows(client, kind), config)
-    return row and {"kind": kind, **in_snapshot_order(row, config), **keep}
+    return row and {"kind": kind, **row}
+
+
+COMPARED_ROW_DOMAINS = REGISTRY_ITEM_DOMAINS | {"device", "entity"}
+# Core keeps an entity's aliases in the order they were given, and its labels in
+# a set. Every list the other rows hold is one Core builds from a set.
+_SET_LISTS = {"entity": ("labels",)}
+
+
+async def compared_row(
+    client: Any, domain: str, entity_id: str, config: dict[str, Any], current: Any
+) -> Any:
+    """The live registry row of a snapshot's item, as a diff compares it."""
+    if current is None:
+        # A restored label, category, area or floor can carry another id.
+        current = await _restored_item(client, domain, entity_id, config)
+        if current is None:
+            return None
+    # A restore cannot set the timestamps, so they differ by nature.
+    readonly = _manager()._REGISTRY_READONLY_KEYS
+    keep = {k: v for k, v in config.items() if k in readonly}
+    return {**in_snapshot_order(current, config, _SET_LISTS.get(domain)), **keep}
