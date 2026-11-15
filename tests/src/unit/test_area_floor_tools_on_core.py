@@ -296,6 +296,31 @@ async def test_an_existing_area_is_updated_after_the_existence_read(
     assert stored.name == "Galley"
 
 
+async def test_an_update_goes_on_when_core_refuses_the_existence_read(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A refused ``config/area_registry/list`` is no reason to refuse the write:
+    the update goes on and the log says the id was not checked."""
+    areas = ar.async_get(hass)
+    kitchen = areas.async_create("Kitchen")
+
+    def refuse(self: ar.AreaRegistry) -> list[ar.AreaEntry]:
+        raise RuntimeError("registry read refused")
+
+    monkeypatch.setattr(ar.AreaRegistry, "async_list_areas", refuse)
+
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="Galley")
+
+    assert result["success"] is True
+    stored = areas.async_get_area(kitchen.id)
+    assert stored is not None
+    assert stored.name == "Galley"
+    assert f"Could not check that area {kitchen.id} exists" in caplog.text
+
+
 @pytest.mark.parametrize(
     "param",
     [

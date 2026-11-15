@@ -455,6 +455,22 @@ async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
         assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
 
 
+async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Core keeps aliases in a set, so the restored area lists the same aliases in
+    another order than the snapshot holds them; that is no difference."""
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall", aliases={f"alias {i}" for i in range(60)})
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    areas.async_delete(area.id)
+    await backup_manager.restore_snapshot(snapshot)
+
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert (diff["entity_missing"], diff["unchanged"]) == (False, True), diff
+
+
 async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:

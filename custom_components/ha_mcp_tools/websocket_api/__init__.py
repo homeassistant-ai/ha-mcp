@@ -273,8 +273,8 @@ the info handshake carries no capability entry:
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
-  so a field Core adds is listed without a change here). Only the requested ``registries`` keys are
-  present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
+  so a field Core adds is listed without a change here). Only the requested
+  ``registries`` keys are present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported
   function-locally (not needed at module top).

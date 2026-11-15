@@ -2,14 +2,14 @@
 
 Wires the REAL component ``_do_registries`` (driven against ``FakeHass`` /
 ``make_view`` fixtures from ``test_component_ws_search.py``) underneath a
-mocked WS transport and invokes the REAL server consumers —
-``ha_list_floors_areas`` (via ``AreaTools``) and the auto-backup capture
-fetchers ``_fetch_label`` / ``_fetch_category`` / ``_fetch_area_or_floor``
+mocked WS transport and invokes the REAL auto-backup capture fetchers
+``_fetch_label`` / ``_fetch_category`` / ``_fetch_area_or_floor``
 (``backup_manager.py``) — so a vocabulary or shape drift on either side of the
 seam fails here rather than shipping a component-served response the consumer
-mis-shapes. Full-field row parity is the key assertion: icon / aliases /
-picture / labels must survive the round trip unchanged (dropping them is the
-audit's explicit anti-goal, CONSUMER-MAP §10).
+mis-shapes. Full-field row parity is the key assertion: the label, category and
+floor fields must survive the round trip unchanged (dropping them is the
+audit's explicit anti-goal, CONSUMER-MAP §10). The area and floor listing is
+tested against real Core in ``test_area_floor_tools_on_core.py``.
 
 Kept as its own file rather than appended to ``test_component_readapi_contract.py``
 — several Phase 2 tasks touch that file's shared ``_REAL_FNS``/import block
@@ -19,18 +19,16 @@ concurrently, and it is off-limits for this task.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ha_mcp import backup_manager
 from ha_mcp.tools import component_registries
-from ha_mcp.tools.tools_areas import register_area_tools
 
 from ._component_routing_helpers import patch_ws
 from .test_component_ws_search import (
     FAKE_TIME,
-    FakeArea,
     FakeCategory,
     FakeCategoryReg,
     FakeFloor,
@@ -64,23 +62,6 @@ def _real_registries_ws(hass: FakeHass) -> AsyncMock:
     return ws
 
 
-def _build_list_floors_areas(client: Any) -> Any:
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_area_tools(mcp, client)
-    return registered["ha_list_floors_areas"]
-
-
 class _AreaFloorClient:
     """Credentialed client whose legacy WS path must never fire once the
     component serves the snapshot — any call raises loudly."""
@@ -97,25 +78,8 @@ class _AreaFloorClient:
 
 
 class TestRegistriesSeam:
-    """One REAL ``_do_registries`` output drives ``ha_list_floors_areas`` and
-    the auto-backup label/category/area/floor capture fetchers through their
-    real server code."""
-
-    def _area(self) -> FakeArea:
-        return FakeArea(
-            "a1",
-            "Office",
-            floor_id="f1",
-            aliases={"studio"},
-            icon="mdi:office",
-            picture="/local/office.png",
-            labels={"important"},
-            humidity_entity_id="sensor.office_humidity",
-            temperature_entity_id="sensor.office_temp",
-        )
-
-    def _unassigned_area(self) -> FakeArea:
-        return FakeArea("a2", "Garage")
+    """One REAL ``_do_registries`` output drives the auto-backup
+    label/category/floor capture fetchers through their real server code."""
 
     def _floor(self) -> FakeFloor:
         return FakeFloor(

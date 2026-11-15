@@ -420,8 +420,8 @@ class AreaTools:
 
         Core's update commands do not catch the ``KeyError`` for an unknown id,
         so the refusal reaches the caller as an opaque "Unknown error". A refused
-        read lets the write go on, with a warning in the log: Core then answers
-        it in its own words.
+        read lets the write go on, with a warning in the log; an id Core lacks then
+        ends as Core's own "Unknown error".
         """
         id_key = f"{kind}_id"
         listed = await self._client.send_websocket_message(
@@ -433,7 +433,7 @@ class AreaTools:
                 "Could not check that %s %s exists; the update goes on: %r",
                 kind,
                 identifier,
-                listed.get("error", listed),
+                listed.get("error", "no list in the answer"),
             )
             return
         if any(isinstance(r, dict) and r.get(id_key) == identifier for r in rows):
@@ -730,7 +730,7 @@ class AreaTools:
         humidity_entity_id) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
-        Pass order to set the order Home Assistant lists areas or floors in.
+        Pass order alone to set the order Home Assistant lists areas or floors in.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
@@ -801,17 +801,15 @@ class AreaTools:
             async with (
                 registry_update_lock(kind, id) if id is not None else nullcontext()
             ):
+                if id is not None:
+                    await self._require_existing(kind, id)
                 # Issue #2159: the area registry stores an unknown floor_id
                 # verbatim, and an unknown label_id is dropped on the way in
                 # (HA filters the set through the label registry) — both end as a
                 # success envelope that does not match what was asked for, so
                 # validate before writing. ``validate_cross_kind_params`` already
-                # rejected floor_id/labels for kind='floor', so the registry
-                # lookups below only ever run for areas; None and "" / [] (clear)
-                # skip them. An update with an id also reads the registry first,
-                # for both kinds, to confirm the id exists.
-                if id is not None:
-                    await self._require_existing(kind, id)
+                # rejected floor_id/labels for kind='floor', so this only ever
+                # runs for areas; None and "" / [] (clear) skip the lookups.
                 await validate_registry_ids(
                     self._client,
                     None,

@@ -1,4 +1,4 @@
-"""Reordering and id checks for ``ha_set_area_or_floor``."""
+"""Reordering for ``ha_set_area_or_floor``."""
 
 from typing import Any
 

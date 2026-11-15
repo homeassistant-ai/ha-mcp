@@ -218,7 +218,12 @@ class TestSetAreaFloorReferenceValidation:
 
     @staticmethod
     def _ws_handler(*floor_ids):
-        """Answer the floor-registry preflight, then ack the area write."""
+        """Answer the floor-registry preflight, then ack the area write.
+
+        The ack also answers the area-registry read of an update, but holds no
+        list, so the existence check is skipped with a warning; the check itself
+        is tested on real Core.
+        """
 
         async def handler(msg):
             if msg.get("type") == "config/floor_registry/list":
