@@ -10,7 +10,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/_logbook_fallback.py"
 message: |
   Do not switch a real-Core check off for one line or one file.
   `ast-grep-ignore`, `noqa: SLF001`, a bare `noqa`, `mypy: ignore-errors`, a
