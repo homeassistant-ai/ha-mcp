@@ -1,849 +1,565 @@
-"""Tests for the ha_mcp_tools caller-token auth path.
+"""The ha_mcp_tools caller-token auth path on a real ``hass``.
 
-Covers three layers:
+Three layers, all against the real tools entry that Core sets up:
 
-1. **Custom component handlers** — token check, unauthorized response shape,
-   get_caller_token bootstrap surface.
-2. **ha-mcp wrapper helper** (``call_mcp_tools_service``) — fetches and
-   caches the token, injects it on every call, refetches on unauthorized.
-3. **ha_call_service refusal** — the wrapper-layer block on the
-   ``ha_mcp_tools`` domain.
+1. The component's services refuse a call that does not carry its token.
+2. ``call_mcp_tools_service`` fetches, caches and re-fetches the token over the
+   server's own client, and gates on the component's reported version.
+3. ``ha_call_service`` refuses the ``ha_mcp_tools`` domain.
 
-Custom-component tests run against real Home Assistant Core.
+The component's version is the manifest version Core's loader holds, so a test
+changes what the component reports by changing that.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Iterator
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.const import EVENT_CALL_SERVICE
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.loader import async_get_integration
+from pytest_homeassistant.common import async_capture_events
 
-# --- Custom-component-side imports ------------------------------------------
-import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import (
-    _HASS_DATA_TOKEN_KEY,
     CALLER_TOKEN_FIELD,
-    _build_get_caller_token_handler,
-    _caller_token_ok,
-    _unauthorized_response,
+    SERVICE_DELETE_FILE,
+    SERVICE_GET_ALLOWED_PATHS,
+    SERVICE_GET_CALLER_TOKEN,
+    SERVICE_GET_EXTRA_YAML_KEYS,
+    SERVICE_LIST_FILES,
+    SERVICE_SET_ALLOWED_PATHS,
+    SERVICE_SET_EXTRA_YAML_KEYS,
+    SERVICE_WRITE_FILE,
 )
 from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-# --- ha-mcp wrapper-side imports --------------------------------------------
+from ha_mcp.client.exceptions import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import Settings
 from ha_mcp.tools.tools_filesystem import (
-    CALLER_TOKEN_BOOTSTRAP_SERVICE,
-    MCP_TOOLS_DOMAIN,
     MIN_COMPONENT_VERSION,
-    _reset_caller_token_cache,
-    _version_tuple,
     call_mcp_tools_service,
 )
+from ha_mcp.tools.tools_service import ServiceTools
+from ha_mcp.tools.yaml_extra_keys import (
+    MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS,
+    assert_extra_yaml_keys_supported,
+    effective_extra_yaml_write_keys,
+)
 
-# =============================================================================
-# Custom-component side: handler-level token check
-# =============================================================================
+from ._file_services import FileService, make_file_service
 
-
-def _fake_hass(token: str | None) -> MagicMock:
-    """Build a hass stand-in whose .data carries the expected caller token."""
-    hass = MagicMock()
-    hass.data = {DOMAIN: {"caller_token": token}} if token is not None else {}
-    return hass
-
-
-def _fake_call(presented_token: str | None, **extra: object) -> MagicMock:
-    """Build a ServiceCall stand-in with .data containing the presented token."""
-    call = MagicMock()
-    payload: dict[str, object] = dict(extra)
-    if presented_token is not None:
-        payload[CALLER_TOKEN_FIELD] = presented_token
-    call.data = payload
-    return call
+# Where the component keeps its token (``.storage/ha_mcp_tools_auth``).
+TOKEN_STORE_KEY = f"{DOMAIN}_auth"
 
 
-class TestCallerTokenOk:
-    """The handler's pre-flight check that gates all dangerous services."""
-
-    def test_accepts_matching_token(self):
-        hass = _fake_hass("good-token-xyz")
-        call = _fake_call("good-token-xyz")
-        assert _caller_token_ok(hass, call) is True
-
-    def test_rejects_missing_token(self):
-        hass = _fake_hass("good-token-xyz")
-        call = _fake_call(None)
-        assert _caller_token_ok(hass, call) is False
-
-    def test_rejects_mismatched_token(self):
-        hass = _fake_hass("good-token-xyz")
-        call = _fake_call("not-the-right-one")
-        assert _caller_token_ok(hass, call) is False
-
-    def test_rejects_when_hass_data_missing_token(self):
-        """If setup_entry hasn't run, no caller is authorized."""
-        hass = _fake_hass(None)
-        call = _fake_call("anything")
-        assert _caller_token_ok(hass, call) is False
-
-    def test_rejects_empty_string_token(self):
-        hass = _fake_hass("good-token-xyz")
-        call = _fake_call("")
-        assert _caller_token_ok(hass, call) is False
-
-    @pytest.mark.parametrize("bad_token", [123, ["good-token-xyz"], {"token": "x"}])
-    def test_rejects_non_string_presented_token(self, bad_token):
-        """isinstance guard must fail-closed on type confusion (the
-        ServiceCall.data dict can contain anything voluptuous coerced)."""
-        hass = _fake_hass("good-token-xyz")
-        call = MagicMock()
-        call.data = {CALLER_TOKEN_FIELD: bad_token}
-        assert _caller_token_ok(hass, call) is False
+@pytest.fixture
+async def tools_entry(hass: HomeAssistant) -> FileService:
+    """The tools entry, set up by Core; the caller presents its token."""
+    return await make_file_service(hass)
 
 
-class TestUnauthorizedResponse:
-    """The structured 'unauthorized' reply the helper emits."""
-
-    def test_has_error_code_unauthorized(self):
-        """Clients detect via error_code, not by string-matching error text."""
-        resp = _unauthorized_response("write_file")
-        assert resp["error_code"] == "unauthorized"
-        assert resp["success"] is False
-
-    def test_mentions_service_name_in_error(self):
-        resp = _unauthorized_response("delete_file")
-        assert "delete_file" in resp["error"]
-
-    def test_extra_kwargs_merged(self):
-        """list_files expects a 'files' key even on error — extras propagate."""
-        resp = _unauthorized_response("list_files", files=[])
-        assert resp["files"] == []
-        assert resp["error_code"] == "unauthorized"
+@pytest.fixture
+def service_calls(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on the client's ``call_service``: it calls through, Core answers."""
+    with patch.object(
+        core_client, "call_service", wraps=core_client.call_service
+    ) as spy:
+        yield spy
 
 
-class TestSettingsHandlersRefuseABadToken:
-    """The caller token is the only check inside these handlers."""
-
-    @pytest.mark.parametrize(
-        ("build_handler", "data"),
-        [
-            ("_build_get_allowed_paths_handler", {}),
-            ("_build_set_allowed_paths_handler", {"paths": ["pyscript"]}),
-            ("_build_get_extra_yaml_keys_handler", {}),
-            ("_build_set_extra_yaml_keys_handler", {"keys": ["alert2"]}),
-        ],
-        ids=["get_paths", "set_paths", "get_keys", "set_keys"],
+async def raw_call(
+    hass: HomeAssistant, service: str, data: dict[str, Any]
+) -> dict[str, Any]:
+    """Call an ``ha_mcp_tools`` service with exactly ``data``."""
+    response = await hass.services.async_call(
+        DOMAIN, service, data, blocking=True, return_response=True
     )
-    async def test_bad_token_is_unauthorized_and_changes_nothing(
-        self, monkeypatch, build_handler, data
-    ):
-        save = AsyncMock()
-        monkeypatch.setattr(comp, "_save_allowed_paths", save)
-        monkeypatch.setattr(comp, "_save_extra_yaml_keys", save)
-        hass = _fake_hass("good")
-        handler = getattr(comp, build_handler)(hass)
-
-        result = await handler(_fake_call("bad", **data))
-
-        assert result["success"] is False
-        assert result["error_code"] == "unauthorized"
-        save.assert_not_awaited()
-        assert hass.data == _fake_hass("good").data
+    assert response is not None
+    return dict(response)
 
 
-class TestGetCallerTokenManifestVersion:
-    """The bootstrap response reports the component's manifest version.
-
-    A manifest without a version reads as ``None`` from the loader rather than
-    raising, so ``str()`` would put the literal "None" in the response and the
-    server's version gate would compare against it. The component's own
-    unreadable-manifest path is the right answer, and only an explicit guard
-    routes it there.
-
-    Unreachable in production — core's loader refuses to set up a custom
-    integration whose manifest carries no version — which is exactly why a
-    test is the only thing keeping the branch honest.
-    """
-
-    @staticmethod
-    def _hass_with_token(token: str = "tok"):
-        hass = MagicMock()
-        hass.data = {DOMAIN: {_HASS_DATA_TOKEN_KEY: token}}
-        return hass
-
-    @pytest.mark.asyncio
-    async def test_version_less_manifest_reports_unreadable(self, monkeypatch):
-        import custom_components.ha_mcp_tools as component
-
-        monkeypatch.setattr(
-            component,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version=None)),
-        )
-        handler = _build_get_caller_token_handler(self._hass_with_token())
-
-        response = await handler(MagicMock())
-
-        assert response["success"] is False
-        assert response["error_code"] == "manifest_unreadable"
-        # The token must not leak out of a response that reports failure.
-        assert "token" not in response
-
-    @pytest.mark.asyncio
-    async def test_readable_manifest_reports_its_version(self, monkeypatch):
-        import custom_components.ha_mcp_tools as component
-
-        monkeypatch.setattr(
-            component,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(version="1.2.4")),
-        )
-        handler = _build_get_caller_token_handler(self._hass_with_token())
-
-        response = await handler(MagicMock())
-
-        assert response == {"success": True, "token": "tok", "version": "1.2.4"}
+async def bootstrap_token(hass: HomeAssistant) -> str:
+    """The token the component hands out through its bootstrap service."""
+    reply = await raw_call(hass, SERVICE_GET_CALLER_TOKEN, {})
+    token = reply["token"]
+    assert isinstance(token, str)
+    return token
 
 
-# =============================================================================
-# ha-mcp wrapper side: bootstrap + injection + refetch
-# =============================================================================
+async def set_component_version(hass: HomeAssistant, version: str | None) -> None:
+    """Change the version the component reports; ``None`` removes it."""
+    manifest = (await async_get_integration(hass, DOMAIN)).manifest
+    if version is None:
+        del manifest["version"]
+    else:
+        manifest["version"] = version
 
 
-@pytest.fixture(autouse=True)
-def _reset_token_cache_between_tests():
-    """Each test starts with an empty per-client token cache."""
-    _reset_caller_token_cache()
-    yield
-    _reset_caller_token_cache()
+def bootstrap_calls(spy: AsyncMock) -> list[Any]:
+    """The bootstrap calls the client made, from a ``call_service`` spy."""
+    return [c for c in spy.await_args_list if c.args[1] == SERVICE_GET_CALLER_TOKEN]
 
 
-def _make_client_with_token(token: str) -> AsyncMock:
-    """Client that returns ``token`` from the get_caller_token bootstrap and
-    echoes payload back for downstream service calls so tests can assert
-    that the token was injected."""
-    client = AsyncMock()
+# --- The component's services refuse a call without the token ---------------
 
-    # _fetch_caller_token now pre-flights via /api/services to detect old
-    # (pre-0.5.0) custom components that lack get_caller_token. The mock
-    # must report the bootstrap service as registered or the bootstrap
-    # path raises COMPONENT_NOT_INSTALLED before ever calling call_service.
-    client.get_services.return_value = [
-        {
-            "domain": MCP_TOOLS_DOMAIN,
-            "services": {
-                CALLER_TOKEN_BOOTSTRAP_SERVICE: {},
-                "list_files": {},
-                "read_file": {},
-                "write_file": {},
-                "delete_file": {},
-                "edit_yaml_config": {},
-            },
-        }
+
+async def test_the_bootstrap_token_is_accepted(
+    hass: HomeAssistant, tools_entry: FileService
+) -> None:
+    """The token the component hands out opens its gated services."""
+    token = await bootstrap_token(hass)
+
+    reply = await raw_call(hass, SERVICE_GET_ALLOWED_PATHS, {CALLER_TOKEN_FIELD: token})
+
+    assert reply["success"] is True
+
+
+@pytest.mark.parametrize(
+    "presented",
+    [
+        {},
+        {CALLER_TOKEN_FIELD: ""},
+        {CALLER_TOKEN_FIELD: "not-the-token"},
+        {CALLER_TOKEN_FIELD: 123},
+    ],
+    ids=["missing", "empty", "wrong", "number"],
+)
+async def test_a_missing_or_wrong_token_is_refused(
+    hass: HomeAssistant, tools_entry: FileService, presented: dict[str, Any]
+) -> None:
+    """Anyone but ha-mcp is told ``unauthorized`` and gets no data."""
+    reply = await raw_call(hass, SERVICE_GET_ALLOWED_PATHS, presented)
+
+    assert reply["success"] is False
+    assert reply["error_code"] == "unauthorized"
+    assert reply["paths"] == []
+
+
+@pytest.mark.parametrize(
+    ("service", "data", "extra"),
+    [
+        (SERVICE_LIST_FILES, {"path": "www"}, {"files": []}),
+        (SERVICE_DELETE_FILE, {"path": "www/x"}, {}),
+        (SERVICE_GET_EXTRA_YAML_KEYS, {}, {"keys": []}),
+    ],
+)
+async def test_the_refusal_names_the_service_and_keeps_the_reply_keys(
+    hass: HomeAssistant,
+    tools_entry: FileService,
+    service: str,
+    data: dict[str, Any],
+    extra: dict[str, Any],
+) -> None:
+    """The client tells a refusal from a failure by ``error_code``, and a list
+    service still carries its empty list so callers need no special case."""
+    reply = await raw_call(hass, service, {**data, CALLER_TOKEN_FIELD: "bad"})
+
+    assert reply["error_code"] == "unauthorized"
+    assert service in reply["error"]
+    for key, value in extra.items():
+        assert reply[key] == value
+
+
+@pytest.mark.parametrize(
+    ("write", "data", "read", "field"),
+    [
+        (
+            SERVICE_SET_ALLOWED_PATHS,
+            {"paths": ["pyscript"]},
+            SERVICE_GET_ALLOWED_PATHS,
+            "paths",
+        ),
+        (
+            SERVICE_SET_EXTRA_YAML_KEYS,
+            {"keys": ["alert2"]},
+            SERVICE_GET_EXTRA_YAML_KEYS,
+            "keys",
+        ),
+    ],
+    ids=["paths", "keys"],
+)
+async def test_a_refused_settings_write_changes_nothing(
+    hass: HomeAssistant,
+    tools_entry: FileService,
+    write: str,
+    data: dict[str, Any],
+    read: str,
+    field: str,
+) -> None:
+    """A caller without the token cannot widen what ha-mcp may write."""
+    refused = await raw_call(hass, write, {**data, CALLER_TOKEN_FIELD: "bad"})
+    assert refused["error_code"] == "unauthorized"
+    assert (await tools_entry(read, {}))[field] == []
+
+    accepted = await tools_entry(write, data)
+
+    assert accepted["success"] is True
+    assert (await tools_entry(read, {}))[field] == next(iter(data.values()))
+
+
+# --- The version the bootstrap reports --------------------------------------
+
+
+async def test_the_bootstrap_reports_the_manifest_version(
+    hass: HomeAssistant, tools_entry: FileService
+) -> None:
+    token = await bootstrap_token(hass)
+    await set_component_version(hass, "1.2.4")
+
+    reply = await raw_call(hass, SERVICE_GET_CALLER_TOKEN, {})
+
+    assert reply == {"success": True, "token": token, "version": "1.2.4"}
+
+
+async def test_a_manifest_without_a_version_is_unreadable_and_leaks_no_token(
+    hass: HomeAssistant, tools_entry: FileService
+) -> None:
+    """A missing version must not become the string ``"None"`` that the
+    server's gate then compares; the token stays out of a failure reply."""
+    await set_component_version(hass, None)
+
+    reply = await raw_call(hass, SERVICE_GET_CALLER_TOKEN, {})
+
+    assert reply["success"] is False
+    assert reply["error_code"] == "manifest_unreadable"
+    assert "token" not in reply
+
+
+# --- call_mcp_tools_service on the server's client --------------------------
+
+
+async def test_the_first_call_bootstraps_then_sends_the_token(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+) -> None:
+    token = await bootstrap_token(hass)
+
+    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    first, second = service_calls.await_args_list
+    assert first.args[1] == SERVICE_GET_CALLER_TOKEN
+    assert second.args[2][CALLER_TOKEN_FIELD] == token
+    assert result["service_response"]["success"] is True
+
+
+async def test_the_token_is_fetched_once_for_many_calls(
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+) -> None:
+    first = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+    second = await call_mcp_tools_service(core_client, SERVICE_GET_EXTRA_YAML_KEYS, {})
+
+    assert len(bootstrap_calls(service_calls)) == 1
+    assert first["service_response"]["success"] is True
+    assert second["service_response"]["success"] is True
+
+
+async def test_a_rotated_token_is_refetched_and_the_call_retried_once(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+) -> None:
+    """After the component's token is regenerated, ha-mcp's cached one is
+    stale: it must refetch and retry instead of failing every file tool."""
+    await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    hass_storage.pop(TOKEN_STORE_KEY)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    fresh = await bootstrap_token(hass)
+    service_calls.reset_mock()
+
+    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    assert result["service_response"]["success"] is True
+    assert [c.args[1] for c in service_calls.await_args_list] == [
+        SERVICE_GET_ALLOWED_PATHS,
+        SERVICE_GET_CALLER_TOKEN,
+        SERVICE_GET_ALLOWED_PATHS,
     ]
-
-    async def fake_call_service(domain, service, payload, **kwargs):
-        if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-            # HA wraps response under "service_response" — mirror that so
-            # unwrap_service_response finds the token. ``version`` is
-            # reported alongside the token so ha-mcp's MIN_COMPONENT_VERSION
-            # gate (added with the packages-only-keys PR) sees a current
-            # version and doesn't reject the test setup as "too old".
-            from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-            return {
-                "service_response": {
-                    "success": True,
-                    "token": token,
-                    "version": MIN_COMPONENT_VERSION,
-                }
-            }
-        # Echo the payload so the test can verify token injection.
-        return {
-            "service_response": {
-                "success": True,
-                "received_payload": dict(payload),
-                "domain": domain,
-                "service": service,
-            }
-        }
-
-    client.call_service.side_effect = fake_call_service
-    return client
+    assert service_calls.await_args_list[-1].args[2][CALLER_TOKEN_FIELD] == fresh
 
 
-class TestCallMcpToolsServiceInjectsToken:
-    """call_mcp_tools_service must always pass the cached/fetched token."""
+async def test_a_component_without_the_bootstrap_service_gets_an_update_prompt(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+) -> None:
+    """Domain services present but no ``get_caller_token``: the user is sent to
+    update the component, not shown Home Assistant's opaque 400."""
+    hass.services.async_remove(DOMAIN, SERVICE_GET_CALLER_TOKEN)
 
-    @pytest.mark.asyncio
-    async def test_bootstraps_token_on_first_call(self):
-        client = _make_client_with_token("server-token-A")
-        result = await call_mcp_tools_service(client, "list_files", {"path": "www"})
+    with pytest.raises(ToolError) as exc_info:
+        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
 
-        # First call to client.call_service should be the bootstrap
-        first_call = client.call_service.await_args_list[0]
-        assert first_call.args[1] == CALLER_TOKEN_BOOTSTRAP_SERVICE
+    msg = str(exc_info.value)
+    assert "too old" in msg
+    assert "pre-0.5.0" in msg
+    service_calls.assert_not_called()
 
-        # The downstream call_service was invoked with the token in payload
-        downstream = client.call_service.await_args_list[1]
-        downstream_payload = downstream.args[2]
-        assert downstream_payload[CALLER_TOKEN_FIELD] == "server-token-A"
-        assert downstream_payload["path"] == "www"
 
-        # And the result came back wrapped — the helper does not unwrap
-        # itself; that's the caller's job to keep parity with the prior
-        # behavior of self._client.call_service(...).
-        echoed = result["service_response"]
-        assert echoed["received_payload"][CALLER_TOKEN_FIELD] == "server-token-A"
+async def test_a_missing_tools_entry_is_told_to_add_the_entry_not_to_update(
+    core_client: HomeAssistantClient, service_calls: AsyncMock
+) -> None:
+    """With only the server entry added there are no ``ha_mcp_tools`` services,
+    and a HACS update cannot fix that (#1996)."""
+    with pytest.raises(ToolError) as exc_info:
+        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
 
-    @pytest.mark.asyncio
-    async def test_caches_token_across_calls(self):
-        client = _make_client_with_token("server-token-B")
+    msg = str(exc_info.value)
+    assert "HA-MCP File & YAML Tools" in msg
+    assert "Add entry" in msg
+    assert "too old" not in msg
+    assert msg.index("Add entry") < msg.index("ha_manage_hacs")
+    service_calls.assert_not_called()
 
-        await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        await call_mcp_tools_service(
-            client, "read_file", {"path": "configuration.yaml"}
+
+async def test_the_component_reason_is_surfaced_verbatim(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """An unreadable manifest must not be re-diagnosed as a missing token, whose
+    remedies (reload, admin rights) cannot fix a manifest."""
+    await set_component_version(hass, None)
+
+    with pytest.raises(ToolError, match="manifest version could not be read"):
+        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
+
+
+async def test_the_shipped_component_passes_the_servers_version_gate(
+    core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """A freshly updated component must not be locked out by a floor that no
+    HACS update can clear: ``MIN_COMPONENT_VERSION`` stays at or below the
+    manifest version."""
+    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    assert result["service_response"]["success"] is True
+
+
+@pytest.mark.parametrize("version", ["0.0.1", "1.1.0"])
+async def test_a_component_below_the_minimum_gets_an_update_prompt(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    version: str,
+) -> None:
+    """The error names the reported version; 1.1.0 stays refused (#1946): it
+    may or may not carry the packages-aware reads, so it cannot be trusted."""
+    await set_component_version(hass, version)
+
+    with pytest.raises(ToolError) as exc_info:
+        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
+
+    msg = str(exc_info.value)
+    assert "too old" in msg
+    assert version in msg
+    assert MIN_COMPONENT_VERSION in msg
+
+
+@pytest.mark.parametrize(
+    "version",
+    [MIN_COMPONENT_VERSION, f"{int(MIN_COMPONENT_VERSION.split('.')[0]) + 1}.0.0"],
+    ids=["minimum", "above"],
+)
+async def test_a_component_at_or_above_the_minimum_is_accepted(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    version: str,
+) -> None:
+    """The gate is ``<``, so exactly the minimum and a later release pass."""
+    await set_component_version(hass, version)
+
+    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    assert result["service_response"]["success"] is True
+
+
+@pytest.mark.parametrize("version", ["1.x.0", "1.2.3-beta"])
+async def test_a_malformed_version_is_refused_without_an_update_prompt(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    version: str,
+) -> None:
+    """``1.x.0`` must not pass as ``(1, 0, 0)``; and updating cannot fix a
+    manifest whose version is wrong, so the advice is to reinstall."""
+    await set_component_version(hass, version)
+
+    with pytest.raises(ToolError) as exc_info:
+        await call_mcp_tools_service(core_client, SERVICE_LIST_FILES, {"path": "www"})
+
+    msg = str(exc_info.value)
+    assert "malformed version" in msg
+    assert version in msg
+    assert "Reinstall" in msg
+    assert "too old" not in msg
+
+
+# --- ha_call_service refuses the ha_mcp_tools domain ------------------------
+
+
+@pytest.fixture
+def tools(core_client: HomeAssistantClient) -> ServiceTools:
+    return ServiceTools(core_client, None)
+
+
+@pytest.mark.parametrize("domain", ["ha_mcp_tools", "HA_MCP_TOOLS", "  ha_mcp_tools  "])
+async def test_ha_call_service_refuses_the_tools_domain_in_any_spelling(
+    hass: HomeAssistant,
+    tools: ServiceTools,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+    domain: str,
+) -> None:
+    """Core lowercases the domain on its fallback lookup, so a spelling variant
+    would otherwise reach the file services past the refusal."""
+    events = async_capture_events(hass, EVENT_CALL_SERVICE)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_call_service(
+            domain=domain, service=SERVICE_WRITE_FILE, data={"path": "www/x"}
         )
 
-        # Bootstrap should fire exactly once — second call reuses cached token.
-        bootstrap_calls = [
-            c
-            for c in client.call_service.await_args_list
-            if c.args[1] == CALLER_TOKEN_BOOTSTRAP_SERVICE
-        ]
-        assert len(bootstrap_calls) == 1
-
-    @pytest.mark.asyncio
-    async def test_refetches_and_retries_once_on_unauthorized(self):
-        """Token rotation flow: cached token is stale → refetch → succeed."""
-        client = AsyncMock()
-        # Bootstrap service must appear registered or _fetch_caller_token
-        # short-circuits with COMPONENT_NOT_INSTALLED before retry happens.
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "write_file": {}},
-            }
-        ]
-        state = {"current_token": "fresh-token", "downstream_calls": 0}
-
-        async def fake_call_service(domain, service, payload, **kwargs):
-            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-                from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-                return {
-                    "service_response": {
-                        "success": True,
-                        "token": state["current_token"],
-                        "version": MIN_COMPONENT_VERSION,
-                    }
-                }
-            state["downstream_calls"] += 1
-            # First downstream call: simulate stale-cache rejection
-            if state["downstream_calls"] == 1:
-                return {
-                    "service_response": {
-                        "success": False,
-                        "error_code": "unauthorized",
-                        "error": "stale",
-                    }
-                }
-            # Second downstream call: accept
-            return {
-                "service_response": {
-                    "success": True,
-                    "received_payload": dict(payload),
-                }
-            }
-
-        client.call_service.side_effect = fake_call_service
-
-        # Pre-seed the cache with a stale token so the first downstream call
-        # uses it, gets rejected, refetches, and retries.
-        from ha_mcp.tools.tools_filesystem import _CALLER_TOKEN_CACHE
-
-        _CALLER_TOKEN_CACHE[client] = "stale-token"
-
-        result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
-
-        # Two downstream attempts were made
-        assert state["downstream_calls"] == 2
-        # Second succeeded with the freshly-fetched token
-        echoed = result["service_response"]
-        assert echoed["received_payload"][CALLER_TOKEN_FIELD] == "fresh-token"
-
-    @pytest.mark.asyncio
-    async def test_raises_when_bootstrap_returns_no_token(self):
-        """Service exists but returns a malformed response (race condition
-        during integration setup, etc.) → structured ToolError, not a bare
-        RuntimeError (which the wrapper's ``except Exception`` would
-        otherwise re-map to a generic INTERNAL_ERROR)."""
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        # Bootstrap returns a malformed response
-        client.call_service.return_value = {"service_response": {"success": False}}
-        with pytest.raises(ToolError, match="did not return a usable token"):
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-
-    @pytest.mark.asyncio
-    async def test_component_reported_reason_is_surfaced_verbatim(self):
-        """A component that says why it failed must not be re-diagnosed here.
-
-        ``manifest_unreadable`` carries no token, so it lands on the same
-        branch as a malformed response — but the generic wording sends the
-        operator to the reload and admin-rights suggestions, neither of which
-        touches a manifest. The component's own message is the accurate one.
-        """
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service.return_value = {
-            "service_response": {
-                "success": False,
-                "error_code": "manifest_unreadable",
-                "error": (
-                    "ha_mcp_tools manifest version could not be read. "
-                    "Reinstall the integration via HACS."
-                ),
-            }
-        }
-        with pytest.raises(ToolError, match="manifest version could not be read"):
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-
-    @pytest.mark.asyncio
-    async def test_second_unauthorized_response_surfaces_no_further_retry(self):
-        """If the refetch+retry path also returns unauthorized (e.g. genuine
-        permanent rejection), the wrapper must NOT loop — it returns the
-        unauthorized response so the caller surfaces a real error rather
-        than spinning forever or silently succeeding."""
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "write_file": {}},
-            }
-        ]
-        downstream_attempts = {"n": 0}
-
-        async def fake_call_service(domain, service, payload, **kwargs):
-            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-                from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-                return {
-                    "service_response": {
-                        "success": True,
-                        "token": "freshly-fetched",
-                        "version": MIN_COMPONENT_VERSION,
-                    }
-                }
-            downstream_attempts["n"] += 1
-            return {
-                "service_response": {
-                    "success": False,
-                    "error_code": "unauthorized",
-                    "error": "still rejected",
-                }
-            }
-
-        client.call_service.side_effect = fake_call_service
-
-        result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
-
-        # Exactly two downstream attempts — one cached, one after refetch.
-        # No third attempt; no silent success.
-        assert downstream_attempts["n"] == 2
-        inner = result["service_response"]
-        assert inner["error_code"] == "unauthorized"
-        assert inner["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_raises_component_too_old_when_bootstrap_service_missing(self):
-        """Old (pre-0.5.0) custom component lacks get_caller_token → actionable
-        COMPONENT_NOT_INSTALLED ToolError, not a generic 'no usable token' string.
-
-        This is the failure mode an upgrade-skipping user hits: ha-mcp updates
-        but the HACS integration doesn't, so the bootstrap call would otherwise
-        hit a 400 from HA. We pre-flight via /api/services to detect this
-        and surface a 'update via HACS' message instead.
-        """
-        client = AsyncMock()
-        # Component is installed, but get_caller_token is NOT registered
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {"list_files": {}, "write_file": {}},  # no get_caller_token
-            }
-        ]
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "pre-0.5.0" in msg
-        # call_service must NOT have been called — pre-flight rejected upstream
-        client.call_service.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raises_entry_not_set_up_when_no_domain_services(self):
-        """No ha_mcp_tools services at all → the "add the File & YAML Tools
-        entry" error, NOT the "too old / update via HACS" prompt (#1996).
-
-        This is the state a fully-current component is in when only the
-        "HA-MCP Server" entry was added: the services register in the tools
-        entry's setup, so a HACS update can never fix it — the old message
-        sent users on exactly that goose chase.
-        """
-        client = AsyncMock()
-        # The non-dict item exercises the probe's malformed-entry guard.
-        client.get_services.return_value = [
-            "bogus-non-dict-entry",
-            {"domain": "light", "services": {"turn_on": {}}},
-        ]
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "HA-MCP File & YAML Tools" in msg
-        assert "Add entry" in msg
-        assert "too old" not in msg
-        # The Add-entry step leads; the HACS install is the fallback.
-        assert msg.index("Add entry") < msg.index("ha_manage_hacs")
-        client.call_service.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raises_component_too_old_when_response_missing_version(self):
-        """Bootstrap registered but response has no ``version`` field → still
-        rejected as "too old" with the same actionable update prompt.
-
-        This covers the 0.5.0 component case after this PR adds the
-        version-reporting field: bootstrap service exists (passes the
-        first gate) but the older code path returns ``{success, token}``
-        without ``version``. ha-mcp treats the missing field as the
-        signal that the component pre-dates version reporting.
-        """
-        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {"success": True, "token": "tok-no-version"}
-            }
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "too old" in msg
-        assert MIN_COMPONENT_VERSION in msg
-
-    @pytest.mark.asyncio
-    async def test_raises_component_too_old_when_version_below_minimum(self):
-        """Bootstrap registered + version present but below
-        ``MIN_COMPONENT_VERSION`` → rejected with the reported version
-        in the error so the operator knows exactly what they have.
-        """
-        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        # Hardcode an older version to ensure < MIN_COMPONENT_VERSION
-        # holds regardless of where the minimum advances over time.
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-old",
-                    "version": "0.0.1",
-                }
-            }
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "0.0.1" in msg
-        assert MIN_COMPONENT_VERSION in msg
-
-    @pytest.mark.asyncio
-    async def test_version_at_minimum_accepted(self):
-        """A component reporting exactly ``MIN_COMPONENT_VERSION`` is accepted."""
-        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
-
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-current",
-                    "version": MIN_COMPONENT_VERSION,
-                }
-            }
-        )
-        # No exception means the gate passed and the downstream
-        # list_files call also went through.
-        await call_mcp_tools_service(client, "list_files", {"path": "www"})
-
-    @pytest.mark.asyncio
-    async def test_version_above_minimum_accepted(self):
-        """A component reporting a version strictly ABOVE
-        ``MIN_COMPONENT_VERSION`` is accepted. Guards against a future
-        ``<`` → ``<=`` flip in the gate that would mis-reject
-        legitimate upgrades (the inverse direction of the
-        below-minimum test)."""
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        # DERIVED from the current minimum (major + 1) rather than hardcoded:
-        # the previous literal "0.99.0" was picked so "a future MIN bump still
-        # sorts BELOW it", but the 0.11.0 → 1.1.0 bump (#1788) overtook it and
-        # broke the test. Deriving keeps that intent true for every bump.
-        above_minimum = f"{_version_tuple(MIN_COMPONENT_VERSION)[0] + 1}.0.0"
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-future",
-                    "version": above_minimum,
-                }
-            }
-        )
-        # No exception ⇒ accepted.
-        await call_mcp_tools_service(client, "list_files", {"path": "www"})
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "bad_version",
-        [
-            "1.x.0",  # non-numeric segment
-            "1.2.3-beta",  # pre-release suffix (most likely real-world case)
-            "v1.2.3",  # git-tag prefix
-            "latest",  # non-numeric placeholder
-        ],
+    msg = str(exc_info.value)
+    assert "ha_mcp_tools" in msg
+    assert any(
+        name in msg for name in ("ha_write_file", "ha_list_files", "ha_config_set_yaml")
     )
-    async def test_malformed_version_string_rejected(self, bad_version):
-        """A version _version_tuple can't parse (non-numeric segment like
-        ``'1.x.0'``, a pre-release suffix, a ``v`` prefix, a placeholder)
-        is rejected fail-closed rather than letting an integer prefix sneak
-        past the gate (``'1.x.0'`` → ``(1, 0, 0)`` would otherwise compare
-        ``>= (0, 5, 1)`` and falsely accept). It routes to a distinct
-        "malformed version" error (reinstall / file-issue), NOT the
-        "too old / update via HACS" remediation — updating can't fix a
-        manifest whose version is wrong.
-
-        (The empty string is handled one guard earlier as a missing-version
-        "too old" case, so it never reaches this branch.)
-        """
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-bad-version",
-                    "version": bad_version,
-                }
-            }
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "malformed version" in msg
-        assert bad_version in msg
-        assert "Reinstall" in msg
-        # Must NOT route to the "too old / update" remediation.
-        assert "too old" not in msg
+    service_calls.assert_not_called()
+    assert events == []
 
 
-# =============================================================================
-# ha_call_service refusal of the ha_mcp_tools domain
-# =============================================================================
+async def test_ha_call_service_still_reaches_other_domains(
+    hass: HomeAssistant, tools: ServiceTools
+) -> None:
+    """Only ``ha_mcp_tools`` is refused: the same call on another domain runs."""
+    dispatched: list[dict[str, Any]] = []
 
+    async def handle(call: ServiceCall) -> None:
+        dispatched.append(dict(call.data))
 
-class TestHaCallServiceRefusesMcpToolsDomain:
-    """ha_call_service must not forward to ha_mcp_tools — the dedicated
-    wrapper tools are the only supported path into that domain."""
+    hass.services.async_register("test", "turn_on", handle)
 
-    @pytest.mark.asyncio
-    async def test_blocks_ha_mcp_tools_domain(self):
-        from ha_mcp.tools.tools_service import ServiceTools
-
-        # Use a real ServiceTools instance with a mocked client — we never
-        # reach the client because the refusal is the first check.
-        tools = ServiceTools.__new__(ServiceTools)
-        tools._client = AsyncMock()
-        tools._device_tools = AsyncMock()
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_call_service(
-                domain="ha_mcp_tools", service="write_file", data={"path": "www/x"}
-            )
-
-        # Error message should point the LLM at the dedicated tool.
-        msg = str(exc_info.value)
-        assert "ha_mcp_tools" in msg
-        assert any(
-            name in msg
-            for name in ("ha_write_file", "ha_list_files", "ha_config_set_yaml")
-        )
-        # The downstream client was never touched.
-        tools._client.call_service.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "variant",
-        ["HA_MCP_TOOLS", "Ha_Mcp_Tools", "  ha_mcp_tools  ", " HA_MCP_TOOLS "],
+    response = await tools.ha_call_service(
+        domain="test", service="turn_on", entity_id="light.kitchen", wait=False
     )
-    @pytest.mark.asyncio
-    async def test_blocks_case_and_whitespace_variants(self, variant):
-        """HA core's ServiceRegistry.async_call lowercases the domain on its
-        fallback lookup, so a mixed-case `HA_MCP_TOOLS` would otherwise slip
-        past the exact-string refusal and still resolve downstream. The
-        refusal must normalize case + whitespace to match."""
-        from ha_mcp.tools.tools_service import ServiceTools
 
-        tools = ServiceTools.__new__(ServiceTools)
-        tools._client = AsyncMock()
-        tools._device_tools = AsyncMock()
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_call_service(
-                domain=variant, service="write_file", data={"path": "www/x"}
-            )
-        assert "ha_mcp_tools" in str(exc_info.value)
-        tools._client.call_service.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_does_not_block_other_domains(self):
-        """light.turn_on must still pass the refusal gate — only ha_mcp_tools is refused."""
-        from ha_mcp.tools.tools_service import ServiceTools
-
-        tools = ServiceTools.__new__(ServiceTools)
-        client = AsyncMock()
-        # A realistic credentialed client double: string base_url/token so the
-        # Phase 3 component-caps probe reaches its real routing decision (a real
-        # client's base_url is a str, not an AsyncMock whose .rstrip() would leak
-        # an unawaited coroutine inside get_websocket_client's cache-key build).
-        client.base_url = "http://ha.test:8123"
-        client.token = "tok"
-        client.call_service.return_value = {"context": {"id": "ctx"}, "result": []}
-        tools._client = client
-        tools._device_tools = AsyncMock()
-
-        # Neutralize the component route deterministically: the probe returns None
-        # (component absent) so ha_call_service takes the legacy REST path. This
-        # test is about the refusal gate, not the component routing — pinning the
-        # probe keeps it fast (no real connect) and focused.
-        # Should NOT raise the domain-refusal ToolError. (May still raise
-        # downstream for unrelated reasons; we just assert we got past the refusal
-        # gate.) wait=False skips the state-change-verification path.
-        with patch(
-            "ha_mcp.tools.tools_service.get_component_caps",
-            AsyncMock(return_value=None),
-        ):
-            try:
-                await tools.ha_call_service(
-                    domain="light",
-                    service="turn_on",
-                    entity_id="light.kitchen",
-                    wait=False,
-                )
-            except ToolError as exc:
-                assert "ha_mcp_tools" not in str(exc), (
-                    "Refusal incorrectly triggered for non-ha_mcp_tools domain"
-                )
+    assert response["success"] is True
+    assert dispatched == [{"entity_id": "light.kitchen"}]
 
 
-class TestEffectiveExtraYamlWriteKeys:
-    """effective_extra_yaml_write_keys unions the server's HA_MCP_EXTRA_YAML_KEYS
-    with the component-owned store, read via get_extra_yaml_keys (#1887)."""
+# --- The extra YAML keys version gate ---------------------------------------
 
-    @staticmethod
-    def _client(store_response=None, store_raises=False):
-        client = _make_client_with_token("eff-token")
 
-        async def fake_call_service(domain, service, payload, **kwargs):
-            if service == "get_extra_yaml_keys":
-                if store_raises:
-                    raise RuntimeError("ws boom")
-                return store_response
-            return {"service_response": {"success": True}}
+async def test_the_extra_keys_gate_passes_on_a_current_component(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """The gate reads the version the bootstrap reported: reading nothing would
+    answer "unknown" on a current component and disable the feature for all."""
+    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
 
-        client.call_service.side_effect = fake_call_service
-        return client
+    await assert_extra_yaml_keys_supported(core_client, ["alert2"])
 
-    @staticmethod
-    def _settings(env):
-        return SimpleNamespace(extra_yaml_write_keys=env)
 
-    async def _run(self, monkeypatch, *, env, store_response=None, store_raises=False):
-        from ha_mcp.tools import tools_filesystem
-        from ha_mcp.tools import yaml_extra_keys as fsmod
+async def test_the_extra_keys_gate_blocks_an_older_component(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    await set_component_version(hass, MIN_COMPONENT_VERSION)
 
-        client = self._client(store_response, store_raises)
-        _ensure = AsyncMock(return_value="eff-token")
-        monkeypatch.setattr(tools_filesystem, "_ensure_caller_token", _ensure)
-        return await fsmod.effective_extra_yaml_write_keys(client, self._settings(env))
+    with pytest.raises(ToolError) as exc_info:
+        await assert_extra_yaml_keys_supported(core_client, ["alert2"])
 
-    @pytest.mark.asyncio
-    async def test_env_only_empty_store(self, monkeypatch):
-        result = await self._run(
-            monkeypatch,
-            env=" alert2, foo ",
-            store_response={"service_response": {"success": True, "keys": []}},
-        )
-        assert result == ["alert2", "foo"]
+    msg = str(exc_info.value)
+    assert MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS in msg
+    assert f"reported version: {MIN_COMPONENT_VERSION}" in msg
 
-    @pytest.mark.asyncio
-    async def test_unions_env_and_store(self, monkeypatch):
-        result = await self._run(
-            monkeypatch,
-            env="alert2",
-            store_response={"service_response": {"success": True, "keys": ["beta"]}},
-        )
-        assert result == ["alert2", "beta"]
 
-    @pytest.mark.asyncio
-    async def test_store_only_when_env_empty(self, monkeypatch):
-        result = await self._run(
-            monkeypatch,
-            env="",
-            store_response={"service_response": {"success": True, "keys": ["beta"]}},
-        )
-        assert result == ["beta"]
+async def test_the_extra_keys_gate_heals_after_a_component_update(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """A component updated under a running server must clear the gate: the
+    cached token stays valid, so without a forced re-bootstrap the old version
+    sticks and the error's own advice (update, then restart) never works."""
+    await set_component_version(hass, MIN_COMPONENT_VERSION)
+    with pytest.raises(ToolError):
+        await assert_extra_yaml_keys_supported(core_client, ["alert2"])
 
-    @pytest.mark.asyncio
-    async def test_store_read_failure_falls_back_to_env(self, monkeypatch):
-        result = await self._run(monkeypatch, env="alert2", store_raises=True)
-        assert result == ["alert2"]
+    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+
+    await assert_extra_yaml_keys_supported(core_client, ["alert2"])
+
+
+# --- The write allowlist extension in force ---------------------------------
+
+
+def _settings(env: str) -> Settings:
+    return Settings(_env_file=None, HA_MCP_EXTRA_YAML_KEYS=env)
+
+
+@pytest.mark.parametrize(
+    ("env", "stored", "expected"),
+    [
+        (" alert2, foo ", [], ["alert2", "foo"]),
+        ("alert2", ["beta"], ["alert2", "beta"]),
+        ("", ["beta"], ["beta"]),
+    ],
+    ids=["env_only", "union", "store_only"],
+)
+async def test_the_effective_keys_are_the_server_setting_plus_the_component_store(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    env: str,
+    stored: list[str],
+    expected: list[str],
+) -> None:
+    """A key set only on the component would otherwise be refused by the
+    server's own allowlist before the write ever reached the component."""
+    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+    await tools_entry(SERVICE_SET_EXTRA_YAML_KEYS, {"keys": stored})
+
+    keys = await effective_extra_yaml_write_keys(core_client, _settings(env))
+
+    assert keys == expected
+
+
+async def test_an_old_component_store_is_not_read(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """A component older than the keys feature is not asked for its store; the
+    gate turns the mismatch into a prompt elsewhere."""
+    await set_component_version(hass, MIN_COMPONENT_VERSION)
+    await tools_entry(SERVICE_SET_EXTRA_YAML_KEYS, {"keys": ["beta"]})
+
+    keys = await effective_extra_yaml_write_keys(core_client, _settings("alert2"))
+
+    assert keys == ["alert2"]
+
+
+async def test_an_unreadable_component_store_falls_back_to_the_server_setting(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools_entry: FileService
+) -> None:
+    """A dropped connection while reading the store must not block a write that
+    the server's own setting allows."""
+    await set_component_version(hass, MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
+    await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    with patch.object(
+        core_client,
+        "call_service",
+        AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+    ):
+        keys = await effective_extra_yaml_write_keys(core_client, _settings("alert2"))
+
+    assert keys == ["alert2"]

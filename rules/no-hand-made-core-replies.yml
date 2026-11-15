@@ -80,7 +80,6 @@ ignores:
   - "tests/src/unit/test_bulk_device_control.py"
   - "tests/src/unit/test_bulk_selector.py"
   - "tests/src/unit/test_call_service_ws_command.py"
-  - "tests/src/unit/test_caller_token_auth.py"
   - "tests/src/unit/test_card_definitions.py"
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_component_api.py"
