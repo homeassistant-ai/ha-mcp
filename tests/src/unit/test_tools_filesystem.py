@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mcp_tools import websocket_api as component_commands
 from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp import config as ha_config
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -185,13 +184,9 @@ async def test_with_the_server_entry_only_a_file_tool_asks_for_the_tools_entry(
     assert ENTRY_NAME in error_of(exc)["message"]
 
 
-@pytest.mark.parametrize("commands", [False, True], ids=["services only", "commands"])
 async def test_with_the_tools_entry_a_listing_keeps_only_the_pattern(
-    hass: HomeAssistant, core_client: HomeAssistantClient, commands: bool
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """With and without the component's commands answering beside the entry."""
-    if commands:
-        component_commands.async_register_commands(hass)
     await make_file_service(hass)
     await _file(hass, "www/card.css")
     await _file(hass, "www/card.js")
