@@ -6593,11 +6593,11 @@ _REDACTION_ADDON_PAYLOAD = {
 
 @pytest.fixture
 def _redaction_registry_clean():
-    from ha_mcp.redaction import _clear_known_secret_values
+    from ha_mcp.redaction import clear_known_secret_values
 
-    _clear_known_secret_values()
+    clear_known_secret_values()
     yield
-    _clear_known_secret_values()
+    clear_known_secret_values()
 
 
 @pytest.fixture

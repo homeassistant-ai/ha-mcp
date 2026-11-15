@@ -605,7 +605,7 @@ def known_secret_values() -> tuple[str, ...]:
         return tuple(sorted(_known_secrets, key=len, reverse=True))
 
 
-def _clear_known_secret_values() -> None:
+def clear_known_secret_values() -> None:
     """Test hook: empty the known-secrets set."""
     with _known_secrets_lock:
         _known_secrets.clear()

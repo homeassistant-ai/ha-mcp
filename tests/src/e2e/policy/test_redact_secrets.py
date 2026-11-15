@@ -33,7 +33,7 @@ from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.redaction import REDACTED_SET, _clear_known_secret_values, is_sentinel
+from ha_mcp.redaction import REDACTED_SET, clear_known_secret_values, is_sentinel
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
@@ -184,7 +184,7 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
         try:
             # A server that never saw the value has nothing to scrub it with;
             # only recognising the field keeps it out.
-            _clear_known_secret_values()
+            clear_known_secret_values()
 
             form = await mcp.call_tool_success(
                 "ha_set_integration", {"entry_id": entry_id}

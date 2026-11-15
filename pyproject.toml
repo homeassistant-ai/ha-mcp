@@ -224,7 +224,6 @@ module = [
     "tests.src.unit.test_performance_parallelization",
     "tests.src.unit.test_read_only",
     "tests.src.unit.test_redaction",
-    "tests.src.unit.test_redaction_app_option_keys",
     "tests.src.unit.test_renamed_tools",
     "tests.src.unit.test_resource_codec",
     "tests.src.unit.test_rest_client_admin_gate",
