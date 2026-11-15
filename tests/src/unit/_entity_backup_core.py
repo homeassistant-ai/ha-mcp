@@ -22,9 +22,11 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools import websocket_api as tools_api
 from ha_mcp import backup_manager as bm
@@ -43,6 +45,7 @@ WRITE_COMMANDS = (
     "homeassistant/expose_entity",
     "ha_mcp_tools/entity_restore",
 )
+COMPONENT_COMMANDS = ("ha_mcp_tools/entity_entry", "ha_mcp_tools/entity_restore")
 DESK_OPTIONS: dict[str, dict[str, Any]] = {
     "light": {"favorite_colors": []},
     "conversation": {"should_expose": False},
@@ -141,6 +144,43 @@ async def desk(
         cat_b=cat_b.category_id,
         cat_s=cat_s.category_id,
     )
+
+
+def with_config_entry(
+    hass: HomeAssistant, registry: er.EntityRegistry, entity_id: str
+) -> MockConfigEntry:
+    """Give ``entity_id`` a config entry of its own."""
+    config_entry = MockConfigEntry(domain="hue")
+    config_entry.add_to_hass(hass)
+    registry.async_update_entity(entity_id, config_entry_id=config_entry.entry_id)
+    return config_entry
+
+
+def with_device(
+    hass: HomeAssistant,
+    registry: er.EntityRegistry,
+    devices: dr.DeviceRegistry,
+    entity_id: str,
+) -> dr.DeviceEntry:
+    """Put ``entity_id`` on a device of its own, which has a config entry."""
+    config_entry = with_config_entry(hass, registry, entity_id)
+    device = devices.async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={("hue", "desk")}
+    )
+    registry.async_update_entity(entity_id, device_id=device.id)
+    return device
+
+
+@contextmanager
+def component_commands_removed(hass: HomeAssistant) -> Iterator[None]:
+    """Core does not know the component's entity commands, as after the
+    component was replaced by a release that predates them."""
+    registered = hass.data[websocket_api.DOMAIN]
+    removed = {command: registered.pop(command) for command in COMPONENT_COMMANDS}
+    try:
+        yield
+    finally:
+        registered.update(removed)
 
 
 async def entity_snapshot(manager: bm.BackupManager, entity_id: str) -> Path:
