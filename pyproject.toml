@@ -267,7 +267,6 @@ module = [
     "tests.src.unit.test_tools_todo",
     "tests.src.unit.test_tools_todo_bridge",
     "tests.src.unit.test_tools_utility_error_log_records",
-    "tests.src.unit.test_tools_utility_supervisor_logs",
     "tests.src.unit.test_translate_locales",
     "tests.src.unit.test_usage_logger",
     "tests.src.unit.test_validation_middleware",
