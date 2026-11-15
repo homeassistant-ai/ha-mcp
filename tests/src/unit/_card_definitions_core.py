@@ -13,7 +13,14 @@ import asyncio
 import importlib
 import json
 import sys
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -295,6 +302,75 @@ async def stalled_card_download(
         yield
     finally:
         release.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+
+def card_file_with_editor(
+    path: Path, tag: str, set_config: str = "", editor_set_config: str = ""
+) -> Path:
+    """A custom card's resource file whose ``getConfigElement`` returns an editor
+    (``editor_set_config`` runs in its ``setConfig``); see ``card_file``."""
+    path.write_text(
+        "class Card extends HTMLElement {\n"
+        f"  setConfig(c) {{ {set_config} }}\n"
+        f"  static getConfigElement() {{ return {{ setConfig(c) {{ {editor_set_config} }} }}; }}\n"
+        "}\n"
+        f"customElements.define({tag!r}, Card);\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def add_card_names(root: Path, names: Mapping[str, str]) -> None:
+    """Give cards a translated name in a frontend written under ``root``."""
+    translations = root / "static" / "translations" / "lovelace" / "en-abc123.json"
+    strings = json.loads(translations.read_text(encoding="utf-8"))
+    strings.update({f"{_I18N}{card}.name": name for card, name in names.items()})
+    translations.write_text(json.dumps(strings), encoding="utf-8")
+
+
+InstallCustomCard = Callable[..., Awaitable[None]]
+
+
+@pytest.fixture
+async def installed_custom_card(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    idle_custom_cards: None,
+) -> AsyncIterator[InstallCustomCard]:
+    """``install(tag, set_config="")``: a custom card file under ``www`` that a
+    dashboard resource names, with the DOM library already in the component's
+    cache. Leaving unloads every card the component loaded."""
+    assert await async_setup_component(hass, "lovelace", {})
+    ws = await hass_ws_client(hass)
+    www = Path(hass.config.path("www"))
+    cache = Path(
+        hass.config.path(
+            ".storage", "ha_mcp_tools", f"linkedom-{cc.LINKEDOM_VERSION}.js"
+        )
+    )
+
+    def write_dom() -> None:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(MINIMAL_DOM, encoding="utf-8")
+
+    async def install(tag: str, set_config: str = "") -> None:
+        def write() -> None:
+            www.mkdir(parents=True, exist_ok=True)
+            card_file(www / f"{tag}.js", tag, set_config)
+
+        await hass.async_add_executor_job(write)
+        await ws_result(
+            ws, "lovelace/resources/create", res_type="js", url=f"/local/{tag}.js"
+        )
+
+    await hass.async_add_executor_job(write_dom)
+    try:
+        yield install
+    finally:
+        for resource in await ws_result(ws, "lovelace/resources"):
+            await ws_result(ws, "lovelace/resources/delete", resource_id=resource["id"])
+        await cc.async_get_custom_cards(hass, timeout=10)
         await hass.async_block_till_done(wait_background_tasks=True)
 
 

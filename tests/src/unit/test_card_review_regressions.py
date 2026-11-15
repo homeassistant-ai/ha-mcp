@@ -1,129 +1,308 @@
-"""Human-review regressions reproduced against the live HA runner."""
+"""Human-review regressions of the dashboard card checks, on real Home Assistant Core.
 
-import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+The card index runs on a small frontend build written to disk, custom cards in
+their real QuickJS sandbox, and the describe tool and the ``dashboard_cards``
+command on a real ``hass`` (the E2E suite runs the real frontend and DOM).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import WebSocketGenerator
 
-from .test_card_definitions import _definitions, cc, cd, dcw, describe_mod
-from .test_card_definitions import component as component
+from custom_components.ha_mcp_tools import card_runtime as runtime
+from custom_components.ha_mcp_tools import websocket_api
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import invalidate_caps
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+
+from ._card_definitions_core import (
+    FrontendOnDisk,
+    InstallCustomCard,
+    add_card_names,
+    build_definitions,
+    card_file,
+    card_file_with_editor,
+    cc,
+    cd,
+    describe_mod,
+    write_frontend,
+)
+from ._card_definitions_core import custom_cards as custom_cards
+from ._card_definitions_core import frontend as frontend
+from ._card_definitions_core import idle_custom_cards as idle_custom_cards
+from ._card_definitions_core import installed_custom_card as installed_custom_card
+from ._card_definitions_core import stalled_card_download as stalled_card_download
+from ._card_runtime_core import constrained_core, installed_packages
+from ._component_core import ws_result
+from ._core_client import refused_url
+
+_PER_CARD = 16 * 1024 * 1024  # one sandbox's heap allowance in these tests
+_ADVISORY = "editor schema advisory; runtime support may differ"
+# A custom card's editor that rejects every option the way the frontend's
+# superstruct does.
+_REJECT_EVERY_OPTION = (
+    "for (const key of Object.keys(c)) { if (key !== 'type') throw new Error("
+    "'At path: ' + key + ' -- Expected a value of type `never`, but received: `1`'); }"
+)
 
 
-def test_advice_does_not_guess_even_a_close_spelling():
-    definitions = _definitions({"tile"}, {"tile": ["color"]})
-    warning = definitions._explain("tile", {"path": ["colour"], "type": "never"})
-    assert warning == "'colour' is not listed in the tile editor schema"
+def _views(*cards: dict[str, Any]) -> dict[str, Any]:
+    return {"views": [{"cards": list(cards)}]}
 
 
-def test_custom_editor_rejection_is_advisory():
-    message = "At path: disabled -- Expected a value of type `never`"
-    result = cd._explain_message("mushroom-entity-card", message, editor=True)
-    assert "editor schema advisory" in result
-    assert "not listed" in result
-    assert "not a mushroom" not in result
-    assert (
-        cd._explain_message(
-            "x-card", message.replace("disabled", "card_mod"), editor=True
-        )
-        is None
+async def _describe(
+    frontend: FrontendOnDisk,
+    client: HomeAssistantClient,
+    editor: str,
+    card_type: str = "tile",
+) -> dict[str, Any]:
+    """What the describe tool says of ``card_type`` once its editor is ``editor``."""
+    frontend.write({"tile": editor})
+    return await describe_mod.describe_card_response(client, card_type)
+
+
+# --- custom cards ----------------------------------------------------------
+
+
+@pytest.mark.usefixtures("idle_custom_cards")
+def test_a_custom_editors_rejection_is_advisory_and_card_mod_is_accepted(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    """The editor's struct says what the editor lists, not what the card
+    accepts: the warning must not claim the option is not a card option."""
+    definitions = build_definitions(tmp_path)
+    tag = "mushroom-entity-card"
+    custom_cards.refresh(
+        [
+            card_file_with_editor(
+                tmp_path / "mushroom.js", tag, editor_set_config=_REJECT_EVERY_OPTION
+            )
+        ]
+    )
+    config = _views(
+        {"type": f"custom:{tag}", "disabled": True},
+        {"type": f"custom:{tag}", "card_mod": {"style": "x"}},
     )
 
+    warnings = definitions.validate(config, custom_cards)
 
-def test_custom_verdict_retains_source_and_prefers_duplicate_card_error():
-    import quickjs
+    assert warnings == [
+        f"views[0].cards[0] (custom:{tag}): {_ADVISORY}: "
+        f"'disabled' is not listed in the {tag} editor schema"
+    ]
 
-    engine = quickjs.Function("card", cc._RUNTIME_JS.replace("__SANDBOX", "[]"))
-    engine(
-        "eval",
-        """
-      globalThis.__registry = {'x-card': class {setConfig(c) {
-        if (c.reject) throw new Error('shared error');
-      }}};
-      __pending['x-card'] = {editor: {setConfig(c) {
-        throw new Error(c.reject ? 'shared error' : 'editor only');
-      }}};
-    """,
+
+def test_a_cards_own_error_hides_the_editors_copy_of_it(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    """An editor message the card did not give is kept as the editor's; one
+    both give is reported once, as the card's."""
+    custom_cards.refresh(
+        [
+            card_file_with_editor(
+                tmp_path / "x-card.js",
+                "x-card",
+                set_config="if (c.reject) throw new Error('shared error');",
+                editor_set_config=(
+                    "throw new Error(c.reject ? 'shared error' : 'editor only');"
+                ),
+            )
+        ]
     )
-    assert engine("check", {"tag": "x-card", "config": {}})["value"] == [
+
+    assert custom_cards.check("x-card", {}) == [
         {"source": "editor", "message": "editor only"}
     ]
-    assert engine("check", {"tag": "x-card", "config": {"reject": True}})["value"] == [
+    assert custom_cards.check("x-card", {"reject": True}) == [
         {"source": "card", "message": "shared error"}
     ]
 
 
-def test_lazy_config_form_module_supplies_schema_and_assertion():
-    definitions = _definitions({"entity"}, {})
-    definitions._tag_module = {"hui-entity-card": "1"}
-    definitions._bodies = {
-        "1": "class Card{static async getConfigForm(){return(await r.e(2).then(r.bind(r,2))).default}}",
-        "2": 'function(m,e,r){const s=[{name:"entity",selector:{entity:{}}}],v=validator;const form={schema:s,assertConfig:c=>(0,x.assert)(c,v)}}',
+def test_a_resource_skipped_for_memory_is_named_in_the_coverage(
+    tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _PER_CARD)  # room for one card
+    files = [card_file(tmp_path / f"card-{i}.js", f"card-{i}") for i in range(2)]
+
+    custom_cards.refresh(files)
+
+    assert custom_cards.status() == {
+        "state": "partial",
+        "resources": [{"resource": str(files[1]), "reason": "memory limit"}],
     }
-    definitions._evaluate = MagicMock(return_value=["entity"])
-    assert definitions._struct_ready("entity")
-    assert cd._schema_expressions(definitions._editor_body("entity")) == [
-        '[{name:"entity",selector:{entity:{}}}]'
+
+
+async def test_a_failed_dom_download_does_not_turn_a_custom_card_into_an_unknown_one(
+    hass: HomeAssistant,
+    frontend: FrontendOnDisk,
+    idle_custom_cards: None,
+    hass_ws_client: WebSocketGenerator,
+    socket_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no resources the inventory is empty, so a custom card is reported as
+    not found; once a resource names one the library it needs is missing, and
+    the empty inventory says nothing about the card."""
+    assert await async_setup_component(hass, "lovelace", {})
+    ws = await hass_ws_client(hass)
+    monkeypatch.setattr(cc, "LINKEDOM_URL", refused_url())
+    config = _views({"type": "custom:installed"})
+
+    [warning] = await cd.async_card_warnings(hass, config)
+    assert "not found in dashboard resources" in warning
+    await ws_result(
+        ws, "lovelace/resources/create", res_type="js", url="/local/installed.js"
+    )
+
+    assert await cd.async_card_warnings(hass, config) == []
+
+
+async def test_a_slow_refresh_still_answers_with_the_published_custom_cards(
+    hass: HomeAssistant,
+    stalled_card_download: None,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    ws = await hass_ws_client(hass)
+    [resource] = await ws_result(ws, "lovelace/resources")
+    await ws_result(ws, "lovelace/resources/delete", resource_id=resource["id"])
+    published = await cc.async_get_custom_cards(hass, timeout=10)
+    assert published is not None
+    await ws_result(
+        ws, "lovelace/resources/create", res_type="module", url="/local/card.js"
+    )
+
+    assert await cc.async_get_custom_cards(hass, timeout=0.05) is published
+    assert cc.custom_load_status(published)["state"] == "loading"
+
+
+# --- the index ---------------------------------------------------------------
+
+
+def test_a_lazy_config_form_module_supplies_the_schema_and_the_assertion(
+    tmp_path: Path,
+) -> None:
+    """A card whose ``getConfigForm`` loads a lazy module has its fields from
+    that module's form, and its options checked by that module's assertion."""
+    modules = (
+        '40(m,e,r){(0,e.EM)("hui-entity-card");class A{setConfig(c){}'
+        "static async getConfigForm(){return(await r.e(2).then(r.bind(r,41))).default}}},"
+        "41(m,e,r){var t=r(6),v=(0,t.object)({type:t.string,entity:t.string});"
+        'const s=[{name:"entity",selector:{entity:{}}}],'
+        "form={schema:s,assertConfig:c=>(0,t.assert)(c,v)}}"
+    )
+    definitions = build_definitions(tmp_path, modules=modules)
+
+    described = definitions.describe("entity")
+    warnings = definitions.validate(_views({"type": "entity", "colour": "red"}))
+
+    assert described is not None
+    assert described["field_coverage"] == "partial"
+    assert described["fields"] == [{"name": "entity", "selector": {"entity": {}}}]
+    assert warnings == [
+        f"views[0].cards[0] (entity): {_ADVISORY}: "
+        "'colour' is not listed in the entity editor schema"
     ]
 
 
-def test_unavailable_struct_marks_editor_fields_unfiltered():
-    definitions = _definitions({"clock"}, {"clock": None})
-    definitions._strings = {}
-    definitions._editor_body = MagicMock(
-        return_value='const s=[{name:"editor_only"}];const form={schema:s}'
+def test_an_export_of_a_module_that_cannot_run_is_read_without_running_it(
+    tmp_path: Path,
+) -> None:
+    """The struct comes from ``refine`` in a module that needs a browser to run
+    (it throws here), found through the export's own definition."""
+    modules = (
+        "3(m,e,r){var s=r(4);const refine=(x)=>s.wrap(x);"
+        "r.d(e,{},{f:refine});window.startBrowser()},"
+        "4(m,e,r){r.d(e,{},{wrap:(x)=>({schema:{entity:x}})})}"
     )
-    definitions._evaluate = MagicMock(return_value=[{"name": "editor_only"}])
-    result = definitions.describe("clock")
-    assert result["field_coverage"] == "unfiltered"
-    assert "UI-only" in result["note"]
+    editor = (
+        "var d=r(3),t=r(6),v=d.f(t.string);class C{setConfig(c){(0,t.assert)(c,v)}}"
+    )
+    definitions = build_definitions(tmp_path, {"tile": editor}, modules=modules)
+
+    described = definitions.describe("tile")
+
+    assert described is not None
+    assert described["fields"] == [{"name": "entity", "type": "string"}]
 
 
-def test_pure_export_can_be_read_without_running_its_browser_module(tmp_path):
-    frontend = tmp_path / "frontend_latest"
-    frontend.mkdir()
-    (frontend / "cards.js").write_text(
-        'export const __webpack_modules__={1(e){(0,e.EM)("hui-tile-card")},'
-        '2(e){(0,e.EM)("hui-entities-card")},'
-        "3(m,e,r){r.a(m,async function(){var s=r(4);const refine=(x)=>s.wrap(x);r.d(e,{},{f:refine})})},"
-        "4(m,e,r){r.d(e,{},{wrap:(x)=>({schema:{entity:x}})})}};",
-        encoding="utf-8",
+def test_the_index_keeps_inherited_cards_but_excludes_dialogs(tmp_path: Path) -> None:
+    """A card with no translated name is a card when it implements, or inherits,
+    ``setConfig``; a dialog registered under a ``hui-*-card`` tag is not one."""
+    modules = (
+        '40(m,e,r){(0,e.EM)("hui-horizontal-stack-card");'
+        "class Dialog{showDialog(t){}}},"
+        '41(m,e,r){(0,e.EM)("hui-dialog-edit-card");class Dialog{showDialog(t){}}},'
+        '42(m,e,r){(0,e.EM)("hui-energy-internal-card");'
+        "class Card{setConfig(t){this.config=t}}},"
+        '43(m,e,r){(0,e.EM)("hui-shopping-list-card");var c=r(123);'
+        "class Alias extends c.Card{}},"
+        "123(m,e,r){class Card{setConfig(t){this.config=t}}}"
     )
+    write_frontend(tmp_path, modules=modules)
+    add_card_names(tmp_path, {"horizontal-stack": "Horizontal stack"})
     definitions = cd.CardDefinitions(tmp_path)
-    assert definitions._evaluate(
-        "struct", "var dep=r(3);", 'dep.f("string")', "tile"
-    ) == ["entity"]
-
-
-def test_malformed_select_options_do_not_abort_description():
-    from ha_mcp.tools.config_helpers.describe import compact_field
-
-    assert compact_field(
-        {"name": "classes", "selector": {"select": {"options": False}}}
-    ) == {"name": "classes", "type": "select"}
-
-
-def test_named_grid_and_flattened_section_follow_stored_shape():
-    from ha_mcp.tools.config_helpers.describe import compact_field
-
-    schema = [
-        {
-            "name": "content",
-            "type": "expandable",
-            "flatten": True,
-            "schema": [{"name": "entity", "selector": {"entity": {}}}],
-        },
-        {
-            "name": "limits",
-            "type": "grid",
-            "schema": [
-                {"name": "min", "selector": {"number": {}}},
-                {"name": "max", "selector": {"number": {}}},
-            ],
-        },
+    cards = [
+        {"type": "horizontal-stack"},
+        {"type": "dialog-edit"},
+        {"type": "energy-internal"},
+        {"type": "shopping-list"},
     ]
-    assert [compact_field(f) for f in describe_mod._flatten(schema)] == [
+
+    assert definitions.validate(_views(*cards)) == [
+        "views[0].cards[1]: unknown card type 'dialog-edit'"
+    ]
+
+
+async def test_a_frontend_with_no_cards_is_unavailable_not_an_empty_list(
+    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+) -> None:
+    frontend.write(files={"cards.js": "export const __webpack_modules__={};"})
+
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(component_core_client, "tile")
+
+    assert "card definitions are unavailable" in str(err.value)
+
+
+# --- the editor form as the tool describes it ---------------------------------
+
+
+async def test_a_malformed_select_does_not_abort_the_description(
+    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+) -> None:
+    editor = (
+        "class E{constructor(){this._schema=(0,m.A)(e=>["
+        '{name:"classes",selector:{select:{options:!1}}}])}}'
+    )
+
+    described = await _describe(frontend, component_core_client, editor)
+
+    assert described["fields"] == [{"name": "classes", "type": "select"}]
+
+
+async def test_a_named_grid_stays_a_section_and_a_flattened_one_is_inlined(
+    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+) -> None:
+    editor = (
+        "class E{constructor(){this._schema=(0,m.A)(e=>["
+        '{name:"content",type:"expandable",flatten:!0,schema:['
+        '{name:"entity",selector:{entity:{}}}]},'
+        '{name:"limits",type:"grid",schema:['
+        '{name:"min",selector:{number:{}}},{name:"max",selector:{number:{}}}]}])}}'
+    )
+
+    described = await _describe(frontend, component_core_client, editor)
+
+    assert described["fields"] == [
         {"name": "entity", "type": "entity"},
         {
             "name": "limits",
@@ -136,277 +315,161 @@ def test_named_grid_and_flattened_section_follow_stored_shape():
     ]
 
 
-def test_editor_only_fields_and_types_are_reconciled_with_stored_struct():
-    fields = [
-        {
-            "name": "content",
-            "type": "expandable",
-            "flatten": True,
-            "schema": [
-                {
-                    "name": "content_layout",
-                    "selector": {"select": {"options": ["vertical"]}},
-                },
-                {"name": "detail", "selector": {"boolean": {}}, "default": True},
-                {"name": "entity", "selector": {"entity": {}}},
-            ],
-        }
-    ]
-    result = cd._stored_fields(
-        fields,
-        {
-            "vertical": {"type": "boolean"},
-            "detail": {"type": "number"},
-            "entity": {"type": "string"},
-        },
+async def test_editor_only_fields_and_types_follow_the_stored_struct(
+    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+) -> None:
+    """``content_layout`` is not stored, and ``detail`` is a number there although
+    the editor shows a switch: describing it as the editor shows it would have
+    the caller write a config the card rejects."""
+    editor = (
+        "var s=r(6),v=(0,s.object)({type:s.string,vertical:{type:'boolean'},"
+        "detail:{type:'number'},entity:s.string});"
+        "class C{constructor(){this._schema=(0,s.memo)(e=>["
+        '{name:"content",type:"expandable",flatten:!0,schema:['
+        '{name:"content_layout",selector:{select:{options:["vertical"]}}},'
+        '{name:"detail",selector:{boolean:{}},default:!0},'
+        '{name:"entity",selector:{entity:{}}}]}])}'
+        "setConfig(c){(0,s.assert)(c,v)}}"
     )
-    assert result[0]["schema"] == [
-        {"name": "detail", "selector": {"number": {}}},
-        {"name": "entity", "selector": {"entity": {}}},
+
+    described = await _describe(frontend, component_core_client, editor)
+
+    assert described["fields"] == [
+        {"name": "detail", "type": "number"},
+        {"name": "entity", "type": "entity"},
+        {"name": "vertical", "type": "boolean"},
     ]
 
 
-def test_custom_wrapper_children_are_not_validated_as_final_configs():
-    definitions = _definitions({"tile"}, {"tile": ["entity", "vertical"]})
-    config = {
-        "views": [
-            {
-                "cards": [
-                    {
-                        "type": "custom:config-template-card",
-                        "card": {
-                            "type": "tile",
-                            "entity": '${"light.test"}',
-                            "vertical": "${true}",
-                        },
-                    }
-                ]
-            }
-        ]
-    }
-    _, checked, _ = definitions._triage(config)
-    assert checked == []
-
-
-def test_empty_frontend_index_is_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(cd.CardDefinitions, "_index", lambda self: None)
-    with pytest.raises(ValueError, match="index"):
-        cd.CardDefinitions(tmp_path)
-
-
-@pytest.mark.asyncio
-async def test_refresh_timeout_retains_published_cache(monkeypatch):
-    release = asyncio.Event()
-    cached = cc.CustomCards("dom")
-    cached._card_types = [{"type": "custom:existing"}]
-
-    async def refresh(hass: HomeAssistant):
-        await release.wait()
-        return cached
-
-    monkeypatch.setattr(cc, "_async_refresh", refresh)
-    monkeypatch.setattr(cc, "_refresh_task", None)
-    monkeypatch.setattr(cc, "_custom", cached)
-    hass = MagicMock()
-    hass.async_create_background_task = lambda coro, name: asyncio.create_task(coro)
-    try:
-        result = await cc.async_get_custom_cards(hass, timeout=0.01)
-        assert result is cached
-        assert result.card_types() == [{"type": "custom:existing"}]
-    finally:
-        release.set()
-        await cc._refresh_task
-
-
-@pytest.mark.asyncio
-async def test_blank_describe_type_lists_cards(component):
-    component.send_command.return_value = {
-        "result": {"success": True, "card_types": [{"type": "tile"}]}
-    }
-    result = await describe_mod.describe_card_response(MagicMock(), "")
-    assert result == {"success": True, "card_types": [{"type": "tile"}]}
-
-
-@pytest.mark.asyncio
-async def test_custom_without_form_does_not_claim_container_semantics(component):
-    component.send_command.return_value = {"result": {"success": True, "fields": None}}
-    result = await describe_mod.describe_card_response(MagicMock(), "custom:example")
-    assert "stack" not in result["note"]
-    assert "inspect" in result["note"]
-
-
-@pytest.mark.asyncio
-async def test_builtin_describe_does_not_load_custom_resources(monkeypatch):
-    import voluptuous as vol
-
-    custom = AsyncMock(return_value=None)
-    definitions = MagicMock()
-    definitions.describe.return_value = {"type": "tile", "fields": []}
-    monkeypatch.setattr(
-        cd, "async_get_definitions", AsyncMock(return_value=definitions)
+async def test_stored_options_the_form_lacks_are_added_once(
+    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+) -> None:
+    editor = (
+        "var s=r(6),v=(0,s.object)({type:s.string,entity:s.string,"
+        "features:{type:'array'},vertical:{type:'boolean'}});"
+        "class C{constructor(){this._schema=(0,s.memo)(e=>["
+        '{name:"content",type:"expandable",flatten:!0,schema:['
+        '{name:"entity",selector:{entity:{}}}]}])}'
+        "setConfig(c){(0,s.assert)(c,v)}}"
     )
-    monkeypatch.setattr(cd, "async_get_custom_cards", custom)
-    hass = MagicMock()
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
-    result = await dcw.command_specs(vol)[0][2](hass, {"card_type": "tile"})
-    assert result["result"]["success"]
-    custom.assert_not_awaited()
 
+    described = await _describe(frontend, component_core_client, editor)
 
-def test_skipped_resources_report_coverage_instead_of_claiming_unknown(
-    tmp_path, monkeypatch
-):
-    files = [tmp_path / f"card-{i}.js" for i in range(2)]
-    for path in files:
-        path.write_text("card")
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", cc._BUNDLE_MEMORY)
-    monkeypatch.setattr(
-        cc, "_Bundle", lambda *args, **kwargs: MagicMock(cards=[], tags=[])
-    )
-    custom = cc.CustomCards("dom")
-    custom.refresh(files)
-    assert custom.status()["state"] == "partial"
-    assert custom.status()["resources"] == [
-        {"resource": str(files[1]), "reason": "memory limit"}
+    assert described["fields"] == [
+        {"name": "entity", "type": "entity"},
+        {"name": "features", "type": "array"},
+        {"name": "vertical", "type": "boolean"},
     ]
-    assert cd._custom_warnings(custom, [("card", "custom:unknown", {})]) == ([], [], 0)
 
 
-def test_unregistered_custom_type_is_only_a_resource_inventory_advisory():
-    custom = cc.CustomCards("")
-    warnings, _, _ = cd._custom_warnings(custom, [("card", "custom:typo", {})])
-    assert "not found in dashboard resources" in warnings[0]
-    assert "extra JavaScript" in warnings[0]
+async def test_a_blank_card_type_lists_the_cards(
+    frontend: FrontendOnDisk,
+    stalled_card_download: None,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+
+    result = await describe_mod.describe_card_response(component_core_client, "")
+
+    assert [card["type"] for card in result["card_types"]] == ["entities", "tile"]
 
 
-def test_failed_refresh_cannot_turn_cached_empty_inventory_into_unknown_warning(
-    monkeypatch,
-):
-    custom = cc.CustomCards("")
-    monkeypatch.setattr(cc, "_resource_error", "DOM download failed")
-    monkeypatch.setattr(cc, "_refresh_task", None)
-    assert cd._custom_warnings(custom, [("card", "custom:installed", {})]) == (
-        [],
-        [],
-        0,
+async def test_a_custom_card_without_a_form_is_not_described_as_a_container(
+    frontend: FrontendOnDisk,
+    installed_custom_card: InstallCustomCard,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    frontend.write(cards=("vertical-stack",))
+    await installed_custom_card("example")
+
+    custom = await describe_mod.describe_card_response(
+        component_core_client, "custom:example"
+    )
+    stack = await describe_mod.describe_card_response(
+        component_core_client, "vertical-stack"
     )
 
+    assert custom["fields"] is None
+    assert "inspect" in custom["note"]
+    assert "stack" not in custom["note"]
+    assert "nests other cards" in stack["note"]
 
-@pytest.mark.asyncio
-async def test_static_card_guide_survives_without_capability(monkeypatch):
-    from ha_mcp.tools import tools_config_dashboards as dashboards
 
-    from .test_card_definitions import _caps
+async def test_describing_a_builtin_card_does_not_load_the_custom_resources(
+    frontend: FrontendOnDisk,
+    stalled_card_download: None,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
 
-    monkeypatch.setattr(
-        dashboards, "get_component_caps", AsyncMock(return_value=_caps("search"))
+    described = await describe_mod.describe_card_response(component_core_client, "tile")
+    assert described["name"] == "Tile"
+    assert cc.custom_load_status(None)["state"] == "unavailable"
+
+    await describe_mod.describe_card_response(component_core_client, None)
+    assert cc.custom_load_status(None)["state"] == "loading"
+
+
+async def test_the_static_card_guide_comes_with_a_write_only_without_the_component(
+    hass: HomeAssistant,
+    frontend: FrontendOnDisk,
+    core_client: HomeAssistantClient,
+) -> None:
+    """Without ``dashboard_cards`` a caller cannot describe cards, so the write
+    carries the static guide; with it the caller has the describe tool."""
+    assert await async_setup_component(hass, "lovelace", {})
+    tools = DashboardConfigTools(core_client)
+    guide = "references/dashboard-cards.md"
+
+    without = await tools.ha_config_set_dashboard(
+        url_path="card-guide-a", title="A", config={"views": []}
     )
-    attach = MagicMock()
-    monkeypatch.setattr(dashboards, "attach_skill_content", attach)
-    await dashboards._attach_dashboard_skill({}, True, MagicMock())
-    assert "references/dashboard-cards.md" in attach.call_args.kwargs["canonical_files"]
-
-
-@pytest.mark.parametrize("provider", ["quickjs", "quickjs-ng"])
-def test_existing_incompatible_provider_is_never_replaced(monkeypatch, provider):
-    from custom_components.ha_mcp_tools import card_runtime as runtime
-
-    def version(name):
-        if name == provider:
-            return "0.16.2.1"
-        raise runtime.metadata.PackageNotFoundError(name)
-
-    monkeypatch.setattr(runtime.metadata, "version", version)
-    with pytest.raises(ValueError):
-        runtime._provider_state()
-
-
-@pytest.mark.asyncio
-async def test_optional_runtime_install_uses_ha_manager_and_failure_is_advisory(
-    monkeypatch,
-):
-    from custom_components.ha_mcp_tools import card_runtime as runtime
-
-    install = AsyncMock(side_effect=RuntimeError("no compatible wheel"))
-    monkeypatch.setattr(
-        "homeassistant.requirements.async_process_requirements", install
-    )
-    monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
-    monkeypatch.setattr(runtime, "_provider_state", lambda: "missing")
-    hass = MagicMock()
-    hass.config.skip_pip = False
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
-    assert await runtime.async_ensure_runtime(hass) is False
-    install.assert_awaited_once_with(
-        hass,
-        "ha_mcp_tools_dashboard_cards",
-        [runtime.QUICKJS_REQUIREMENT],
-        is_built_in=False,
+    websocket_api.async_register_commands(hass)
+    invalidate_caps(core_client)
+    with_component = await tools.ha_config_set_dashboard(
+        url_path="card-guide-b", title="B", config={"views": []}
     )
 
+    assert guide in without["skill_content"]
+    assert guide not in with_component["skill_content"]
 
-def test_conflicting_installed_consumer_disables_optional_runtime(monkeypatch):
-    from custom_components.ha_mcp_tools import card_runtime as runtime
 
-    monkeypatch.setattr(
-        runtime.metadata,
-        "distributions",
-        lambda: [SimpleNamespace(requires=["quickjs-ng==0.16.2.1"])],
+# --- validating a saved dashboard --------------------------------------------
+
+
+def test_a_custom_cards_child_is_not_checked_against_the_editor_schema(
+    tmp_path: Path,
+) -> None:
+    """A wrapper's child is a template the wrapper fills in, so its options are
+    not a final card's; the same card outside the wrapper is checked."""
+    definitions = build_definitions(tmp_path)
+    child = {"type": "tile", "entity": '${"light.test"}', "vertical": "${true}"}
+
+    wrapped = definitions.validate(
+        _views({"type": "custom:config-template-card", "card": child})
     )
-    with pytest.raises(ValueError, match="another installed package"):
-        runtime._check_consumers()
+    plain = definitions.validate(_views(child))
+
+    assert wrapped == []
+    assert plain == [
+        f"views[0].cards[0] (tile): {_ADVISORY}: "
+        "'vertical' is not listed in the tile editor schema"
+    ]
 
 
-def test_core_constraints_cannot_be_overridden_by_the_optional_runtime(
-    tmp_path, monkeypatch
-):
-    import homeassistant
-
-    from custom_components.ha_mcp_tools import card_runtime as runtime
-
-    monkeypatch.setattr(
-        homeassistant, "__file__", str(tmp_path / "__init__.py"), raising=False
+def test_a_partial_custom_child_may_omit_its_type_but_a_typo_is_reported(
+    tmp_path: Path,
+) -> None:
+    definitions = build_definitions(tmp_path)
+    config = _views(
+        {"type": "custom:auto-entities", "card": {"title": "Lights on"}},
+        {"type": "custom:auto-entities", "card": {"type": "tyle"}},
+        {"title": "Missing real type"},
     )
-    (tmp_path / "package_constraints.txt").write_text("quickjs-ng==0.0.0\n")
-    with pytest.raises(ValueError, match="Home Assistant requires"):
-        runtime._check_core_constraints()
 
-
-@pytest.mark.parametrize("state,ready", [("missing", False), ("ready", True)])
-@pytest.mark.asyncio
-async def test_skip_pip_never_installs_but_allows_compatible_provider(
-    monkeypatch, state, ready
-):
-    from custom_components.ha_mcp_tools import card_runtime as runtime
-
-    install = AsyncMock()
-    monkeypatch.setattr(
-        "homeassistant.requirements.async_process_requirements", install
-    )
-    monkeypatch.setattr(runtime, "_check_core_constraints", lambda: None)
-    monkeypatch.setattr(runtime, "_provider_state", lambda: state)
-    hass = MagicMock()
-    hass.config.skip_pip = True
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
-    assert await runtime.async_ensure_runtime(hass) is ready
-    install.assert_not_awaited()
-
-
-def test_partial_custom_child_can_omit_type_but_explicit_typo_is_reported():
-    definitions = _definitions({"entities"}, {"entities": None})
-    config = {
-        "views": [
-            {
-                "cards": [
-                    {"type": "custom:auto-entities", "card": {"title": "Lights on"}},
-                    {"type": "custom:auto-entities", "card": {"type": "tyle"}},
-                    {"title": "Missing real type"},
-                ]
-            }
-        ]
-    }
-    warnings = definitions.validate(config)
-    assert warnings == [
+    assert definitions.validate(config) == [
         "views[0].cards[1].card: unknown card type 'tyle'",
         "views[0].cards[2]: no card type configured",
     ]
@@ -415,80 +478,136 @@ def test_partial_custom_child_can_omit_type_but_explicit_typo_is_reported():
 @pytest.mark.parametrize(
     "view", [{"cards": 5}, {"sections": 5}, {"sections": [{"cards": 5}]}]
 )
-def test_malformed_view_does_not_hide_other_card_warnings(view):
-    definitions = _definitions({"tile"}, {"tile": None})
-    assert definitions.validate({"views": [{"cards": [{"type": "tyle"}]}, view]}) == [
+def test_a_malformed_view_does_not_hide_the_other_card_warnings(
+    tmp_path: Path, view: dict[str, Any]
+) -> None:
+    definitions = build_definitions(tmp_path)
+    config = {"views": [{"cards": [{"type": "tyle"}]}, view]}
+
+    assert definitions.validate(config) == [
         "views[0].cards[0]: unknown card type 'tyle'"
     ]
 
 
-@pytest.mark.asyncio
-async def test_unavailable_describe_points_to_static_reference(component):
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    component.send_command.return_value = {
-        "result": {"success": False, "error": "unavailable"}
-    }
-    with pytest.raises(ToolError, match=r"references/dashboard-cards\.md"):
-        await describe_mod.describe_card_response(MagicMock(), "tile")
+# --- the optional QuickJS runtime ---------------------------------------------
 
 
-def test_struct_fields_fill_subeditor_gaps_without_duplicating_form_fields():
-    fields = [
-        {
-            "type": "expandable",
-            "name": "content",
-            "flatten": True,
-            "schema": [{"name": "entity", "selector": {"entity": {}}}],
-        }
-    ]
-    types = {
-        "type": {"type": "string"},
-        "entity": {"type": "string"},
-        "features": {"type": "array"},
-        "vertical": {"type": "boolean"},
-    }
-    result = cd._complete_fields(fields, types)
-    compact = describe_mod._flatten(result)
-    assert [f["name"] for f in compact] == ["entity", "features", "vertical"]
-    assert compact[1:] == [
-        {"name": "features", "type": "array"},
-        {"name": "vertical", "type": "boolean"},
-    ]
-
-
-def test_struct_advice_is_explicit_about_its_editor_only_authority():
-    definitions = _definitions({"button"}, {"button": ["type", "tap_action"]})
-    definitions._engine = MagicMock(
-        return_value={
-            "value": [
-                [
-                    {
-                        "path": ["tap_action", "action"],
-                        "type": "enums",
-                        "message": "fire-dom-event is outside the editor enum",
-                    }
-                ]
-            ]
-        }
+def _requirements(monkeypatch: pytest.MonkeyPatch, hass: HomeAssistant) -> AsyncMock:
+    """Home Assistant's requirement manager, replaced so that nothing installs."""
+    install = AsyncMock()
+    monkeypatch.setattr(
+        "homeassistant.requirements.async_process_requirements", install
     )
-    warnings = definitions.validate({"views": [{"cards": [{"type": "button"}]}]})
-    assert "editor schema advisory; runtime support may differ" in warnings[0]
+    hass.config.skip_pip = False
+    return install
 
 
-def test_card_index_keeps_inherited_cards_but_excludes_dialogs():
-    definitions = _definitions(set(), {})
-    definitions._strings = {f"{cd._I18N}horizontal-stack.name": "Horizontal stack"}
-    definitions._body = MagicMock(return_value="class Dialog{showDialog(t){}}")
-    assert definitions._is_card("horizontal-stack")
-    assert not definitions._is_card("dialog-edit")
-    definitions._body.return_value = "class Card{setConfig(t){this.config=t}}"
-    assert definitions._is_card("energy-internal")
-    definitions._body.return_value = (
-        "function(m,e,r){var c=r(123);class Alias extends c.Card{}}"
+@pytest.mark.parametrize(
+    ("provider", "reason"),
+    [
+        ("quickjs", "already owns the quickjs module"),
+        ("quickjs-ng", "must not be replaced"),
+    ],
+)
+async def test_a_provider_that_does_not_fit_is_never_replaced(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    provider: str,
+    reason: str,
+) -> None:
+    install = _requirements(monkeypatch, hass)
+
+    with installed_packages(monkeypatch, tmp_path, {provider: "0.16.2.1"}):
+        assert await runtime.async_ensure_runtime(hass) is False
+
+    install.assert_not_awaited()
+    assert reason in caplog.text
+
+
+async def test_a_package_that_needs_another_provider_keeps_the_runtime_off(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    install = _requirements(monkeypatch, hass)
+
+    with installed_packages(
+        monkeypatch, tmp_path, {}, requires=["quickjs-ng==0.16.2.1"]
+    ):
+        assert await runtime.async_ensure_runtime(hass) is False
+
+    install.assert_not_awaited()
+    assert "another installed package" in caplog.text
+
+
+async def test_home_assistants_constraints_cannot_be_overridden_by_the_runtime(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    install = _requirements(monkeypatch, hass)
+    constrained_core(monkeypatch, tmp_path, "quickjs-ng==0.0.0\n")
+
+    with installed_packages(monkeypatch, tmp_path / "site", {}):
+        assert await runtime.async_ensure_runtime(hass) is False
+
+    install.assert_not_awaited()
+    assert "Home Assistant requires" in caplog.text
+
+
+async def test_a_failed_install_leaves_the_advice_off_and_nothing_else(
+    hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _requirements(monkeypatch, hass)
+    install.side_effect = RuntimeError("no compatible wheel")
+
+    with installed_packages(monkeypatch, tmp_path, {}):
+        assert await runtime.async_ensure_runtime(hass) is False
+
+    install.assert_awaited_once_with(
+        hass,
+        "ha_mcp_tools_dashboard_cards",
+        [runtime.QUICKJS_REQUIREMENT],
+        is_built_in=False,
     )
-    definitions._engine = MagicMock(
-        return_value={"value": "class Card{setConfig(t){this.config=t}}"}
-    )
-    assert definitions._is_card("shopping-list")
-    definitions._engine.assert_called_once_with("source", {"id": "123"}, run_gc=False)
+
+
+async def test_the_runtime_is_ready_once_home_assistant_has_installed_it(
+    hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _requirements(monkeypatch, hass)
+
+    with installed_packages(monkeypatch, tmp_path, {}) as installed:
+
+        async def provide(*args: Any, **kwargs: Any) -> None:
+            installed["quickjs-ng"] = runtime.QUICKJS_VERSION
+
+        install.side_effect = provide
+        assert await runtime.async_ensure_runtime(hass) is True
+
+    install.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("installed", "ready"),
+    [({}, False), ({"quickjs-ng": runtime.QUICKJS_VERSION}, True)],
+    ids=["missing", "compatible"],
+)
+async def test_skip_pip_never_installs_but_allows_a_compatible_provider(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed: dict[str, str],
+    ready: bool,
+) -> None:
+    install = _requirements(monkeypatch, hass)
+    hass.config.skip_pip = True
+
+    with installed_packages(monkeypatch, tmp_path, installed):
+        assert await runtime.async_ensure_runtime(hass) is ready
+
+    install.assert_not_awaited()
