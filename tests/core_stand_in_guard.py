@@ -27,7 +27,6 @@ _CORE_ROOTS = frozenset({"homeassistant", "aiohttp", "voluptuous", "probatio", "
 # They are to be converted and removed from this list; never add a file to it.
 _GRANDFATHERED = frozenset(
     {
-        "tests/src/unit/test_config_flow.py",
     }
 )
 
