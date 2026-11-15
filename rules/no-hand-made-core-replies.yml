@@ -72,7 +72,6 @@ ignores:
   - "tests/src/unit/test_backup_restore_consumers.py"
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"
-  - "tests/src/unit/test_backup_target_identity.py"
   - "tests/src/unit/test_bm25_search.py"
   - "tests/src/unit/test_bulk_device_control.py"
   - "tests/src/unit/test_bulk_selector.py"
