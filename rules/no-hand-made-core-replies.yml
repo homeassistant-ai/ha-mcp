@@ -69,7 +69,6 @@ ignores:
   - "tests/src/unit/test_automation_enabled.py"
   - "tests/src/unit/test_backup_access.py"
   - "tests/src/unit/test_backup_delete.py"
-  - "tests/src/unit/test_backup_restore_consumers.py"
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"
   - "tests/src/unit/test_bm25_search.py"
