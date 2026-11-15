@@ -13,4 +13,3 @@ src = ["../..", "../../src"]
 extend-select = ["SLF001"]
 
 [lint.extend-per-file-ignores]
-"test_addon_startup.py" = ["SLF001"]

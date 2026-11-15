@@ -32,7 +32,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/addon/test_backup_controls.py"
   - "tests/src/unit/test_action_discriminator.py"
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"

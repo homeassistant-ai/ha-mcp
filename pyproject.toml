@@ -183,7 +183,6 @@ disable_error_code = ["import-not-found", "import-untyped"]
 # removes it, and no new module is added (tests/AGENTS.md, "Unit Tests Run on
 # Real Home Assistant Core").
 module = [
-    "tests.addon.test_addon_startup",
     "tests.haos_image_build.build_image",
     "tests.haos_image_build.dev_addon_tree",
     "tests.src.unit._backup_snapshot_fakes",
