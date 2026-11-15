@@ -20,7 +20,7 @@ from pytest_homeassistant.common import MockModule, mock_integration
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_logs import LogTools
 
-from ._log_tool_calls import call_kwargs
+from ._log_tool_calls import call_kwargs, set_up_core_logs
 from ._supervisor_logs_core import Route, Target, ask
 from ._supervisor_logs_core import app_route as app_route
 from ._supervisor_logs_core import core_proxy as core_proxy
@@ -46,8 +46,7 @@ def error_log_file(hass: HomeAssistant, tmp_path: Path) -> Path:
 @pytest.fixture
 async def core_logs(hass: HomeAssistant, error_log_file: Path) -> None:
     """Core's ``system_log`` and ``logger``, which the other sources read."""
-    assert await async_setup_component(hass, "system_log", {})
-    assert await async_setup_component(hass, "logger", {})
+    await set_up_core_logs(hass)
 
 
 @pytest.fixture

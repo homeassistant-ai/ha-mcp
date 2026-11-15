@@ -279,29 +279,9 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "tests/src/unit/_error_log_structured_fixtures.py",
         "_SAMPLE_LOG",
         "",
-        "Cross-module use: this module is the fixture leaf of the structured "
-        "error-log test split, so the literal is imported and read by "
-        "test_tools_utility_error_log_structured.py. CodeQL's single-file "
-        "analysis misses the cross-module import.",
-    ),
-    *(
-        (
-            "py/unused-global-variable",
-            "tests/src/unit/_error_log_structured_fixtures.py",
-            name,
-            "",
-            "Cross-module use: fixture leaf module; read by "
-            "test_tools_utility_error_log_structured.py.",
-        )
-        for name in (
-            "_EMPTY_LOG",
-            "_UNPARSEABLE_LOG",
-            "_UNSORTED_LOG",
-            "_OUT_OF_ORDER_LOG",
-            "_NESTED_PAREN_THREAD_LOG",
-            "_ANSI_LOG",
-            "_TRACEBACK_LOG",
-        )
+        "Cross-module use: the literal is imported and read by "
+        "_error_log_test_helpers.py. CodeQL's single-file analysis misses "
+        "the cross-module import.",
     ),
     (
         "py/unused-import",

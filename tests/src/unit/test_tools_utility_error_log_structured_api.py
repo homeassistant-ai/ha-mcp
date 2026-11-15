@@ -35,14 +35,14 @@ from ._error_log_samples import (
     SAMPLE_LOG,
     UNPARSEABLE_LOG,
 )
+from ._log_tool_calls import set_up_core_logs
 from ._tool_errors import rejected_call_body
 
 
 @pytest.fixture
 async def core_logs(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
     """Core's ``system_log`` and ``logger`` answering ``system`` and ``logger``."""
-    assert await async_setup_component(hass, "system_log", {})
-    assert await async_setup_component(hass, "logger", {})
+    await set_up_core_logs(hass)
 
 
 @pytest.fixture

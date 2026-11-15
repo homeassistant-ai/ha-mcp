@@ -10,23 +10,11 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import pytest
-from homeassistant.const import KEY_DATA_LOGGING
-from homeassistant.core import HomeAssistant
-
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_logs import register_logs_tools
 
-
-@pytest.fixture
-def log_file(hass: HomeAssistant, tmp_path: Path) -> Path:
-    """The file Core serves as its error log; asked for before ``core_client``,
-    whose ``api`` setup only serves the log when Core knows the file."""
-    path = tmp_path / "home-assistant.log"
-    path.write_text("", encoding="utf-8")
-    hass.data[KEY_DATA_LOGGING] = str(path)
-    return path
+from ._error_log_core import log_file as log_file
 
 
 async def _structured_summary(
