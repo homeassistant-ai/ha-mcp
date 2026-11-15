@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import hashlib
 import logging
 import os
 import re
@@ -112,6 +111,16 @@ from .backup_registry_items import restore_area_or_floor as _restore_area_or_flo
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
 from .backup_registry_items import restored_item as _restored_item
+from .backup_snapshot_identity import (
+    entity_id_aliases as _entity_id_aliases,
+)
+from .backup_snapshot_identity import (
+    matches_listing_identity,
+    might_be_legacy_digest,
+)
+from .backup_snapshot_identity import (
+    safe_entity_id as _safe_entity_id,
+)
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -138,7 +147,6 @@ logger = logging.getLogger(__name__)
 _MAX_PATCH_OPS = 200
 
 SCHEMA_VERSION = 1
-_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 # Expected failure modes for the capture pipeline. Anything outside this
 # tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
@@ -427,71 +435,6 @@ class DomainHandler:
 # ----------------------------- backup manager -------------------------------
 
 
-def _entity_id_aliases(entity_id: str) -> list[str]:
-    """Every filename stem a snapshot of ``entity_id`` may carry.
-
-    Sanitised ids gained a digest suffix, so snapshots written before that
-    sit under the bare sanitised name. Rotation and entity filtering match
-    both, otherwise those older files would never be counted again: they
-    would never be pruned, and would drop out of an entity-filtered listing.
-    """
-    current = _safe_entity_id(entity_id)
-    legacy = _SAFE_ID_RE.sub("_", entity_id).lstrip(".") or "_"
-    aliases = [current, legacy]
-    legacy_digest = _legacy_entity_id_digest(entity_id, legacy)
-    if legacy_digest is not None:
-        aliases.append(legacy_digest)
-    return list(dict.fromkeys(aliases))
-
-
-_MAX_ENTITY_STEM_LENGTH = 112
-_ENTITY_ID_DIGEST_LENGTH = 8
-
-
-def _entity_id_digest(entity_id: str) -> str:
-    return hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[
-        :_ENTITY_ID_DIGEST_LENGTH
-    ]
-
-
-def _legacy_entity_id_digest(entity_id: str, cleaned: str) -> str | None:
-    if (
-        cleaned != entity_id
-        and len(cleaned) + _ENTITY_ID_DIGEST_LENGTH + 1 > _MAX_ENTITY_STEM_LENGTH
-    ):
-        return f"{cleaned}-{_entity_id_digest(entity_id)}"
-    return None
-
-
-def _safe_entity_id(entity_id: str) -> str:
-    """Sanitize an entity id for use in a filename.
-
-    Replaces any character outside ``[A-Za-z0-9._-]`` with ``_``. Path
-    separators get caught by this (the regex excludes both ``/`` and ``\\``).
-    Strips leading dots to prevent dotfile collisions.
-
-    Sanitizing is lossy, so ids that needed it get a short digest of the
-    ORIGINAL appended. Blueprint domains (#2329) key on paths, where
-    ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
-    ``user_motion.yaml`` -- without the digest they share one snapshot
-    namespace, so captures in the same second overwrite each other and
-    rotation counts both histories as one, able to delete the only restore
-    point for a blueprint that was never written. Long stems are bounded to
-    leave room for the domain, timestamp and atomic-write suffix. The complete
-    original id remains in the snapshot payload.
-    """
-    if not entity_id:
-        return "_"
-    cleaned = _SAFE_ID_RE.sub("_", entity_id).lstrip(".")
-    if not cleaned:
-        return "_"
-    if cleaned == entity_id and len(cleaned) <= _MAX_ENTITY_STEM_LENGTH:
-        return cleaned
-    digest = _entity_id_digest(entity_id)
-    prefix_length = _MAX_ENTITY_STEM_LENGTH - len(digest) - 1
-    return f"{cleaned[:prefix_length]}-{digest}"
-
-
 def _snapshot_order(path: Path) -> tuple[str, str, str]:
     """Sort key placing snapshots in capture order, oldest first.
 
@@ -505,21 +448,6 @@ def _snapshot_order(path: Path) -> tuple[str, str, str]:
     if m is None:
         return ("", "", path.name)
     return (m.group("ts"), m.group("seq") or "", path.name)
-
-
-def _id_matches(payload_id: str | None, wanted: str) -> bool:
-    """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
-
-    The original id and its current or previous digest stem select an
-    entity. A bare pre-digest stem is deliberately not accepted because
-    it may belong to a differently-named entity.
-    """
-    if payload_id is None:
-        return False
-    if payload_id == wanted or _safe_entity_id(payload_id) == wanted:
-        return True
-    cleaned = _SAFE_ID_RE.sub("_", payload_id).lstrip(".") or "_"
-    return _legacy_entity_id_digest(payload_id, cleaned) == wanted
 
 
 def _now_ts() -> str:
@@ -1281,10 +1209,6 @@ class BackupManager:
         with self._entry_identity_lock:
             self._entry_identity_cache.pop(name, None)
 
-    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
-        """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
-        return _id_matches(self._payload_entity_id(path), entity_id)
-
     def _rotate(
         self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
     ) -> None:
@@ -1301,7 +1225,7 @@ class BackupManager:
             for safe in _entity_id_aliases(entity_id):
                 candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
         files = sorted(
-            (p for p in candidates if self._snapshot_is_for(p, entity_id)),
+            (p for p in candidates if self._payload_entity_id(p) == entity_id),
             key=_snapshot_order,
         )
         excess = len(files) - self.retain_per_entity
@@ -1345,9 +1269,12 @@ class BackupManager:
         # sanitising is lossy in both directions (``user/motion.yaml``'s
         # pre-digest stem IS ``user_motion.yaml``'s current stem), so each
         # stem match is confirmed against the id the payload stores before it
-        # counts as this entity's — ``delete_bulk`` unlinks whatever is
-        # returned here, and the caller named one entity.
-        safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
+        # counts as this entity's.
+        safe_filter = (
+            set(_entity_id_aliases(entity_id))
+            if entity_id and not might_be_legacy_digest(entity_id)
+            else None
+        )
         out: list[dict[str, Any]] = []
         # Newest first by capture time — see ``_snapshot_order`` for why the
         # filename itself is not the key.
@@ -1392,7 +1319,7 @@ class BackupManager:
         # itself keeps its stem in an unfiltered
         # listing and is left out of a filtered one.
         payload_id = self._payload_entity_id(path)
-        if entity_id and not _id_matches(payload_id, entity_id):
+        if entity_id and not matches_listing_identity(payload_id, entity_id):
             return None
         if payload_id is not None:
             meta["entity_id"] = payload_id
@@ -1450,7 +1377,7 @@ class BackupManager:
         entity_id: str | None = None,
         older_than_days: int | None = None,
     ) -> BulkDeleteResult:
-        """Delete snapshots matching ``domain`` / ``entity_id`` / age.
+        """Delete snapshots matching ``domain`` / original ``entity_id`` / age.
 
         Returns a dict ``{"deleted": [...], "failed": [...]}`` so callers
         can surface partial failures. ``failure_reasons`` optionally maps
@@ -1466,6 +1393,8 @@ class BackupManager:
                 raise ValueError("older_than_days must be >= 0")
             cutoff = time.time() - (older_than_days * 86400)
         for meta in self.list_snapshots(domain=domain, entity_id=entity_id):
+            if entity_id and meta["entity_id"] != entity_id:
+                continue
             if cutoff is not None and meta["mtime"] >= cutoff:
                 continue
             try:
