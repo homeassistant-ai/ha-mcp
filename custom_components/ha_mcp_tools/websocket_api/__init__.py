@@ -38,8 +38,9 @@ the info handshake carries no capability entry:
   requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
   of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
   bulk call from one in-process frame instead of up to 100 REST GETs. The body
-  is byte-identical to the REST ``/api/states/<id>`` serialization by
-  construction; the server maps found/missing onto its per-id error contract.
+  is the REST ``/api/states/<id>`` serialization with the live
+  ``last_reported``, which Core's cached one can lag; the server maps
+  found/missing onto its per-id error contract.
 * ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
   (``{metadata, config, yaml}``), which core's ``blueprint/list`` never returns (it
   serves only ``{metadata}``). The path is jailed under
@@ -221,8 +222,8 @@ the info handshake carries no capability entry:
   timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
   the dispatch raises, a failure AFTER it does not (the call already landed).
   A call asking for a response also returns ``changed_states``, every state
-  written under the call's context (Core's REST call lists the same), and a
-  response Core rejects after the service ran comes back as ``response_error``.
+  written under the call's context (Core's REST call lists the same) followed
+  by each target's state that is none of them, and a response Core rejects after the service ran comes back as ``response_error``.
   A ``HomeAssistantError`` such a call raises comes back as ``service_error``
   (``translation_key``, ``message``): it may have run.
 * ``ha_mcp_tools/bulk_call_service`` — the BATCH write capability (D5a). One frame
@@ -268,7 +269,7 @@ the info handshake carries no capability entry:
   live objects the health path reads: ``config_entries`` (identity fields only —
   no options/subentries), ``issues`` (the ``_overview_repairs`` slice),
   ``entities`` (the ``registry_lookup`` row shape), ``states``
-  (``State.as_dict()``). ``include_*`` flags gate each section. Reading them in a
+  (``State.as_dict()`` with the live ``last_reported``). ``include_*`` flags gate each section. Reading them in a
   single frame kills the 3x ``config_entries/get`` TOCTOU the server had.
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as

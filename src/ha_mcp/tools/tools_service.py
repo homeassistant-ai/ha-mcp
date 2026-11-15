@@ -1550,13 +1550,11 @@ class ServiceTools(EventCallMixin):
             if isinstance(transition, dict)
             and isinstance(transition.get("new_state"), dict)
         ]
-        # A call asking for a response also lists every state written under its
-        # context, in order, as Core's REST call does; a confirmed state written
-        # under another context follows them.
+        # A call asking for a response lists what the component lists: the states
+        # written under its context, then each target's state they do not hold.
         changed = component_result.get("changed_states")
         if isinstance(changed, list):
-            records = [state for state in changed if isinstance(state, dict)]
-            new_states = records + [s for s in new_states if s not in records]
+            new_states = changed
         projected_result, projection_warnings = self._project_service_result(
             new_states,
             entity_id=entity_id,

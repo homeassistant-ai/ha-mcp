@@ -189,7 +189,9 @@ async def _call_service_prep(
         if response_error is not None:
             result["service_error" if failed else "response_error"] = response_error
         if return_response:
-            result["changed_states"] = changed
+            result["changed_states"] = _changed_states(
+                hass, changed, entity_ids, captured
+            )
     except Exception:
         # PRE-confirmation ``async_call`` failure (never dispatched) → re-raise so the
         # server maps it (D7/D9 MID-dispatch residual). Any POST-dispatch failure →
@@ -218,9 +220,29 @@ def _track_changed_states(hass: HomeAssistant, context: Any, changed: list[Any])
     @callback
     def _record(event: Event[EventStateChangedData]) -> None:
         if event.context == context and (state := event.data["new_state"]):
-            changed.append(_state_as_dict(state))
+            changed.append(state)
 
     return hass.bus.async_listen(EVENT_STATE_CHANGED, _record)
+
+
+def _changed_states(
+    hass: HomeAssistant,
+    changed: list[Any],
+    entity_ids: list[str],
+    captured: Mapping[str, Any],
+) -> list[Any]:
+    """The states written under the call's context, in order, then each target's
+    state that is none of them (one written under another context).
+
+    A repeated report of an unchanged state updates the same ``State`` object, so
+    a target's state is matched by identity, never by its serialized fields.
+    """
+    states = list(changed)
+    for entity_id in entity_ids:
+        post = captured.get(entity_id) or _state_get(hass, entity_id)
+        if post is not None and not any(post is state for state in states):
+            states.append(post)
+    return [as_dict for state in states if (as_dict := _state_as_dict(state))]
 
 
 def _confirmable_entity_ids(entity_ids: list[str], pre: Mapping[str, Any]) -> list[str]:
