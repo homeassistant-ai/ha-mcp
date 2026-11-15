@@ -226,8 +226,6 @@ class TestSetAreaFloorReferenceValidation:
                     "success": True,
                     "result": [{"floor_id": fid} for fid in floor_ids],
                 }
-            if msg.get("type") == "config/area_registry/list":
-                return {"success": True, "result": [{"area_id": "kitchen"}]}
             return {
                 "success": True,
                 "result": {"area_id": "kitchen", "name": "Kitchen"},
@@ -276,8 +274,9 @@ class TestSetAreaFloorReferenceValidation:
             "config/floor_registry/list",
         ]
 
-    async def test_empty_floor_id_clears_without_lookup(self, tools):
-        """floor_id='' is the documented clear sentinel — no floor to validate."""
+    async def test_empty_floor_id_clears_without_floor_lookup(self, tools):
+        """floor_id='' is the documented clear sentinel: no floor to validate, only
+        the id-exists read."""
         tools._client.send_websocket_message.side_effect = self._ws_handler()
 
         result = await tools.ha_set_area_or_floor(
@@ -575,7 +574,7 @@ class TestSetAreaLabels:
         assert error_data["unknown_labels"] == ["ghost_label"]
         assert self._sent_types(tools) == ["config/label_registry/list"]
 
-    async def test_empty_labels_clears_without_lookup(self, tools):
+    async def test_empty_labels_clears_without_label_lookup(self, tools):
         tools._client.send_websocket_message.side_effect = self._ws_handler()
 
         result = await tools.ha_set_area_or_floor(kind="area", id="kitchen", labels=[])

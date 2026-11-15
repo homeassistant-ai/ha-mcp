@@ -38,7 +38,6 @@ import orjson
 import pytest
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.json import json_bytes, json_fragment
 
 # Server-side scoring path the component must stay in parity with.
 from ha_mcp.tools.search.entities import _match_exact_search_entity
@@ -180,7 +179,7 @@ class FakeErModule:
         return out
 
 
-_FAKE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+FAKE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class FakeArea:
@@ -210,29 +209,8 @@ class FakeArea:
         self.labels = set(labels)
         self.humidity_entity_id = humidity_entity_id
         self.temperature_entity_id = temperature_entity_id
-        self.created_at = created_at
-        self.modified_at = modified_at
-
-    @property
-    def json_fragment(self):
-        """The row Core serialises for an area (``AreaEntry.json_fragment``)."""
-        return json_fragment(
-            json_bytes(
-                {
-                    "aliases": sorted(self.aliases),
-                    "area_id": self.id,
-                    "floor_id": self.floor_id,
-                    "humidity_entity_id": self.humidity_entity_id,
-                    "icon": self.icon,
-                    "labels": sorted(self.labels),
-                    "name": self.name,
-                    "picture": self.picture,
-                    "temperature_entity_id": self.temperature_entity_id,
-                    "created_at": (self.created_at or _FAKE_TIME).timestamp(),
-                    "modified_at": (self.modified_at or _FAKE_TIME).timestamp(),
-                }
-            )
-        )
+        self.created_at = created_at or FAKE_TIME
+        self.modified_at = modified_at or FAKE_TIME
 
 
 class FakeAreaReg:
@@ -264,8 +242,8 @@ class FakeFloor:
         self.level = level
         self.icon = icon
         self.aliases = set(aliases)
-        self.created_at = created_at
-        self.modified_at = modified_at
+        self.created_at = created_at or FAKE_TIME
+        self.modified_at = modified_at or FAKE_TIME
 
 
 class FakeFloorReg:
@@ -297,8 +275,8 @@ class FakeLabel:
         self.color = color
         self.description = description
         self.icon = icon
-        self.created_at = created_at
-        self.modified_at = modified_at
+        self.created_at = created_at or FAKE_TIME
+        self.modified_at = modified_at or FAKE_TIME
 
 
 class FakeLabelReg:
@@ -321,8 +299,8 @@ class FakeCategory:
         self.category_id = category_id
         self.name = name
         self.icon = icon
-        self.created_at = created_at
-        self.modified_at = modified_at
+        self.created_at = created_at or FAKE_TIME
+        self.modified_at = modified_at or FAKE_TIME
 
 
 class FakeCategoryReg:
@@ -3795,15 +3773,17 @@ class TestEntityLookup:
 
 
 # =============================================================================
-# registries — FULL-FIELD area/floor/label/category rows (core parity)
+# registries — area/floor/label/category rows from Core's serializers
 # =============================================================================
 _REG_CREATED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 _REG_MODIFIED = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 
 
 class TestRegistries:
-    """``ha_mcp_tools/registries`` — each row byte-compatible with the legacy WS
-    list response (verified against core's registry serializers)."""
+    """``ha_mcp_tools/registries`` — row selection, scoping and drift handling.
+
+    The rows are Core's own serializers' output; the parity with Core's list
+    commands is checked on real Core in ``test_area_floor_tools_on_core.py``."""
 
     def test_floor_full_field_row_has_no_labels(self, monkeypatch):
         floor = FakeFloor(
@@ -3894,17 +3874,12 @@ class TestRegistries:
             wsapi,
             "_resolve_registries",
             lambda h: make_view(
-                areas=[FakeArea("a1", "Office")],
                 floors=[FakeFloor("f1", "Up")],
-                labels=[
-                    FakeLabel(
-                        "lb1", "Fav", created_at=_REG_CREATED, modified_at=_REG_MODIFIED
-                    )
-                ],
+                labels=[FakeLabel("lb1", "Fav")],
             ),
         )
-        res = wsapi._do_registries(FakeHass(), {"registries": ["area", "label"]})
-        assert set(res) == {"areas", "labels"}
+        res = wsapi._do_registries(FakeHass(), {"registries": ["floor", "label"]})
+        assert set(res) == {"floors", "labels"}
 
     def test_category_requested_without_scopes_raises(self, monkeypatch):
         # category_scopes is REQUIRED when "category" is requested — a scope-less

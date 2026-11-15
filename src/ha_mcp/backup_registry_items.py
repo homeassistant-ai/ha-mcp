@@ -70,6 +70,24 @@ def _same(a: Any, b: Any) -> bool:
     return bool(a == b)
 
 
+def in_snapshot_order(
+    current: dict[str, Any], stored: dict[str, Any]
+) -> dict[str, Any]:
+    """Give the live row's lists the snapshot's order where both hold the same items.
+
+    Core lists the aliases and labels it keeps in sets in hash order, which differs
+    between runs, and a diff compares lists position by position.
+    """
+    return {
+        key: stored[key]
+        if isinstance(value, list)
+        and isinstance(stored.get(key), list)
+        and _same(value, stored[key])
+        else value
+        for key, value in current.items()
+    }
+
+
 def _has_fields(row: dict[str, Any], fields: dict[str, Any]) -> bool:
     return all(_same(row.get(key), value) for key, value in fields.items())
 

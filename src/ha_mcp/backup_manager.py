@@ -108,6 +108,7 @@ from .backup_registry_items import REGISTRY_ITEM_DOMAINS as _REGISTRY_ITEM_DOMAI
 from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
 from .backup_registry_items import fetch_category as _fetch_category
 from .backup_registry_items import fetch_label as _fetch_label
+from .backup_registry_items import in_snapshot_order as _in_snapshot_order
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
@@ -1705,10 +1706,9 @@ class BackupManager:
             # A restored item can carry another id.
             return await _restored_item(self._client, domain, entity_id, config)
         if isinstance(current, dict):
-            # A restore cannot set the timestamps either, so an item that came
-            # back under its own id differs in them by nature.
+            # A restore cannot set the timestamps, so they differ by nature.
             keep = {k: v for k, v in config.items() if k in _REGISTRY_READONLY_KEYS}
-            return {**current, **keep}
+            return {**_in_snapshot_order(current, config), **keep}
         return current
 
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:

@@ -272,9 +272,8 @@ the info handshake carries no capability entry:
   all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
-  the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
-  legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
-  floats via ``.timestamp()``). Only the requested ``registries`` keys are
+  the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
+  so a field Core adds is listed without a change here). Only the requested ``registries`` keys are
   present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported

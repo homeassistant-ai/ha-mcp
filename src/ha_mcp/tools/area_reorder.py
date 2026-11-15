@@ -1,7 +1,4 @@
-"""Reordering and id checks for ``ha_set_area_or_floor``.
-
-Kept apart from ``tools_areas`` so the tool module stays under the size ratchet.
-"""
+"""Reordering and id checks for ``ha_set_area_or_floor``."""
 
 from typing import Any
 
@@ -13,27 +10,11 @@ from .helpers import (
     exception_to_structured_error,
     raise_core_refusal,
     raise_tool_error,
-    validate_identifier_not_empty,
 )
 
 
-def require_id_not_blank(kind: str, identifier: str | None) -> None:
-    """Refuse an empty id: ``None`` is the "create new" sentinel, and a blank
-    one would silently route to create and lose the update intent."""
-    if identifier is not None:
-        validate_identifier_not_empty(
-            identifier,
-            "id",
-            suggestions=[
-                "Omit id entirely to create a new entry",
-                "Pass a real area_id/floor_id to update an existing entry",
-            ],
-            context={"kind": kind},
-        )
-
-
-def passed_params(plain: dict[str, Any], clearable: dict[str, Any]) -> list[str]:
-    """Names of the params the caller passed.
+def _passed_params(plain: dict[str, Any], clearable: dict[str, Any]) -> list[str]:
+    """List the names of the params the caller passed.
 
     A plain param counts unless it is None; a clearable one (omitted is ``UNSET``
     or a ``FieldInfo``) counts unless omitted, so an explicit null is a pass.
@@ -64,7 +45,7 @@ async def reorder_area_or_floor(
                 context=context,
             )
         )
-    if clashing := passed_params(plain, clearable):
+    if clashing := _passed_params(plain, clearable):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,

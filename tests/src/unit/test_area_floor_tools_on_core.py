@@ -143,21 +143,21 @@ async def test_a_floor_level_is_cleared_by_null_and_kept_when_omitted(
     floor = floors.async_create("Ground", level=2)
 
     await tools.ha_set_area_or_floor(kind="floor", id=floor.floor_id, name="Main")
-    assert _level_of(floors, floor.floor_id) == 2
+    assert _stored_floor(floors, floor.floor_id).level == 2
 
     await tools.ha_set_area_or_floor(kind="floor", id=floor.floor_id, level=None)
-    assert _level_of(floors, floor.floor_id) is None
+    assert _stored_floor(floors, floor.floor_id).level is None
 
 
+@pytest.mark.parametrize("level", [1, None])
 async def test_level_is_still_refused_for_an_area(
-    tools: AreaTools,
+    tools: AreaTools, level: int | None
 ) -> None:
     """A level, even a null one, belongs to a floor."""
-    for level in (1, None):
-        error = await rejected_call_body(
-            tools.ha_set_area_or_floor(kind="area", name="Kitchen", level=level)
-        )
-        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    error = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", name="Kitchen", level=level)
+    )
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 async def test_a_refused_write_keeps_cores_code_and_text(
@@ -204,34 +204,12 @@ async def test_removing_a_floor_keeps_the_areas_it_carried(
     assert stored.floor_id is None
 
 
-def _level_of(floors: fr.FloorRegistry, floor_id: str) -> int | None:
-    floor = floors.async_get_floor(floor_id)
-    assert floor is not None
-    return floor.level
-
-
-def _name_of(floors: fr.FloorRegistry, floor_id: str) -> str:
-    floor = floors.async_get_floor(floor_id)
-    assert floor is not None
-    return floor.name
-
-
-def _without_areas(floors: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{k: v for k, v in f.items() if k != "areas"} for f in floors]
-
-
-def _unordered(row: dict[str, Any]) -> dict[str, Any]:
-    """A row with its set-valued lists in a fixed order: Core lists a set in hash
-    order, which differs between two reads of it."""
-    return {k: sorted(v) if k in ("aliases", "labels") else v for k, v in row.items()}
-
-
 @pytest.mark.parametrize("kind", ["area", "floor"])
 async def test_updating_an_unknown_id_is_reported_as_not_found(
     tools: AreaTools, kind: Literal["area", "floor"]
 ) -> None:
     """Core answers an update of an id it lacks with "Unknown error"; the tool
-    says the area or floor was not found and how to create one."""
+    says the area or floor was not found."""
     error = await rejected_call_body(
         tools.ha_set_area_or_floor(kind=kind, id="missing", name="Attic")
     )
@@ -301,4 +279,75 @@ async def test_order_is_refused_next_to_other_parameters(
 
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["invalid_parameters"] == ["name", "level"]
-    assert _name_of(floors, ground.floor_id) == "Ground"
+    assert _stored_floor(floors, ground.floor_id).name == "Ground"
+
+
+async def test_an_existing_area_is_updated_after_the_existence_read(
+    hass: HomeAssistant, tools: AreaTools
+) -> None:
+    areas = ar.async_get(hass)
+    kitchen = areas.async_create("Kitchen")
+
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="Galley")
+
+    assert result["success"] is True
+    stored = areas.async_get_area(kitchen.id)
+    assert stored is not None
+    assert stored.name == "Galley"
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        "floor_id",
+        "level",
+        "icon",
+        "picture",
+        "temperature_entity_id",
+        "humidity_entity_id",
+    ],
+)
+async def test_an_explicit_null_next_to_order_is_a_clash(
+    tools: AreaTools, param: str
+) -> None:
+    """A null clears a field, so it counts as passed next to ``order``."""
+    error = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", order=["x"], **{param: None})
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["invalid_parameters"] == [param]
+
+
+async def test_a_reorder_reaches_the_component_listing(
+    hass: HomeAssistant, component_tools: AreaTools
+) -> None:
+    floors = fr.async_get(hass)
+    ground = floors.async_create("Ground", level=0)
+    attic = floors.async_create("Attic", level=2)
+
+    await component_tools.ha_set_area_or_floor(
+        kind="floor", order=[attic.floor_id, ground.floor_id]
+    )
+
+    listed = await component_tools.ha_list_floors_areas()
+    assert [f["floor_id"] for f in listed["floors"]] == [
+        attic.floor_id,
+        ground.floor_id,
+    ]
+
+
+def _stored_floor(floors: fr.FloorRegistry, floor_id: str) -> fr.FloorEntry:
+    floor = floors.async_get_floor(floor_id)
+    assert floor is not None
+    return floor
+
+
+def _without_areas(floors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: v for k, v in f.items() if k != "areas"} for f in floors]
+
+
+def _unordered(row: dict[str, Any]) -> dict[str, Any]:
+    """A row with its set-valued lists in a fixed order: Core lists a set in hash
+    order, which differs between two reads of it."""
+    return {k: sorted(v) if k in ("aliases", "labels") else v for k, v in row.items()}

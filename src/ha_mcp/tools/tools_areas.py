@@ -22,15 +22,17 @@ from .area_messages import (
     build_area_update_message,
     build_floor_create_message,
     build_floor_update_message,
+    require_id_not_blank,
     resolve_clearable,
     resolve_level,
     validate_cross_kind_params,
 )
-from .area_reorder import reorder_area_or_floor, require_id_not_blank
+from .area_reorder import reorder_area_or_floor
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, UNSET, parse_string_list_param
 from .component_registries import fetch_registries_via_component
 from .config_helpers.registry import validate_registry_ids
+from .entity_param_parsing import _parse_string_list_field
 from .helpers import (
     core_error_message,
     exception_to_structured_error,
@@ -163,7 +165,7 @@ class AreaTools:
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
 
-        Floors are not sorted by level: the order is the one set in Home Assistant's area settings. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
+        Floors are not re-sorted by level. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
         """
         # Validate projection params before any WS round-trips so a bad shape
         # fails fast without burning two registry reads.
@@ -417,17 +419,24 @@ class AreaTools:
         """Raise RESOURCE_NOT_FOUND when an update names an area or floor Core lacks.
 
         Core's update commands do not catch the ``KeyError`` for an unknown id,
-        so the refusal reaches the caller as an opaque "Unknown error". A failed
-        read lets the write go on: Core then answers it in its own words.
+        so the refusal reaches the caller as an opaque "Unknown error". A refused
+        read lets the write go on, with a warning in the log: Core then answers
+        it in its own words.
         """
         id_key = f"{kind}_id"
         listed = await self._client.send_websocket_message(
             {"type": f"config/{kind}_registry/list"}
         )
         rows = listed.get("result") if listed.get("success") else None
-        if not isinstance(rows, list) or any(
-            isinstance(r, dict) and r.get(id_key) == identifier for r in rows
-        ):
+        if not isinstance(rows, list):
+            logger.warning(
+                "Could not check that %s %s exists; the update goes on: %r",
+                kind,
+                identifier,
+                listed.get("error", listed),
+            )
+            return
+        if any(isinstance(r, dict) and r.get(id_key) == identifier for r in rows):
             return
         raise_tool_error(
             create_error_response(
@@ -464,25 +473,6 @@ class AreaTools:
         if name:
             ctx["name"] = name
         return ctx
-
-    async def _validate_write_targets(
-        self,
-        kind: str,
-        identifier: str | None,
-        labels: list[str] | None,
-        floor_id: str | None,
-    ) -> None:
-        """Refuse a write whose id, floor or labels the registries do not hold."""
-        if identifier is not None:
-            await self._require_existing(kind, identifier)
-        await validate_registry_ids(
-            self._client,
-            None,
-            labels,
-            None,
-            floor_id=floor_id,
-            fail_closed=True,
-        )
 
     async def _verify_area_labels_written(
         self,
@@ -728,8 +718,7 @@ class AreaTools:
             Field(
                 description=(
                     "Reorder every area or floor of this kind: all existing ids in "
-                    "the new order, each exactly once (Core refuses anything else). "
-                    "Passed alone; no other parameter may accompany it."
+                    "the new order, each exactly once (Core refuses anything else)."
                 ),
                 default=None,
             ),
@@ -741,7 +730,7 @@ class AreaTools:
         humidity_entity_id) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
-        Pass order alone to set the order Home Assistant lists areas or floors in.
+        Pass order to set the order Home Assistant lists areas or floors in.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
@@ -769,25 +758,8 @@ class AreaTools:
             )
         operation = "create"
         try:
-            try:
-                parsed_aliases = parse_string_list_param(aliases, "aliases")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid aliases parameter: {e}",
-                    )
-                )
-
-            try:
-                parsed_labels = parse_string_list_param(labels, "labels")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid labels parameter: {e}",
-                    )
-                )
+            parsed_aliases = _parse_string_list_field(aliases, "aliases")
+            parsed_labels = _parse_string_list_field(labels, "labels")
 
             # Explicit null clears (some MCP clients cannot send ""); omitted
             # (UNSET) leaves the field alone. Builders keep their None/"" idiom.
@@ -834,9 +806,20 @@ class AreaTools:
                 # (HA filters the set through the label registry) — both end as a
                 # success envelope that does not match what was asked for, so
                 # validate before writing. ``validate_cross_kind_params`` already
-                # rejected floor_id/labels for kind='floor', so this only ever
-                # runs for areas; None and "" / [] (clear) skip the lookup.
-                await self._validate_write_targets(kind, id, parsed_labels, floor_id)
+                # rejected floor_id/labels for kind='floor', so the registry
+                # lookups below only ever run for areas; None and "" / [] (clear)
+                # skip them. An update with an id also reads the registry first,
+                # for both kinds, to confirm the id exists.
+                if id is not None:
+                    await self._require_existing(kind, id)
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    parsed_labels,
+                    None,
+                    floor_id=floor_id,
+                    fail_closed=True,
+                )
 
                 result = await self._client.send_websocket_message(message)
 

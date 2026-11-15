@@ -10,7 +10,7 @@ from pydantic.fields import FieldInfo
 
 from ..errors import ErrorCode, create_error_response
 from .coercion import UNSET
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, validate_identifier_not_empty
 
 
 def resolve_clearable(value: Any) -> str | None:
@@ -28,14 +28,33 @@ def resolve_clearable(value: Any) -> str | None:
 
 
 def resolve_level(value: Any) -> Any:
-    """Keep a floor level that was passed: ``UNSET`` when omitted, ``None`` to clear.
+    """Map an omitted level to ``UNSET`` and pass any other value through.
 
     Core's floor create and update take ``level=None`` as "no level", unlike the
-    string params above, which the builders still read as None=keep, ""=clear.
+    params ``resolve_clearable`` maps, which the builders read as None=keep,
+    ""=clear.
     """
     if isinstance(value, FieldInfo):
         return UNSET
     return value
+
+
+def require_id_not_blank(kind: str, identifier: str | None) -> None:
+    """Refuse an empty id.
+
+    ``None`` is the "create new" sentinel; a blank id would silently route to
+    create and lose the update intent.
+    """
+    if identifier is not None:
+        validate_identifier_not_empty(
+            identifier,
+            "id",
+            suggestions=[
+                "Omit id entirely to create a new entry",
+                "Pass a real area_id/floor_id to update an existing entry",
+            ],
+            context={"kind": kind},
+        )
 
 
 _AREA_PARAMS = (

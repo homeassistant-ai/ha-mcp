@@ -18,7 +18,6 @@ concurrently, and it is off-limits for this task.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +29,7 @@ from ha_mcp.tools.tools_areas import register_area_tools
 
 from ._component_routing_helpers import patch_ws
 from .test_component_ws_search import (
+    FAKE_TIME,
     FakeArea,
     FakeCategory,
     FakeCategoryReg,
@@ -96,9 +96,6 @@ class _AreaFloorClient:
         raise AssertionError(f"legacy WS call should not fire: {msg}")
 
 
-_STAMP = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
-
-
 class TestRegistriesSeam:
     """One REAL ``_do_registries`` output drives ``ha_list_floors_areas`` and
     the auto-backup label/category/area/floor capture fetchers through their
@@ -122,76 +119,15 @@ class TestRegistriesSeam:
 
     def _floor(self) -> FakeFloor:
         return FakeFloor(
-            "f1",
-            "Ground",
-            level=0,
-            icon="mdi:floor-plan",
-            aliases={"downstairs"},
-            created_at=_STAMP,
-            modified_at=_STAMP,
+            "f1", "Ground", level=0, icon="mdi:floor-plan", aliases={"downstairs"}
         )
-
-    @pytest.mark.asyncio
-    async def test_list_floors_areas_full_field_parity_from_real_component(
-        self, monkeypatch
-    ) -> None:
-        area = self._area()
-        unassigned = self._unassigned_area()
-        floor = self._floor()
-        monkeypatch.setattr(
-            wsapi,
-            "_resolve_registries",
-            lambda h: make_view(areas=[area, unassigned], floors=[floor]),
-        )
-        client = _AreaFloorClient()
-        ws = _real_registries_ws(FakeHass())
-        list_floors_areas = _build_list_floors_areas(client)
-
-        with patch_ws(ws, component_registries):
-            resp = await list_floors_areas()
-
-        assert resp["success"] is True
-        assert client.legacy_calls == 0
-        assert resp["floor_count"] == 1
-        assert resp["area_count"] == 2
-        assert resp["unassigned_count"] == 1
-        assert resp["orphaned_count"] == 0
-
-        nested = resp["floors"][0]["areas"][0]
-        # Full-field row parity — icon/aliases/picture/labels must survive.
-        assert nested["area_id"] == "a1"
-        assert nested["icon"] == "mdi:office"
-        assert nested["aliases"] == ["studio"]
-        assert nested["picture"] == "/local/office.png"
-        assert nested["labels"] == ["important"]
-        assert nested["humidity_entity_id"] == "sensor.office_humidity"
-        assert nested["temperature_entity_id"] == "sensor.office_temp"
-
-        floor_row = resp["floors"][0]
-        assert floor_row["icon"] == "mdi:floor-plan"
-        assert floor_row["aliases"] == ["downstairs"]
-        assert floor_row["level"] == 0
-        assert "labels" not in floor_row  # core's FloorEntry carries none
-
-        assert resp["unassigned_areas"][0]["area_id"] == "a2"
-
-        # Pin against the RAW component output directly too, so a drift in
-        # either the row shape or the consumer's pass-through fails here.
-        raw = wsapi._do_registries(FakeHass(), {"registries": ["area", "floor"]})
-        assert nested == next(a for a in raw["areas"] if a["area_id"] == "a1")
 
     @pytest.mark.asyncio
     async def test_label_capture_full_field_parity_from_real_component(
         self, monkeypatch
     ) -> None:
         label = FakeLabel(
-            "lb1",
-            "Favorites",
-            color="red",
-            description="fav",
-            icon="mdi:star",
-            created_at=_STAMP,
-            modified_at=_STAMP,
+            "lb1", "Favorites", color="red", description="fav", icon="mdi:star"
         )
         monkeypatch.setattr(
             wsapi, "_resolve_registries", lambda h: make_view(labels=[label])
@@ -205,25 +141,19 @@ class TestRegistriesSeam:
         assert client.legacy_calls == 0
         assert result == {
             "color": "red",
-            "created_at": _STAMP.timestamp(),
+            "created_at": FAKE_TIME.timestamp(),
             "description": "fav",
             "icon": "mdi:star",
             "label_id": "lb1",
             "name": "Favorites",
-            "modified_at": _STAMP.timestamp(),
+            "modified_at": FAKE_TIME.timestamp(),
         }
 
     @pytest.mark.asyncio
     async def test_category_capture_full_field_parity_from_real_component(
         self, monkeypatch
     ) -> None:
-        cat = FakeCategory(
-            "cat1",
-            "Lights",
-            icon="mdi:lightbulb",
-            created_at=_STAMP,
-            modified_at=_STAMP,
-        )
+        cat = FakeCategory("cat1", "Lights", icon="mdi:lightbulb")
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         monkeypatch.setattr(
             wsapi,
@@ -240,32 +170,11 @@ class TestRegistriesSeam:
         assert result == {
             "scope": "automation",
             "category_id": "cat1",
-            "created_at": _STAMP.timestamp(),
+            "created_at": FAKE_TIME.timestamp(),
             "icon": "mdi:lightbulb",
-            "modified_at": _STAMP.timestamp(),
+            "modified_at": FAKE_TIME.timestamp(),
             "name": "Lights",
         }
-
-    @pytest.mark.asyncio
-    async def test_area_capture_full_field_parity_from_real_component(
-        self, monkeypatch
-    ) -> None:
-        area = self._area()
-        monkeypatch.setattr(
-            wsapi, "_resolve_registries", lambda h: make_view(areas=[area])
-        )
-        client = _AreaFloorClient()
-        ws = _real_registries_ws(FakeHass())
-
-        with patch_ws(ws, component_registries):
-            result = await backup_manager._fetch_area_or_floor(client, "area:a1")
-
-        assert client.legacy_calls == 0
-        assert result["kind"] == "area"
-        assert result["icon"] == "mdi:office"
-        assert result["aliases"] == ["studio"]
-        assert result["picture"] == "/local/office.png"
-        assert result["labels"] == ["important"]
 
     @pytest.mark.asyncio
     async def test_floor_capture_full_field_parity_from_real_component(
