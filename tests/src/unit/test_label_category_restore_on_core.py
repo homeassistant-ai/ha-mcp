@@ -8,10 +8,9 @@ manager's public entry point. Every registry row read back is Core's.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import Any
 from unittest.mock import patch
 
-import orjson
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
@@ -20,18 +19,24 @@ from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
 
-from ha_mcp.backup_diff import DiffResponse
+from custom_components.ha_mcp_tools.websocket_api import registries
 from ha_mcp.backup_manager import BackupManager, BackupRestoreError
-from ha_mcp.backup_registry_items import reordered_lists
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
+from ._command_faults import taking, unanswered
+from ._registry_item_snapshots import (
+    _second_restore_with_lists_reversed,
+    _snapshot,
+    _store,
+)
 
-async def _snapshot(backup_manager: BackupManager, domain: str, entity_id: str) -> str:
-    path = await backup_manager.maybe_snapshot(domain, entity_id, force=True)
-    assert path is not None
-    return path.name
+_FIELDS = "ha_mcp_tools/registry_fields"
 
 
 async def test_a_label_changed_since_the_snapshot_is_updated_in_place(
@@ -287,32 +292,6 @@ async def test_a_restored_area_keeps_its_floor(
     assert "warnings" not in outcome["result"]
 
 
-def _store_aliases_reversed(
-    backup_manager: BackupManager, snapshot: str, area: ar.AreaEntry
-) -> None:
-    """Edit the snapshot to hold the aliases in the reverse of Core's order."""
-    path = next(backup_manager.backup_dir.rglob(snapshot))
-    stored = yaml.safe_load(path.read_text())
-    stored["config"]["aliases"] = list(reversed(list(area.aliases)))
-    path.write_text(yaml.safe_dump(stored))
-
-
-async def _second_restore_with_aliases_reversed(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> str:
-    """Restore a deleted area under another id, then hand back its snapshot,
-    edited to hold the aliases in the reverse of the order Core lists them in."""
-    registry = ar.async_get(hass)
-    area = registry.async_create("Hall", aliases={"entrance", "lobby"})
-    registry.async_update(area.id, name="Corridor")
-    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
-    registry.async_delete(area.id)
-    await backup_manager.restore_snapshot(snapshot)
-    (restored,) = registry.async_list_areas()
-    _store_aliases_reversed(backup_manager, snapshot, restored)
-    return snapshot
-
-
 async def test_a_second_restore_matches_a_set_in_any_order(
     hass: HomeAssistant,
     backup_manager: BackupManager,
@@ -321,7 +300,9 @@ async def test_a_second_restore_matches_a_set_in_any_order(
     """Core keeps an area's aliases in a set and lists them in hash order, so
     the area the first restore created is taken whatever order the snapshot
     holds them in, and nothing is said about the order."""
-    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+    snapshot = await _second_restore_with_lists_reversed(
+        hass, backup_manager, "aliases"
+    )
 
     outcome = await backup_manager.restore_snapshot(snapshot)
 
@@ -335,14 +316,17 @@ async def test_a_second_restore_without_the_component_says_it_matched_in_another
     """Only the component can say that Core keeps the aliases in a set. Without
     it the first restore's area is still taken, with a warning that names the
     list and the component."""
-    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+    snapshot = await _second_restore_with_lists_reversed(
+        hass, backup_manager, "aliases"
+    )
 
     outcome = await backup_manager.restore_snapshot(snapshot)
 
     assert [a.name for a in ar.async_get(hass).areas.values()] == ["Corridor"]
     (warning,) = [w for w in outcome["result"]["warnings"] if "order" in w]
     assert "aliases" in warning
-    assert "ha_mcp_tools component" in warning
+    assert "only the ha_mcp_tools component can tell" in warning
+    assert "install or update it via HACS" in warning
 
 
 async def test_a_second_restore_does_not_take_an_area_whose_ordered_list_differs(
@@ -358,13 +342,146 @@ async def test_a_second_restore_does_not_take_an_area_whose_ordered_list_differs
         "custom_components.ha_mcp_tools.websocket_api.registries.declared_fields",
         lambda entry: (),
     )
-    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+    snapshot = await _second_restore_with_lists_reversed(
+        hass, backup_manager, "aliases"
+    )
 
     with pytest.raises(BackupRestoreError, match="already in use") as refused:
         await backup_manager.restore_snapshot(snapshot)
 
     (held,) = ar.async_get(hass).areas.values()
     assert held.id in str(refused.value)
+
+
+async def test_a_second_restore_needs_every_reordered_list_named(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a Core that keeps an area's aliases in a set and its labels in order,
+    an area whose labels are in another order is not the snapshot's: the item
+    is created again and Core refuses the name."""
+    declared = registries.declared_fields
+    monkeypatch.setattr(
+        registries,
+        "declared_fields",
+        lambda entry: [field for field in declared(entry) if field.name != "labels"],
+    )
+    snapshot = await _second_restore_with_lists_reversed(
+        hass, backup_manager, "aliases", "labels"
+    )
+
+    with pytest.raises(BackupRestoreError, match="already in use"):
+        await backup_manager.restore_snapshot(snapshot)
+
+
+async def _label_snapshot_with_a_badge(
+    hass: HomeAssistant, backup_manager: BackupManager, *, deleted: bool
+) -> tuple[str, str]:
+    """The snapshot of a red label and the label's id. The snapshot file is
+    edited to carry ``badge``, a key neither of Core's label commands takes;
+    the label is then deleted, or turned blue."""
+    registry = lr.async_get(hass)
+    label = registry.async_create("Security", color="red")
+    snapshot = await _snapshot(backup_manager, "label", label.label_id)
+    _store(backup_manager, snapshot, badge="gold")
+    if deleted:
+        registry.async_delete(label.label_id)
+    else:
+        registry.async_update(label.label_id, color="blue")
+    return snapshot, label.label_id
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+async def test_a_stored_key_cores_command_does_not_take_is_not_sent(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    deleted: bool,
+) -> None:
+    """Which keys of a stored row a restore sends is the component's answer,
+    read from Core's commands: a key they do not take is left out of the update
+    of a label Core holds and of the create of one it no longer holds."""
+    snapshot, label_id = await _label_snapshot_with_a_badge(
+        hass, backup_manager, deleted=deleted
+    )
+
+    await backup_manager.restore_snapshot(snapshot)
+
+    restored = lr.async_get(hass).async_get_label(label_id)
+    assert restored is not None
+    assert restored.color == "red"
+
+
+@pytest.mark.parametrize(("grown", "deleted"), [("update", True), ("create", False)])
+async def test_a_key_only_cores_other_command_takes_is_not_sent(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    grown: str,
+    deleted: bool,
+) -> None:
+    """Core's create and update command each take their own keys: on a Core
+    whose update takes a key the create does not, the create goes out without
+    it, and the reverse."""
+    snapshot, label_id = await _label_snapshot_with_a_badge(
+        hass, backup_manager, deleted=deleted
+    )
+
+    with taking(hass, f"config/label_registry/{grown}", "badge"):
+        await backup_manager.restore_snapshot(snapshot)
+
+    restored = lr.async_get(hass).async_get_label(label_id)
+    assert restored is not None
+    assert restored.color == "red"
+
+
+@pytest.mark.parametrize(
+    ("deleted", "refusal"),
+    [(False, HomeAssistantCommandError), (True, BackupRestoreError)],
+)
+async def test_without_the_component_core_refuses_a_stored_key_it_does_not_take(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    deleted: bool,
+    refusal: type[Exception],
+) -> None:
+    """Without the component the restore sends the stored row but for
+    ``created_at`` and ``modified_at``. Core refuses a key its command does not
+    take, and the label stays as it was."""
+    snapshot, label_id = await _label_snapshot_with_a_badge(
+        hass, backup_manager, deleted=deleted
+    )
+
+    with pytest.raises(refusal, match="badge"):
+        await backup_manager.restore_snapshot(snapshot)
+
+    left = lr.async_get(hass).async_get_label(label_id)
+    assert (left and left.color) == (None if deleted else "blue")
+
+
+async def test_a_question_the_component_does_not_answer_fails_the_restore(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A question that was sent and got no answer is not a missing component:
+    the restore fails rather than send a row the component may rule out, and
+    the label stays as it was."""
+    registry = lr.async_get(hass)
+    label = registry.async_create("Security", color="red")
+    snapshot = await _snapshot(backup_manager, "label", label.label_id)
+    registry.async_update(label.label_id, color="blue")
+
+    async with unanswered(hass, _FIELDS, monkeypatch):
+        with pytest.raises(HomeAssistantConnectionError):
+            await backup_manager.restore_snapshot(snapshot)
+
+    left = registry.async_get_label(label.label_id)
+    assert left is not None
+    assert left.color == "blue"
 
 
 async def test_a_second_restore_of_an_area_whose_label_is_gone_names_the_holder(
@@ -429,226 +546,6 @@ async def test_the_restore_of_a_deleted_item_says_it_no_longer_exists(
         (warning,) = outcome["warnings"]
         assert ids[domain] in warning, domain
         assert "no longer exists" in warning, domain
-
-
-async def test_a_diff_after_a_restore_finds_the_item_and_reports_its_new_id(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """A restored category has another id than the snapshot's, and so does a
-    renamed label, area or floor. The diff finds them by their name and reports
-    the id as the one difference, instead of calling them unchanged; an
-    unrelated item of the same registry is not taken for them."""
-    labels = lr.async_get(hass)
-    labels.async_create("Unrelated")
-    label = labels.async_create("Security")
-    labels.async_update(label.label_id, name="Alarm")
-    categories = cr.async_get(hass)
-    categories.async_create(scope="automation", name="Unrelated")
-    categories.async_create(scope="script", name="Unrelated")
-    category = categories.async_create(scope="automation", name="Lighting")
-    other = categories.async_create(scope="script", name="Night")
-    areas = ar.async_get(hass)
-    areas.async_create("Unrelated")
-    area = areas.async_create("Hall", icon="mdi:door")
-    areas.async_update(area.id, name="Corridor")
-    floors = fr.async_get(hass)
-    floors.async_create("Unrelated")
-    floor = floors.async_create("Ground", level=0)
-    floors.async_update(floor.floor_id, name="Base")
-    wanted = {
-        await _snapshot(backup_manager, "label", label.label_id): (
-            "label_id",
-            label.label_id,
-        ),
-        await _snapshot(
-            backup_manager, "category", f"automation:{category.category_id}"
-        ): ("category_id", category.category_id),
-        await _snapshot(backup_manager, "category", f"script:{other.category_id}"): (
-            "category_id",
-            other.category_id,
-        ),
-        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"): (
-            "area_id",
-            area.id,
-        ),
-        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"): (
-            "floor_id",
-            floor.floor_id,
-        ),
-    }
-    labels.async_delete(label.label_id)
-    categories.async_delete(scope="automation", category_id=category.category_id)
-    categories.async_delete(scope="script", category_id=other.category_id)
-    areas.async_delete(area.id)
-    floors.async_delete(floor.floor_id)
-
-    for snapshot, (id_key, old_id) in wanted.items():
-        await backup_manager.restore_snapshot(snapshot)
-        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
-        assert (diff["entity_missing"], diff["unchanged"]) == (False, False), snapshot
-        assert [(op["path"], op["value"]) for op in diff["patch"]] == [
-            (f"/{id_key}", old_id)
-        ], snapshot
-
-
-async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """A label, area or floor that was never renamed comes back under its own
-    id; its new read-only timestamps are no difference the snapshot can restore."""
-    labels = lr.async_get(hass)
-    label = labels.async_create("Security")
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall", icon="mdi:door")
-    floors = fr.async_get(hass)
-    floor = floors.async_create("Ground", level=0)
-    snapshots = [
-        await _snapshot(backup_manager, "label", label.label_id),
-        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
-        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
-    ]
-    labels.async_delete(label.label_id)
-    areas.async_delete(area.id)
-    floors.async_delete(floor.floor_id)
-
-    for snapshot in snapshots:
-        await backup_manager.restore_snapshot(snapshot)
-        diff = await backup_manager.diff_snapshot(snapshot)
-        assert (diff["entity_missing"], diff["unchanged"]) == (False, True), snapshot
-
-
-async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """Core keeps aliases in a set, so the order the snapshot holds them in is
-    no difference: the snapshot file is edited to hold them in the reverse of the
-    order Core lists the restored area's in."""
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall", aliases={"entrance", "lobby"})
-    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
-    areas.async_delete(area.id)
-    await backup_manager.restore_snapshot(snapshot)
-    (restored,) = areas.async_list_areas()
-    _store_aliases_reversed(backup_manager, snapshot, restored)
-
-    diff = await backup_manager.diff_snapshot(snapshot)
-
-    assert (diff["entity_missing"], diff["unchanged"]) == (False, True), diff
-
-
-async def test_a_diff_after_a_restore_under_another_id_ignores_the_alias_order(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """The area comes back under a new id, so the diff finds it by name. Its
-    aliases are compared without regard to order: the snapshot file is edited to
-    hold them in the reverse of the order Core lists them in."""
-    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
-
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
-
-    assert diff["entity_missing"] is False
-    assert not [op for op in diff["patch"] if op["path"].startswith("/aliases")], diff
-
-
-def test_a_list_keeps_the_type_of_its_elements_when_compared(
-    hass: HomeAssistant,
-) -> None:
-    """A snapshot edited by hand to hold [1, 2] does not hold the aliases "1"
-    and "2" Core lists in another order: the list is compared as it is."""
-    area = ar.async_get(hass).async_create("Hall", aliases={"1", "2"})
-    live = orjson.loads(orjson.dumps(area.json_fragment))
-    reverse = list(reversed(live["aliases"]))
-
-    assert reordered_lists(live, {**live, "aliases": reverse}) == ["aliases"]
-    assert reordered_lists(live, {**live, "aliases": [int(a) for a in reverse]}) == []
-
-
-async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """The restored area is found although it lost a deleted label, and the lost
-    label is among the differences the diff reports."""
-    labels = lr.async_get(hass)
-    gone = labels.async_create("Gone")
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall", labels={gone.label_id})
-    areas.async_update(area.id, name="Corridor")
-    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
-    areas.async_delete(area.id)
-    labels.async_delete(gone.label_id)
-    await backup_manager.restore_snapshot(snapshot)
-
-    diff = await backup_manager.diff_snapshot(snapshot)
-
-    assert diff["entity_missing"] is False
-    assert {"op": "add", "path": "/labels/-", "value": gone.label_id} in cast(
-        DiffResponse, diff
-    )["patch"]
-
-
-async def test_a_diff_of_a_present_item_changed_since_the_snapshot_is_not_missing(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """The item still holds its id, so the lookup by fields stays out of it."""
-    labels = lr.async_get(hass)
-    label = labels.async_create("Security")
-    categories = cr.async_get(hass)
-    category = categories.async_create(scope="automation", name="Lighting")
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall")
-    floors = fr.async_get(hass)
-    floor = floors.async_create("Ground")
-    snapshots = [
-        await _snapshot(backup_manager, "label", label.label_id),
-        await _snapshot(
-            backup_manager, "category", f"automation:{category.category_id}"
-        ),
-        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
-        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
-    ]
-    labels.async_update(label.label_id, color="red")
-    categories.async_update(
-        scope="automation", category_id=category.category_id, icon="mdi:lamp"
-    )
-    areas.async_update(area.id, icon="mdi:door")
-    floors.async_update(floor.floor_id, icon="mdi:stairs")
-
-    for snapshot in snapshots:
-        diff = await backup_manager.diff_snapshot(snapshot)
-        assert (diff["entity_missing"], diff["unchanged"]) == (False, False), snapshot
-
-
-async def test_a_diff_of_a_deleted_item_still_says_it_is_missing(
-    hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    labels = lr.async_get(hass)
-    label = labels.async_create("Security")
-    categories = cr.async_get(hass)
-    category = categories.async_create(scope="automation", name="Lighting")
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall")
-    floors = fr.async_get(hass)
-    floor = floors.async_create("Ground")
-    snapshots = [
-        await _snapshot(backup_manager, "label", label.label_id),
-        await _snapshot(
-            backup_manager, "category", f"automation:{category.category_id}"
-        ),
-        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
-        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
-    ]
-    labels.async_delete(label.label_id)
-    categories.async_delete(scope="automation", category_id=category.category_id)
-    areas.async_delete(area.id)
-    floors.async_delete(floor.floor_id)
-
-    for snapshot in snapshots:
-        diff = await backup_manager.diff_snapshot(snapshot)
-        assert (diff["entity_missing"], diff["unchanged"]) == (True, False), snapshot
 
 
 async def test_a_floor_changed_since_the_snapshot_is_updated_in_place(

@@ -1,9 +1,11 @@
-"""What Core received, and the two ways a client gets no answer to a command.
+"""What Core received, the two ways a client gets no answer to a command, and
+a command that takes one more key.
 
-Each helper re-registers a command's own handler with its own schema: to see
+Each helper re-registers a command's own handler: with its own schema to see
 the messages Core received for it, to hold it until the client's wait has run
-out, or to drop the connection once Core has it. Core's handler still answers
-every message it is handed; nothing here answers for it.
+out, or to drop the connection once Core has it; with one more key in that
+schema to stand for a Core release whose command takes the key. Core's handler
+still answers every message it is handed; nothing here answers for it.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 import pytest
+import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
@@ -102,6 +105,20 @@ def dropped_on(
         abort_transport(socket)
 
     websocket_api.async_register_command(hass, command, drop, schema)
+    try:
+        yield
+    finally:
+        websocket_api.async_register_command(hass, command, core_handler, schema)
+
+
+@contextmanager
+def taking(hass: HomeAssistant, command: str, key: str) -> Iterator[None]:
+    """Core's ``command`` takes ``key`` as well meanwhile, as on a Core release
+    whose command grew that field."""
+    core_handler, schema = _handler(hass, command)
+    websocket_api.async_register_command(
+        hass, command, core_handler, schema.extend({vol.Optional(key): str})
+    )
     try:
         yield
     finally:

@@ -1,9 +1,10 @@
-"""The ``registries`` and ``registry_set_fields`` read commands."""
+"""The ``registries`` and ``registry_fields`` read commands."""
 
 from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime
 from typing import Any
 
 import attr
@@ -82,63 +83,109 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
 
 
 # =============================================================================
-# ha_mcp_tools/registry_set_fields
+# ha_mcp_tools/registry_fields
 # =============================================================================
-def _do_registry_set_fields(
-    hass: HomeAssistant, params: dict[str, Any]
-) -> dict[str, Any]:
-    """Name the fields of one registry entry that Core keeps in a set.
+def _do_registry_fields(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Name the fields Core's commands take for a registry, and how Core keeps
+    the fields of one of its entries.
 
-    ``{set_fields: [...] | None}``: the declared fields of the entry's class
-    whose value on this entry is a ``set`` or ``frozenset``, sorted; ``None``
-    when Core holds no such entry. Core lists a set in hash order, which differs
-    between runs, so a caller that compares two rows of the entry takes a list
-    named here as equal in any order, and every other list by position. The
-    answer is read from the entry, so a field Core starts or stops keeping in a
-    set is answered without a change here.
+    ``update_fields`` and ``create_fields`` are the keys of the schema Core
+    registered for ``config/<registry>_registry/update`` and ``.../create``,
+    without the transport keys ``id`` and ``type``, sorted. ``create_fields`` is
+    ``None`` for a registry Core registers no create command for (a device, an
+    entity). A caller that writes a stored row back sends the keys named here,
+    so a key Core starts or stops taking is answered without a change here.
+    Raises ``HomeAssistantError`` when Core registers no update command for the
+    registry.
 
-    A field is named, not a row key: in every row Core 2026.11 serves a list of
-    more than one item of a set carries its field's name (a device's
-    ``config_entries`` holds its one config entry), and a list whose key names
-    no such field is compared by position. Only declared fields are read, never
-    a row key as an attribute: ``DeviceEntry.config_entries`` and its siblings
-    are deprecated properties that report their use.
+    With ``item_id`` the entry is read too; without it, and when Core holds no
+    such entry, both of these are ``None``:
+
+    * ``set_fields``: the declared fields of the entry's class whose value on
+      this entry is a ``set`` or ``frozenset``, sorted. Core lists a set in hash
+      order, which differs between runs, so a caller that compares two rows of
+      the entry takes a list named here as equal in any order, and every other
+      list by position.
+    * ``stamped_fields``: the declared fields whose value is a ``datetime`` and
+      that ``update_fields`` does not name, sorted: the points in time Core sets
+      itself, which no write puts back.
+
+    Both are read from the entry, so a field Core starts or stops keeping that
+    way is answered without a change here. A field is named, not a row key: in
+    every row Core 2026.11 serves a list of more than one item of a set carries
+    its field's name (a device's ``config_entries`` holds its one config entry),
+    and a list whose key names no such field is compared by position. Only
+    declared fields are read, never a row key as an attribute:
+    ``DeviceEntry.config_entries`` and its siblings are deprecated properties
+    that report their use.
 
     A device is looked up where ``device_get`` looks it up (main and child
-    devices). A category id is unique within its scope only, so ``category``
-    REQUIRES ``scope`` and raises ``HomeAssistantError`` without it. A registry
-    whose accessor drifted raises as in :func:`_do_registries`.
+    devices). A category id is unique within its scope only, so a ``category``
+    entry REQUIRES ``scope`` and raises ``HomeAssistantError`` without it. A
+    registry whose accessor drifted raises as in :func:`_do_registries`.
     """
-    kind, item_id = params["registry"], params["item_id"]
+    kind = params["registry"]
+    update_fields = _command_fields(hass, f"config/{kind}_registry/update")
+    if update_fields is None:
+        raise HomeAssistantError(
+            f"ha_mcp_tools/registry_fields: Core registers no update command "
+            f"for the {kind} registry"
+        )
+    result: dict[str, Any] = {
+        "update_fields": update_fields,
+        "create_fields": _command_fields(hass, f"config/{kind}_registry/create"),
+        "set_fields": None,
+        "stamped_fields": None,
+    }
+    item_id = params.get("item_id")
+    if item_id is None:
+        return result
+    entry = _registry_entry(hass, kind, item_id, params.get("scope"))
+    if entry is None:
+        return result
+    values = {
+        field.name: getattr(entry, field.name) for field in declared_fields(entry)
+    }
+    result["set_fields"] = sorted(
+        name for name, value in values.items() if isinstance(value, (set, frozenset))
+    )
+    result["stamped_fields"] = sorted(
+        name
+        for name, value in values.items()
+        if isinstance(value, datetime) and name not in update_fields
+    )
+    return result
+
+
+def _command_fields(hass: HomeAssistant, command: str) -> list[str] | None:
+    """The keys of the schema Core registered for ``command``, without the
+    transport keys ``id`` and ``type``; None when Core registers no such
+    command."""
+    registered = (hass.data.get("websocket_api") or {}).get(command)
+    if registered is None:
+        return None
+    return sorted({str(key) for key in registered[1].schema} - {"id", "type"})
+
+
+def _registry_entry(hass: HomeAssistant, kind: str, item_id: str, scope: Any) -> Any:
+    """Core's entry of ``kind`` with ``item_id``, None when Core holds none."""
     if kind == "category":
-        scope = params.get("scope")
         if not scope:
             raise HomeAssistantError(
-                "ha_mcp_tools/registry_set_fields: scope is required for a category"
+                "ha_mcp_tools/registry_fields: scope is required for a category"
             )
         registry = _category_registry(hass)
         if registry is None:
             raise _substrate_unavailable("category registry")
-        entry = registry.async_get_category(scope=scope, category_id=item_id)
-    else:
-        view = _resolve_registries(hass)
-        registry = getattr(view, kind)
-        if registry is None:
-            raise _substrate_unavailable(f"{kind} registry")
-        if kind == "device":
-            entry = _unambiguous_device_entries(view).get(item_id)
-        else:
-            getter = "async_get" if kind == "entity" else f"async_get_{kind}"
-            entry = getattr(registry, getter)(item_id)
-    if entry is None:
-        return {"set_fields": None}
-    return {
-        "set_fields": sorted(
-            field.name
-            for field in declared_fields(entry)
-            if isinstance(getattr(entry, field.name), (set, frozenset))
-        )
-    }
+        return registry.async_get_category(scope=scope, category_id=item_id)
+    view = _resolve_registries(hass)
+    registry = getattr(view, kind)
+    if registry is None:
+        raise _substrate_unavailable(f"{kind} registry")
+    if kind == "device":
+        return _unambiguous_device_entries(view).get(item_id)
+    getter = "async_get" if kind == "entity" else f"async_get_{kind}"
+    return getattr(registry, getter)(item_id)
 
 
 def declared_fields(entry: Any) -> Any:

@@ -2222,8 +2222,9 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 # Registry read-only fields
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
-# ``modified_at`` their lists return, which snapshots keep; every registry
-# restore strips them.
+# ``modified_at`` their lists return, which snapshots keep. Which keys those
+# commands take is the component's answer (``backup_registry_items``); this
+# list stands in where no component gives it.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 

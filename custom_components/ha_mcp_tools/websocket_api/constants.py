@@ -70,7 +70,7 @@ __all__ = [
     "WS_OVERVIEW",
     "WS_REFERENCE_DATA",
     "WS_REGISTRIES",
-    "WS_REGISTRY_SET_FIELDS",
+    "WS_REGISTRY_FIELDS",
     "WS_REGISTRY_LOOKUP",
     "WS_SEARCH",
     "WS_SERVER_ENTRY",
@@ -100,7 +100,7 @@ WS_REGISTRY_LOOKUP = f"{WS_API_PREFIX}/registry_lookup"
 WS_SYSTEM_SNAPSHOT = f"{WS_API_PREFIX}/system_snapshot"
 WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
 WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
-WS_REGISTRY_SET_FIELDS = f"{WS_API_PREFIX}/registry_set_fields"
+WS_REGISTRY_FIELDS = f"{WS_API_PREFIX}/registry_fields"
 WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
 WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
@@ -173,7 +173,7 @@ CAPABILITIES: list[str] = [
     "system_snapshot",
     "entity_lookup",
     "registries",
-    "registry_set_fields",
+    "registry_fields",
     "dashboards",
     "dashboard_edit",
     # A flag, not a standalone command: gates the additive whole-document

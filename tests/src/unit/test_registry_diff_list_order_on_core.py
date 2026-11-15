@@ -4,29 +4,33 @@ Core keeps the labels of an entity and of a device, and a device's identifiers
 and connections, in sets, and lists a set in hash order. Which lists those are
 is the component's answer, read from Core's registry entry: with the component
 their order is no difference, and without it the diff reports the order and
-says so. The snapshot is taken from Core's registry through the server's own
-client. An order test then edits the snapshot file to hold a list in the
-reverse of the order Core lists it in, so it does not depend on the hash seed.
+says so. The same answer names the points in time Core sets itself, which no
+restore puts back: with the component they are no difference, and without it
+the diff of a device reports them and says so. The snapshot is taken from
+Core's registry through the server's own client. An order test then edits the
+snapshot file to hold a list in the reverse of the order Core lists it in, so
+it does not depend on the hash seed.
 """
 
 from __future__ import annotations
 
-from typing import cast
-from unittest.mock import AsyncMock
+from typing import Any, cast
 
 import orjson
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
 
+from custom_components.ha_mcp_tools.websocket_api import registries
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager
-from ha_mcp.backup_registry_items import compared_row
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -34,6 +38,10 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_restore_helpers import backup_tool, use_backup_manager
+from ._command_faults import received, taking, unanswered
+from ._component_frames import older_component
+
+_FIELDS = "ha_mcp_tools/registry_fields"
 
 
 async def _snapshot_reversing(
@@ -66,6 +74,10 @@ def _device(hass: HomeAssistant) -> dr.DeviceEntry:
     updated = devices.async_update_device(device.id, labels={"first", "second"})
     assert updated is not None
     return updated
+
+
+def _changed_fields(diff: DiffResponse) -> set[str]:
+    return {op["path"].split("/")[1] for op in diff["patch"]}
 
 
 async def test_an_entity_diff_ignores_the_order_core_lists_labels_in(
@@ -138,39 +150,139 @@ async def test_a_diff_without_the_component_reports_the_order_and_says_so(
 
     diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
 
-    assert {op["path"].split("/")[1] for op in diff["patch"]} == {
-        "labels",
-        "identifiers",
-        "connections",
-    }, diff
+    assert _changed_fields(diff) == {"labels", "identifiers", "connections"}, diff
     (warning,) = diff["warnings"]
     assert "connections, identifiers, labels" in warning
-    assert "ha_mcp_tools component" in warning
+    assert "only the ha_mcp_tools component can tell" in warning
+    assert "install or update it via HACS" in warning
 
 
-async def test_a_question_the_component_does_not_answer_fails_the_comparison(
+async def test_a_question_the_component_does_not_answer_fails_the_diff(
     hass: HomeAssistant,
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A question that was sent and got no answer is not a missing component:
-    the comparison fails rather than report an order the component may rule
-    out. The first comparison is answered, so the component is known by then."""
+    the diff fails rather than report an order the component may rule out."""
     device = _device(hass)
     snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-    data, current = await backup_manager.snapshot_comparison(snapshot)
-    reordered = {**current, "labels": current["labels"][::-1]}
-    monkeypatch.setattr(
-        component_core_client,
-        "send_websocket_message",
-        AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
+
+    async with unanswered(hass, _FIELDS, monkeypatch):
+        with pytest.raises(HomeAssistantConnectionError):
+            await backup_manager.diff_snapshot(snapshot)
+
+
+async def test_a_diff_with_a_component_older_than_the_command_says_so(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A component from before the command is installed: the diff reports the
+    order and says the component could not tell."""
+    older_component(monkeypatch, "registry_fields")
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+    (warning,) = diff["warnings"]
+    assert "labels" in warning
+
+
+async def test_a_diff_the_component_refuses_to_rule_on_says_so(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command answers with an error: the diff reports the order and says
+    the component could not tell, as without a component."""
+
+    def refuse(entry: Any) -> Any:
+        raise HomeAssistantError("registry drifted")
+
+    monkeypatch.setattr(registries, "declared_fields", refuse)
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+    (warning,) = diff["warnings"]
+    assert "labels" in warning
+
+
+async def test_a_diff_the_component_names_no_set_for_reports_the_order_only(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a Core that keeps none of a device's lists in a set, the component's
+    empty answer is still its ruling: the order is a difference and there is
+    nothing to warn about."""
+    monkeypatch.setattr(registries, "declared_fields", lambda entry: ())
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_device_diff_with_the_component_reports_a_label_that_changed(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component names labels as a set. That makes their order no
+    difference; a label that was swapped for another still is one."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    dr.async_get(hass).async_update_device(device.id, labels={"first", "third"})
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+
+
+async def test_a_floor_diff_ignores_the_order_core_lists_aliases_in(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A floor's aliases are a set in Core, and a floor is asked about as a
+    floor: the same aliases in another order are no difference."""
+    floor = fr.async_get(hass).async_create("Ground", aliases={"downstairs", "base"})
+    snapshot = await _snapshot_reversing(
+        backup_manager, "area_or_floor", f"floor:{floor.floor_id}", "aliases"
     )
 
-    with pytest.raises(HomeAssistantConnectionError, match="no answer"):
-        await compared_row(
-            component_core_client, "device", device.id, data["config"], reordered
-        )
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert diff["unchanged"] is True, diff
+    assert "warnings" not in diff
+
+
+async def test_a_diff_of_an_unchanged_device_asks_the_component_nothing(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+
+    with received(hass, _FIELDS) as seen:
+        diff = await backup_manager.diff_snapshot(path.name)
+
+    assert diff["unchanged"] is True, diff
+    assert seen[_FIELDS] == []
 
 
 async def test_the_backup_tool_puts_the_diff_warning_beside_the_diff(
@@ -209,20 +321,66 @@ async def test_the_settings_diff_carries_the_diff_warning(
     assert "labels" in warning
 
 
-async def test_a_device_diff_names_the_changed_field_and_not_modified_at(
+async def _snapshot_then_rename(
     hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """Core gives a device a new ``modified_at`` whenever a write changes a field
-    it stores; no restore can set that back, so the diff names only the field
-    that changed."""
+) -> str:
+    """Snapshot a device, then give it a name, which gives it a new
+    ``modified_at`` too."""
     device = _device(hass)
     path = await backup_manager.maybe_snapshot("device", device.id, force=True)
     assert path is not None
     dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
+    return path.name
 
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
 
-    assert [op["path"] for op in diff["patch"]] == ["/name_by_user"], diff
+async def test_a_device_diff_names_the_changed_field_and_not_modified_at(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core gives a device a new ``modified_at`` whenever a write changes a field
+    it stores, and its update command does not take one: the component names it
+    as a point in time Core sets itself, so the diff names only the field that
+    changed."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_point_in_time_cores_update_command_takes_is_compared(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Which points in time no restore puts back is read from Core: on a release
+    whose device update takes ``modified_at``, the diff reports it."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    with taking(hass, "config/device_registry/update", "modified_at"):
+        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user", "modified_at"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_device_diff_without_the_component_reports_modified_at_and_says_so(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Only the component can say which points in time Core sets itself. Without
+    it the diff of a device does not guess: ``modified_at`` is a difference,
+    with a warning that names it and the component."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user", "modified_at"}, diff
+    (warning,) = diff["warnings"]
+    assert "reports modified_at as" in warning
+    assert "only the ha_mcp_tools component can tell" in warning
+    assert "install or update it via HACS" in warning
 
 
 async def test_a_device_diff_names_a_list_the_snapshot_does_not_hold(

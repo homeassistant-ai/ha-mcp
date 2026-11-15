@@ -33,8 +33,8 @@ from .constants import (
     WS_OVERVIEW,
     WS_REFERENCE_DATA,
     WS_REGISTRIES,
+    WS_REGISTRY_FIELDS,
     WS_REGISTRY_LOOKUP,
-    WS_REGISTRY_SET_FIELDS,
     WS_SEARCH,
     WS_SERVER_ENTRY,
     WS_SERVER_ENTRY_UPDATE,
@@ -253,11 +253,11 @@ def _registries_schema() -> dict[Any, Any]:
     }
 
 
-def _registry_set_fields_schema() -> dict[Any, Any]:
+def _registry_fields_schema() -> dict[Any, Any]:
     return {
-        vol.Required("type"): WS_REGISTRY_SET_FIELDS,
+        vol.Required("type"): WS_REGISTRY_FIELDS,
         vol.Required("registry"): vol.In(("device", "entity", *REGISTRY_KINDS)),
-        vol.Required("item_id"): str,
+        vol.Optional("item_id"): str,
         vol.Optional("scope"): str,
     }
 
