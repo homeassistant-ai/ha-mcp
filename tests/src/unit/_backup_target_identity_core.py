@@ -15,16 +15,17 @@ from typing import Any
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.loader import async_get_integration
 from starlette.requests import Request
 
-from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp import backup_manager as bm
 from ha_mcp import config
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import build_settings_handlers
+from ha_mcp.tools import tools_filesystem
+from ha_mcp.tools.helpers import raise_tool_error
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._backup_core import manage_backup, place_snapshot
@@ -127,21 +128,37 @@ def place_item_snapshot(
     return placed.name
 
 
-async def older_yaml_snapshot(
+async def yaml_snapshot_whose_write_is_refused(
     hass: HomeAssistant,
     manager: bm.BackupManager,
     settings: config.Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> str:
-    """A snapshot of the YAML key ``alert2``, which the operator allowed, on a
-    File & YAML Tools component from before extra keys (1.2.3): its restore is
-    refused with a prompt to update the component. The snapshot's name."""
+    """A snapshot of the YAML key ``alert2``, which the operator allowed, whose
+    restore reads its safety backup and then has its write refused with the
+    server's own component error. The component refuses only at its token
+    bootstrap, ahead of that read, so the server call is the seam for the
+    write alone. The snapshot's name."""
     monkeypatch.setattr(settings, "extra_yaml_write_keys", "alert2")
     await write_config_files(
         hass, {"packages/alerts.yaml": "alert2:\n  defaults: {}\n"}
     )
-    integration = await async_get_integration(hass, DOMAIN)
-    monkeypatch.setitem(integration.manifest, "version", "1.2.3")
+    call = tools_filesystem.call_mcp_tools_service
+
+    async def refuse_the_write(
+        client: Any, service: str, data: dict[str, Any], **kw: Any
+    ) -> Any:
+        if service == "edit_yaml_config":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "The installed ha_mcp_tools custom component is too old.",
+                    suggestions=["Update it and restart Home Assistant"],
+                )
+            )
+        return await call(client, service, data, **kw)
+
+    monkeypatch.setattr(tools_filesystem, "call_mcp_tools_service", refuse_the_write)
     return place_snapshot(
         manager.backup_dir,
         "yaml.alerts.20260521_120000.yaml",

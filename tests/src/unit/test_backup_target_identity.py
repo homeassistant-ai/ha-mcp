@@ -43,7 +43,6 @@ from ._backup_target_identity_core import (
     failed_restore,
     held_by,
     move_entity,
-    older_yaml_snapshot,
     place_item_snapshot,
     rejected_script_snapshot,
     remove_tag,
@@ -51,6 +50,7 @@ from ._backup_target_identity_core import (
     restore_of,
     settings_restore,
     tag_ids,
+    yaml_snapshot_whose_write_is_refused,
 )
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._helper_tool_core import set_up, stored_item
@@ -338,7 +338,7 @@ async def test_a_tool_error_on_apply_names_the_safety_backup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The MCP reply of a tool error is its text, so the outcome must be in it."""
-    name = await older_yaml_snapshot(
+    name = await yaml_snapshot_whose_write_is_refused(
         hass, file_snapshot_manager, backup_settings, monkeypatch
     )
 
@@ -504,7 +504,7 @@ async def test_settings_keeps_a_structured_tool_error(
 ) -> None:
     """A ToolError already says what failed and how to fix it; re-classified,
     Settings showed "An unexpected error occurred"."""
-    name = await older_yaml_snapshot(
+    name = await yaml_snapshot_whose_write_is_refused(
         hass, file_snapshot_manager, backup_settings, monkeypatch
     )
 
@@ -514,7 +514,7 @@ async def test_settings_keeps_a_structured_tool_error(
     assert status == 409
     assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
     assert body["data"]["apply_status"] == "unknown"
-    assert "requires >= 1.2.4" in " ".join(rendered.alerts)
+    assert "too old" in " ".join(rendered.alerts)
 
 
 def test_settings_names_a_recreated_helper_s_mapping_warning_once(
