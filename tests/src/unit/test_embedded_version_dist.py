@@ -5,7 +5,7 @@ installed: always the manifest pin's distribution beside an override under
 another name, which skips the conflicting uninstall. Bring-up, the post-start
 staleness check and the worker's recorded version must all read the
 distribution the spec installs. The ``ha-mcp-dev`` overrides are covered in
-``test_embedded_server_purge.py`` and ``test_embedded_server_package.py``.
+``test_embedded_server.py`` and ``test_embedded_server_package.py``.
 
 The override ``acme-ha-mcp`` is a real ``.dist-info`` on ``sys.path``, so
 whether it ships the server is decided by the installed metadata itself.

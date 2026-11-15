@@ -1,17 +1,31 @@
-"""Helper types come from Core's helper flow list, read at call time (#2632)."""
+"""Helper types come from Core's helper flow list, read at call time (#2632).
+
+Also holds Core's helper flow list reads and a custom helper integration."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
+from homeassistant.components.config import config_entries as config_entries_view
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_clear_custom_components_cache
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -21,14 +35,69 @@ from ha_mcp.tools.config_entry_backup import resolve_config_entry_backup_domain
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from . import _helper_flows_core as flows
 from ._backup_core import backup_settings as backup_settings
 from ._backup_core import manage_backup
 from ._backup_core import snapshot_manager as snapshot_manager
 from ._core_setup import install_custom_helper
-from ._helper_flows_core import custom_helper_flow as custom_helper_flow
 from ._template_helper_core import create_template_sensor
 from ._tool_errors import error_of
+
+CUSTOM = "my_custom_helper"
+
+
+@contextmanager
+def flow_list_reads() -> Iterator[AsyncMock]:
+    """Count Core's reads of the helper flow list; Core still answers each one."""
+    with patch.object(
+        config_entries_view,
+        "async_get_config_flows",
+        wraps=config_entries_view.async_get_config_flows,
+    ) as spy:
+        yield spy
+
+
+class MonotonicClock:
+    """The reading of ``time.monotonic`` the helper flow cache sees."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+class _CustomHelperFlow(ConfigFlow):
+    """A helper integration's config flow: a name and a source entity."""
+
+    VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=probatio.Schema(
+                    {probatio.Required("name"): str, probatio.Required("source"): str}
+                ),
+            )
+        return self.async_create_entry(title=user_input["name"], data=user_input)
+
+
+@pytest.fixture
+def custom_helper_flow(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enable_custom_integrations: None,
+) -> Iterator[None]:
+    """``my_custom_helper``: a custom helper integration Core's loader finds on
+    disk and whose config flow runs."""
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    mock_integration(hass, MockModule(CUSTOM))
+    mock_platform(hass, f"{CUSTOM}.config_flow")
+    with mock_config_flow(CUSTOM, _CustomHelperFlow):
+        yield
 
 
 @pytest.fixture
@@ -65,7 +134,7 @@ async def _call_with_unknown_type(kind: str, client: HomeAssistantClient) -> Any
 async def test_helper_types_are_read_from_core_once_per_client(
     core_client: HomeAssistantClient,
 ) -> None:
-    with flows.flow_list_reads() as reads:
+    with flow_list_reads() as reads:
         types = [await helper_flows.helper_flow_types(core_client) for _ in range(2)]
     assert types[0] == types[1]
     assert {"template", "group"} <= types[0]
@@ -77,9 +146,9 @@ async def test_helper_types_are_read_from_core_once_per_client(
 async def test_a_helper_integration_installed_later_shows_up_after_the_cache_expires(
     core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    clock = flows.MonotonicClock()
+    clock = MonotonicClock()
     monkeypatch.setattr(helper_flows, "time", clock)
-    with flows.flow_list_reads() as reads:
+    with flow_list_reads() as reads:
         await helper_flows.helper_flow_types(core_client)
         await helper_flows.helper_flow_types(core_client)
         assert reads.await_count == 1
@@ -120,10 +189,10 @@ async def test_a_helper_integration_installed_since_the_last_read_is_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await helper_flows.helper_flow_types(core_client)  # cached before the install
-    install_custom_helper(tmp_path, monkeypatch, flows.CUSTOM)
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
     async_clear_custom_components_cache(hass)
-    with flows.flow_list_reads() as reads:
-        await helper_flows.require_helper_type(core_client, flows.CUSTOM)
+    with flow_list_reads() as reads:
+        await helper_flows.require_helper_type(core_client, CUSTOM)
     reads.assert_awaited_once()
 
 
@@ -131,7 +200,7 @@ async def test_a_helper_integration_installed_since_the_last_read_is_accepted(
 async def test_a_fresh_read_is_not_repeated_for_an_unknown_type(
     core_client: HomeAssistantClient,
 ) -> None:
-    with flows.flow_list_reads() as reads, pytest.raises(ToolError):
+    with flow_list_reads() as reads, pytest.raises(ToolError):
         await helper_flows.require_helper_type(core_client, "no_such_helper")
     reads.assert_awaited_once()
 
@@ -144,13 +213,13 @@ async def test_an_entity_of_a_newly_installed_helper_integration_is_a_helper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entity = entity_registry.async_get_or_create("sensor", flows.CUSTOM, "gate")
+    entity = entity_registry.async_get_or_create("sensor", CUSTOM, "gate")
     await helper_flows.helper_flow_types(core_client)  # cached before the install
-    install_custom_helper(tmp_path, monkeypatch, flows.CUSTOM)
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
     async_clear_custom_components_cache(hass)
     assert await flow_helper_lookup.resolve_helper_entity(
         core_client, entity.entity_id
-    ) == (flows.CUSTOM, entity.entity_id)
+    ) == (CUSTOM, entity.entity_id)
 
 
 @pytest.mark.usefixtures("config_up")
@@ -245,7 +314,7 @@ async def test_an_entry_delete_proceeds_when_the_helper_flow_read_fails(
     reported."""
     entry = await create_template_sensor(hass, "1")
     monkeypatch.setattr(
-        flows.config_entries_view,
+        config_entries_view,
         "async_get_config_flows",
         _failing_flow_list,
     )
@@ -269,13 +338,13 @@ async def test_a_custom_helper_flow_is_created_through_its_config_flow(
     """A helper integration outside Core's built-in list is created through
     its own config flow, like template or group."""
     result = await HelperConfigTools(core_client).ha_config_set_helper(
-        helper_type=flows.CUSTOM,
+        helper_type=CUSTOM,
         name="Gate",
         config={"source": "sensor.x"},
         wait=False,
     )
     assert result["success"] is True, result
-    [entry] = hass.config_entries.async_entries(flows.CUSTOM)
+    [entry] = hass.config_entries.async_entries(CUSTOM)
     assert entry.title == "Gate"
     assert entry.data == {"name": "Gate", "source": "sensor.x"}
 
@@ -285,7 +354,7 @@ async def test_a_custom_helper_flow_describes_its_config_flow_fields(
     core_client: HomeAssistantClient,
 ) -> None:
     result = await HelperConfigTools(core_client).ha_config_list_helpers(
-        helper_type=flows.CUSTOM, describe=True
+        helper_type=CUSTOM, describe=True
     )
     assert [field["name"] for field in result["fields"]] == ["name", "source"]
 
@@ -296,13 +365,13 @@ async def test_a_custom_helper_flow_is_removed_through_the_flow_path(
     core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
 ) -> None:
-    entry = MockConfigEntry(domain=flows.CUSTOM, title="Gate")
+    entry = MockConfigEntry(domain=CUSTOM, title="Gate")
     entry.add_to_hass(hass)
     entity = entity_registry.async_get_or_create(
-        "sensor", flows.CUSTOM, "gate", config_entry=entry
+        "sensor", CUSTOM, "gate", config_entry=entry
     )
     await IntegrationTools(core_client).ha_remove_helpers_integrations(
-        target=entity.entity_id, helper_type=flows.CUSTOM, confirm=True
+        target=entity.entity_id, helper_type=CUSTOM, confirm=True
     )
     assert hass.config_entries.async_get_entry(entry.entry_id) is None
 
@@ -311,13 +380,13 @@ async def test_a_custom_helper_flow_is_removed_through_the_flow_path(
 async def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry(
     core_client: HomeAssistantClient, entity_registry: er.EntityRegistry
 ) -> None:
-    entity = entity_registry.async_get_or_create("sensor", flows.CUSTOM, "gate")
+    entity = entity_registry.async_get_or_create("sensor", CUSTOM, "gate")
     with pytest.raises(ToolError) as exc_info:
         await IntegrationTools(core_client).ha_remove_helpers_integrations(
             target=entity.entity_id, helper_type="template", confirm=True
         )
     assert error_of(exc_info)["suggestion"] == (
-        f"Pass helper_type='{flows.CUSTOM}', or omit helper_type."
+        f"Pass helper_type='{CUSTOM}', or omit helper_type."
     )
 
 
@@ -382,7 +451,7 @@ async def test_an_entry_delete_is_backed_up_as_a_helper_only_for_a_helper_flow(
 @pytest.mark.parametrize(
     "domain,options,detail",
     [
-        (flows.CUSTOM, {"k": "v"}, "custom integration"),
+        (CUSTOM, {"k": "v"}, "custom integration"),
         ("otp", {}, "no stored options"),
     ],
 )

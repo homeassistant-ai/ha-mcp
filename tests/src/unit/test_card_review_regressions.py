@@ -2,18 +2,28 @@
 
 The card index runs on a small frontend build written to disk, custom cards in
 their real QuickJS sandbox, and the describe tool and the ``dashboard_cards``
-command on a real ``hass`` (the E2E suite runs the real frontend and DOM).
+command on a real ``hass`` (the E2E suite runs the real frontend and DOM). The
+optional QuickJS runtime is read from real ``importlib.metadata`` distributions
+in ``.dist-info`` folders and a Core package directory holding the constraints,
+and the unit environment installs the QuickJS build the component accepts.
 """
 
 from __future__ import annotations
 
+import importlib.util
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from importlib import metadata
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
+import homeassistant
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from packaging.utils import canonicalize_name
 from pytest_homeassistant.typing import WebSocketGenerator
 
 from custom_components.ha_mcp_tools import card_runtime as runtime
@@ -40,7 +50,6 @@ from ._card_definitions_core import frontend as frontend
 from ._card_definitions_core import idle_custom_cards as idle_custom_cards
 from ._card_definitions_core import installed_custom_card as installed_custom_card
 from ._card_definitions_core import stalled_card_download as stalled_card_download
-from ._card_runtime_core import constrained_core, installed_packages
 from ._component_core import ws_result
 from ._core_client import refused_url
 
@@ -67,6 +76,68 @@ async def _describe(
     """What the describe tool says of ``card_type`` once its editor is ``editor``."""
     frontend.write({"tile": editor})
     return await describe_mod.describe_card_response(client, card_type)
+
+
+_PROVIDERS = ("quickjs", "quickjs-ng")
+
+
+def _distribution(
+    root: Path, name: str, version: str, requires: Sequence[str]
+) -> metadata.Distribution:
+    folder = root / f"{name.replace('-', '_')}-{version}.dist-info"
+    folder.mkdir(parents=True)
+    lines = ["Metadata-Version: 2.1", f"Name: {name}", f"Version: {version}"]
+    lines.extend(f"Requires-Dist: {requirement}" for requirement in requires)
+    (folder / "METADATA").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return metadata.Distribution.at(folder)
+
+
+@contextmanager
+def installed_packages(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    packages: Mapping[str, str],
+    *,
+    requires: Sequence[str] = (),
+) -> Iterator[dict[str, str]]:
+    """Only ``packages`` (name: version) provide QuickJS, and the install holds
+    one more package that ``requires`` these requirements. The yielded dict is
+    the providers installed now: a test adds one to install it."""
+    dists = [
+        _distribution(root, name, version, ()) for name, version in packages.items()
+    ]
+    dists.append(_distribution(root, "another-package", "1.0", requires))
+    versions: dict[str, str] = {
+        str(canonicalize_name(name)): version for name, version in packages.items()
+    }
+    real_version, real_find_spec = metadata.version, importlib.util.find_spec
+
+    def version(name: str) -> str:
+        key = canonicalize_name(name)
+        if key in versions:
+            return versions[key]
+        if key in _PROVIDERS:
+            raise metadata.PackageNotFoundError(name)
+        return real_version(name)
+
+    def find_spec(name: str, package: str | None = None) -> ModuleSpec | None:
+        if name == "quickjs":
+            return ModuleSpec(name, None) if set(_PROVIDERS) & set(versions) else None
+        return real_find_spec(name, package)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(metadata, "version", version)
+        patch.setattr(metadata, "distributions", lambda: dists)
+        patch.setattr(importlib.util, "find_spec", find_spec)
+        yield versions
+
+
+def constrained_core(
+    monkeypatch: pytest.MonkeyPatch, root: Path, constraints: str
+) -> None:
+    """Home Assistant's package constraints are ``constraints``."""
+    (root / "package_constraints.txt").write_text(constraints, encoding="utf-8")
+    monkeypatch.setattr(homeassistant, "__file__", str(root / "__init__.py"))
 
 
 # --- custom cards ----------------------------------------------------------
@@ -611,3 +682,14 @@ async def test_skip_pip_never_installs_but_allows_a_compatible_provider(
         assert await runtime.async_ensure_runtime(hass) is ready
 
     install.assert_not_awaited()
+
+
+# --- the installed QuickJS ----------------------------------------------
+
+
+async def test_the_dev_group_installs_the_quickjs_the_component_accepts(
+    hass: HomeAssistant,
+) -> None:
+    """A dev pin that drifts from the component's makes its own runtime check
+    refuse the installed build, so the card tests would run a QuickJS no user gets."""
+    assert await runtime.async_ensure_runtime(hass)
