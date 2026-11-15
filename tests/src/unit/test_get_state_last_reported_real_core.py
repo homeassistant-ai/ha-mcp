@@ -32,6 +32,7 @@ async def _read_after_a_repeated_report(
 ) -> tuple[dict[str, Any], datetime]:
     tools = SearchTools(client, SmartSearchTools(client=client))
     hass.states.async_set(ENTITY_ID, "0", timestamp=1_800_000_000.0)
+    # The first read makes Core cache the serialized state.
     await tools.ha_get_state(entity_id=_SHAPES[shape])
     hass.states.async_set(ENTITY_ID, "0", timestamp=1_800_000_060.0)
     result: dict[str, Any] = await tools.ha_get_state(
@@ -55,21 +56,22 @@ async def test_last_reported_follows_an_unchanged_report(
     assert "warnings" not in result
 
 
-@pytest.mark.parametrize("shape", list(_SHAPES))
 async def test_without_the_component_a_stale_last_reported_is_named(
-    hass: HomeAssistant, core_client: HomeAssistantClient, shape: str
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """Core's REST value can lag the live one; the reply says so and how to fix it."""
-    result, _ = await _read_after_a_repeated_report(hass, core_client, shape)
+    """Core's REST value can lag the live one; the reply says so and how to fix
+    it. The bulk read's warning is in ``test_ha_get_state_component_routing.py``."""
+    result, _ = await _read_after_a_repeated_report(hass, core_client, "single")
 
     assert any("last_reported" in w and "ha_mcp_tools" in w for w in result["warnings"])
 
 
+@pytest.mark.parametrize("shape", list(_SHAPES))
 async def test_without_the_component_no_warning_when_last_reported_is_not_returned(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, core_client: HomeAssistantClient, shape: str
 ) -> None:
     result, _ = await _read_after_a_repeated_report(
-        hass, core_client, "single", fields=["state"]
+        hass, core_client, shape, fields=["state"]
     )
 
     assert "warnings" not in result

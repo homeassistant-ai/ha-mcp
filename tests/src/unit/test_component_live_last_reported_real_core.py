@@ -27,8 +27,8 @@ ENTITY_ID = "sensor.plug_power"
 
 
 def _re_reported(hass: HomeAssistant) -> str:
-    """Report ``0`` twice a minute apart, after Core rendered the first report.
-    Returns the live ``last_reported``."""
+    """Report ``0``, serialize it so Core caches the dict, then report ``0``
+    again a minute later. Returns the live ``last_reported``."""
     hass.states.async_set(ENTITY_ID, "0", timestamp=1_800_000_000.0)
     first = hass.states.get(ENTITY_ID)
     assert first is not None
@@ -36,6 +36,8 @@ def _re_reported(hass: HomeAssistant) -> str:
     hass.states.async_set(ENTITY_ID, "0", timestamp=1_800_000_060.0)
     live = hass.states.get(ENTITY_ID)
     assert live is not None
+    # Core's cached dict lags (core#181392). Once Core refreshes it, this fails
+    # and the override in ``_state_as_dict`` can go.
     assert live.as_dict()["last_reported"] != live.last_reported.isoformat()
     return live.last_reported.isoformat()
 

@@ -269,7 +269,7 @@ the info handshake carries no capability entry:
   live objects the health path reads: ``config_entries`` (identity fields only —
   no options/subentries), ``issues`` (the ``_overview_repairs`` slice),
   ``entities`` (the ``registry_lookup`` row shape), ``states``
-  (``State.as_dict()``). ``include_*`` flags gate each section. Reading them in a
+  (``State.as_dict()`` with the live ``last_reported``). ``include_*`` flags gate each section. Reading them in a
   single frame kills the 3x ``config_entries/get`` TOCTOU the server had.
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as

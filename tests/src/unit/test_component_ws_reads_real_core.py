@@ -69,8 +69,9 @@ async def test_states_splits_found_from_missing(
 async def test_a_state_is_the_one_rest_sends(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """The body is Core's ``State.as_dict()`` unmodified, timestamps included,
-    so it matches the REST ``/api/states/<id>`` read byte for byte."""
+    """The body is Core's ``State.as_dict()``, timestamps included, with the
+    live ``last_reported``: the REST ``/api/states/<id>`` read until the entity
+    reports the unchanged state again."""
     hass.states.async_set("light.a", "on", {"friendly_name": "A", "brightness": 128})
     state = hass.states.get("light.a")
     assert state is not None

@@ -270,8 +270,8 @@ class StateMixin(SearchToolsBase):
     ) -> tuple[list[dict[str, Any]], bool]:
         """Per-id fetch results for a bulk read, and whether the component served them.
 
-        Returns one entry per id in ``_fetch_single_state`` shape (a hit dict or a
-        structured error). The component path resolves every id in ONE
+        The list holds one entry per id in ``_fetch_single_state`` shape (a hit
+        dict or a structured error). The component path resolves every id in ONE
         ``ha_mcp_tools/states`` frame instead of up to 100 REST GETs; a missing id
         is mapped to the same 404-classified error the legacy per-id path yields,
         so ``_accumulate_state_results`` and the response-level ``ha_search()``
@@ -305,7 +305,7 @@ class StateMixin(SearchToolsBase):
         """One ``ha_mcp_tools/states`` bulk read; ``None`` ⇒ use the legacy REST path.
 
         Returns the component's ``{states, missing}`` payload (found ids mapped to
-        their ``State.as_dict()`` body) or ``None`` when the component lacks the
+        their state body, ``State.as_dict()`` with the live ``last_reported``) or ``None`` when the component lacks the
         ``states`` capability, was downgraded (``unknown_command`` → invalidate the
         cached caps), errored, or returned a malformed payload (both logged).
         The fallback itself adds no warning; the caller warns only when the REST
