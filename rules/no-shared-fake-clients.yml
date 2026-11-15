@@ -32,8 +32,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/test_backup_snapshot.py"
-  - "tests/src/unit/test_backup_snapshot_restore.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
   - "tests/src/unit/test_history_pagination.py"
   - "tests/src/unit/test_identifier_validation_family.py"
