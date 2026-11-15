@@ -50,9 +50,10 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Requirements
 
-Only the current stable Home Assistant release is officially supported; the
-floors below are technical limits, not supported versions. Three apply, from
-the outside in:
+Only the current stable Home Assistant release is officially supported; a
+beta may be, with a fallback to stable, but that is not guaranteed. The floors
+below are technical limits, not supported versions. Three apply, from the
+outside in:
 
 - **HACS (the Marketplace from 2026.11) installs the component only on Home
   Assistant 2026.8.0 or newer** (`hacs.json`), the floor the config flow also enforces for the in-process
