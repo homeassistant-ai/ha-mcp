@@ -136,7 +136,11 @@ async def _exercise_allow_changes_switch(ha_client: Any, webhook_url: str) -> No
     try:
 
         async def _allow_changes_added() -> bool:
-            return await _has_state(ha_client, allow_changes_id)
+            states = {
+                state["entity_id"]: state["state"]
+                for state in await ha_client.get_states()
+            }
+            return states.get(allow_changes_id) in ("on", "off")
 
         assert await wait_for_condition(
             _allow_changes_added,

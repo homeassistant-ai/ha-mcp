@@ -316,7 +316,8 @@ class TestAccessSwitch:
 
         assert await set_up(hass, entry)
 
-        [state] = hass.states.async_all("switch")
+        state = hass.states.get("switch.ha_mcp_server_access")
+        assert state is not None
         assert state.state == STATE_OFF
 
     async def test_switching_on_after_the_entry_unloaded_starts_nothing(
