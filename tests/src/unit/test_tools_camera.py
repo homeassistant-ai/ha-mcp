@@ -9,20 +9,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools, _detect_image_format
 
+from ._camera_test_helpers import png_bytes as _png
 from ._tool_errors import error_of
-
-
-def _png(width: int, height: int) -> bytes:
-    """Minimal structurally-valid PNG header with the given dimensions."""
-    ihdr_payload = (
-        width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
-    )
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + len(ihdr_payload).to_bytes(4, "big")
-        + b"IHDR"
-        + ihdr_payload
-    )
 
 
 class TestDetectImageFormat:
@@ -100,7 +88,7 @@ class TestHaGetCameraImage:
             await camera_tools.ha_get_camera_image(entity_id="light.living_room")
         error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "not a camera entity" in error["message"]
+        assert "not a camera or image entity" in error["message"]
 
     @pytest.mark.asyncio
     async def test_non_camera_domain_sensor(self, camera_tools):
@@ -109,7 +97,7 @@ class TestHaGetCameraImage:
             await camera_tools.ha_get_camera_image(entity_id="sensor.temperature")
         error = error_of(exc_info)
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "Domain is 'sensor', expected 'camera'" in error["message"]
+        assert "Domain is 'sensor', expected 'camera' or 'image'" in error["message"]
 
     @pytest.mark.asyncio
     async def test_successful_image_retrieval(self, mock_client):
