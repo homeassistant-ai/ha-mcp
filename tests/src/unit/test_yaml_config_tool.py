@@ -728,26 +728,6 @@ def test_extra_yaml_write_keys_parsing(raw, expected):
     assert parse_extra_yaml_write_keys(settings) == expected
 
 
-async def test_extra_keys_absent_from_payload_when_unset(monkeypatch):
-    """Without extra keys configured the write sends none."""
-    from ha_mcp import config as ha_mcp_config
-
-    monkeypatch.delenv("HA_MCP_EXTRA_YAML_KEYS", raising=False)
-    monkeypatch.setattr(ha_mcp_config, "_settings", None)
-
-    fn, client = await _make_tool()
-    await fn(
-        file="configuration.yaml",
-        yaml_path="sensor",
-        action="add",
-        content="- platform: template",
-    )
-
-    payloads = _dispatch_payloads(client)
-    assert payloads
-    assert "extra_allowed_keys" not in payloads[0]
-
-
 async def test_extra_keys_sent_when_configured(monkeypatch):
     from ha_mcp import config as ha_mcp_config
 

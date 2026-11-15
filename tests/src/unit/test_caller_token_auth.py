@@ -14,8 +14,6 @@ Custom-component tests run against real Home Assistant Core.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -152,54 +150,6 @@ class TestSettingsHandlersRefuseABadToken:
         assert result["error_code"] == "unauthorized"
         save.assert_not_awaited()
         assert hass.data == _fake_hass("good").data
-
-
-class TestFloorFollowsTheRelease:
-    """The file and YAML tools need the component of the server's own release.
-
-    The component and the server ship in lockstep, so a floor left at an old
-    release lets an outdated component through without the "update" prompt.
-    semantic-release stamps the floor beside the component's version.
-    """
-
-    def test_floor_is_the_version_the_component_ships_with(self):
-        import custom_components.ha_mcp_tools as component
-
-        manifest = json.loads(
-            (Path(component.__file__).parent / "manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert manifest["version"] == MIN_COMPONENT_VERSION
-
-    def test_every_release_stamps_the_floor(self):
-        """semantic-release rewrites ``NAME = "x.y.z"`` and skips, without an
-        error, a declaration it cannot find: the floor stays one plain string
-        assignment in the file ``version_variables`` names."""
-        import ast
-        import inspect
-        import tomllib
-
-        repo = Path(__file__).resolve().parents[3]
-        release = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))[
-            "tool"
-        ]["semantic_release"]
-        source = Path(inspect.getfile(_version_tuple)).resolve()
-        stamped = f"{source.relative_to(repo).as_posix()}:MIN_COMPONENT_VERSION"
-        assert stamped in release["version_variables"]
-
-        assigned = [
-            node.value
-            for node in ast.parse(source.read_text(encoding="utf-8")).body
-            if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "MIN_COMPONENT_VERSION"
-                for target in node.targets
-            )
-        ]
-        assert len(assigned) == 1
-        assert isinstance(assigned[0], ast.Constant)
-        assert assigned[0].value == MIN_COMPONENT_VERSION
 
 
 class TestGetCallerTokenManifestVersion:

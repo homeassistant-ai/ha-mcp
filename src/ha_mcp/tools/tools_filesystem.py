@@ -200,8 +200,9 @@ def _raise_component_too_old(detail: str) -> NoReturn:
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
                 (
-                    "If no update is listed yet, refresh the release data with "
-                    "ha_manage_hacs(action='update_information') and look again"
+                    "If no update is listed yet, refresh HA-MCP's release data "
+                    "(ha_manage_hacs action='update_information' with its "
+                    "repository_id) and look again"
                 ),
             ],
         )
@@ -444,7 +445,7 @@ async def _probe_tools_services(client: Any) -> bool:
     """``_is_mcp_tools_available`` behind a short per-client TTL memo.
 
     The live registry probe is an uncached ``GET /api/services`` — HA serves
-    the whole service registry — and every gated tool call on a 2.1.0+
+    the whole service registry — and every gated tool call on a current
     component reaches it, so an unbounded per-call probe would put that request
     in front of each file read. Memoizing the verdict for
     ``_LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
@@ -484,10 +485,12 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     the cached boolean is stale in BOTH directions: a pre-tools-entry ``False``
     would block these tools until a restart, and a pre-removal ``True`` would
     wave calls through to now-missing services and surface raw
-    service-call failures instead of the actionable error. So ignore its cached
-    value and consult the live service registry (``_probe_tools_services``),
-    which is memoized for ``_LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()``
-    per window, not one per gated call.
+    service-call failures instead of the actionable error. So when the field
+    is present at all, ignore its cached value and consult the live service
+    registry (``_probe_tools_services``), which is memoized for
+    ``_LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
+    per gated call. Without the field, answering caps is taken as proof, as it
+    was before the server entry registered ``info``.
 
     Caps is None when no component answered ``info`` (none installed, or the
     probe failed), so the same live probe is the only signal available. A
@@ -505,6 +508,10 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     caps = await get_component_caps(client)
     if caps is not None:
         _assert_caps_version_ok(caps)
+        if caps.tools_services is None:
+            # No ``tools_services`` field: only the tools entry registered
+            # ``info`` then, so answering caps DID prove the services exist.
+            return
     if not await _probe_tools_services(client):
         _raise_tools_entry_not_set_up()
 

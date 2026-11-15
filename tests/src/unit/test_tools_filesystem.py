@@ -183,8 +183,8 @@ class TestIsMcpToolsAvailable:
 
 
 class TestAssertMcpToolsAvailableCapsFirst:
-    """``_assert_mcp_tools_available`` enforces the version floor on the shared
-    caps probe, then asks the live service registry whether the services exist
+    """``_assert_mcp_tools_available`` consults the shared caps probe first and
+    only falls back to the ``get_services()`` existence probe when caps is None
     (issue #1813 P5 item 1c)."""
 
     @staticmethod
@@ -198,6 +198,21 @@ class TestAssertMcpToolsAvailableCapsFirst:
             limits={},
             tools_services=tools_services,
         )
+
+    @pytest.mark.asyncio
+    async def test_caps_hit_skips_get_services(self):
+        """A caps-present component obviously exists — the get_services probe
+        is skipped entirely."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps()),
+        ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        client.get_services.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_caps_hit_enforces_min_version(self):
@@ -269,7 +284,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
 
     @pytest.mark.asyncio
     async def test_caps_tools_services_true_passes_via_live_probe(self):
-        """A dual-entry (or tools-only) component reports True; the gate
+        """A dual-entry (or tools-only) 2.1.0 component reports True; the gate
         still consults the live registry (the cached snapshot is stale in both
         directions, #2302) and passes when the services are really there."""
         from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
