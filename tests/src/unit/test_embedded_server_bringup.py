@@ -74,8 +74,9 @@ async def wait_for_log(caplog: pytest.LogCaptureFixture, text: str) -> None:
 
 async def cancelled(task: asyncio.Task[Any]) -> None:
     task.cancel()
+    await asyncio.wait([task])
     with suppress(asyncio.CancelledError):
-        await task
+        task.result()
 
 
 @asynccontextmanager
