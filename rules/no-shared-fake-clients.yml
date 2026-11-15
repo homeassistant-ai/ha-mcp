@@ -42,7 +42,6 @@ ignores:
   - "tests/src/unit/test_backup_todo.py"
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_card_review_round6.py"
-  - "tests/src/unit/test_config_flow_server.py"
   - "tests/src/unit/test_config_subentries_folded.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
   - "tests/src/unit/test_embedded_server_stop.py"
