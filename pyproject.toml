@@ -590,7 +590,7 @@ dev = [
     "matter-python-client==1.5.5",
     "matter-ble-proxy==0.7.1",
     "PyTurboJPEG==1.8.3",
-    "av==19.0.0",
+    "av==19.0.2",
     "numpy==2.3.2",
     "zha==2.4.3",
     "zha-quirks==2.4.1",
