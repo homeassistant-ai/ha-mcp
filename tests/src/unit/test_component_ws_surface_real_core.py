@@ -15,7 +15,6 @@ import pytest
 from homeassistant.components import websocket_api as core_websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from custom_components.ha_mcp_tools import (
@@ -29,11 +28,9 @@ from custom_components.ha_mcp_tools import (
     helper_collections,
     todo_items,
 )
-from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import (
     COMPONENT_VERSION,
     DOMAIN,
-    TOOLS_ENTRY_TITLE,
 )
 from custom_components.ha_mcp_tools.websocket_api import constants as c
 
@@ -83,27 +80,6 @@ async def test_info_advertises_the_handshake_contract(
     assert "config_get" not in info["capabilities"]
     assert info["limits"] == {"max_results": 500, "max_body_bytes": 1_000_000}
     assert info["timezone"] == "America/New_York"
-
-
-async def test_info_reports_whether_the_tools_services_are_registered(
-    hass: HomeAssistant, component_ws: MockHAClientWebSocket
-) -> None:
-    """Both entry types serve this surface (#2289), so the server's
-    filesystem/YAML gate reads ``tools_services`` instead of inferring the
-    tools entry from ``info`` answering (#2292)."""
-    assert (await ws_result(component_ws, c.WS_INFO))["tools_services"] is False
-
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=TOOLS_ENTRY_TITLE,
-        version=HaMcpToolsConfigFlow.VERSION,
-        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
-        data={},
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-
-    assert (await ws_result(component_ws, c.WS_INFO))["tools_services"] is True
 
 
 def test_info_reports_the_version_hacs_installed() -> None:

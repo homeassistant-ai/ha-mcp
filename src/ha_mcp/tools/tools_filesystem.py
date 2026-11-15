@@ -57,42 +57,15 @@ CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 EDIT_FILE_SERVICE = "edit_file"
 
-# Minimum version of the ha_mcp_tools custom component that this ha-mcp
-# release expects. Bumps in lockstep with ``manifest.json`` whenever a
-# server-side behavior change requires it. Older components (no
-# ``version`` in the get_caller_token response, or a version below this)
-# get an actionable "update via HACS" error.
-# 0.8.0: ``ha_config_set_yaml`` now depends on the component's
-# ``themes/*.yaml`` yaml_path scope; a <0.8.0 component reaches the old
-# handler and rejects ``themes/<name>.yaml`` with a misleading "not
-# allowed" message instead of this actionable update prompt.
-# 0.9.0: the file tools accept absolute HAOS sibling-volume paths (/share,
-# /media, /ssl, /backup — issue #1586). A <0.9.0 component's allowlist
-# normalizer rejects every absolute path, so adding a volume would silently
-# do nothing; the version gate surfaces an actionable "update" prompt instead.
-# 0.10.0: legacy-backup restore + whole-file YAML replace add new component
-# services (``replace_file``, ``list_legacy_backups``, ``read_legacy_backup``)
-# and a ``yaml_path`` arg on ``read_file``. A <0.10.0 component lacks these
-# services; the gate surfaces an actionable "update" instead of a raw
-# "service not found".
-# 0.11.0: the confirm-flow + diff work (#1720) adds ``require_confirm`` /
-# ``confirm_token`` args to ``edit_yaml_config`` and ``diff`` / ``written``
-# response fields. The server always sends ``require_confirm`` (from
-# ENABLE_YAML_EDIT_CONFIRM, default on); a <0.11.0 component's strict
-# (PREVENT_EXTRA) schema rejects the unknown arg with a raw voluptuous
-# error — the gate surfaces an actionable "update" prompt instead.
-# 1.2.0: the YAML fragment read (#1788, PR #1882) needs two component
-# behaviours that a component reports no differently from a missing key.
-# ``list_files`` honours the configured packages folder, so ha_config_get_yaml's
-# glob/discovery would otherwise come back "Path not allowed" instead of
-# enumerating packages; and ``include_parsed`` on ``read_file`` is a new arg
-# that an older strict (PREVENT_EXTRA) schema rejects with a raw voluptuous
-# error. The gate turns both into the actionable "update" prompt. The floor is
-# 1.2.0, not the 1.1.0 that was current when #1882 landed: #1882 added these
-# behaviours under an *un-bumped* 1.1.0 component, so 1.1.0 splits into builds
-# with and without them and cannot distinguish the two (#1946). 1.2.0 is the
-# first component version cut after #1882, hence the first that guarantees both.
-MIN_COMPONENT_VERSION = "1.2.0"
+# The ha_mcp_tools component version every call to the File & YAML Tools
+# entry's services needs (the file and YAML tools, their backups, the fault
+# log read, the settings UI's file handlers): this release's own. The
+# component and the server ship in lockstep, so semantic-release stamps this
+# with each release (``version_variables`` in ``pyproject.toml``), beside the
+# component's own version. An older component (a lower version, or no
+# ``version`` in the get_caller_token response) gets an actionable "update"
+# error.
+MIN_COMPONENT_VERSION = "9.2.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -113,15 +86,6 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 # when a client is garbage-collected (avoids id() reuse if a freed client's
 # address gets recycled before the unauthorized-retry fires).
 _CALLER_TOKEN_CACHE: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
-# Component version as reported by the REST bootstrap, keyed like the token
-# cache. Populated in ``_fetch_caller_token``, which already parses and
-# validates it. Feature-scoped version gates read this rather than the
-# WebSocket capability handshake: caps come back ``None`` for a transport
-# blip just as they do for an old component, so gating on them would report
-# a momentary socket drop as "your component is too old".
-_COMPONENT_VERSION_CACHE: weakref.WeakKeyDictionary[Any, str] = (
-    weakref.WeakKeyDictionary()
-)
 _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
@@ -132,10 +96,10 @@ _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
 # can flip at any moment — there a transport that may come back, here a config
 # entry the user can add or remove at runtime — so both stay short enough to
 # self-heal without a server restart.
-_LIVE_TOOLS_PROBE_TTL_S = 30.0
+LIVE_TOOLS_PROBE_TTL_S = 30.0
 # ``(verdict, monotonic_time)`` per client, keyed exactly like
-# ``_CALLER_TOKEN_CACHE`` / ``_COMPONENT_VERSION_CACHE`` above so the entry
-# self-evicts with the client and multi-client setups stay separate.
+# ``_CALLER_TOKEN_CACHE`` above so the entry self-evicts with the client and
+# multi-client setups stay separate.
 _LIVE_TOOLS_PROBE_CACHE: weakref.WeakKeyDictionary[Any, tuple[bool, float]] = (
     weakref.WeakKeyDictionary()
 )
@@ -145,7 +109,7 @@ _LIVE_TOOLS_PROBE_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
 )
 
 
-def _monotonic() -> float:
+def probe_clock() -> float:
     """Monotonic clock read, isolated so tests can advance it deterministically."""
     return time.monotonic()
 
@@ -235,6 +199,11 @@ def _raise_component_too_old(detail: str) -> NoReturn:
                 "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
+                (
+                    "If no update is listed yet, refresh its release data and "
+                    'look again: ha_manage_hacs(action="update_information", '
+                    'repository_id="homeassistant-ai/ha-mcp")'
+                ),
             ],
         )
     )
@@ -253,13 +222,9 @@ async def _fetch_caller_token(client: Any) -> str:
     2. Domain present but no ``get_caller_token`` — pre-0.5.0 components
        don't ship the bootstrap service. Surface an actionable "update"
        error instead of letting HA return an opaque 400 to the caller.
-    3. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
-       present, the response now carries the component's manifest
-       version. ha-mcp releases that depend on newer custom-component
-       behavior (e.g. a new accepted yaml_path key, a new schema field)
-       bump ``MIN_COMPONENT_VERSION`` together with the manifest, and
-       this check rejects 0.5.0+ components that are still behind that
-       bar with the same actionable update prompt.
+    3. ``MIN_COMPONENT_VERSION`` — the response carries the component's
+       manifest version, and a component older than this release is
+       rejected with the same actionable update prompt.
 
     Components that pre-date the version-reporting field (returned no
     ``version`` in the response) are treated as "too old" for the same
@@ -307,8 +272,7 @@ async def _fetch_caller_token(client: Any) -> str:
     raw_version: Any = unwrapped.get("version") if isinstance(unwrapped, dict) else None
     if not isinstance(raw_version, str) or not raw_version:
         _raise_component_too_old(
-            "the get_caller_token response did not include a version "
-            f"field (pre-{MIN_COMPONENT_VERSION})"
+            "the get_caller_token response did not include a version field"
         )
     version: str = raw_version
     try:
@@ -336,7 +300,6 @@ async def _fetch_caller_token(client: Any) -> str:
     if parsed < _version_tuple(MIN_COMPONENT_VERSION):
         _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token
-    _COMPONENT_VERSION_CACHE[client] = version
     return token
 
 
@@ -439,12 +402,10 @@ async def _is_mcp_tools_available(client: Any) -> bool:
 def _assert_caps_version_ok(caps: ComponentCaps) -> None:
     """Reject a caps-present component below ``MIN_COMPONENT_VERSION``.
 
-    ``get_component_caps`` only returns caps for a component new enough to
-    answer ``ha_mcp_tools/info`` (shipped in 1.1.0, already past the 0.11.0
-    floor), so this is a defensive belt mirroring the authoritative gate in
-    ``_fetch_caller_token`` and never fires in practice. An empty / unparseable
-    ``component_version`` (never emitted by a real caps-present component) is
-    left to that downstream token-fetch gate rather than rejected here.
+    Mirrors the authoritative gate in ``_fetch_caller_token`` for a caller that
+    already holds the caps. An empty / unparseable ``component_version`` (never
+    emitted by a real caps-present component) is left to that downstream
+    token-fetch gate rather than rejected here.
     """
     try:
         parsed = _version_tuple(caps.component_version)
@@ -484,10 +445,10 @@ async def _probe_tools_services(client: Any) -> bool:
     """``_is_mcp_tools_available`` behind a short per-client TTL memo.
 
     The live registry probe is an uncached ``GET /api/services`` — HA serves
-    the whole service registry — and every gated tool call on a 2.1.0+
+    the whole service registry — and every gated tool call on a current
     component reaches it, so an unbounded per-call probe would put that request
     in front of each file read. Memoizing the verdict for
-    ``_LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
+    ``LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
 
     A ``False`` verdict is memoized too: a user who adds the tools entry
     mid-session waits at most the TTL for the tools to start working, which is
@@ -495,7 +456,7 @@ async def _probe_tools_services(client: Any) -> bool:
     better than the restart the cached caps boolean would have required.
     """
     cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
-    if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+    if cached is not None and (probe_clock() - cached[1]) < LIVE_TOOLS_PROBE_TTL_S:
         return cached[0]
     # Serialize the refresh per client: concurrent gated calls arriving on an
     # expired entry would otherwise each pass the miss check and each fetch the
@@ -503,10 +464,10 @@ async def _probe_tools_services(client: Any) -> bool:
     lock = _LIVE_TOOLS_PROBE_LOCKS.setdefault(client, asyncio.Lock())
     async with lock:
         cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
-        if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+        if cached is not None and (probe_clock() - cached[1]) < LIVE_TOOLS_PROBE_TTL_S:
             return cached[0]
         verdict = await _is_mcp_tools_available(client)
-        _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, _monotonic())
+        _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, probe_clock())
         return verdict
 
 
@@ -516,30 +477,20 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     Caps-first: a component that answers ``ha_mcp_tools/info``
     (``get_component_caps`` returns caps) obviously exists — reuse that shared
     cached probe and enforce ``MIN_COMPONENT_VERSION`` from
-    ``caps.component_version`` (info shipped in 1.1.0, already past the floor).
-    Caps alone no longer prove the SERVICES exist, though: since 2.1.0 the
-    server entry also registers the WS surface (#2289), so ``info`` answers on
-    a server-entry-only install too. Such a component reports the additive
-    ``tools_services`` field (#2292) — but the caps snapshot is cached for the
-    client's lifetime while config entries come and go at runtime, so the
-    cached boolean is stale in BOTH directions: a pre-tools-entry ``False``
-    would block these tools until a restart, and a pre-removal ``True`` would
-    wave calls through to now-missing services and surface raw
-    service-call failures instead of the actionable error. So when the field
-    is present at all, ignore its cached value and consult the live service
-    registry (``_probe_tools_services``), which is memoized for
-    ``_LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
-    per gated call. ``None`` (a pre-2.1.0 component) keeps the old implication,
-    which was sound there — only the tools entry registered ``info``.
+    ``caps.component_version``. Caps alone do not prove the SERVICES exist,
+    though: the server entry also registers the WS surface (#2289), so ``info``
+    answers on a server-entry-only install too, and the caps snapshot is
+    cached for the client's lifetime while config entries come and go at
+    runtime (#2292, #2302). So consult the live service registry
+    (``_probe_tools_services``), which is memoized for
+    ``LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
+    per gated call.
 
-    Caps-absent band: caps is None for a component in the 0.11.0-1.1.0 band
-    (services, no info command) or an absent one, so the same live probe is the
-    only signal available. It is the secondary case now — on a current
-    component the probe above is the primary path — but the verdict is read
-    identically. A no-services verdict raises the "File & YAML Tools entry not
-    set up" error (``_raise_tools_entry_not_set_up``), not an
-    install-the-component prompt — the entry-not-added state is the common
-    cause (#1996).
+    Caps is None when no component answered ``info`` (none installed, or the
+    probe failed), so the same live probe is the only signal available. A
+    no-services verdict raises the "File & YAML Tools entry not set up" error
+    (``_raise_tools_entry_not_set_up``), not an install-the-component prompt —
+    the entry-not-added state is the common cause (#1996).
 
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified
@@ -551,10 +502,6 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     caps = await get_component_caps(client)
     if caps is not None:
         _assert_caps_version_ok(caps)
-        if caps.tools_services is None:
-            # Pre-2.1.0 component: only the tools entry registered ``info``,
-            # so answering caps DID prove the services exist.
-            return
     if not await _probe_tools_services(client):
         _raise_tools_entry_not_set_up()
 

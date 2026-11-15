@@ -14,8 +14,6 @@ Custom-component tests run against real Home Assistant Core.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -152,36 +150,6 @@ class TestSettingsHandlersRefuseABadToken:
         assert result["error_code"] == "unauthorized"
         save.assert_not_awaited()
         assert hass.data == _fake_hass("good").data
-
-
-class TestManifestVersionCoupling:
-    """The shipped component's manifest version must satisfy the server's
-    own ``MIN_COMPONENT_VERSION`` floor.
-
-    If the manifest ever falls behind the floor, a freshly-updated
-    component would report a version below the gate and lock every caller
-    out with a "too old" error that no further HACS update can clear.
-    Whenever a PR adds a new component service or schema field it must
-    bump both in lockstep (see the comment block at the
-    ``MIN_COMPONENT_VERSION`` definition); this test pins that invariant.
-    """
-
-    def _manifest_version(self) -> str:
-        import custom_components.ha_mcp_tools as component
-
-        manifest_path = Path(component.__file__).parent / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return manifest["version"]
-
-    def test_manifest_version_meets_minimum(self):
-        manifest_version = self._manifest_version()
-        assert _version_tuple(manifest_version) >= _version_tuple(
-            MIN_COMPONENT_VERSION
-        ), (
-            f"manifest.json version {manifest_version!r} is below the server's "
-            f"MIN_COMPONENT_VERSION {MIN_COMPONENT_VERSION!r}; a fresh component "
-            "would fail its own version gate. Bump manifest.json in lockstep."
-        )
 
 
 class TestGetCallerTokenManifestVersion:
@@ -640,42 +608,6 @@ class TestCallMcpToolsServiceInjectsToken:
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
     @pytest.mark.asyncio
-    async def test_stale_1_1_0_component_rejected(self):
-        """Regression for #1946: a component reporting exactly ``1.1.0`` is
-        rejected as too old.
-
-        #1882 added the packages-aware ``list_files`` + ``read_file``
-        ``include_parsed`` behaviours under an *un-bumped* ``1.1.0`` component,
-        so a ``1.1.0`` build may or may not carry them. The floor must therefore
-        exclude ``1.1.0`` (it is ``1.2.0``, the first version cut after #1882),
-        else a stale ``1.1.0`` install passes the gate and then hits raw
-        failures instead of the actionable "update" prompt. Pins that ``1.1.0``
-        never passes; this holds for any floor above it, so it also guards
-        against a regression that lowers the floor back to ``1.1.0``.
-        """
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-stale",
-                    "version": "1.1.0",
-                }
-            }
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "1.1.0" in msg
-
-    @pytest.mark.asyncio
     async def test_version_above_minimum_accepted(self):
         """A component reporting a version strictly ABOVE
         ``MIN_COMPONENT_VERSION`` is accepted. Guards against a future
@@ -853,116 +785,9 @@ class TestHaCallServiceRefusesMcpToolsDomain:
                 )
 
 
-class TestExtraYamlKeysVersionGate:
-    """The #1887 gate reads the version the REST bootstrap reported.
-
-    Every other test of the gate seeds ``_COMPONENT_VERSION_CACHE`` by hand,
-    which pins the comparison but not its input. These drive the real
-    ``_fetch_caller_token`` so that deleting the cache write - which would
-    make the gate answer "reported version: unknown" on a perfectly current
-    component, disabling the feature for everyone - cannot stay green.
-    """
-
-    @staticmethod
-    def _client(version: str):
-        client = _make_client_with_token("gate-token")
-
-        async def fake_call_service(domain, service, payload, **kwargs):
-            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-                return {
-                    "service_response": {
-                        "success": True,
-                        "token": "gate-token",
-                        "version": version,
-                    }
-                }
-            return {"service_response": {"success": True}}
-
-        client.call_service.side_effect = fake_call_service
-        return client
-
-    @pytest.mark.asyncio
-    async def test_bootstrap_populates_version_cache(self):
-        from ha_mcp.tools.tools_filesystem import (
-            _COMPONENT_VERSION_CACHE,
-            _fetch_caller_token,
-        )
-
-        client = self._client("1.2.4")
-        await _fetch_caller_token(client)
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
-
-    @pytest.mark.asyncio
-    async def test_gate_passes_on_current_component_via_bootstrap(self):
-        from ha_mcp.tools.yaml_extra_keys import (
-            MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS,
-            assert_extra_yaml_keys_supported,
-        )
-
-        client = self._client(MIN_COMPONENT_VERSION_EXTRA_YAML_KEYS)
-        # No exception: the gate found the version the bootstrap reported.
-        await assert_extra_yaml_keys_supported(client, ["alert2"])
-
-    @pytest.mark.asyncio
-    async def test_gate_blocks_on_older_component_via_bootstrap(self):
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-        from ha_mcp.tools.yaml_extra_keys import assert_extra_yaml_keys_supported
-
-        client = self._client("1.2.3")
-        with pytest.raises(ToolError) as excinfo:
-            await assert_extra_yaml_keys_supported(client, ["alert2"])
-        assert "1.2.4" in str(excinfo.value)
-
-    @pytest.mark.asyncio
-    async def test_gate_rebootstraps_after_component_update(self):
-        """A component updated underneath a running server must heal the gate.
-
-        The caller-token cache is keyed by the long-lived REST client and
-        survives a Home Assistant restart, so without a forced re-bootstrap
-        the version stays at whatever it was when this process first talked
-        to the component. The error's own remediation ("update, then restart
-        HA") would then never take effect.
-        """
-        from ha_mcp.tools.tools_filesystem import (
-            _CALLER_TOKEN_CACHE,
-            _COMPONENT_VERSION_CACHE,
-            _fetch_caller_token,
-        )
-        from ha_mcp.tools.yaml_extra_keys import assert_extra_yaml_keys_supported
-
-        reported = {"version": "1.2.3"}
-        client = _make_client_with_token("gate-token")
-
-        async def fake_call_service(domain, service, payload, **kwargs):
-            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-                return {
-                    "service_response": {
-                        "success": True,
-                        "token": "gate-token",
-                        "version": reported["version"],
-                    }
-                }
-            return {"service_response": {"success": True}}
-
-        client.call_service.side_effect = fake_call_service
-
-        # Prime the caches the way a live server would have, on the old build.
-        await _fetch_caller_token(client)
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.3"
-        assert _CALLER_TOKEN_CACHE.get(client) == "gate-token"
-
-        # Operator updates the component; the cached token is still valid, so
-        # nothing else on the path would re-read the version.
-        reported["version"] = "1.2.4"
-
-        await assert_extra_yaml_keys_supported(client, ["alert2"])
-        assert _COMPONENT_VERSION_CACHE.get(client) == "1.2.4"
-
-
 class TestEffectiveExtraYamlWriteKeys:
     """effective_extra_yaml_write_keys unions the server's HA_MCP_EXTRA_YAML_KEYS
-    with the component-owned store, read via get_extra_yaml_keys and gated on the
-    component version (#1887)."""
+    with the component-owned store, read via get_extra_yaml_keys (#1887)."""
 
     @staticmethod
     def _client(store_response=None, store_raises=False):
@@ -982,24 +807,19 @@ class TestEffectiveExtraYamlWriteKeys:
     def _settings(env):
         return SimpleNamespace(extra_yaml_write_keys=env)
 
-    async def _run(
-        self, monkeypatch, *, version, env, store_response=None, store_raises=False
-    ):
+    async def _run(self, monkeypatch, *, env, store_response=None, store_raises=False):
         from ha_mcp.tools import tools_filesystem
         from ha_mcp.tools import yaml_extra_keys as fsmod
 
         client = self._client(store_response, store_raises)
         _ensure = AsyncMock(return_value="eff-token")
-        monkeypatch.setattr(fsmod, "_ensure_caller_token", _ensure)
         monkeypatch.setattr(tools_filesystem, "_ensure_caller_token", _ensure)
-        fsmod._COMPONENT_VERSION_CACHE[client] = version
         return await fsmod.effective_extra_yaml_write_keys(client, self._settings(env))
 
     @pytest.mark.asyncio
     async def test_env_only_empty_store(self, monkeypatch):
         result = await self._run(
             monkeypatch,
-            version="1.2.4",
             env=" alert2, foo ",
             store_response={"service_response": {"success": True, "keys": []}},
         )
@@ -1009,7 +829,6 @@ class TestEffectiveExtraYamlWriteKeys:
     async def test_unions_env_and_store(self, monkeypatch):
         result = await self._run(
             monkeypatch,
-            version="1.2.4",
             env="alert2",
             store_response={"service_response": {"success": True, "keys": ["beta"]}},
         )
@@ -1019,27 +838,12 @@ class TestEffectiveExtraYamlWriteKeys:
     async def test_store_only_when_env_empty(self, monkeypatch):
         result = await self._run(
             monkeypatch,
-            version="1.2.4",
             env="",
             store_response={"service_response": {"success": True, "keys": ["beta"]}},
         )
         assert result == ["beta"]
 
     @pytest.mark.asyncio
-    async def test_old_component_never_reads_store(self, monkeypatch):
-        # The store would report "beta", but a pre-1.2.4 component is not asked;
-        # assert_extra_yaml_keys_supported then handles the mismatch elsewhere.
-        result = await self._run(
-            monkeypatch,
-            version="1.2.3",
-            env="alert2",
-            store_response={"service_response": {"success": True, "keys": ["beta"]}},
-        )
-        assert result == ["alert2"]
-
-    @pytest.mark.asyncio
     async def test_store_read_failure_falls_back_to_env(self, monkeypatch):
-        result = await self._run(
-            monkeypatch, version="1.2.4", env="alert2", store_raises=True
-        )
+        result = await self._run(monkeypatch, env="alert2", store_raises=True)
         assert result == ["alert2"]

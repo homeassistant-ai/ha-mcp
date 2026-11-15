@@ -15,8 +15,8 @@ raw-text sources this one orders whole blocks and pages through the result
 with ``offset`` instead of reversing lines.
 
 The read goes through the File & YAML Tools entry's privileged ``read_file``
-service (the same route as ``ha_read_file``), which allows the path from
-component 2.2.0. Split out of ``log_sources`` under `.gemini/styleguide.md`
+service (the same route as ``ha_read_file``). Split out of ``log_sources``
+under `.gemini/styleguide.md`
 § Tool Consolidation and Module Size.
 """
 
@@ -42,11 +42,6 @@ from .util_helpers import unwrap_service_response
 # Config-relative path HA Core hands to ``faulthandler.enable`` (``FAULT_LOG_FILENAME``
 # in ``homeassistant/__main__.py``).
 FAULT_LOG_PATH = "home-assistant.log.fault"
-
-# First component release whose read allowlist includes ``FAULT_LOG_PATH``. An
-# older component answers the read with "Path not allowed"; that reply is the
-# version signal, no separate probe needed.
-MIN_COMPONENT_VERSION_FAULT_LOG = "2.2.0"
 
 # Lines tailed from the file per call, independent of ``limit``. A single dump
 # lists every thread, so it routinely runs past a 100-line ``limit``; tailing
@@ -82,27 +77,7 @@ def _no_crash(data: dict[str, Any], total_lines: int) -> dict[str, Any]:
 
 
 def _raise_read_failure(error: str) -> NoReturn:
-    """Turn a ``read_file`` refusal into the matching structured error.
-
-    "Path not allowed" is the one refusal with a known cause: a component
-    older than :data:`MIN_COMPONENT_VERSION_FAULT_LOG`, whose allowlist does
-    not yet carry the file. Anything else is reported verbatim.
-    """
-    if "Path not allowed" in error:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                "The installed ha_mcp_tools custom component does not allow "
-                f"reading {FAULT_LOG_PATH} (requires component >= "
-                f"{MIN_COMPONENT_VERSION_FAULT_LOG}).",
-                details=error,
-                suggestions=[
-                    "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
-                    "Restart Home Assistant after the update completes",
-                ],
-                context={"source": "fault_log"},
-            )
-        )
+    """Report a ``read_file`` refusal verbatim, as a structured error."""
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,

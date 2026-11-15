@@ -307,6 +307,8 @@ The **HA-MCP integration** also powers a set of privileged tools that standard H
 
 Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. These five tools return an error with installation instructions if the component is missing.
 
+A server that runs outside Home Assistant (the app, Docker or pip) needs the component of its own release for these tools. After a server update, update HA-MCP in HACS or the Marketplace and restart Home Assistant; until then they return an error that says so. The in-process server always runs the release its component ships with.
+
 These tools also require beta feature flags. See **[Beta Features](docs/beta.md)** for how to enable them — including the `ENABLE_BETA_FEATURES` master flag, which must be on before the filesystem/YAML sub-flags take effect.
 
 ### Install
