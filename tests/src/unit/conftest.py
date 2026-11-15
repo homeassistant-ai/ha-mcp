@@ -94,6 +94,23 @@ def pytest_collection_finish(session: pytest.Session) -> None:
             os.environ[name] = value
 
 
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Keep this runner's share of the suite (``UNIT_TEST_SHARD``, set in CI)."""
+    shard = os.environ.get("UNIT_TEST_SHARD")
+    if not shard:
+        return
+    from ._shards import in_shard
+
+    kept: list[pytest.Item] = []
+    dropped: list[pytest.Item] = []
+    for item in items:
+        (kept if in_shard(item.nodeid, shard) else dropped).append(item)
+    config.hook.pytest_deselected(items=dropped)
+    items[:] = kept
+
+
 def pytest_unconfigure(config: pytest.Config) -> None:
     if _SESSION_DATA_DIR:
         shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
