@@ -250,6 +250,9 @@
         "switch": {
             "server_access": {
                 "name": "Access"
+            },
+            "server_allow_changes": {
+                "name": "Allow changes"
             }
         }
     }
