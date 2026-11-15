@@ -100,7 +100,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _unit_test_env(tmp_path_factory, monkeypatch):
+def _unit_test_env(monkeypatch):
     """Set the environment every unit test starts from.
 
     - An empty ``HA_MCP_CONFIG_DIR`` per test. Without it, tests write tool
@@ -123,9 +123,9 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     tests from other trees in the same session keep their own environment.
     A test that needs another value sets it with ``monkeypatch``.
     """
-    monkeypatch.setenv(
-        "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
-    )
+    # Not ``tmp_path_factory.mktemp``: pytest numbers a directory by listing
+    # every one it made so far, which gets slower with each test of the suite.
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", tempfile.mkdtemp(dir=_SESSION_DATA_DIR))
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
     monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
@@ -227,10 +227,14 @@ def _logging_put_back() -> Iterator[None]:
     levels = {name: logging.getLogger(name).level for name in names}
     root_level, root_handlers = root.level, root.handlers[:]
     yield
-    root.setLevel(root_level)
-    root.handlers[:] = root_handlers
+    # Only what a test changed: ``setLevel`` clears every logger's level cache.
+    if root.level != root_level:
+        root.setLevel(root_level)
+    if root.handlers != root_handlers:
+        root.handlers[:] = root_handlers
     for name, level in levels.items():
-        logging.getLogger(name).setLevel(level)
+        if logging.getLogger(name).level != level:
+            logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(autouse=True)
