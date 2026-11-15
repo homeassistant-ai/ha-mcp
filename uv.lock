@@ -1569,7 +1569,7 @@ dev = [
     { name = "knx-frontend", specifier = "==2026.11.8.11926" },
     { name = "knx-telegram-store", extras = ["sqlite", "postgres"], specifier = "==0.15.2" },
     { name = "lefthook", specifier = ">=1.10.0" },
-    { name = "matter-ble-proxy", specifier = "==0.7.1" },
+    { name = "matter-ble-proxy", specifier = "==1.5.5" },
     { name = "matter-python-client", specifier = "==1.5.5" },
     { name = "mcp", specifier = ">=1.26.0,<2" },
     { name = "mypy", specifier = ">=1.17.0" },
@@ -2272,15 +2272,15 @@ wheels = [
 
 [[package]]
 name = "matter-ble-proxy"
-version = "0.7.1"
+version = "1.5.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "bleak" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d3/7c/93045b18c90c225d5b58dba594500ca3041ec90922930a60a920f910b29d/matter_ble_proxy-0.7.1.tar.gz", hash = "sha256:847f5c869526ae623f5be9f033403313e91ef593b94b1d41514a2eb4b94c9616", size = 17052, upload-time = "2026-05-21T12:35:53.242Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/84/7164555376d47a5d3f05500e320b1ab7fef25f2650c53f11df1825018e42/matter_ble_proxy-1.5.5.tar.gz", hash = "sha256:a095635187b6163d9b7bd66324d2958a82ac44865674c6b54017f09d09678787", size = 20924, upload-time = "2026-10-24T13:09:02.533Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/36/7dd6213767204c5bdef8a2116607c6eb2752e1b0a6ee406c337ddc8aa69f/matter_ble_proxy-0.7.1-py3-none-any.whl", hash = "sha256:ca79d636f9aed217fe229f04c2f049df38935845c6beb7fd2da360ac6f513057", size = 16166, upload-time = "2026-05-21T12:35:52.068Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/d0/7df95e5eb6e108ae483f4e25ecb6c7489c2dba2137055cb3e2a82ee7f2f2/matter_ble_proxy-1.5.5-py3-none-any.whl", hash = "sha256:9ad8f6ac1b111ea0d880e51f46f917119a7cb75296108ccabd3e0ff3969e5201", size = 17414, upload-time = "2026-10-24T13:09:01.096Z" },
 ]
 
 [[package]]

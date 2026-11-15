@@ -588,7 +588,7 @@ dev = [
     "pyroute2==0.9.6",
     "zwave-js-server-python==0.74.0",
     "matter-python-client==1.5.5",
-    "matter-ble-proxy==0.7.1",
+    "matter-ble-proxy==1.5.5",
     "PyTurboJPEG==1.8.3",
     "av==19.0.0",
     "numpy==2.3.2",
