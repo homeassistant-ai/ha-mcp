@@ -143,6 +143,18 @@ class TestListGroups:
 
         assert any("last_reported" in w for w in result["warnings"])
 
+    async def test_list_falls_back_to_rest_when_the_snapshot_reply_is_lost(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        with patch(
+            "ha_mcp.tools.tools_groups.ask_component",
+            AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
+        ):
+            result, _ = await _list_after_a_repeated_report(hass, component_core_client)
+
+        assert [g["entity_id"] for g in result["groups"]] == ["group.g"]
+        assert any("last_reported" in w for w in result["warnings"])
+
     async def test_list_without_an_answer_is_a_tool_error(
         self,
         core_client: HomeAssistantClient,

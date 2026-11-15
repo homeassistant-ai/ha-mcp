@@ -144,14 +144,19 @@ class GroupTools:
         try:
             # The component's snapshot carries the live last_reported; Core's
             # REST states can hold an older one (home-assistant/core#181392).
-            snapshot = await ask_component(
-                self._client,
-                "system_snapshot",
-                include_issues=False,
-                include_config_entries=False,
-                include_entities=False,
-                include_states=True,
-            )
+            try:
+                snapshot = await ask_component(
+                    self._client,
+                    "system_snapshot",
+                    include_issues=False,
+                    include_config_entries=False,
+                    include_entities=False,
+                    include_states=True,
+                )
+            except HomeAssistantConnectionError as exc:
+                # A read: a lost reply falls back to REST like a refusal.
+                logger.warning("Component snapshot failed; using REST: %r", exc)
+                snapshot = None
             states = snapshot.get("states") if snapshot else None
             live = isinstance(states, list)
             if not isinstance(states, list):
