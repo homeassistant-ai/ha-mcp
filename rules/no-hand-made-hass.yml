@@ -31,7 +31,6 @@ ignores:
   - "tests/src/unit/test_card_review_regressions.py"
   - "tests/src/unit/test_card_review_round6.py"
   - "tests/src/unit/test_embedded_server.py"
-  - "tests/src/unit/test_embedded_setup.py"
   - "tests/src/unit/test_ha_mcp_server_entry.py"
   - "tests/src/unit/test_oauth_dcr.py"
   - "tests/src/unit/test_tools_entry_lifecycle.py"
