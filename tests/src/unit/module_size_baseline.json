@@ -27,7 +27,7 @@
   "src/ha_mcp/tools/tools_history.py": 1100,
   "src/ha_mcp/tools/tools_integrations.py": 2827,
   "src/ha_mcp/tools/tools_registry.py": 1042,
-  "src/ha_mcp/tools/tools_service.py": 2393,
+  "src/ha_mcp/tools/tools_service.py": 2391,
   "src/ha_mcp/tools/tools_system.py": 1624,
   "src/ha_mcp/tools/tools_updates.py": 1083,
   "tests/haos_image_build/build_image.py": 2695,
