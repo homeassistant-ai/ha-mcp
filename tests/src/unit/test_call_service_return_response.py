@@ -1,11 +1,9 @@
 """ha_call_service places a service's response data once (issue #2085).
 
-Home Assistant answers ``return_response`` over REST with an envelope,
-``{"changed_states": [...], "service_response": {...}}``. The legacy REST path
-in ``ha_call_service`` used to put that whole envelope in ``result`` *and*
-copy ``service_response`` to the top level, so the response shipped twice.
-The envelope is now split: ``result`` carries the changed states only, and
-``service_response`` appears exactly once, at the top level.
+Without the component a call is Core's REST POST, whose answer lists the
+changed states and, when asked for, the response data; ``service_response``
+appears exactly once, at the top level. With the component, a call asking for
+a response lists the states written under its context the same way.
 
 Every reply below is Core's own: a test service registered on the real
 ``hass`` changes states under the call's context and returns response data.
@@ -66,84 +64,101 @@ def tools(core_client: HomeAssistantClient) -> ServiceTools:
     return ServiceTools(core_client, None)
 
 
-async def test_service_response_is_top_level_once_and_states_are_compacted(
-    hass: HomeAssistant, tools: ServiceTools
+@pytest.mark.parametrize("verbose", [False, True], ids=["compact", "verbose"])
+async def test_without_the_component_the_post_lists_its_states_and_response_once(
+    hass: HomeAssistant, tools: ServiceTools, verbose: bool
 ) -> None:
-    """The envelope splits: response data top-level, compacted states in result."""
+    """Core's REST POST answers the changed states and the response; the
+    response appears once, top level, and verbose does not repeat it."""
     _register_echo(hass, "light.x")
 
     response = await tools.ha_call_service(
-        domain="test", service="echo", return_response=True
+        domain="test", service="echo", return_response=True, verbose=verbose
     )
 
     assert response["service_response"] == SHELL_RESPONSE
-    result = response["result"]
-    assert isinstance(result, list), result
-    assert [record["entity_id"] for record in result] == ["light.x"]
-    assert "service_response" not in result[0]
-    # The changed states go through default compaction like every other path.
-    assert "context" not in result[0]
-    assert "last_changed" not in result[0]
+    assert [record["entity_id"] for record in response["result"]] == ["light.x"]
     assert _occurrences(response, "stdout") == 1, response
-    # Core's reply is the expected envelope, so nothing needs explaining.
     assert "warnings" not in response, response
 
 
-async def test_verbose_returns_raw_states_and_one_response_copy(
-    hass: HomeAssistant, tools: ServiceTools
+async def test_the_component_lists_a_confirmed_calls_changed_state_once(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """verbose=True bypasses projection but must not resurrect the duplicate."""
-    _register_echo(hass, "light.x")
+    """Where the changed states live: the component's confirmed call returns
+    the target's new state, compacted, beside the response data shipped once."""
 
-    response = await tools.ha_call_service(
-        domain="test", service="echo", return_response=True, verbose=True
+    async def turn_on(call: ServiceCall) -> ServiceResponse:
+        hass.states.async_set("light.x", "on", {"brightness": 10})
+        return dict(SHELL_RESPONSE)
+
+    hass.states.async_set("light.x", "off")
+    hass.services.async_register(
+        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+    )
+
+    response = await ServiceTools(component_core_client, None).ha_call_service(
+        domain="light", service="turn_on", entity_id="light.x", return_response=True
     )
 
     assert response["service_response"] == SHELL_RESPONSE
     (record,) = response["result"]
-    state = hass.states.get("light.x")
-    assert state is not None
-    # Raw: Core's metadata is kept, and it is the state the call changed.
-    assert record["entity_id"] == "light.x"
-    assert record["context"]["id"] == state.context.id
-    assert "last_changed" in record
+    assert (record["entity_id"], record["state"]) == ("light.x", "on")
+    assert "context" not in record
+    assert "last_changed" not in record
     assert _occurrences(response, "stdout") == 1, response
+    assert "warnings" not in response, response
 
 
-async def test_result_fields_projects_the_changed_states(
-    hass: HomeAssistant, tools: ServiceTools
+async def test_a_verbose_confirmed_call_keeps_every_write_of_its_target(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """result_fields reaches the changed states on a return_response call.
+    """The confirmation is the target's verification, not a replacement for
+    the writes Core recorded under the call's context."""
 
-    Before the split ``result`` was the envelope dict, so projection bailed on
-    its list guard and the parameter was silently ignored.
-    """
-    _register_echo(hass, "light.x")
+    async def turn_on(call: ServiceCall) -> ServiceResponse:
+        for level in (10, 200):
+            hass.states.async_set(
+                "light.x", "on", {"brightness": level}, context=call.context
+            )
+        return dict(SHELL_RESPONSE)
 
-    response = await tools.ha_call_service(
-        domain="test",
-        service="echo",
+    hass.states.async_set("light.x", "off")
+    hass.services.async_register(
+        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+    )
+
+    response = await ServiceTools(component_core_client, None).ha_call_service(
+        domain="light",
+        service="turn_on",
+        entity_id="light.x",
         return_response=True,
-        result_fields=["entity_id"],
+        verbose=True,
     )
 
-    assert response["result"] == [{"entity_id": "light.x"}]
-    assert response["service_response"] == SHELL_RESPONSE
+    levels = [r["attributes"]["brightness"] for r in response["result"]]
+    assert levels == [10, 200]
 
 
-async def test_entity_id_filters_the_changed_states(
-    hass: HomeAssistant, tools: ServiceTools
+@pytest.mark.parametrize("verbose", [False, True], ids=["compact", "verbose"])
+async def test_the_component_lists_an_unconfirmed_calls_changed_states(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, verbose: bool
 ) -> None:
-    """Compaction's target filter applies to return_response changed states."""
-    _register_echo(hass, "light.x", "light.parent_group")
+    """A call with no target to confirm still lists, through the component,
+    the states written under its context, with no install hint."""
+    _register_echo(hass, "light.x", "light.y")
 
-    response = await tools.ha_call_service(
-        domain="test", service="echo", entity_id="light.x", return_response=True
+    response = await ServiceTools(component_core_client, None).ha_call_service(
+        domain="test", service="echo", return_response=True, verbose=verbose
     )
 
-    result = response["result"]
-    assert [record["entity_id"] for record in result] == ["light.x"], result
     assert response["service_response"] == SHELL_RESPONSE
+    assert sorted(r["entity_id"] for r in response["result"]) == [
+        "light.x",
+        "light.y",
+    ]
+    assert _occurrences(response, "stdout") == 1, response
+    assert "warnings" not in response, response
 
 
 async def test_return_response_false_has_no_service_response_key(

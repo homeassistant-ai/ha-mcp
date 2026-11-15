@@ -984,7 +984,7 @@ class SystemTools:
         (entities + states + config_entries), collapsing what was up to 2x
         ``config_entries/get`` round-trips (a TOCTOU across sections) into one
         consistent in-process read. Repairs are not read from it: Core's ``repairs/list_issues`` also
-        drops the issues of a disabled config entry, and the slice does not.
+        drops the issues of a disabled config entry, and an older component's slice does not.
 
         All-or-nothing per call, mirroring ``_fetch_exposure_via_component`` /
         ``_overview_via_component``: a capability miss, command error/timeout,

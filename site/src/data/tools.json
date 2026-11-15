@@ -3812,12 +3812,12 @@
         },
         "return_response": {
           "type": "bool",
-          "description": "If True, the service's response data is returned once, as the top-level 'service_response' key — never nested inside 'result'.",
+          "description": "If True, the service's response data is returned once, as the top-level 'service_response' key — never nested inside 'result'. With the ha_mcp_tools component, a response Home Assistant rejects after the service ran still succeeds, with 'response_error' and a warning not to call it again.",
           "default": false
         },
         "wait": {
           "type": "bool",
-          "description": "If True (default), wait for the entity state to change before returning. Applies only to state-changing services called with a single entity_id. A comma-separated multi-target does not get confirmed by this: it falls through to a legacy path that polls for the literal composite entity_id and times out after 10s. Set wait=False for multi-target calls.",
+          "description": "If True (default), wait for the entity state to change before returning. Applies only to state-changing services called with a single entity_id. A comma-separated multi-target does not get confirmed by this: without return_response it falls through to a legacy path that polls for the literal composite entity_id and times out after 10s. Set wait=False for multi-target calls.",
           "default": true
         },
         "verbose": {

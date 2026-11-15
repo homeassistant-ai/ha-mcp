@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
@@ -35,8 +34,6 @@ from ha_mcp.tools.automation_errors import (
     section_from_status,
     text_suggestions,
 )
-
-from ._core_client import refused_url
 
 # --- the failed section ---------------------------------------------------------
 
@@ -100,20 +97,6 @@ async def test_legacy_root_keys_are_checked_under_cores_names(
     ask_core.assert_awaited_once_with(
         {"type": "validate_config", "triggers": triggers, "actions": actions}
     )
-
-
-@pytest.fixture
-async def unreachable_client(
-    hass_access_token: str, socket_enabled: None
-) -> AsyncIterator[HomeAssistantClient]:
-    """A client whose Home Assistant refuses every connection."""
-    client = HomeAssistantClient(
-        base_url=refused_url(), token=hass_access_token, verify_ssl=False
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 async def test_no_answer_from_core_names_no_section(

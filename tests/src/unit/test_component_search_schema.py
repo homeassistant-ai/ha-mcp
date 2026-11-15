@@ -9,7 +9,6 @@ capability answer is the real component's.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from copy import deepcopy
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -186,22 +185,6 @@ async def _unified(client: HomeAssistantClient, tool: Tool) -> bool:
     """Whether a fresh transform on ``client`` lists the trimmed schema."""
     listed = (await ComponentSearchSchemaTransform(client).list_tools([tool]))[0]
     return listed is not tool and _HIDDEN.isdisjoint(listed.parameters["properties"])
-
-
-@pytest.fixture
-async def second_client(
-    component_core_client: HomeAssistantClient,
-) -> AsyncIterator[HomeAssistantClient]:
-    """Another client of the same Home Assistant, as a second user's would be."""
-    client = HomeAssistantClient(
-        base_url=component_core_client.base_url,
-        token=component_core_client.token,
-        verify_ssl=False,
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 async def test_capability_cache_is_kept_per_ha_client(

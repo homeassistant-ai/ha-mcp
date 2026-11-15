@@ -1,214 +1,261 @@
 """The ``oauth_callbacks`` commands the settings panel edits the allowlist with.
 
 The none-mode callback allowlist (#2427) is an option on the server entry;
-these commands read it and replace it without reloading the entry.
+these commands read it and replace it without reloading the entry. The server
+entry is a real config entry in a real ``hass`` and the commands run through
+Core's WebSocket API (``component_ws``).
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import voluptuous as vol
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from custom_components.ha_mcp_tools.const import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
+    OPT_WEBHOOK_AUTH,
 )
-from custom_components.ha_mcp_tools.websocket_api import (
-    oauth_callbacks,
+from custom_components.ha_mcp_tools.websocket_api.constants import (
+    WS_OAUTH_CALLBACKS,
+    WS_OAUTH_CALLBACKS_UPDATE,
 )
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.settings_ui import build_settings_handlers
 
-from .test_component_ws_search import (
-    FakeConfigEntry,
-    FakeHass,
-    _FakeConnection,
-    _FakeWSApi,
-    _Unauthorized,
-    wsapi,
-)
+from ._component_core import ws_call, ws_result
+from ._server_entry import add_server_entry
 
 CALLBACK = "https://chatgpt.example/cb"
 
 
-class _ConfigEntries:
-    def __init__(self, entries: list[Any]) -> None:
-        self._entries = entries
-
-    def async_entries(self) -> list[Any]:
-        return list(self._entries)
-
-    def async_update_entry(self, entry: Any, *, options: Any) -> bool:
-        entry.options = dict(options)
-        return True
+async def _read(ws: MockHAClientWebSocket) -> Any:
+    return await ws_result(ws, WS_OAUTH_CALLBACKS)
 
 
-class _Hass:
-    def __init__(self, entry: Any) -> None:
-        self.config_entries = _ConfigEntries([entry])
-        self.data: dict[str, Any] = {}
+async def _update(ws: MockHAClientWebSocket, **fields: Any) -> Any:
+    return await ws_result(ws, WS_OAUTH_CALLBACKS_UPDATE, **fields)
 
 
-def _hass(options: dict[str, Any] | None = None) -> tuple[_Hass, Any]:
-    entry = FakeConfigEntry(
-        domain="ha_mcp_tools",
-        data={"entry_type": "server"},
-        options=options or {},
-        entry_id="srv1",
-    )
-    return _Hass(entry), entry
+async def _refused(ws: MockHAClientWebSocket, **fields: Any) -> str:
+    reply = await ws_call(ws, WS_OAUTH_CALLBACKS_UPDATE, **fields)
+    assert reply["success"] is False, reply
+    message: str = reply["error"]["message"]
+    return message
 
 
-async def _update(hass: _Hass, **fields: Any) -> dict[str, Any]:
-    msg = {"type": wsapi.WS_OAUTH_CALLBACKS_UPDATE, **fields}
-    extra = await oauth_callbacks._oauth_callbacks_update_prep(hass, msg)
-    return oauth_callbacks._do_oauth_callbacks_update(hass, msg, **extra)
+async def test_an_unedited_entry_reports_the_default_list_in_force(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    add_server_entry(hass)
 
+    result = await _read(component_ws)
 
-def test_an_unedited_entry_reports_the_default_list() -> None:
-    hass, _ = _hass()
-    result = oauth_callbacks._do_oauth_callbacks(hass, {})
     assert result["allowlist"] == list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
-    assert result["customized"] is False
-    assert result["allow_any"] is False
+    assert (result["customized"], result["allow_any"]) == (False, False)
+    assert result["applies"] is True
 
 
-def test_the_read_reports_a_turned_off_list() -> None:
-    # The panel says the list is not used while Configure's switch is on.
-    hass, _ = _hass({"oauth_allow_any_callback": True})
-    assert oauth_callbacks._do_oauth_callbacks(hass, {})["allow_any"] is True
+async def test_the_read_reports_a_turned_off_list(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """The panel says the list is not used while Configure's switch is on."""
+    add_server_entry(hass, options={OPT_OAUTH_ALLOW_ANY_CALLBACK: True})
+
+    assert (await _read(component_ws))["allow_any"] is True
 
 
-def test_a_malformed_stored_value_still_offers_the_reset() -> None:
-    # A non-list refuses every callback; the panel's Restore default must show.
-    hass, _ = _hass({OPT_OAUTH_REDIRECT_ALLOWLIST: "https://x.example/cb"})
-    result = oauth_callbacks._do_oauth_callbacks(hass, {})
+async def test_a_malformed_stored_value_still_offers_the_reset(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """A non-list refuses every callback; the panel's Restore default must show."""
+    add_server_entry(
+        hass, options={OPT_OAUTH_REDIRECT_ALLOWLIST: "https://x.example/cb"}
+    )
+
+    result = await _read(component_ws)
+
     assert result["allowlist"] == []
     assert result["customized"] is True
 
 
-def test_the_list_is_reported_as_inactive_outside_none_mode() -> None:
-    hass, _ = _hass({"webhook_auth": "ha_auth"})
-    assert oauth_callbacks._do_oauth_callbacks(hass, {})["applies"] is False
+async def test_the_list_is_reported_as_inactive_outside_none_mode(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    add_server_entry(hass, options={OPT_WEBHOOK_AUTH: "ha_auth"})
+
+    assert (await _read(component_ws))["applies"] is False
 
 
-async def test_a_save_keeps_the_other_options() -> None:
-    hass, entry = _hass({"server_port": 9584})
-    result = await _update(hass, allowlist=[f" {CALLBACK} ", CALLBACK])
+async def test_a_save_keeps_the_other_options(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    entry = add_server_entry(hass, options={"server_port": 9584})
+
+    result = await _update(component_ws, allowlist=[f" {CALLBACK} ", CALLBACK])
+
     assert result["saved"] is True
-    assert entry.options == {
+    assert dict(entry.options) == {
         "server_port": 9584,
         OPT_OAUTH_REDIRECT_ALLOWLIST: [CALLBACK],
     }
 
 
-async def test_an_invalid_entry_saves_nothing_and_is_named() -> None:
-    hass, entry = _hass()
-    result = await _update(hass, allowlist=[CALLBACK, "http://not-loopback/cb"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://not-loopback/cb",
+        "https://example.com/" + "a" * MAX_OAUTH_CALLBACK_LENGTH,
+    ],
+    ids=["not_loopback", "over_long"],
+)
+async def test_an_invalid_callback_saves_nothing_and_is_named(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, bad: str
+) -> None:
+    entry = add_server_entry(hass)
+
+    result = await _update(component_ws, allowlist=[CALLBACK, bad])
+
     assert result["saved"] is False
-    assert result["invalid"] == ["http://not-loopback/cb"]
-    assert entry.options == {}
+    assert result["invalid"] == [bad]
+    assert dict(entry.options) == {}
 
 
-async def test_saving_the_default_unchanged_keeps_following_it() -> None:
-    # The panel's Save on an untouched list must not freeze today's default.
-    hass, entry = _hass({"server_port": 9584})
-    result = await _update(hass, allowlist=list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST))
-    assert result["saved"] is True
-    assert result["customized"] is False
-    assert entry.options == {"server_port": 9584}
+async def test_saving_the_default_unchanged_keeps_following_it(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """The panel's Save on an untouched list must not freeze today's default."""
+    entry = add_server_entry(hass, options={"server_port": 9584})
+
+    result = await _update(
+        component_ws, allowlist=list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+    )
+
+    assert (result["saved"], result["customized"]) == (True, False)
+    assert dict(entry.options) == {"server_port": 9584}
 
 
-async def test_an_over_long_callback_saves_nothing_and_is_named() -> None:
-    hass, entry = _hass()
-    long = "https://example.com/" + "a" * MAX_OAUTH_CALLBACK_LENGTH
-    result = await _update(hass, allowlist=[long])
-    assert result["saved"] is False
-    assert result["invalid"] == [long]
-    assert entry.options == {}
-
-
-async def test_the_list_is_counted_after_normalizing_like_configure() -> None:
-    # 51 lines with one duplicate are 50 callbacks, which Configure saves too.
-    hass, entry = _hass()
+async def test_the_list_is_counted_after_normalizing_like_configure(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """51 lines with one duplicate are 50 callbacks, which Configure saves too."""
+    entry = add_server_entry(hass)
     lines = [f"https://ex{i}.example/cb" for i in range(MAX_OAUTH_CALLBACKS)]
-    result = await _update(hass, allowlist=[*lines, lines[0]])
+
+    result = await _update(component_ws, allowlist=[*lines, lines[0]])
+
     assert result["saved"] is True
     assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == lines
 
 
-async def test_more_callbacks_than_the_cap_save_nothing() -> None:
-    hass, entry = _hass()
+async def test_more_callbacks_than_the_cap_save_nothing(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    entry = add_server_entry(hass)
     lines = [f"https://ex{i}.example/cb" for i in range(MAX_OAUTH_CALLBACKS + 1)]
-    with pytest.raises(Exception, match=f"at most {MAX_OAUTH_CALLBACKS} callbacks"):
-        await _update(hass, allowlist=lines)
-    assert entry.options == {}
+
+    message = await _refused(component_ws, allowlist=lines)
+
+    assert f"at most {MAX_OAUTH_CALLBACKS} callbacks" in message
+    assert dict(entry.options) == {}
 
 
-async def test_reset_restores_the_default_list() -> None:
-    hass, entry = _hass({OPT_OAUTH_REDIRECT_ALLOWLIST: []})
-    result = await _update(hass, reset=True)
+async def test_reset_restores_the_default_list(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    entry = add_server_entry(hass, options={OPT_OAUTH_REDIRECT_ALLOWLIST: []})
+
+    result = await _update(component_ws, reset=True)
+
     assert result["allowlist"] == list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
     assert OPT_OAUTH_REDIRECT_ALLOWLIST not in entry.options
 
 
-async def test_an_update_naming_neither_change_is_refused() -> None:
-    hass, entry = _hass({"server_port": 9584})
-    with pytest.raises(Exception, match="needs allowlist or reset"):
-        await _update(hass)
-    assert entry.options == {"server_port": 9584}
+async def test_an_update_naming_neither_change_is_refused(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    entry = add_server_entry(hass, options={"server_port": 9584})
+
+    message = await _refused(component_ws)
+
+    assert "needs allowlist or reset" in message
+    assert dict(entry.options) == {"server_port": 9584}
 
 
-async def test_an_install_without_the_server_entry_is_told_so() -> None:
-    hass = _Hass(FakeConfigEntry(domain="ha_mcp_tools", data={"entry_type": "tools"}))
-    hass.config_entries = _ConfigEntries([])
-    with pytest.raises(Exception, match="no ha_mcp_tools in-process server"):
-        await _update(hass, allowlist=[CALLBACK])
-
-
-class TestUpdateFrame:
-    @pytest.fixture
-    def schema(self, monkeypatch: Any) -> Any:
-        return vol.Schema(oauth_callbacks._oauth_callbacks_update_schema())
-
-    @pytest.mark.parametrize(
-        "frame",
-        [
-            {"allowlist": [CALLBACK], "reset": True},
-            {"allowlist": [CALLBACK, 3]},
-        ],
-        ids=["both_changes", "not_strings"],
+async def test_an_install_without_the_server_entry_is_told_so(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    MockConfigEntry(domain="ha_mcp_tools", data={"entry_type": "tools"}).add_to_hass(
+        hass
     )
-    def test_an_out_of_bounds_frame_is_refused(
-        self, schema: Any, frame: dict[str, Any]
-    ) -> None:
-        with pytest.raises(vol.Invalid):
-            schema({"type": wsapi.WS_OAUTH_CALLBACKS_UPDATE, **frame})
+
+    message = await _refused(component_ws, allowlist=[CALLBACK])
+
+    assert "no ha_mcp_tools in-process server" in message
 
 
-class TestAdminGate:
-    @pytest.mark.parametrize(
-        "conn",
-        [_FakeConnection(is_admin=False), _FakeConnection(has_user=False)],
-        ids=["non_admin", "no_user"],
-    )
-    def test_only_an_administrator_can_read_or_change_the_list(
-        self, monkeypatch: Any, conn: Any
-    ) -> None:
-        fake = _FakeWSApi()
-        monkeypatch.setattr(wsapi, "websocket_api", fake)
-        wsapi.async_register_commands(FakeHass())
-        for command in (wsapi.WS_OAUTH_CALLBACKS, wsapi.WS_OAUTH_CALLBACKS_UPDATE):
-            with pytest.raises(_Unauthorized):
-                fake.registered[command](FakeHass(), conn, {"id": 1, "type": command})
+@pytest.mark.parametrize(
+    "frame",
+    [
+        {"allowlist": [CALLBACK], "reset": True},
+        {"allowlist": [CALLBACK, 3]},
+    ],
+    ids=["both_changes", "not_strings"],
+)
+async def test_an_out_of_bounds_frame_is_refused(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, frame: dict[str, Any]
+) -> None:
+    add_server_entry(hass)
+
+    reply = await ws_call(component_ws, WS_OAUTH_CALLBACKS_UPDATE, **frame)
+
+    assert reply["success"] is False
+    assert reply["error"]["code"] == "invalid_format"
 
 
-def test_the_settings_panel_speaks_the_component_contract() -> None:
-    """The server's panel handler copies these literals; they cannot import each other."""
-    from ha_mcp.settings_ui import _handlers_oauth_callbacks as panel
+@pytest.mark.parametrize(
+    ("command", "fields"),
+    [(WS_OAUTH_CALLBACKS, {}), (WS_OAUTH_CALLBACKS_UPDATE, {"reset": True})],
+)
+async def test_only_an_administrator_can_read_or_change_the_list(
+    hass: HomeAssistant,
+    component_ws_read_only: MockHAClientWebSocket,
+    command: str,
+    fields: dict[str, Any],
+) -> None:
+    entry = add_server_entry(hass, options={OPT_OAUTH_REDIRECT_ALLOWLIST: []})
 
-    assert panel.WS_OAUTH_CALLBACKS == wsapi.WS_OAUTH_CALLBACKS
-    assert panel.WS_OAUTH_CALLBACKS_UPDATE == wsapi.WS_OAUTH_CALLBACKS_UPDATE
-    assert panel.CAPABILITY in wsapi.CAPABILITIES
+    reply = await ws_call(component_ws_read_only, command, **fields)
+
+    assert reply["error"]["code"] == "unauthorized"
+    assert dict(entry.options) == {OPT_OAUTH_REDIRECT_ALLOWLIST: []}
+
+
+async def test_the_settings_panel_speaks_the_component_contract(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The panel's handlers copy the command names and capability; they read
+    and save the list through the real component."""
+    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+    entry = add_server_entry(hass)
+    handlers = build_settings_handlers(server=MagicMock(client=component_core_client))
+    save = MagicMock()
+    save.json = AsyncMock(return_value={"allowlist": [CALLBACK]})
+
+    read = await handlers["get_oauth_callbacks"](MagicMock())
+    saved = await handlers["save_oauth_callbacks"](save)
+
+    assert json.loads(read.body)["allowlist"] == list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+    assert saved.status_code == 200
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == [CALLBACK]
