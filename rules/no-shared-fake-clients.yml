@@ -35,7 +35,6 @@ ignores:
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
-  - "tests/src/unit/test_error_code_consistency_1297.py"
   - "tests/src/unit/test_helper_registry_id_validation.py"
   - "tests/src/unit/test_helper_update_persistence.py"
   - "tests/src/unit/test_history_pagination.py"
