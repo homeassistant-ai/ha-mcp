@@ -32,7 +32,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/test_history_pagination.py"
   - "tests/src/unit/test_identifier_validation_family.py"
   - "tests/src/unit/test_label_area_assignment.py"
   - "tests/src/unit/test_listen_sockets.py"
