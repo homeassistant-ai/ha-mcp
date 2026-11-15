@@ -139,7 +139,7 @@ def convert_to_voluptuous(schema: Any) -> vol.Schema:
 # Keywords whose value is a mapping keyed by author-chosen names — property
 # names, definition names, regexes — rather than by JSON Schema keywords. A key
 # spelled like a bound is one of those names and must not be rewritten.
-_SCHEMA_MAPS: frozenset[str] = frozenset(
+SCHEMA_MAPS: frozenset[str] = frozenset(
     {
         "properties",
         "patternProperties",
@@ -154,7 +154,7 @@ _SCHEMA_MAPS: frozenset[str] = frozenset(
 # Keywords whose value is instance data rather than a subschema. A key spelled
 # like a bound inside one of these is a value in someone's default, not a bound.
 # ``example`` is OpenAPI's singular spelling of ``examples``.
-_INSTANCE_VALUES: frozenset[str] = frozenset(
+INSTANCE_VALUES: frozenset[str] = frozenset(
     {"default", "const", "enum", "examples", "example"}
 )
 # Keywords whose value is neither a subschema nor a map of subschemas.
@@ -163,19 +163,19 @@ _INSTANCE_VALUES: frozenset[str] = frozenset(
 # those names, and its ``$ref`` value would read as a non-numeric bound and be
 # dropped, corrupting a valid discriminated union. OpenAPI ``x-`` specification
 # extensions carry arbitrary vendor objects the same way and are matched by
-# prefix in ``_is_opaque_key``.
-_OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
+# prefix in ``is_opaque_key``.
+OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
 
 
-def _is_opaque_key(key: str) -> bool:
+def is_opaque_key(key: str) -> bool:
     """True for a keyword whose value must be copied through untouched."""
-    return key in _OPAQUE_KEYWORDS or key.startswith("x-")
+    return key in OPAQUE_KEYWORDS or key.startswith("x-")
 
 
 # Each exclusive keyword, the inclusive twin it folds into, the picker that
 # keeps the tighter of the two when both are present, and the step to the
 # nearest integer the bound still admits.
-_EXCLUSIVE_BOUNDS: tuple[
+EXCLUSIVE_BOUNDS: tuple[
     tuple[str, str, Callable[[Any, Any], Any], Callable[[Any], int]], ...
 ] = (
     ("exclusiveMinimum", "minimum", max, lambda bound: math.floor(bound) + 1),
@@ -225,12 +225,12 @@ def _to_inclusive_bounds(schema: Any, rewrite: _Rewrite | None = None) -> Any:
 
     result: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in _INSTANCE_VALUES or _is_opaque_key(key):
+        if key in INSTANCE_VALUES or is_opaque_key(key):
             # Copied, not aliased: the result is handed to Core and kept in
             # the search catalog, and neither may reach back into the MCP
             # result object this schema came from.
             result[key] = copy.deepcopy(value)
-        elif key in _SCHEMA_MAPS and isinstance(value, dict):
+        elif key in SCHEMA_MAPS and isinstance(value, dict):
             result[key] = {
                 name: _to_inclusive_bounds(sub, rewrite) for name, sub in value.items()
             }
@@ -262,7 +262,7 @@ def _admits_integers_only(node: dict[str, Any]) -> bool:
 
 def _fold_bounds(node: dict[str, Any], rewrite: _Rewrite | None = None) -> None:
     """Fold each exclusive keyword into its inclusive twin, in place."""
-    for exclusive, inclusive, tighter, to_integer in _EXCLUSIVE_BOUNDS:
+    for exclusive, inclusive, tighter, to_integer in EXCLUSIVE_BOUNDS:
         if exclusive not in node:
             continue
         bound = node.pop(exclusive)
@@ -399,14 +399,14 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
     :func:`_transport_error_leaves` to find. Includes ExceptionGroup because
     the SDK's anyio task groups wrap in-session failures — but a caught group
     must still pass
-    :func:`_is_transport_failure` before being mapped to a friendly error,
+    :func:`is_transport_failure` before being mapped to a friendly error,
     or a genuine bug that happened inside the task group would be relabeled
     as a transport failure (review finding).
     """
     return (*_transport_error_leaves(), ExceptionGroup)
 
 
-def _is_transport_failure(err: BaseException) -> bool:
+def is_transport_failure(err: BaseException) -> bool:
     """Return True when ``err`` is purely a transport failure.
 
     A group counts only when EVERY leaf (nested groups included) is a
@@ -415,7 +415,7 @@ def _is_transport_failure(err: BaseException) -> bool:
     remapped to a "could not reach the server" message.
     """
     if isinstance(err, ExceptionGroup):
-        return all(_is_transport_failure(exc) for exc in err.exceptions)
+        return all(is_transport_failure(exc) for exc in err.exceptions)
     return isinstance(err, _transport_error_leaves())
 
 
@@ -646,7 +646,7 @@ async def _forward_tool_call(
                 return None
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
-        if not _is_transport_failure(err):
+        if not is_transport_failure(err):
             raise
         raise HomeAssistantError(
             f"Error calling the HA-MCP tool {name}: {err}"
@@ -758,7 +758,7 @@ class HaMcpLlmApi(llm.API):
             ):
                 list_result = await session.list_tools()
         except _transport_errors() as err:
-            if not _is_transport_failure(err):
+            if not is_transport_failure(err):
                 raise
             raise HomeAssistantError(
                 f"Could not reach the in-process HA-MCP server: {err}"

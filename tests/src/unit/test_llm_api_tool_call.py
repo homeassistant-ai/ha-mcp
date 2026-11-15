@@ -73,6 +73,35 @@ async def test_a_malformed_answer_propagates_as_the_bug_it_is(
             await call(hass, mirrored_tool(srv.port), {})
 
 
+@pytest.mark.parametrize(
+    ("error", "transport"),
+    [
+        pytest.param(
+            ExceptionGroup("session", [OSError("refused")]), True, id="transport-only"
+        ),
+        pytest.param(
+            ExceptionGroup("session", [OSError("refused"), TypeError("bug")]),
+            False,
+            id="mixed-transport-and-bug",
+        ),
+        pytest.param(
+            ExceptionGroup(
+                "session",
+                [ExceptionGroup("inner", [OSError("refused"), TypeError("bug")])],
+            ),
+            False,
+            id="bug-in-a-nested-group",
+        ),
+    ],
+)
+def test_a_group_holding_any_bug_is_not_a_transport_failure(
+    error: ExceptionGroup, transport: bool
+) -> None:
+    """A transport error beside a bug must not relabel the bug as an
+    unreachable server (#1782)."""
+    assert llm_api.is_transport_failure(error) is transport
+
+
 async def test_a_slow_tool_call_times_out_as_homeassistanterror(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
