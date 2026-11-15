@@ -620,21 +620,21 @@ If tools stop responding or the connector appears disconnected in Claude.ai:
 6. **Don't forget to click *Connect* on the connector** — and, with OAuth enabled, click **Allow** on the consent page. Adding the connector alone does not complete the connection.
 7. **URL works in your browser but the LLM can't connect?** Your reverse proxy is filtering the AI client — see [Cloudflare: LLM can't connect](#cloudflare-llm-cant-connect-block-ai-training-bots) above (Cloudflare's "Block AI training bots" and geo/country blocking are the usual causes).
 
-### Google Gemini Spark: legacy mode is verified; ha_auth expected as of component 2.0.0
+### Google Gemini Spark: legacy mode is verified; ha_auth expected
 
 Gemini Spark's custom connected apps are OAuth-only, and they authenticate using a cross-origin redirect URI (a Client ID Metadata Document). Home Assistant core's native OAuth provider only fetches these from 2026.9 onward ([home-assistant/core#176286](https://github.com/home-assistant/core/pull/176286), fixing [#176282](https://github.com/home-assistant/core/issues/176282)); older cores reject Spark's authorization request with **"Invalid redirect URI"**.
 
-As of component 2.0.0, the HA-MCP component validates Client ID Metadata Documents itself and hands Home Assistant core an identity it accepts on any core version, so **ha_auth** mode is expected to work with Spark (live verification in progress). **Legacy** mode remains the verified fallback: a self-hosted authorization server with a static Client ID and Client Secret you paste into Spark's Advanced settings. One limitation of the automatic path: registrations without exactly one stable web redirect origin — multiple origins (as Spark's), loopback-only callbacks (CLI clients), or a mix — sign in normally but cannot refresh; the client must re-authorize when the token expires, which most handle automatically but some surface to the user. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) and pick **Gemini Spark** for the full walkthrough.
+The HA-MCP component validates Client ID Metadata Documents itself and hands Home Assistant core an identity it accepts on any core version, so **ha_auth** mode is expected to work with Spark (live verification in progress). **Legacy** mode remains the verified fallback: a self-hosted authorization server with a static Client ID and Client Secret you paste into Spark's Advanced settings. One limitation of the automatic path: registrations without exactly one stable web redirect origin — multiple origins (as Spark's), loopback-only callbacks (CLI clients), or a mix — sign in normally but cannot refresh; the client must re-authorize when the token expires, which most handle automatically but some surface to the user. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) and pick **Gemini Spark** for the full walkthrough.
 
 This page will be updated once ha_auth mode is verified end-to-end with Spark.
 
-### Copilot CLI: remote OAuth works with ha_auth as of component 2.0.0; legacy for older setups
+### Copilot CLI: remote OAuth works with ha_auth; legacy as a fallback
 
-Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it tries to get one via dynamic client registration. Before component 2.0.0, `ha_auth` mode advertised no registration endpoint, so that registration failed (`MCPOAuthError: Failed to register OAuth client`). As of 2.0.0 the component serves a registration endpoint in `ha_auth` mode, so registration succeeds; legacy mode remains the verified alternative if your setup predates it.
+Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it gets one via dynamic client registration, which the component serves in `ha_auth` mode.
 
-On component 2.0.0 or newer: keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. On older versions (or as a fallback): set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the entry's **Configure** screen into Copilot CLI's required fields.
+Keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. If registration fails: set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the entry's **Configure** screen into Copilot CLI's required fields.
 
-This is the same self-hosted authorization path used for [Google Gemini Spark](#google-gemini-spark-legacy-mode-is-verified-ha_auth-expected-as-of-component-200), which can also use it as a fallback.
+The legacy fallback is the same self-hosted authorization path used for [Google Gemini Spark](#google-gemini-spark-legacy-mode-is-verified-ha_auth-expected), which can also use it as a fallback.
 
 ### Test ha-mcp without configuring a client
 

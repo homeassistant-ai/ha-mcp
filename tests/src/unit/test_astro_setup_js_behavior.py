@@ -981,8 +981,7 @@ _SPARK_LEGACY_WHY = "Why legacy OAuth mode"
 _COPILOT_HTTP_TITLE = "Copilot CLI Configuration (HTTP)"
 _COPILOT_STDIO_TITLE = "Copilot CLI Configuration (STDIO)"
 _COPILOT_CLIENT_ID_CALLOUT = (
-    "Client ID required: ha_auth registers one automatically (2.0.0+); "
-    "legacy as fallback"
+    "Client ID required: ha_auth registers one automatically; legacy as fallback"
 )
 
 
