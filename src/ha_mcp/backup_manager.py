@@ -147,6 +147,7 @@ logger = logging.getLogger(__name__)
 _MAX_PATCH_OPS = 200
 
 SCHEMA_VERSION = 1
+_SNAPSHOT_PUBLISH_LOCK = threading.Lock()
 
 # Expected failure modes for the capture pipeline. Anything outside this
 # tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
@@ -1048,7 +1049,7 @@ class BackupManager:
             self._directory_checked = True
             raise
         safe = _safe_entity_id(entity_id)
-        target = self._unclaimed_target(domain, safe, _now_ts())
+        ts = _now_ts()
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "domain": domain,
@@ -1064,7 +1065,7 @@ class BackupManager:
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
-            prefix=".snapshot-", suffix=".tmp", dir=target.parent
+            prefix=".snapshot-", suffix=".tmp", dir=self._dir
         )
         try:
             try:
@@ -1074,7 +1075,9 @@ class BackupManager:
                 raise
             with stream:
                 stream.write("# ha_mcp_backup\n" + body)
-            os.replace(tmp_name, str(target))
+            with _SNAPSHOT_PUBLISH_LOCK:
+                target = self._unclaimed_target(domain, safe, ts)
+                os.replace(tmp_name, str(target))
         finally:
             with suppress(OSError):
                 Path(tmp_name).unlink()

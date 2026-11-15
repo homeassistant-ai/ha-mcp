@@ -1,15 +1,21 @@
 """Long snapshot names retain their original Core config-entry identities."""
 
+import asyncio
 import hashlib
+import tempfile
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
 import pytest
-from ha_mcp.backup_manager import BackupManager, get_backup_manager
-from ha_mcp.client.rest_client import HomeAssistantClient
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
+
+from ha_mcp.backup_manager import BackupManager, get_backup_manager
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 
 @pytest.fixture
@@ -90,3 +96,30 @@ async def test_long_identities_get_separate_files_with_complete_headers(
     assert manager.read_snapshot(first.name)["entity_id"] == f"{common}1"
     assert manager.read_snapshot(second.name)["entity_id"] == f"{common}2"
     assert not list(first.parent.glob("*.tmp"))
+
+
+async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
+    hass: HomeAssistant, manager: BackupManager
+) -> None:
+    longer = "a" * 113
+    digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
+    shorter = f"{longer[:103]}-{digest}"
+    both_writers = Barrier(2, timeout=15)
+    mkstemp = tempfile.mkstemp
+
+    def overlap(**kwargs: Any) -> tuple[int, str]:
+        both_writers.wait()
+        return mkstemp(**kwargs)
+
+    with (
+        patch("ha_mcp.backup_manager._now_ts", return_value="20260101_000000"),
+        patch("ha_mcp.backup_manager.tempfile", SimpleNamespace(mkstemp=overlap)),
+    ):
+        first, second = await asyncio.gather(
+            capture(hass, manager, longer),
+            capture(hass, manager, shorter),
+        )
+
+    assert first.name != second.name
+    assert manager.read_snapshot(first.name)["entity_id"] == longer
+    assert manager.read_snapshot(second.name)["entity_id"] == shorter
