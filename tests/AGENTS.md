@@ -169,12 +169,11 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
-(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
-(`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)` or an
+(`rules/no-fake-core-objects.yml`), `patch.dict(sys.modules, ...)` or an
 assignment of a Core module name in `sys.modules`
 (`rules/no-core-module-stand-ins.yml`), a replaced client method, client or
 HTTP transport, or a hand-written client class
@@ -184,13 +183,13 @@ hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
 and a comment that switches one of these checks off for a line or a file
 (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
 bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
-`assignment`, `attr-defined` or `misc`). The eighth
+`assignment`, `attr-defined` or `misc`). The seventh
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
-The ninth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
+The eighth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
 a test registers (`@websocket_api.websocket_command`) and a reply it writes on
 a connection (`connection.send_result`, `send_error`, `send_message`,
-`send_event`); it has no list, so every unit test complies. The tenth
+`send_event`); it has no list, so every unit test complies. The ninth
 (`rules/no-test-registry-store-writes.yml`) refuses a write into a registry's
 store (`.issues`, `.entities`, `.deleted_entities`, `.devices`,
 `.deleted_devices`, `.areas`, `.floors`, `.labels`, `.categories`): an item
@@ -200,7 +199,7 @@ restored one by having Core load it from storage. It has no list either.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
-which is why the fourth rule exists.
+which is why the third rule exists.
 
 Test files written before a check are listed with it, in the rule's `ignores`.
 Only the reply and shared-client rules still have a list; the hand-made

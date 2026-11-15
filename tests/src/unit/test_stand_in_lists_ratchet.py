@@ -446,6 +446,19 @@ def test_a_guard_list_brought_back_is_not_a_new_check(
     assert any(reported in problem for problem in problems), problems
 
 
+def test_the_rule_for_the_deleted_shared_fakes_can_be_retired(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """Its three fake modules are gone, so the rule has nothing left to refuse;
+    removing any other rule is still reported (``rule-removed`` above)."""
+    path = "rules/no-shared-core-fakes.yml"
+    retired = _RULE.replace("no-hand-made-core-replies", "no-shared-core-fakes")
+    retired = retired.replace(f'  - "{_OLD}"\n', "")
+    repo = _pull_request(tmp_path, {path: None}, {**_BASE, path: retired})
+
+    assert ratchet.problems_since(repo, "HEAD") == []
+
+
 def test_a_guard_list_that_names_a_file_indirectly_fails(
     ratchet: ModuleType, tmp_path: Path
 ) -> None:

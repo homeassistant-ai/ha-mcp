@@ -63,6 +63,9 @@ RULE_DEFINITION = ("rule", "constraints", "utils", "language")
 # The list of test modules mypy skips, as the conversion check names it.
 MYPY_LIST = f"{PYPROJECT} (mypy)"
 MYPY_LOOSENING = ("ignore_errors", "ignore_missing_imports", "follow_imports")
+# A rule deleted with what it refused: it named three shared fake modules, and
+# no file is left to import from any of them.
+RETIRED_RULES = frozenset({"no-shared-core-fakes"})
 
 
 class Base:
@@ -282,7 +285,7 @@ def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:
     old = _test_rules(base_texts)
     problems.extend(
         f"rules: {rule_id} was removed or renamed"
-        for rule_id in sorted(set(old) - set(head))
+        for rule_id in sorted(set(old) - set(head) - RETIRED_RULES)
     )
     for rule_id, rule in sorted(head.items()):
         before = old.get(rule_id)
