@@ -370,6 +370,20 @@ Exposing it would let a conversation agent or voice satellite turn access on.
 Do not disable the switch entity while access is off: nothing can turn access
 back on until you enable the entity again.
 
+The same device also has an **Allow changes** switch, disabled by default. It
+controls the same setting as **Read Only Mode** in the HA-MCP settings panel:
+off means read-only, and on permits writes. Enable the entity on the device
+page to use it in scenes and automations. Its state persists across restarts,
+and a panel change appears on the entity after its next update. Turning it off
+takes effect on the next tool call, without restarting the server. The
+`/readonly` connection remains read-only even while **Allow changes** is on.
+
+Because both controls are disabled by default, an automation that turns all
+enabled switches off changes neither setting on an install that did not opt in.
+After enabling them, an everything-off scene closes access and leaves the
+server read-only; **Allow changes** can still save that safer state if the
+**Access** switch was turned off first.
+
 Turning access off does not revoke credentials a client already holds; when
 access is on again, they work as before. With **Authentication mode**
 `ha_auth`, a client holds a Home Assistant token of the administrator who
