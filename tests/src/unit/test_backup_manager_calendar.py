@@ -10,10 +10,12 @@ is asked to expand, observed with a call-through spy.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from freezegun import freeze_time
 from homeassistant.components.calendar import CalendarEntity, CalendarEntityFeature
 from homeassistant.components.local_calendar.calendar import LocalCalendarEntity
 from homeassistant.core import HomeAssistant
@@ -42,6 +44,14 @@ from ._component_core import ws_result
 
 # Core's config directory is this test's ``tmp_path``.
 hass_config_dir = calendar_config_dir
+
+
+@pytest.fixture(autouse=True)
+def fixed_now() -> Iterator[None]:
+    """Friday noon in New York, so a weekly series crosses the March DST change.
+    The clock keeps ticking from there: Core's timers still have to fire."""
+    with freeze_time("2026-03-06T17:00:00Z", tick=True):
+        yield
 
 
 @pytest.fixture(autouse=True)
