@@ -1,1504 +1,506 @@
-"""Unit tests for the merged HA-MCP config + options flow (issues #1527, tile fold).
+"""The config flow: setup menu, tools branch and both entries' options flows.
 
-One config flow serves two entry types under the shared domain:
-
-* the ``user`` step is a menu (``tools`` / ``server``);
-* ``tools`` is a plain confirm-and-create step that creates the services entry;
-* ``server`` is a single confirm step that creates the in-process server entry
-  (``entry_type="server"``);
-* ``async_get_options_flow`` dispatches on ``entry_type`` — the server entry gets
-  the port/auth/pip options flow, the tools entry gets a light informational
-  options flow (an empty-schema ``tools_info`` step, nothing to configure yet).
-
-The flow classes are Core's real ``ConfigFlow`` / ``OptionsFlow``; the framework
-methods (async_show_menu / async_show_form / async_create_entry / ...) are
-replaced on the flow instance so each routing decision is asserted directly.
+One config flow serves two entry types: the ``user`` step is a menu, ``tools``
+creates the File & YAML Tools entry, and the options flow follows the entry's
+type. Every step runs through Core's flow managers, so submitted input passes
+the schema Core holds for the shown form, as it does for a user. The second
+half covers the server entry's options form: what it shows and what it saves.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
-import sys
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.selector import TextSelector, TextSelectorType
 
-from custom_components.ha_mcp_tools import config_flow as cf
 from custom_components.ha_mcp_tools import (
-    config_flow_text as cft,
+    SERVICE_GET_ALLOWED_PATHS,
+    SERVICE_GET_EXTRA_YAML_KEYS,
+    SERVICE_SET_ALLOWED_PATHS,
+    SERVICE_SET_EXTRA_YAML_KEYS,
+    config_flow,
+    server_credentials,
 )
-from custom_components.ha_mcp_tools import const
+from custom_components.ha_mcp_tools.const import (
+    BIND_HOST_ALL,
+    BIND_HOST_LOOPBACK,
+    CONF_ENTRY_TYPE,
+    DEFAULT_LOOPBACK_URL,
+    DEFAULT_PIP_SPEC,
+    DOMAIN,
+    ENTRY_TYPE_SERVER,
+    ENTRY_TYPE_TOOLS,
+    EXPOSURE_FULL,
+    OPT_ACCESS_OFF_AFTER_RESTART,
+    OPT_ADMIN_TOKEN_REPLACEMENT,
+    OPT_BIND_HOST,
+    OPT_ENABLE_LLM_API,
+    OPT_ENABLE_SIDEBAR_PANEL,
+    OPT_ENABLE_STARTUP_NOTIFICATION,
+    OPT_ENABLE_WEBHOOK,
+    OPT_EXTERNAL_URL,
+    OPT_LLM_API_EXPOSURE,
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
+    OPT_OAUTH_CLIENT_ID,
+    OPT_OAUTH_CLIENT_SECRET,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
+    OPT_OAUTH_REGENERATE,
+    OPT_PIP_SPEC,
+    OPT_REGENERATE_SECRETS,
+    OPT_SECRET_PATH_OVERRIDE,
+    OPT_SERVER_PORT,
+    OPT_SERVER_URL,
+    OPT_WEBHOOK_AUTH,
+    OPT_WEBHOOK_ID_OVERRIDE,
+    TOOLS_ENTRY_TITLE,
+    WEBHOOK_AUTH_HA,
+)
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+from ._config_flow_core import (
+    FlowResultDict,
+    add_options_entry,
+    open_options_form,
+    schema_markers,
+    schema_validators,
+    shown_value,
+    start_config_flow,
+    start_entry_type_flow,
+    start_options_flow,
+    submit_config_step,
+    submit_options_step,
+)
+from ._file_services import make_file_service
+
+CONNECT_PATH_FIELDS = [OPT_SECRET_PATH_OVERRIDE, OPT_WEBHOOK_ID_OVERRIDE]
+CLEARABLE = {
+    OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",
+    OPT_SERVER_URL: "https://ha.example:8123",
+    OPT_EXTERNAL_URL: "https://ha.example.com",
+    OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
+    OPT_SECRET_PATH_OVERRIDE: "/custom_path",
+}
 
 
-def _make_flow() -> cf.HaMcpToolsConfigFlow:
-    """Build a flow with the HA framework methods stubbed to return markers."""
-    flow = cf.HaMcpToolsConfigFlow()
-    flow.hass = MagicMock(name="hass")
-    flow.async_set_unique_id = AsyncMock(return_value=None)
-    flow._abort_if_unique_id_configured = MagicMock(return_value=None)
-    flow.async_show_menu = MagicMock(side_effect=lambda **kw: {"type": "menu", **kw})
-    flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
-    flow.async_abort = MagicMock(side_effect=lambda **kw: {"type": "abort", **kw})
-    flow.async_create_entry = MagicMock(
-        side_effect=lambda **kw: {"type": "entry", **kw}
+async def _save(hass: HomeAssistant, user_input: dict[str, Any]) -> FlowResultDict:
+    """Open a fresh server options form and submit ``user_input``."""
+    form = await open_options_form(hass)
+    return await submit_options_step(hass, form["flow_id"], user_input)
+
+
+# -- setup menu and tools entry -------------------------------------------------
+
+
+async def test_setup_menu_offers_the_server_entry_first(hass: HomeAssistant) -> None:
+    """The recommended server entry leads the menu; the optional tools entry follows."""
+    menu = await start_config_flow(hass)
+
+    assert menu["type"] is FlowResultType.MENU
+    assert menu["step_id"] == "user"
+    assert menu["menu_options"] == [ENTRY_TYPE_SERVER, ENTRY_TYPE_TOOLS]
+
+
+async def test_tools_branch_confirms_then_creates_the_services_entry(
+    hass: HomeAssistant,
+) -> None:
+    """Choosing tools shows a confirm form; submitting it adds the services entry."""
+    form = await start_entry_type_flow(hass, ENTRY_TYPE_TOOLS)
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == "tools"
+
+    created = await submit_config_step(hass, form["flow_id"], {})
+
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+    assert created["title"] == TOOLS_ENTRY_TITLE
+    assert created["data"] == {CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS}
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    assert entry.title == TOOLS_ENTRY_TITLE
+
+
+async def test_a_second_tools_entry_is_refused(hass: HomeAssistant) -> None:
+    """The services entry is single-instance: adding it twice aborts the second."""
+    first = await start_entry_type_flow(hass, ENTRY_TYPE_TOOLS)
+    await submit_config_step(hass, first["flow_id"], {})
+
+    second = await start_entry_type_flow(hass, ENTRY_TYPE_TOOLS)
+
+    assert second["type"] is FlowResultType.ABORT
+    assert second["reason"] == "already_configured"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_only_the_server_branch_needs_a_current_home_assistant(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On an older Home Assistant the server entry is refused, the tools entry is not."""
+    monkeypatch.setattr(config_flow, "HA_VERSION", "2024.11.0")
+
+    server = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    assert server["type"] is FlowResultType.ABORT
+    assert server["reason"] == "unsupported_home_assistant"
+
+    tools = await start_entry_type_flow(hass, ENTRY_TYPE_TOOLS)
+    created = await submit_config_step(hass, tools["flow_id"], {})
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_tools_options_form_shows_the_stored_directories_and_keys(
+    hass: HomeAssistant,
+) -> None:
+    """The tools entry's options form is editable and pre-filled with what is stored."""
+    call = await make_file_service(hass)
+    await call(SERVICE_SET_ALLOWED_PATHS, {"paths": ["pyscript"]})
+    await call(SERVICE_SET_EXTRA_YAML_KEYS, {"keys": ["alert2"]})
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+
+    form = await start_options_flow(hass, entry)
+
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == "tools_info"
+    markers = schema_markers(form)
+    assert set(markers) == {"allowed_dirs", "extra_yaml_keys"}
+    assert markers["allowed_dirs"].default() == ["pyscript"]
+    assert markers["extra_yaml_keys"].default() == ["alert2"]
+
+
+async def test_tools_options_submit_saves_the_validated_directories_and_keys(
+    hass: HomeAssistant,
+) -> None:
+    """Saving the form stores both lists through the services' validated path."""
+    call = await make_file_service(hass)
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    form = await start_options_flow(hass, entry)
+
+    result = await submit_options_step(
+        hass,
+        form["flow_id"],
+        {"allowed_dirs": ["pyscript", "../escape"], "extra_yaml_keys": ["alert2"]},
     )
-    return flow
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {}
+    paths = await call(SERVICE_GET_ALLOWED_PATHS, {})
+    keys = await call(SERVICE_GET_EXTRA_YAML_KEYS, {})
+    assert paths["paths"] == ["pyscript"]
+    assert keys["keys"] == ["alert2"]
 
 
-class _OptionsFlowWithEntry(cf.HaMcpServerOptionsFlow):
-    """The server options flow holding its entry directly.
+async def test_tools_options_submit_without_input_shows_the_form_again(
+    hass: HomeAssistant,
+) -> None:
+    """A submit with no payload re-renders the form and saves nothing."""
+    call = await make_file_service(hass)
+    await call(SERVICE_SET_ALLOWED_PATHS, {"paths": ["pyscript"]})
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    form = await start_options_flow(hass, entry)
 
-    Core's ``OptionsFlow.config_entry`` looks the entry up in a running
-    ``ConfigEntries`` registry, which these synchronous tests do not start.
+    again = await hass.config_entries.options.async_configure(form["flow_id"])
+
+    assert again["type"] is FlowResultType.FORM
+    assert again["step_id"] == "tools_info"
+    assert (await call(SERVICE_GET_ALLOWED_PATHS, {}))["paths"] == ["pyscript"]
+
+
+# -- server options form --------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", [OPT_SECRET_PATH_OVERRIDE, OPT_OAUTH_CLIENT_SECRET])
+async def test_secret_fields_are_plain_text_not_password_inputs(
+    hass: HomeAssistant, field: str
+) -> None:
+    """The direct-access path and the legacy OAuth secret show in clear text.
+
+    The administrator copies them into clients, so a masked input would hide
+    the value they came to read.
     """
+    form = await open_options_form(hass)
 
-    config_entry = None
+    selector = schema_validators(form)[field]
+
+    assert isinstance(selector, TextSelector)
+    assert selector.config["type"] == TextSelectorType.TEXT
 
 
-def _make_options_flow(*, options=None, data=None) -> cf.HaMcpServerOptionsFlow:
-    flow = _OptionsFlowWithEntry()
-    flow.config_entry = SimpleNamespace(
-        entry_id="srv1", options=options or {}, data=data or {}
+@pytest.mark.parametrize("field", CONNECT_PATH_FIELDS)
+@pytest.mark.parametrize("invalid_character", ["#", "?", "%", " ", "\t"])
+async def test_connect_path_override_rejects_url_breaking_characters(
+    hass: HomeAssistant, field: str, invalid_character: str
+) -> None:
+    """A path or id that cannot sit in a URL is refused and the form keeps the typed value."""
+    invalid_value = f"safe{invalid_character}value"
+
+    result = await _save(hass, {field: invalid_value})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert result["errors"] == {field: "invalid_connect_path"}
+    assert shown_value(schema_markers(result)[field]) == invalid_value
+
+
+async def test_connect_path_overrides_accept_url_safe_values(
+    hass: HomeAssistant,
+) -> None:
+    """URL-safe overrides are saved as typed."""
+    user_input = {
+        OPT_SECRET_PATH_OVERRIDE: "/mcp_safe-token.123",
+        OPT_WEBHOOK_ID_OVERRIDE: "mcp_safe-token.123",
+    }
+
+    result = await _save(hass, user_input)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert {key: result["data"][key] for key in user_input} == user_input
+
+
+async def test_webhook_id_override_rejects_slash(hass: HomeAssistant) -> None:
+    """A slash would split the webhook id into two URL segments."""
+    result = await _save(hass, {OPT_WEBHOOK_ID_OVERRIDE: "mcp/abc"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {OPT_WEBHOOK_ID_OVERRIDE: "invalid_webhook_id"}
+
+
+async def test_connect_path_overrides_accept_surrounding_whitespace(
+    hass: HomeAssistant,
+) -> None:
+    """Whitespace around a pasted value is dropped; the value itself is kept."""
+    result = await _save(
+        hass,
+        {
+            OPT_SECRET_PATH_OVERRIDE: " \t/nested/direct/path\r\n",
+            OPT_WEBHOOK_ID_OVERRIDE: " \tmcp_abc\r\n",
+        },
     )
-    # Bare hass with empty data: legacy_credentials_active() resolves False
-    # (nothing bound) unless a test monkeypatches it.
-    flow.hass = MagicMock(name="hass")
-    flow.hass.data = {}
-    flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
-    flow.async_create_entry = MagicMock(
-        side_effect=lambda **kw: {"type": "entry", **kw}
-    )
-    return flow
 
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][OPT_SECRET_PATH_OVERRIDE] == "/nested/direct/path"
+    assert result["data"][OPT_WEBHOOK_ID_OVERRIDE] == "mcp_abc"
 
-class TestMenuStep:
-    def test_user_step_shows_entry_type_menu(self):
-        flow = _make_flow()
-        menu = asyncio.run(flow.async_step_user(None))
-        assert menu["type"] == "menu"
-        assert menu["step_id"] == "user"
-        # Server first: it is the recommended entry; tools is the opt-in
-        # file/YAML services entry (#1715).
-        assert menu["menu_options"] == [
-            const.ENTRY_TYPE_SERVER,
-            const.ENTRY_TYPE_TOOLS,
-        ]
 
+async def test_webhook_auth_is_the_first_field(hass: HomeAssistant) -> None:
+    """Authentication mode sits at the top of the form, under the connect URLs."""
+    form = await open_options_form(hass)
 
-class TestToolsBranch:
-    def test_non_supervisor_shows_form_then_creates_entry(self):
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_tools(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "tools"
+    assert next(iter(schema_markers(form))) == OPT_WEBHOOK_AUTH
 
-        entry = asyncio.run(flow.async_step_tools({}))
-        assert entry["type"] == "entry"
-        assert entry["title"] == const.TOOLS_ENTRY_TITLE
-        assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
 
-    def test_tools_uses_domain_unique_id(self):
-        flow = _make_flow()
-        asyncio.run(flow.async_step_tools(None))
-        flow.async_set_unique_id.assert_awaited_once_with(const.DOMAIN)
-        flow._abort_if_unique_id_configured.assert_called_once()
+async def test_form_prefills_every_field_from_saved_options(
+    hass: HomeAssistant,
+) -> None:
+    """The form shows the saved value of every field, never the default.
 
-    def test_tools_remains_available_on_older_home_assistant(self, monkeypatch):
-        monkeypatch.setattr(cf, "HA_VERSION", "2024.11.0")
-        flow = _make_flow()
-
-        entry = asyncio.run(flow.async_step_tools({}))
-
-        assert entry["type"] == "entry"
-
-    def test_tools_entry_title_reflects_rename(self):
-        # #1853: the title names what the entry actually is — the privileged
-        # file & YAML editing services — not "HA MCP Tools", which read as if the
-        # component were required for MCP tools in general.
-        assert const.TOOLS_ENTRY_TITLE == "HA-MCP File & YAML Tools"
-        # The pre-rename default the setup migration retitles existing installs
-        # away from (see _async_setup_tools_entry).
-        assert const.TOOLS_ENTRY_LEGACY_TITLE == "HA MCP Tools"
-
-
-class TestToolsInfoOptionsFlow:
-    def _flow_with_stores(self, *, dirs=None, keys=None):
-        # The tools options flow reads/writes the component's own stores via
-        # hass.data; give it a stand-in hass carrying the current values.
-        flow = cf.HaMcpToolsInfoOptionsFlow()
-        flow.hass = SimpleNamespace(
-            data={
-                const.DOMAIN: {
-                    "allowed_paths": list(dirs or []),
-                    "extra_yaml_keys": list(keys or []),
-                }
-            }
-        )
-        return flow
-
-    def test_init_shows_editable_form_with_current_values(self):
-        # The tools entry's options flow shows an EDITABLE form on a step id
-        # distinct from the server flow's ``init`` (a shared id would collide in
-        # strings.json). The two fields default to the current stored values.
-        flow = self._flow_with_stores(dirs=["pyscript"], keys=["alert2"])
-        flow.async_show_form = MagicMock(
-            side_effect=lambda **kw: {"type": "form", **kw}
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "tools_info"
-        markers = {m.schema: m for m in form["data_schema"].schema}
-        assert set(markers) == {"allowed_dirs", "extra_yaml_keys"}
-        assert markers["allowed_dirs"].default() == ["pyscript"]
-        assert markers["extra_yaml_keys"].default() == ["alert2"]
-
-    def test_submit_persists_via_apply_helpers_and_creates_entry(self, monkeypatch):
-        # The submit routes both lists through the shared _apply_* helpers (the
-        # same validated path the services use) and then creates the entry.
-        import custom_components.ha_mcp_tools as comp
-
-        applied: dict[str, list[str]] = {}
-
-        async def _apply_dirs(hass, raw):
-            applied["dirs"] = raw
-            return raw, []
-
-        async def _apply_keys(hass, raw):
-            applied["keys"] = raw
-            return raw, []
-
-        monkeypatch.setattr(comp, "_apply_allowed_paths", _apply_dirs)
-        monkeypatch.setattr(comp, "_apply_extra_yaml_keys", _apply_keys)
-
-        flow = self._flow_with_stores()
-        flow.async_create_entry = MagicMock(
-            side_effect=lambda **kw: {"type": "entry", **kw}
-        )
-        result = asyncio.run(
-            flow.async_step_tools_info(
-                {"allowed_dirs": ["pyscript"], "extra_yaml_keys": ["alert2"]}
-            )
-        )
-        assert result["type"] == "entry"
-        assert result["data"] == {}
-        assert applied == {"dirs": ["pyscript"], "keys": ["alert2"]}
-
-    def test_submit_none_reshows_form(self):
-        # Defensive: HA calls async_step_tools_info(None) in some flows; it must
-        # re-render rather than persist an empty payload.
-        flow = self._flow_with_stores(dirs=["pyscript"])
-        flow.async_show_form = MagicMock(
-            side_effect=lambda **kw: {"type": "form", **kw}
-        )
-        form = asyncio.run(flow.async_step_tools_info(None))
-        assert form["step_id"] == "tools_info"
-
-
-class TestServerOptionsFlow:
-    def test_init_shows_form_with_connect_url_placeholder(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "init"
-        assert "mcp_abc" in form["description_placeholders"]["connect_url"]
-
-    def test_direct_access_path_is_explicit_plain_text_selector(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-
-        form = asyncio.run(flow.async_step_init(None))
-        validators = {
-            marker.schema: validator
-            for marker, validator in form["data_schema"].schema.items()
-        }
-        selector = validators[const.OPT_SECRET_PATH_OVERRIDE]
-
-        assert isinstance(selector, TextSelector)
-        assert selector.config["type"] == TextSelectorType.TEXT
-
-    def test_legacy_oauth_secret_is_explicit_plain_text_selector(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-
-        form = asyncio.run(flow.async_step_init(None))
-        validators = {
-            marker.schema: validator
-            for marker, validator in form["data_schema"].schema.items()
-        }
-        selector = validators[const.OPT_OAUTH_CLIENT_SECRET]
-
-        assert isinstance(selector, TextSelector)
-        assert selector.config["type"] == TextSelectorType.TEXT
-
-    @pytest.mark.parametrize(
-        "field",
-        [const.OPT_SECRET_PATH_OVERRIDE, const.OPT_WEBHOOK_ID_OVERRIDE],
-    )
-    @pytest.mark.parametrize("invalid_character", ["#", "?", "%", " ", "\t"])
-    def test_connect_path_override_rejects_url_breaking_characters(
-        self, field, invalid_character
-    ):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        invalid_value = f"safe{invalid_character}value"
-
-        result = asyncio.run(flow.async_step_init({field: invalid_value}))
-
-        assert result["type"] == "form"
-        assert result["step_id"] == "init"
-        assert result["errors"] == {field: "invalid_connect_path"}
-        marker = next(
-            marker for marker in result["data_schema"].schema if marker.schema == field
-        )
-        assert marker.description["suggested_value"] == invalid_value
-
-    def test_connect_path_overrides_accept_url_safe_values(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        user_input = {
-            const.OPT_SECRET_PATH_OVERRIDE: "/mcp_safe-token.123",
-            const.OPT_WEBHOOK_ID_OVERRIDE: "mcp_safe-token.123",
-        }
-
-        result = asyncio.run(flow.async_step_init(user_input))
-
-        assert result["type"] == "entry"
-        assert (
-            result["data"][const.OPT_SECRET_PATH_OVERRIDE]
-            == user_input[const.OPT_SECRET_PATH_OVERRIDE]
-        )
-        assert (
-            result["data"][const.OPT_WEBHOOK_ID_OVERRIDE]
-            == user_input[const.OPT_WEBHOOK_ID_OVERRIDE]
-        )
-
-    def test_webhook_id_override_rejects_slash(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-
-        result = asyncio.run(
-            flow.async_step_init({const.OPT_WEBHOOK_ID_OVERRIDE: "mcp/abc"})
-        )
-
-        assert result["type"] == "form"
-        assert result["errors"] == {const.OPT_WEBHOOK_ID_OVERRIDE: "invalid_webhook_id"}
-
-    def test_connect_path_overrides_accept_surrounding_whitespace(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_SECRET_PATH_OVERRIDE: " \t/nested/direct/path\r\n",
-                    const.OPT_WEBHOOK_ID_OVERRIDE: " \tmcp_abc\r\n",
-                }
-            )
-        )
-
-        assert result["type"] == "entry"
-        assert result["data"][const.OPT_SECRET_PATH_OVERRIDE] == "/nested/direct/path"
-        assert result["data"][const.OPT_WEBHOOK_ID_OVERRIDE] == "mcp_abc"
-
-    def test_versions_placeholder_present_and_populated(self, monkeypatch):
-        # The Configure form carries a "versions" placeholder that names the
-        # component version (from the manifest) and the installed server version.
-        flow = _make_options_flow(
-            options={},
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
-        )
-        flow.hass = MagicMock()
-        # The server-version read is offloaded to the executor (blocking I/O);
-        # make the mock actually run the callable.
-        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="0.14.0")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.9.0")
-
-        form = asyncio.run(flow.async_step_init(None))
-        versions = form["description_placeholders"]["versions"]
-        # startswith, not equality: the tools-module status line (#1996) rides
-        # the same placeholder below the version line.
-        assert versions.startswith(
-            "Component 0.14.0 - Server ha-mcp 7.9.0 (installed with this component release)"
-        )
-
-    def test_versions_placeholder_is_failure_proof(self, monkeypatch, caplog):
-        # A broken version read must not break the form: the component read
-        # failing and the server read raising both degrade to safe text.
-        # Both degradations are asserted at warning level — they put a
-        # visible fallback on the form, and reverting either to debug
-        # otherwise keeps this test green.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        flow.hass = MagicMock()
-        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-        monkeypatch.setattr(
-            cf, "async_get_integration", AsyncMock(side_effect=RuntimeError("boom"))
-        )
-
-        def _raise(_spec):
-            raise RuntimeError("metadata boom")
-
-        monkeypatch.setattr(cf, "_installed_server_version", _raise)
-
-        with caplog.at_level(logging.WARNING):
-            form = asyncio.run(flow.async_step_init(None))  # must not raise
-        versions = form["description_placeholders"]["versions"]
-        assert versions.startswith(
-            "Component unknown - Server ha-mcp not installed yet (installed with this component release)"
-        )
-        assert "Could not read the component version" in caplog.text
-        assert "Could not read the server version" in caplog.text
-
-    def test_versions_placeholder_server_not_installed_yet(self, monkeypatch):
-        # Before the server package is installed, the server half reads
-        # "not installed yet" rather than a bogus version.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: None)
-        form = asyncio.run(flow.async_step_init(None))
-        versions = form["description_placeholders"]["versions"]
-        # No hass on the flow ⇒ component "unknown"; server not installed yet.
-        assert "not installed yet" in versions
-        assert versions.startswith("Component unknown")
-
-    @staticmethod
-    def _hass_with_entries(entries):
-        """hass whose config-entry registry returns ``entries`` for the domain."""
-        hass = MagicMock()
-        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-        hass.config_entries.async_entries = MagicMock(return_value=entries)
-        return hass
-
-    def test_versions_placeholder_flags_missing_tools_entry(self, monkeypatch):
-        # #1996: a server-entry-only install shows a status line directly under
-        # the version line pointing at the missing File & YAML Tools entry —
-        # users otherwise never learn about the second entry until a tool fails.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        flow.hass = self._hass_with_entries(
-            [SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})]
-        )
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-
-        form = asyncio.run(flow.async_step_init(None))
-        versions = form["description_placeholders"]["versions"]
-        assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-        assert "Not installed" in versions
-        assert "Add entry" in versions
-
-    def test_versions_placeholder_shows_tools_entry_installed(self, monkeypatch):
-        # Both entries present and the tools entry loaded → the status line
-        # reads Installed. A legacy tools entry without the entry_type
-        # discriminator counts too (missing entry_type means tools, mirroring
-        # async_setup_entry).
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        for tools_data in (
-            {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
-            {},  # legacy pre-#1527 entry
-        ):
-            flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-            flow.hass = self._hass_with_entries(
-                [
-                    SimpleNamespace(
-                        data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}
-                    ),
-                    SimpleNamespace(data=tools_data, state=cf.ConfigEntryState.LOADED),
-                ]
-            )
-            form = asyncio.run(flow.async_step_init(None))
-            versions = form["description_placeholders"]["versions"]
-            assert "tools module (optional): Installed" in versions
-            assert "Not installed" not in versions
-            assert "not loaded" not in versions
-
-    def test_versions_placeholder_flags_unloaded_tools_entry(self, monkeypatch):
-        # A tools entry that exists but is not loaded (disabled / setup failed)
-        # serves no services, so it must not read as plain Installed — the line
-        # points at enabling/reloading the existing entry instead.
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        flow.hass = self._hass_with_entries(
-            [
-                SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER}),
-                SimpleNamespace(
-                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
-                    state=cf.ConfigEntryState.NOT_LOADED,
-                ),
-            ]
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        versions = form["description_placeholders"]["versions"]
-        assert "not loaded" in versions
-        assert "enable or reload" in versions
-
-    def test_tools_module_hint_mixed_entry_states_reads_installed(self, monkeypatch):
-        # With several tools entries, one loaded entry is enough for Installed
-        # (the any() semantics) — the unloaded sibling must not downgrade it.
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        flow.hass = self._hass_with_entries(
-            [
-                SimpleNamespace(
-                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
-                    state=cf.ConfigEntryState.NOT_LOADED,
-                ),
-                SimpleNamespace(
-                    data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS},
-                    state=cf.ConfigEntryState.LOADED,
-                ),
-            ]
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        versions = form["description_placeholders"]["versions"]
-        assert "tools module (optional): Installed" in versions
-        assert "not loaded" not in versions
-
-    def test_tools_module_hint_read_error_drops_line(self, monkeypatch):
-        # Failure-proof like the sibling hints: a raising entry-registry read
-        # drops the status line rather than breaking the options form.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        hass = MagicMock()
-        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-        hass.config_entries.async_entries = MagicMock(side_effect=RuntimeError("boom"))
-        flow.hass = hass
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-
-        form = asyncio.run(flow.async_step_init(None))  # must not raise
-        versions = form["description_placeholders"]["versions"]
-        assert versions.startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-        assert "tools module" not in versions
-
-    def test_webhook_auth_is_first_option_field(self):
-        # #1875: Authentication mode sits at the top of the options form,
-        # directly under the connect URLs, so users find it without scrolling.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        markers = list(form["data_schema"].schema)
-        assert markers[0].schema == const.OPT_WEBHOOK_AUTH
-
-    def test_form_prefills_every_field_from_saved_options(self):
-        # Review gap: the form must show the user's SAVED values, not the
-        # defaults, for every field (a regression here silently reverts a
-        # user's config on the next save). Dropdowns/toggles pre-fill via the
-        # schema default; the optional text fields pre-fill via suggested_value
-        # (a default there would make them impossible to clear — see
-        # test_clearing_an_override_field_sticks).
-        saved = {
-            const.OPT_SERVER_PORT: 12345,
-            const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
-            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
-            const.OPT_PIP_SPEC: "ha-mcp==0.0.1",
-            const.OPT_SERVER_URL: "https://ha.example:8123",
-            # Saved non-defaults prove each of these toggles and selectors prefills.
-            const.OPT_ENABLE_LLM_API: False,
-            const.OPT_ACCESS_OFF_AFTER_RESTART: True,
-            const.OPT_LLM_API_EXPOSURE: const.EXPOSURE_FULL,
-            const.OPT_EXTERNAL_URL: "https://ha.example.com",
-            const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
-            const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
-            const.OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
-            const.OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://chatgpt.example/cb"],
-        }
-        flow = _make_options_flow(
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        markers = {m.schema: m for m in form["data_schema"].schema}
-
-        # Optional text fields pre-fill via suggested_value so they stay
-        # clearable; every other field pre-fills via the schema default.
-        text_fields = (
-            const.OPT_PIP_SPEC,
-            const.OPT_SERVER_URL,
-            const.OPT_EXTERNAL_URL,
-            const.OPT_WEBHOOK_ID_OVERRIDE,
-            const.OPT_SECRET_PATH_OVERRIDE,
-            const.OPT_OAUTH_CLIENT_ID,
-            const.OPT_OAUTH_CLIENT_SECRET,
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST,
-        )
-        for key in text_fields:
-            assert markers[key].description["suggested_value"] == saved[key]
-
-        # The administrator token and login are never pre-filled from anything saved.
-        defaults = {
-            key: m.default()
-            for key, m in markers.items()
-            if key
-            not in (
-                *text_fields,
-                const.OPT_ADMIN_TOKEN_REPLACEMENT,
-                cf.server_credentials.ADMIN_USERNAME,
-                cf.server_credentials.ADMIN_PASSWORD,
-            )
-        }
-        # One-shot actions are never pre-filled True; the enable_* toggles
-        # default on and the callback list stays on when unsaved. Pop them off
-        # (not inside assert, which `python -O` would strip) before comparing.
-        expected = {
-            const.OPT_REGENERATE_SECRETS: False,
-            const.OPT_OAUTH_REGENERATE: False,
-            const.OPT_ENABLE_WEBHOOK: True,
-            const.OPT_ENABLE_STARTUP_NOTIFICATION: True,
-            const.OPT_ENABLE_SIDEBAR_PANEL: True,
-            const.OPT_OAUTH_ALLOW_ANY_CALLBACK: False,
-        }
-        popped = {key: defaults.pop(key) for key in expected}
-        assert popped == expected
-        assert defaults == {k: v for k, v in saved.items() if k not in text_fields}
-
-    def test_init_submit_round_trips_input_into_entry(self):
-        flow = _make_options_flow()
-        user_input = {
-            const.OPT_CHANNEL: const.CHANNEL_DEV,
-            const.OPT_SERVER_PORT: 9999,
-            const.OPT_BIND_HOST: const.BIND_HOST_ALL,
-            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
-            const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",  # real override
-            # A REAL URL override — DEFAULT_LOOPBACK_URL would be normalized
-            # away (see test_server_url_default_loopback_normalized_away).
-            const.OPT_SERVER_URL: "http://ha.internal:8123",
-        }
-        result = asyncio.run(flow.async_step_init(user_input))
-        assert result["type"] == "entry"
-        assert result["title"] == ""
-        # A genuine override is stored verbatim; the channel rides along.
-        # _normalize adds the (empty) URL/secret management fields when the
-        # submission omits them; an omitted callback list is an emptied one.
-        assert result["data"] == {
-            **user_input,
-            const.OPT_EXTERNAL_URL: "",
-            const.OPT_WEBHOOK_ID_OVERRIDE: "",
-            const.OPT_SECRET_PATH_OVERRIDE: "",
-            const.OPT_OAUTH_CLIENT_ID: "",
-            const.OPT_OAUTH_CLIENT_SECRET: "",
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST: [],
-        }
-
-    def test_default_pip_spec_normalized_to_empty(self):
-        # Saving with the pinned default in the pip-spec field must not persist it
-        # as an override — the default moves with each release, so it is collapsed
-        # to empty ("use the selected channel").
-        flow = _make_options_flow()
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
-                    const.OPT_PIP_SPEC: const.DEFAULT_PIP_SPEC,
-                }
-            )
-        )
-        assert result["data"][const.OPT_PIP_SPEC] == ""
-
-    def test_server_url_whitespace_is_dropped_to_default(self):
-        # A whitespace-only Home Assistant URL must not be stored verbatim: it is
-        # truthy, so it would bypass the consumer's empty -> loopback fallback and
-        # break the connection. _normalize drops it so the default applies.
-        flow = _make_options_flow()
-        result = asyncio.run(
-            flow.async_step_init(
-                {const.OPT_CHANNEL: const.CHANNEL_STABLE, const.OPT_SERVER_URL: "   "}
-            )
-        )
-        assert const.OPT_SERVER_URL not in result["data"]
-
-    def test_server_url_trailing_slash_stripped(self):
-        # A real URL is kept, with any trailing slash trimmed.
-        flow = _make_options_flow()
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
-                    const.OPT_SERVER_URL: "http://ha.local:8123/",
-                }
-            )
-        )
-        assert result["data"][const.OPT_SERVER_URL] == "http://ha.local:8123"
-
-    def test_server_url_default_loopback_normalized_away(self):
-        # Older forms pre-filled DEFAULT_LOOPBACK_URL as suggested_value, so a
-        # plain options save stored it as an explicit override. Persisting it
-        # would pin the plaintext scheme and port, defeating the SSL/port-aware
-        # loopback derivation (issue #1890) — collapse it to "no override".
-        flow = _make_options_flow()
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
-                    const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL + "/",
-                }
-            )
-        )
-        assert const.OPT_SERVER_URL not in result["data"]
-
-    def test_pip_spec_field_empty_when_no_override(self):
-        # The "leave blank to follow the channel" field must actually BE
-        # blank when no override is stored — pre-filling the default dist
-        # name as a hint made it always look populated (and showed the
-        # STABLE dist name even on the dev channel). A saved override still
-        # pre-fills: see test_form_prefills_every_field_from_saved_options.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        marker = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_PIP_SPEC
-        )
-        assert marker.description["suggested_value"] == ""
-
-    def test_server_url_field_empty_when_no_override(self):
-        # Same pattern as pip_spec above: pre-filling DEFAULT_LOOPBACK_URL made
-        # every options save persist the constant as an explicit override,
-        # pinning the plaintext scheme/port that the #1890 loopback derivation
-        # replaces. No override stored -> empty field.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        marker = next(
-            m for m in form["data_schema"].schema if m.schema == const.OPT_SERVER_URL
-        )
-        assert marker.description["suggested_value"] == ""
-
-    def test_clearing_an_override_field_sticks(self):
-        # Regression: emptying an optional text field must persist as cleared.
-        # HA's frontend DROPS an emptied optional field from the submitted
-        # payload; the flow manager then validates that payload against the
-        # shown schema (filling voluptuous defaults) before the step handler
-        # runs — the layer a direct-handler unit test skips. A schema
-        # ``default=<saved value>`` silently re-injects the old value there, so
-        # clearing never took: the pip-spec override kept re-installing the old
-        # build and the field re-appeared populated on reopen. Pre-filling with
-        # ``suggested_value`` (not ``default``) has no such re-injection, so the
-        # cleared state sticks.
-        clearable = {
-            const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",
-            const.OPT_SERVER_URL: "https://ha.example:8123",
-            const.OPT_EXTERNAL_URL: "https://ha.example.com",
-            const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
-            const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
-        }
-        for field in clearable:
-            flow = _make_options_flow(
-                data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=dict(clearable)
-            )
-            form = asyncio.run(flow.async_step_init(None))
-            # The user cleared exactly one field; the frontend omits it and
-            # submits the rest. Validate through the shown schema exactly as the
-            # flow manager does, then hand the result to the step.
-            submitted = {k: v for k, v in clearable.items() if k != field}
-            validated = form["data_schema"](submitted)
-            result = asyncio.run(flow.async_step_init(validated))
-            assert result["data"].get(field, "") == "", (
-                f"clearing {field!r} did not persist: {result['data'].get(field)!r}"
-            )
-
-    def test_no_enable_toggle_option_exists(self):
-        # Regression guard for the single-instance pivot: the enable/disable
-        # toggle was dropped (entry-exists = server runs).
-        assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
-
-    def test_new_toggle_defaults_for_fresh_entry(self) -> None:
-        # The UX toggles default on and the restart-access toggle off (an
-        # existing install's first save must not close access after restarts)
-        # when the entry has never stored them; a missing field is a KeyError.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        markers = {m.schema: m for m in form["data_schema"].schema}
-        assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is True
-        assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is True
-        assert markers[const.OPT_ACCESS_OFF_AFTER_RESTART].default() is False
-
-    def test_new_toggles_placed_right_after_enable_webhook(self):
-        # Contract: both toggles sit immediately after the enable_webhook field.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        keys = [m.schema for m in form["data_schema"].schema]
-        webhook_idx = keys.index(const.OPT_ENABLE_WEBHOOK)
-        assert set(keys[webhook_idx + 1 : webhook_idx + 3]) == {
-            const.OPT_ENABLE_STARTUP_NOTIFICATION,
-            const.OPT_ENABLE_SIDEBAR_PANEL,
-        }
-
-    def test_new_toggles_prefill_stored_false(self):
-        # Re-opening the form after saving False shows the stored False, not the
-        # default True (a regression here silently re-enables an opted-out UI).
-        flow = _make_options_flow(
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
-            options={
-                const.OPT_ENABLE_STARTUP_NOTIFICATION: False,
-                const.OPT_ENABLE_SIDEBAR_PANEL: False,
-            },
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        markers = {m.schema: m for m in form["data_schema"].schema}
-        assert markers[const.OPT_ENABLE_STARTUP_NOTIFICATION].default() is False
-        assert markers[const.OPT_ENABLE_SIDEBAR_PANEL].default() is False
-
-    def test_submitting_false_stores_false_for_new_toggles(self):
-        # Submitting the form with both toggles unchecked persists False.
-        flow = _make_options_flow()
-        user_input = {
-            const.OPT_CHANNEL: const.CHANNEL_STABLE,
-            const.OPT_ENABLE_STARTUP_NOTIFICATION: False,
-            const.OPT_ENABLE_SIDEBAR_PANEL: False,
-        }
-        result = asyncio.run(flow.async_step_init(user_input))
-        assert result["type"] == "entry"
-        assert result["data"][const.OPT_ENABLE_STARTUP_NOTIFICATION] is False
-        assert result["data"][const.OPT_ENABLE_SIDEBAR_PANEL] is False
-
-    def test_panel_hint_contains_panel_url_when_sidebar_enabled(self):
-        # panel_hint is a non-empty sentence naming the panel URL when the
-        # sidebar option is enabled (absent counts as enabled).
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        hint = form["description_placeholders"]["panel_hint"]
-        assert hint
-        assert "(/ha-mcp)" in hint
-
-    def test_panel_hint_empty_when_sidebar_disabled(self):
-        # With the sidebar option stored False, the panel hint collapses to "".
-        flow = _make_options_flow(
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
-            options={const.OPT_ENABLE_SIDEBAR_PANEL: False},
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        assert form["description_placeholders"]["panel_hint"] == ""
-
-    def test_connect_url_hint_uses_configured_port(self):
-        flow = _make_options_flow(
-            options={const.OPT_SERVER_PORT: 9999},
-            data={
-                const.DATA_WEBHOOK_ID: "mcp_abc",
-                const.DATA_SECRET_PATH: "/private_x",
-            },
-        )
-        hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
-        assert "/api/webhook/mcp_abc" in hint
-        # The LAN hint uses the CONFIGURED port, not the 9584 default.
-        assert ":9999/private_x" in hint
-
-    def test_connect_url_hint_before_start_points_at_log(self):
-        flow = _make_options_flow(data={})
-        hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS)).lower()
-        assert "once the server has started" in hint
-        assert "notification" not in hint
-
-    def test_connect_url_hint_resolves_actual_urls_via_builder(self):
-        """With hass available, the hint lists the REAL resolved URLs.
-
-        The builder import is module-local (``from .embedded_setup import
-        build_connect_urls``), so injecting a stub module into sys.modules
-        substitutes it without importing the real embedded_setup (which
-        needs a full Home Assistant install).
-        """
-        calls: list[dict] = []
-
-        def fake_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
-            calls.append(
-                {
-                    "hass": hass,
-                    "webhook_enabled": webhook_enabled,
-                    "extra_hosts": extra_hosts,
-                }
-            )
-            return [
-                "https://example.duckdns.org/api/webhook/mcp_abc",
-                "http://192.168.1.150:9584/private_x (direct access)",
-            ]
-
-        async def fake_lan_hosts(hass):
-            return ["10.0.1.3"]
-
-        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
-        stub.build_connect_urls = fake_builder
-        stub.async_get_lan_hosts = fake_lan_hosts
-        flow = _make_options_flow(
-            options={const.OPT_ENABLE_WEBHOOK: False},
-            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
-        )
-        flow.hass = MagicMock()
-        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
-        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
-        try:
-            hint = asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
-        finally:
-            if orig is None:
-                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
-            else:
-                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
-        assert "https://example.duckdns.org/api/webhook/mcp_abc" in hint
-        assert "http://192.168.1.150:9584/private_x" in hint
-        assert "<your-home-assistant-url>" not in hint
-        # The enable_webhook option is forwarded to the builder.
-        assert calls and calls[0]["webhook_enabled"] is False
-        # The enumerated adapter hosts are forwarded so per-interface URLs
-        # surface on the Configure screen too (#1862).
-        assert calls[0]["extra_hosts"] == ["10.0.1.3"]
-
-    def _hint_with_stub_builder(self, builder, *, data, options=None):
-        """Call ``_connect_url_hint`` with ``build_connect_urls`` stubbed.
-
-        Injects a fake ``embedded_setup`` module so the flow's module-local
-        ``from .embedded_setup import build_connect_urls`` resolves to ``builder``
-        without importing the real module (which needs a full HA install).
-        """
-
-        async def fake_lan_hosts(hass):
-            return []
-
-        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
-        stub.build_connect_urls = builder
-        stub.async_get_lan_hosts = fake_lan_hosts
-        flow = _make_options_flow(data=data, options=options)
-        flow.hass = MagicMock()
-        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
-        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
-        try:
-            return asyncio.run(flow._connect_url_hint(cf._COMMON_FALLBACKS))
-        finally:
-            if orig is None:
-                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
-            else:
-                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
-
-    def test_connect_url_hint_falls_back_when_builder_raises(self):
-        # A resolution bug in build_connect_urls must not escape and take down
-        # the whole options form: the hint degrades to the placeholder form.
-        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
-            raise RuntimeError("resolution boom")
-
-        hint = self._hint_with_stub_builder(
-            boom_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
-        )
-        assert "<your-home-assistant-url>" in hint
-        assert "/api/webhook/mcp_abc" in hint
-
-    def test_connect_url_hint_falls_back_when_builder_returns_empty(self):
-        # An empty resolver result (nothing resolvable yet) also degrades to the
-        # placeholder form rather than an empty "Connect URL(s):" header.
-        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
-            return []
-
-        hint = self._hint_with_stub_builder(
-            empty_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
-        )
-        assert "<your-home-assistant-url>" in hint
-        assert "/api/webhook/mcp_abc" in hint
-
-    def test_connect_url_hint_local_only_never_shows_webhook_url(self):
-        """Webhook disabled + nothing resolvable: no dead webhook URL.
-
-        With remote access via webhook off, the webhook endpoint is never
-        registered - the fallback must state local-only mode with the real
-        loopback direct URL instead of rendering a webhook URL that 404s.
-        """
-
-        def empty_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
-            return []
-
-        hint = self._hint_with_stub_builder(
-            empty_builder,
-            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
-            options={const.OPT_ENABLE_WEBHOOK: False, const.OPT_SERVER_PORT: 9999},
-        )
-        assert hint.startswith("Remote access via webhook is disabled")
-        assert "http://127.0.0.1:9999/private_x" in hint
-        assert "/api/webhook/" not in hint
-
-    def test_connect_url_hint_local_only_when_builder_raises(self):
-        """Webhook disabled + resolver RAISES: same local-only contract.
-
-        The ``except`` path must also fall through to the local-only message
-        (loopback direct URL, no webhook URL), not the placeholder webhook form
-        — a resolution error must not resurrect a webhook URL that 404s.
-        """
-
-        def boom_builder(hass, entry, *, webhook_enabled=True, extra_hosts=None):
-            raise RuntimeError("resolution boom")
-
-        hint = self._hint_with_stub_builder(
-            boom_builder,
-            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
-            options={const.OPT_ENABLE_WEBHOOK: False},
-        )
-        assert hint.startswith("Remote access via webhook is disabled")
-        assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
-        assert "/api/webhook/" not in hint
-
-
-class TestOptionsFormTranslations:
-    """The runtime-assembled prose follows the configured language.
-
-    The sentences in the options form depend on runtime state, so they are
-    built in Python rather than written into a step description. Before this,
-    that meant English paragraphs sitting inside an otherwise translated
-    form for every non-English user.
+    A regression here silently reverts a user's configuration on the next
+    save. Optional text fields pre-fill by suggestion so they stay clearable;
+    every other field pre-fills through the schema default.
     """
-
-    PREFIX = f"component.{const.DOMAIN}.common."
-
-    def _flow_with_language(self, language, **kwargs):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"}, **kwargs)
-        flow.hass.config.language = language
-        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-        flow.hass.config_entries.async_entries = MagicMock(return_value=[])
-        return flow
-
-    def _catalog(self, **overrides):
-        return {f"{self.PREFIX}{key}": value for key, value in overrides.items()}
-
-    def test_form_prose_uses_the_catalog_for_the_configured_language(self, monkeypatch):
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(
-                return_value=self._catalog(
-                    panel_hint="Öffne das Panel.",
-                    version_line=(
-                        "Komponente {component_version} - "
-                        "Server ha-mcp {server_version} ({source})"
-                    ),
-                    tools_module_not_installed="Modul: Nicht installiert",
-                )
-            ),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        # The trailing space that spaces the sentence from the surrounding
-        # prose is added by the caller, not carried in the catalog.
-        assert placeholders["panel_hint"] == "Öffne das Panel. "
-        assert placeholders["versions"].startswith(
-            "Komponente 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-        assert "Modul: Nicht installiert" in placeholders["versions"]
-
-    def test_untranslated_keys_keep_their_english_source(self, monkeypatch):
-        """A partial catalog must not blank the keys it does not carry."""
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="Öffne das Panel.")),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"] == "Öffne das Panel. "
-        assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-
-    def test_failing_lookup_degrades_to_english(self, monkeypatch, caplog):
-        """Translations are additive; a broken catalog must not break the form.
-
-        The level is asserted, not just the fallback text: reverting this
-        ``except`` to debug leaves the degradation invisible while every
-        text assertion stays green.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(side_effect=RuntimeError("boom")),
-        )
-        flow = self._flow_with_language("de")
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
-        assert placeholders["versions"].startswith("Component 1.2.4")
-        assert "falling back to" in caplog.text
-
-    def test_unreadable_language_skips_the_lookup(self, monkeypatch):
-        """No language to ask for means English, not a lookup with a bad key."""
-        seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        flow = self._flow_with_language(object())
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        seam.assert_not_awaited()
-        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
-
-    def test_malformed_version_line_falls_back_to_the_english_template(
-        self, monkeypatch, caplog
-    ):
-        """A catalog is data — an unusable brace must not take the form down.
-
-        The level is asserted for the same reason as the lookup failure above:
-        the fallback text alone stays green at debug.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(version_line="Komponente {nope} {")),
-        )
-        flow = self._flow_with_language("de")
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-        assert "Unusable version_line template" in caplog.text
-
-    def test_dotted_placeholder_in_version_line_does_not_break_the_form(
-        self, monkeypatch
-    ):
-        """The failure the placeholder-parity check cannot see.
-
-        ``{component_version.major}`` matches no placeholder pattern, so the
-        parity check reads the placeholder set as unchanged and passes it
-        through — and ``.format`` then raises ``AttributeError``, which is not
-        among the errors a narrow guard would catch.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(
-                return_value=self._catalog(
-                    version_line="Komponente {component_version.major}"
-                )
-            ),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["versions"].startswith(
-            "Component 1.2.4 - Server ha-mcp 7.14.1 (installed with this component release)"
-        )
-
-    def test_the_seam_is_asked_for_the_configured_language(self, monkeypatch):
-        """Every test above stays green if the call site hardcodes ``"en"``."""
-        seam = AsyncMock(return_value={})
-        monkeypatch.setattr(cft, "_fetch_common_translations", seam)
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        flow = self._flow_with_language("de")
-
-        asyncio.run(flow.async_step_init(None))
-
-        seam.assert_awaited_once_with(flow.hass, "de")
-
-    def test_empty_translated_value_keeps_the_english_source(self, monkeypatch):
-        """An empty value in a catalog would otherwise blank the sentence.
-
-        Deleting the truthiness filter in the merge leaves every other test
-        green; only an empty string discriminates.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="")),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
-
-    def test_catalog_without_our_prefix_says_so(self, monkeypatch, caplog):
-        """A wrong category or prefix is a silent no-op otherwise.
-
-        The lookup succeeds, the merge matches nothing, the form renders pure
-        English, and no other check has an opinion about it.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(
-                return_value={"component.other.common.panel_hint": "Öffne das Panel."}
-            ),
-        )
-        flow = self._flow_with_language("de")
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
-        assert self.PREFIX in caplog.text
-        # The wording itself, not just the prefix it names: this line also
-        # covers the path where the seam discarded the catalog, and the
-        # earlier "carries no keys" described a catalog that never existed.
-        # Both sentences contain the prefix, so only this assert tells them
-        # apart.
-        assert "No usable" in caplog.text
-
-    def test_manifest_without_a_version_shows_the_unknown_wording(
-        self, monkeypatch, caplog
-    ):
-        """``str(None)`` renders "None" into the form, with no exception.
-
-        The translated unknown-version wording exists for exactly this case and
-        would never have fired: the read succeeds, so the ``except`` never runs.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version=None)),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
-        )
-        flow = self._flow_with_language("de")
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        assert placeholders["versions"].startswith("Component unknown - ")
-        assert "None" not in placeholders["versions"]
-        assert "carries no version" in caplog.text
-
-    def test_empty_catalog_says_so(self, monkeypatch, caplog):
-        """The reachable half of the same defect, and the likelier one.
-
-        Core serves a single-component lookup straight out of that component's
-        cache entry, so everything a non-empty result can contain is already
-        prefixed. The developer error worth seeing — the ``common`` category
-        never built, or the block missing from ``strings.json`` — arrives as
-        ``{}`` instead, which an ``if loaded and ...`` condition skips.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft, "_fetch_common_translations", AsyncMock(return_value={})
-        )
-        flow = self._flow_with_language("de")
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        assert placeholders["panel_hint"].startswith("Open the [HA-MCP settings panel]")
-        assert self.PREFIX in caplog.text
-
-    def test_non_mapping_lookup_result_says_so(self, monkeypatch, caplog):
-        """Discarding a whole catalog is the same pure-English outcome.
-
-        Exercises the seam itself, since every other test here replaces it.
-        """
-        # setitem, not setdefault: the module stub has to be removed again, or
-        # this test leaves an ordering dependence behind for its peers.
-        translation = MagicMock()
-        translation.async_get_translations = AsyncMock(
-            return_value=["not", "a", "mapping"]
-        )
-        monkeypatch.setitem(
-            sys.modules, "homeassistant.helpers.translation", translation
-        )
-
-        with caplog.at_level(logging.WARNING):
-            result = asyncio.run(cft._fetch_common_translations(MagicMock(), "de"))
-
-        assert result == {}
-        assert "expected a Mapping, got list" in caplog.text
-
-    def test_cjk_language_gets_no_ascii_space(self, monkeypatch):
-        """The separator belongs to the script, and the language names it.
-
-        Character sniffing got this wrong twice: U+201D is Simplified Chinese's
-        closing quote and was dropped as "Latin", while the traditional
-        brackets zh-Hans does not use were kept. The language decides.
-
-        The sentence deliberately ends on U+201D, the character the glyph list
-        got wrong, so this test discriminates the two implementations instead
-        of merely agreeing with both: a list-based rule spaces this string and
-        fails here. Ending it on U+3002 would pass either way.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="打开“设置面板”")),
-        )
-        flow = self._flow_with_language("zh-Hans")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"] == "打开“设置面板”"
-
-    @pytest.mark.parametrize("language", ["ja", "zh-Hans"])
-    def test_english_text_keeps_its_space_under_a_cjk_language(
-        self, monkeypatch, language
-    ):
-        """The language alone does not decide it — the text has to agree.
-
-        Home Assistant serves English for any language this integration does
-        not ship (core loads ``[en, <language>]`` and merges English first),
-        so a ``ja`` instance renders these sentences in English while
-        ``hass.config.language`` still reads ``ja``. Keying the separator off
-        the language alone jammed the two English sentences together. The same
-        applies to a shipped language whose catalog load degrades, which
-        ``zh-Hans`` covers here.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        english = cf._COMMON_FALLBACKS["panel_hint"]
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint=english)),
-        )
-        flow = self._flow_with_language(language)
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"] == f"{english} "
-
-    def test_korean_keeps_the_separator(self, monkeypatch):
-        """Korean is not a full-width-punctuation script.
-
-        It separates words with ASCII spaces and ends sentences on an ASCII
-        full stop, so it belongs with the Latin catalogs here even though it
-        is written in a non-Latin script. The text is deliberately not the
-        English source, so this fails if ``ko`` is ever added back to the
-        no-space set rather than passing via the English-text exemption.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="설정 패널을 여세요.")),
-        )
-        flow = self._flow_with_language("ko")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"] == "설정 패널을 여세요. "
-
-    def test_latin_sentence_ending_on_a_quote_keeps_its_space(self, monkeypatch):
-        """The other direction of the same rule.
-
-        A Latin catalog may legitimately end this sentence on U+201D, and it
-        still needs the separator — re-adding that character to a glyph list
-        would silently run the two sentences together.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(return_value=self._catalog(panel_hint="Öffne das “Panel”")),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["panel_hint"] == "Öffne das “Panel” "
-
-    def test_tools_module_read_failure_is_logged(self, monkeypatch, caplog):
-        """Dropping the paragraph is a bigger loss than either version wording.
-
-        The line vanishes from the form entirely, so the degradation has to be
-        visible at the same level as the two version reads above it.
-        """
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft, "_fetch_common_translations", AsyncMock(return_value=self._catalog())
-        )
-        flow = self._flow_with_language("de")
-        flow.hass.config_entries.async_entries = MagicMock(
-            side_effect=RuntimeError("registry boom")
-        )
-
-        with caplog.at_level(logging.WARNING):
-            placeholders = asyncio.run(flow.async_step_init(None))[
-                "description_placeholders"
-            ]
-
-        # Anchor the paragraph that must survive before asserting the one that
-        # must not: an absence check alone stays green when the whole
-        # placeholder regresses to empty, which would be the larger loss.
-        assert placeholders["versions"].startswith("Component ")
-        assert "Beta/advanced file & YAML tools module" not in placeholders["versions"]
-        assert "Could not read the tools-entry state" in caplog.text
-
-    def test_connect_and_oauth_prose_follow_the_catalog(self, monkeypatch):
-        """The two hints were the last all-English blocks in the paragraph."""
-        monkeypatch.setattr(
-            cf,
-            "async_get_integration",
-            AsyncMock(return_value=SimpleNamespace(requirements=[], version="1.2.4")),
-        )
-        monkeypatch.setattr(cf, "_installed_server_version", lambda _: "7.14.1")
-        monkeypatch.setattr(
-            cft,
-            "_fetch_common_translations",
-            AsyncMock(
-                return_value=self._catalog(
-                    connect_remote_url="Remote-Verbindungs-URL: {url}",
-                    oauth_select_legacy_mode="Setze den Authentifizierungsmodus.",
-                )
-            ),
-        )
-        flow = self._flow_with_language("de")
-
-        placeholders = asyncio.run(flow.async_step_init(None))[
-            "description_placeholders"
-        ]
-
-        assert placeholders["connect_url"].startswith("Remote-Verbindungs-URL: ")
-        assert "/api/webhook/mcp_abc" in placeholders["connect_url"]
-        assert placeholders["oauth_creds"] == "Setze den Authentifizierungsmodus."
-
-
-def test_common_fallbacks_mirror_strings_json():
-    """``strings.json`` is the source; the fallback dict is a copy of it.
-
-    Nothing else compares the two: reword a string in ``strings.json``, sweep
-    the six catalogs and refresh the locale baseline, and CI stays green while
-    this copy keeps serving the old English to every failed lookup.
+    saved = {
+        OPT_SERVER_PORT: 12345,
+        OPT_BIND_HOST: BIND_HOST_LOOPBACK,
+        OPT_WEBHOOK_AUTH: WEBHOOK_AUTH_HA,
+        OPT_PIP_SPEC: "ha-mcp==0.0.1",
+        OPT_SERVER_URL: "https://ha.example:8123",
+        OPT_ENABLE_LLM_API: False,
+        OPT_ACCESS_OFF_AFTER_RESTART: True,
+        OPT_LLM_API_EXPOSURE: EXPOSURE_FULL,
+        OPT_EXTERNAL_URL: "https://ha.example.com",
+        OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
+        OPT_SECRET_PATH_OVERRIDE: "/custom_path",
+        OPT_OAUTH_CLIENT_ID: "hamcp-deadbeef",
+        OPT_OAUTH_CLIENT_SECRET: "super-secret-value",
+        OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://chatgpt.example/cb"],
+    }
+    text_fields = (
+        OPT_PIP_SPEC,
+        OPT_SERVER_URL,
+        OPT_EXTERNAL_URL,
+        OPT_WEBHOOK_ID_OVERRIDE,
+        OPT_SECRET_PATH_OVERRIDE,
+        OPT_OAUTH_CLIENT_ID,
+        OPT_OAUTH_CLIENT_SECRET,
+        OPT_OAUTH_REDIRECT_ALLOWLIST,
+    )
+    form = await open_options_form(hass, options=saved)
+    markers = schema_markers(form)
+
+    for key in text_fields:
+        assert markers[key].description is not None
+        assert markers[key].description["suggested_value"] == saved[key]
+
+    # One-shot actions are never pre-filled on, and the toggles the entry never
+    # stored take their defaults.
+    unsaved = {
+        OPT_REGENERATE_SECRETS: False,
+        OPT_OAUTH_REGENERATE: False,
+        OPT_ENABLE_WEBHOOK: True,
+        OPT_ENABLE_STARTUP_NOTIFICATION: True,
+        OPT_ENABLE_SIDEBAR_PANEL: True,
+        OPT_OAUTH_ALLOW_ANY_CALLBACK: False,
+    }
+    never_prefilled = (
+        OPT_ADMIN_TOKEN_REPLACEMENT,
+        server_credentials.ADMIN_USERNAME,
+        server_credentials.ADMIN_PASSWORD,
+    )
+    defaults = {
+        key: marker.default()
+        for key, marker in markers.items()
+        if key not in (*text_fields, *never_prefilled)
+    }
+    assert defaults == {
+        **{k: v for k, v in saved.items() if k not in text_fields},
+        **unsaved,
+    }
+
+
+@pytest.mark.parametrize("field", [OPT_PIP_SPEC, OPT_SERVER_URL])
+async def test_override_fields_are_empty_when_nothing_is_overridden(
+    hass: HomeAssistant, field: str
+) -> None:
+    """With no override saved the field is blank, not filled with the default.
+
+    A pre-filled default made every save store it as an explicit override.
     """
-    strings = json.loads(
-        (_REPO_ROOT / "custom_components" / "ha_mcp_tools" / "strings.json").read_text(
-            "utf-8"
-        )
+    form = await open_options_form(hass)
+
+    assert shown_value(schema_markers(form)[field]) == ""
+
+
+@pytest.mark.parametrize("field", list(CLEARABLE))
+async def test_clearing_an_override_field_sticks(
+    hass: HomeAssistant, field: str
+) -> None:
+    """Emptying an optional text field saves it as cleared and leaves the others.
+
+    The frontend drops an emptied field from the submit. A schema default equal
+    to the saved value would be put back by Core's validation, so the old
+    override would come back; a suggested value is not.
+    """
+    entry = add_options_entry(hass, options=dict(CLEARABLE))
+    form = await start_options_flow(hass, entry)
+
+    result = await submit_options_step(
+        hass, form["flow_id"], {k: v for k, v in CLEARABLE.items() if k != field}
     )
 
-    assert strings["common"] == cf._COMMON_FALLBACKS, (
-        "custom_components/ha_mcp_tools/config_flow.py's _COMMON_FALLBACKS has "
-        "drifted from strings.json's common block — the fallback must show the "
-        "same English every catalog is keyed against"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options.get(field, "") == ""
+    assert {k: entry.options[k] for k in CLEARABLE if k != field} == {
+        k: v for k, v in CLEARABLE.items() if k != field
+    }
+
+
+async def test_submit_stores_what_was_entered(hass: HomeAssistant) -> None:
+    """A genuine override is stored verbatim and the URL fields are always present."""
+    entry = add_options_entry(hass)
+    form = await start_options_flow(hass, entry)
+    user_input = {
+        OPT_SERVER_PORT: 9999,
+        OPT_BIND_HOST: BIND_HOST_ALL,
+        OPT_WEBHOOK_AUTH: WEBHOOK_AUTH_HA,
+        OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",
+        OPT_SERVER_URL: "http://ha.internal:8123",
+    }
+
+    result = await submit_options_step(hass, form["flow_id"], user_input)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == ""
+    assert {key: entry.options[key] for key in user_input} == user_input
+    assert {
+        key: entry.options[key]
+        for key in (
+            OPT_EXTERNAL_URL,
+            OPT_WEBHOOK_ID_OVERRIDE,
+            OPT_SECRET_PATH_OVERRIDE,
+            OPT_OAUTH_CLIENT_ID,
+            OPT_OAUTH_CLIENT_SECRET,
+        )
+    } == {
+        OPT_EXTERNAL_URL: "",
+        OPT_WEBHOOK_ID_OVERRIDE: "",
+        OPT_SECRET_PATH_OVERRIDE: "",
+        OPT_OAUTH_CLIENT_ID: "",
+        OPT_OAUTH_CLIENT_SECRET: "",
+    }
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == []
+
+
+async def test_default_pip_spec_is_saved_as_no_override(hass: HomeAssistant) -> None:
+    """The pinned default moves with each release, so it is saved as "use the paired server"."""
+    result = await _save(hass, {OPT_PIP_SPEC: DEFAULT_PIP_SPEC})
+
+    assert result["data"][OPT_PIP_SPEC] == ""
+
+
+async def test_whitespace_server_url_is_dropped(hass: HomeAssistant) -> None:
+    """A blank URL is truthy; stored, it would bypass the loopback fallback."""
+    result = await _save(hass, {OPT_SERVER_URL: "   "})
+
+    assert OPT_SERVER_URL not in result["data"]
+
+
+async def test_server_url_trailing_slash_is_stripped(hass: HomeAssistant) -> None:
+    """A real URL is kept without its trailing slash."""
+    result = await _save(hass, {OPT_SERVER_URL: "http://ha.local:8123/"})
+
+    assert result["data"][OPT_SERVER_URL] == "http://ha.local:8123"
+
+
+async def test_default_loopback_url_is_not_saved_as_an_override(
+    hass: HomeAssistant,
+) -> None:
+    """Older forms pre-filled the loopback URL; saving it would pin its scheme and port."""
+    result = await _save(hass, {OPT_SERVER_URL: DEFAULT_LOOPBACK_URL + "/"})
+
+    assert OPT_SERVER_URL not in result["data"]
+
+
+async def test_new_toggles_default_for_an_entry_that_never_stored_them(
+    hass: HomeAssistant,
+) -> None:
+    """Notification and panel default on, restart access off, for an existing install."""
+    markers = schema_markers(await open_options_form(hass))
+
+    assert markers[OPT_ENABLE_STARTUP_NOTIFICATION].default() is True
+    assert markers[OPT_ENABLE_SIDEBAR_PANEL].default() is True
+    assert markers[OPT_ACCESS_OFF_AFTER_RESTART].default() is False
+
+
+async def test_new_toggles_sit_right_after_enable_webhook(hass: HomeAssistant) -> None:
+    """Both toggles follow the enable-webhook field in the form."""
+    keys = list(schema_markers(await open_options_form(hass)))
+
+    start = keys.index(OPT_ENABLE_WEBHOOK) + 1
+    assert set(keys[start : start + 2]) == {
+        OPT_ENABLE_STARTUP_NOTIFICATION,
+        OPT_ENABLE_SIDEBAR_PANEL,
+    }
+
+
+async def test_opted_out_toggles_reopen_as_off(hass: HomeAssistant) -> None:
+    """Reopening after saving off shows off, not the default on."""
+    form = await open_options_form(
+        hass,
+        options={
+            OPT_ENABLE_STARTUP_NOTIFICATION: False,
+            OPT_ENABLE_SIDEBAR_PANEL: False,
+        },
     )
+    markers = schema_markers(form)
+
+    assert markers[OPT_ENABLE_STARTUP_NOTIFICATION].default() is False
+    assert markers[OPT_ENABLE_SIDEBAR_PANEL].default() is False
+
+
+async def test_submitting_toggles_off_saves_them_off(hass: HomeAssistant) -> None:
+    """Unchecking both toggles persists False for both."""
+    result = await _save(
+        hass,
+        {OPT_ENABLE_STARTUP_NOTIFICATION: False, OPT_ENABLE_SIDEBAR_PANEL: False},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][OPT_ENABLE_STARTUP_NOTIFICATION] is False
+    assert result["data"][OPT_ENABLE_SIDEBAR_PANEL] is False

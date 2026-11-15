@@ -44,7 +44,7 @@ PROBE_HELPERS_SOURCE = """
 import traceback
 
 # Mirrors the component: the values under these keys are instance data or
-# vendor extensions that llm_api._INSTANCE_VALUES / llm_api._is_opaque_key copy
+# vendor extensions that llm_api.INSTANCE_VALUES / llm_api.is_opaque_key copy
 # through untouched, so a bound-like key inside them is not a bound and an
 # integer type inside them is not a parameter type.
 _OPAQUE_VALUE_KEYS = ("default", "const", "enum", "examples", "example")

@@ -4,18 +4,20 @@
 The unit and app (add-on) tests run on real Home Assistant Core
 (tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core"). Files written
 before each check are listed with it: the ``ignores`` of the ast-grep rules
-that scan the tests, ``_GRANDFATHERED`` in ``tests/core_stand_in_guard.py``,
-the ``SLF001`` entries of the two test ``ruff.toml`` files and the mypy
-overrides that name a ``tests.`` module in ``pyproject.toml``. The lists are
-plain files, so a pull request could add its own new test to one and every
-check would pass. With ``--base`` this compares them with the base commit.
+that scan the tests, the ``SLF001`` entries of the two test ``ruff.toml`` files
+and the mypy overrides that name a ``tests.`` module in ``pyproject.toml``.
+``tests/core_stand_in_guard.py`` has no list now: a guard without
+``_GRANDFATHERED`` counts as one with an empty list, and its hook must not see
+the test item. The lists are plain files, so a pull request could add its own
+new test to one and every check would pass. With ``--base`` this compares them
+with the base commit.
 
 Two rules decide every added entry:
 
 - A file that does not exist at the base is new, and a new file is never
   listed, whatever else the pull request changes. A renamed file is new.
 - A file that does exist at the base may be listed only when the check itself
-  is new or wider than at the base: the list did not exist, or its ast-grep
+  is new or wider than at the base: the check did not exist, or its ast-grep
   rule's definition changed. A wider rule matches older files it did not
   match before; nothing else justifies a longer list.
 
@@ -30,8 +32,9 @@ is on no list: one taken off an ast-grep rule's list but left on ``SLF001``
 still reaches into private members the conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
-removing or renaming a rule, loosening the ``tests.*`` mypy settings, and
-turning ``SLF001`` off in a test ``ruff.toml``.
+removing or renaming a rule (except one named in ``RETIRED_RULES`` whose list
+is empty), loosening the ``tests.*`` mypy settings, and turning ``SLF001`` off
+in a test ``ruff.toml``.
 """
 
 from __future__ import annotations
@@ -62,6 +65,10 @@ RULE_DEFINITION = ("rule", "constraints", "utils", "language")
 # The list of test modules mypy skips, as the conversion check names it.
 MYPY_LIST = f"{PYPROJECT} (mypy)"
 MYPY_LOOSENING = ("ignore_errors", "ignore_missing_imports", "follow_imports")
+# A rule deleted with what it refused: it named three shared fake modules, and
+# no file is left to import from any of them. Matters only while a pull
+# request's base still has the rule, and only with its list empty.
+RETIRED_RULES = frozenset({"no-shared-core-fakes"})
 
 
 class Base:
@@ -137,19 +144,37 @@ def _definition(rule: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guard_entries(text: str) -> set[str]:
-    values: list[ast.Assign | ast.AnnAssign | ast.AugAssign] = []
-    for node in ast.walk(ast.parse(text)):
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
-            targets = [node.target]
-        else:
-            continue
-        if any(isinstance(t, ast.Name) and t.id == "_GRANDFATHERED" for t in targets):
-            values.append(node)
-    if len(values) != 1 or isinstance(values[0], ast.AugAssign):
-        raise ValueError(f"{GUARD} must assign _GRANDFATHERED exactly once")
+    tree = ast.parse(text)
+    stores = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id == "_GRANDFATHERED"
+        and isinstance(node.ctx, ast.Store)
+    ]
+    if not stores:
+        # No list exempts no file, as long as the hook cannot pick out a test.
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "pytest_runtest_call"
+            and (node.args.args or node.args.posonlyargs or node.args.kwonlyargs)
+            for node in ast.walk(tree)
+        ):
+            raise ValueError(
+                f"{GUARD}: pytest_runtest_call takes the test item but the guard "
+                "has no _GRANDFATHERED list"
+            )
+        return set()
+    values = [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Assign) and node.targets == [stores[0]])
+        or (isinstance(node, ast.AnnAssign) and node.target is stores[0])
+    ]
+    if len(stores) != 1 or len(values) != 1:
+        raise ValueError(
+            f"{GUARD} must assign _GRANDFATHERED once, by plain assignment"
+        )
     value = values[0].value
     if value is None:
         raise ValueError(f"{GUARD} declares _GRANDFATHERED without a value")
@@ -279,6 +304,7 @@ def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:
     problems.extend(
         f"rules: {rule_id} was removed or renamed"
         for rule_id in sorted(set(old) - set(head))
+        if rule_id not in RETIRED_RULES or old[rule_id].get("ignores")
     )
     for rule_id, rule in sorted(head.items()):
         before = old.get(rule_id)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from threading import Event
+from threading import enumerate as live_threads
 from typing import Any
 from unittest.mock import Mock, call, patch
 
@@ -109,11 +110,7 @@ def test_supervisor_api_stalled_send_is_bounded() -> None:
     )
     socket = Mock()
     release_send = Event()
-
-    def stalled_send(_: str) -> None:
-        release_send.wait()
-
-    socket.send.side_effect = stalled_send
+    socket.send.side_effect = lambda _: release_send.wait()
     socket.close_socket.side_effect = release_send.set
     ws._ws = socket
 
@@ -133,6 +130,8 @@ def test_supervisor_api_stalled_send_is_bounded() -> None:
     socket.close_socket.assert_called_once()
     socket.recv.assert_not_called()
     assert ws._ws is None
+    for thread in [t for t in live_threads() if t.name == "haos-ws-send"]:
+        thread.join(1)  # released by the close; Core's cleanup refuses a live one
 
 
 def test_send_completion_after_deadline_invalidates_socket() -> None:

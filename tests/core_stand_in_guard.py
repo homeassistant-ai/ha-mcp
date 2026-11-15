@@ -23,14 +23,6 @@ import pytest
 
 _CORE_ROOTS = frozenset({"homeassistant", "aiohttp", "voluptuous", "probatio", "yarl"})
 
-# Test files written before the unit tests ran on real Home Assistant Core.
-# They are to be converted and removed from this list; never add a file to it.
-_GRANDFATHERED = frozenset(
-    {
-        "tests/src/unit/test_config_flow.py",
-    }
-)
-
 
 def core_module_stand_ins() -> list[str]:
     """Names in ``sys.modules`` under Core's roots that are not imported modules."""
@@ -52,10 +44,8 @@ def is_registered(config: pytest.Config) -> bool:
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_runtest_call(item: pytest.Item) -> Generator[None, Any, Any]:
+def pytest_runtest_call() -> Generator[None, Any, Any]:
     result = yield
-    if item.nodeid.partition("::")[0] in _GRANDFATHERED:
-        return result
     if stand_ins := core_module_stand_ins():
         pytest.fail(
             "The test replaced Home Assistant modules with stand-ins: "
