@@ -6,13 +6,10 @@ import json
 
 import pytest
 
+from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import run_script
-from .test_settings_ui_js_behavior import (
-    DEFAULT_FETCHES,
-    MIN_DOM,
-    _assert_clean_init,
-    _probe,
-)
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
+from ._settings_ui_js_helpers import probe
 
 
 class TestBackupActionErrorToast:
@@ -57,7 +54,7 @@ class TestBackupActionErrorToast:
             invoke=invoke,
         )
         _assert_clean_init(result)
-        toast = _probe(result, "toast") or ""
+        toast = probe(result, "toast") or ""
         assert "ha-toast-error" in toast, (
             f"expected an error toast for a failed {act}; got {toast!r}"
         )
@@ -168,10 +165,10 @@ class TestBackupRestoreDiagnostics:
             ),
         )
         _assert_clean_init(result)
-        message = _probe(result, "message") or ""
+        message = probe(result, "message") or ""
         assert "Restore was applied and verified" in message
         assert "Recreated config entry: new-entry" in message
         assert expected in message
         assert "sensor.occupied is already in use" in message
         assert "Safety backup:" in message
-        assert _probe(result, "injected") == "0"
+        assert probe(result, "injected") == "0"
