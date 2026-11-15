@@ -2375,17 +2375,13 @@ class IntegrationTools:
         if not isinstance(result, dict) or not result.get("success"):
             error = result.get("error", "Operation failed")
             error_msg = websocket_error_message(error)
-            # Detect "subentry already absent" by HA's structured
-            # ``code="not_found"`` only. A generic ``"not found" in
-            # error_msg`` substring match was rejected because it can
-            # collide with unrelated HA error messages (e.g.
-            # "repository not found", "integration not found") and
-            # mis-classify a real failure as a missing target.
-            # The HA ``config_entries/subentries/delete`` handler raises
-            # with ``code="not_found"`` when entry_id or subentry_id is
-            # missing; if a future HA version uses a different code, we
-            # raise SERVICE_CALL_FAILED instead — safer than mis-classifying.
-            error_code = error.get("code") if isinstance(error, dict) else None
+            # Only Core's own ``not_found`` code means the subentry is absent:
+            # matching "not found" in the message would also catch unrelated
+            # failures ("repository not found"). The client reports the code
+            # beside the message; a dict error carries it inside.
+            error_code = result.get("error_code") or (
+                error.get("code") if isinstance(error, dict) else None
+            )
             if error_code == "not_found":
                 # Subentry absent under the parent config entry. Surface
                 # as RESOURCE_NOT_FOUND so the caller learns the target
