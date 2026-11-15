@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
@@ -40,17 +40,6 @@ def llm_context() -> llm.LLMContext:
 def registered_apis(hass: HomeAssistant) -> dict[str, Any]:
     """The LLM APIs registered in Core's registry for ``hass``, by id."""
     return {api.id: api for api in llm.async_get_apis(hass)}
-
-
-def make_hass() -> MagicMock:
-    hass = MagicMock(name="hass")
-    hass.data = {}
-
-    async def _executor(func, *args):
-        return func(*args)
-
-    hass.async_add_executor_job = AsyncMock(side_effect=_executor)
-    return hass
 
 
 def tool_entry(

@@ -59,7 +59,6 @@ ignores:
   - "tests/src/unit/test_identifier_validation_family.py"
   - "tests/src/unit/test_label_area_assignment.py"
   - "tests/src/unit/test_listen_sockets.py"
-  - "tests/src/unit/test_llm_api.py"
   - "tests/src/unit/test_oauth_redirect_allowlist.py"
   - "tests/src/unit/test_overview_system_info.py"
   - "tests/src/unit/test_radio_management.py"

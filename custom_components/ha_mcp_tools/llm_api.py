@@ -93,13 +93,13 @@ _LOGGER = logging.getLogger(__name__)
 
 # Listing tools is two loopback round-trips (initialize + tools/list); a slow
 # answer means the server thread is wedged, not that the network is slow.
-_LIST_TOOLS_TIMEOUT_SECONDS = 10.0
+LIST_TOOLS_TIMEOUT_SECONDS = 10.0
 
 # Tool calls run real work — WebSocket-verified device control, dashboard
 # screenshots, config writes that poll for completion — well beyond the 10s a
 # remote-server integration would allow. The conversation agent shows a spinner
 # for the duration, so err generous rather than kill a legitimate slow tool.
-_CALL_TOOL_TIMEOUT_SECONDS = 300.0
+CALL_TOOL_TIMEOUT_SECONDS = 300.0
 
 
 @cache
@@ -124,6 +124,11 @@ def _schema_converter() -> Callable[[Any], Any]:
         )
         return cast(Callable[[Any], Any], probatio.from_openapi)
     return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
+
+
+def reset_schema_converter() -> None:
+    """Resolve the converter again on the next conversion."""
+    _schema_converter.cache_clear()
 
 
 def convert_to_voluptuous(schema: Any) -> vol.Schema:
@@ -505,7 +510,7 @@ async def _mcp_session(
     shared client is built with no explicit ``timeout=``, so it silently
     carries httpx's own hardcoded 5-second default — capping every tool call
     at 5 seconds of read-idle no matter how generous
-    ``_CALL_TOOL_TIMEOUT_SECONDS`` / ``_LIST_TOOLS_TIMEOUT_SECONDS`` looked
+    ``CALL_TOOL_TIMEOUT_SECONDS`` / ``LIST_TOOLS_TIMEOUT_SECONDS`` looked
     (live-found investigating a ~60s Assist-pipeline hang: a real tool doing
     real work never got anywhere near its own asyncio budget).
 
@@ -559,7 +564,7 @@ async def _mcp_session(
                 http_lib.AsyncClient(
                     verify=False,
                     trust_env=False,
-                    timeout=http_lib.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+                    timeout=http_lib.Timeout(CALL_TOOL_TIMEOUT_SECONDS),
                 )
             )
             transport = streamable_http_client(url=url, http_client=http_client)
@@ -631,7 +636,7 @@ async def _forward_tool_call(
     """
     try:
         async with (
-            asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+            asyncio.timeout(CALL_TOOL_TIMEOUT_SECONDS),
             _mcp_session(server_url) as (session, _init),
         ):
             exposed, _pinned, _stamped = partition_tools(
@@ -745,7 +750,7 @@ class HaMcpLlmApi(llm.API):
         """
         try:
             async with (
-                asyncio.timeout(_LIST_TOOLS_TIMEOUT_SECONDS),
+                asyncio.timeout(LIST_TOOLS_TIMEOUT_SECONDS),
                 _mcp_session(self.server_url) as (
                     session,
                     init_result,

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import llm_api
 from custom_components.ha_mcp_tools.const import (
@@ -23,7 +24,6 @@ from ._llm_api_helpers import (
     fake_session,
     llm_context,
     make_api,
-    make_hass,
     tool_entry,
 )
 
@@ -67,7 +67,11 @@ class TestCoreToolMetadata:
 
     @pytest.mark.parametrize("sdk", ["v1", "v2"])
     async def test_mirrored_tool_carries_the_servers_metadata(
-        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None, sdk: str
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        core_2026_10: None,
+        sdk: str,
     ) -> None:
         hints = {
             "readOnlyHint": True,
@@ -77,7 +81,7 @@ class TestCoreToolMetadata:
         }
         fake_session(monkeypatch, tools=[_annotated_entry(sdk, **hints)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
+        instance = await make_api(hass).async_get_api_instance(llm_context())
 
         (tool,) = instance.tools
         assert tool.title == "Get Entity State"
@@ -87,17 +91,21 @@ class TestCoreToolMetadata:
         )
 
     async def test_an_undeclared_hint_keeps_cores_default(
-        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
     ) -> None:
         fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
+        instance = await make_api(hass).async_get_api_instance(llm_context())
 
         assert instance.tools[0].annotations == _CoreToolAnnotations(read_only=True)
 
     @pytest.mark.parametrize("is_error", [True, False])
     async def test_call_returns_a_tool_result_flagging_errors(
-        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None, is_error: bool
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        core_2026_10: None,
+        is_error: bool,
     ) -> None:
         from ha_mcp._vendor.mcp.types import CallToolResult, TextContent
 
@@ -112,7 +120,7 @@ class TestCoreToolMetadata:
         )
 
         result = await tool.async_call(
-            make_hass(),
+            hass,
             llm_api.llm.ToolInput("ha_search", {}),
             llm_context(),
         )
@@ -122,11 +130,11 @@ class TestCoreToolMetadata:
         assert result.data["isError"] is is_error
 
     async def test_meta_tools_declare_their_own_safety(
-        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
     ) -> None:
         fake_session(monkeypatch, tools=[tool_entry("ha_get_state")])
         instance = await make_api(
-            make_hass(), mode=EXPOSURE_TOOL_SEARCH
+            hass, mode=EXPOSURE_TOOL_SEARCH
         ).async_get_api_instance(llm_context())
         search, call = instance.tools
 
@@ -138,20 +146,20 @@ class TestCoreToolMetadata:
         assert {search.integration, call.integration} == {DOMAIN}
 
         unknown = await call.async_call(
-            make_hass(),
+            hass,
             llm_api.llm.ToolInput("ha_call_tool", {"name": "ha_nope"}),
             llm_context(),
         )
         assert unknown.error is True
 
     async def test_older_core_gets_plain_results_and_no_annotations(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delattr(llm_api.llm, "ToolResult", raising=False)
         monkeypatch.delattr(llm_api.llm, "ToolAnnotations", raising=False)
         fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
-        instance = await make_api(make_hass()).async_get_api_instance(llm_context())
+        instance = await make_api(hass).async_get_api_instance(llm_context())
 
         assert "annotations" not in vars(instance.tools[0])
         assert instance.tools[0].title == "Get Entity State"
