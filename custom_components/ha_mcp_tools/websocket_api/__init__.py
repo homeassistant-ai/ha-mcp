@@ -222,8 +222,8 @@ the info handshake carries no capability entry:
   timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
   the dispatch raises, a failure AFTER it does not (the call already landed).
   A call asking for a response also returns ``changed_states``, every state
-  written under the call's context (Core's REST call lists the same), and a
-  response Core rejects after the service ran comes back as ``response_error``.
+  written under the call's context (Core's REST call lists the same) followed
+  by each target's state that is none of them, and a response Core rejects after the service ran comes back as ``response_error``.
   A ``HomeAssistantError`` such a call raises comes back as ``service_error``
   (``translation_key``, ``message``): it may have run.
 * ``ha_mcp_tools/bulk_call_service`` — the BATCH write capability (D5a). One frame
