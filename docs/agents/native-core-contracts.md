@@ -285,6 +285,20 @@ out, so a submit to an options or reconfigure form goes over those values
 (`config_entry_flow_form`). A backup restore is the exception: it replays a
 stored snapshot into the flow's forms and is verified by readback.
 
+A backup diff, and the restore of a deleted label, category, area or floor,
+compare a registry row with a snapshot's. Core keeps some of a row's lists in a
+set and lists a set in hash order, so whether two orders of the same items
+differ is Core's to say: the component's `ha_mcp_tools/registry_set_fields`
+bridge (capability `registry_set_fields`) names the fields of the live entry
+whose value is a set, read from the entry on every call. A list it names
+matches in any order; every other list is compared in the order given. When
+the component cannot be asked or refuses, the diff reports the order as a
+difference and the restore takes the row an earlier restore created, each with a
+warning that the order could not be judged. When the command was sent and got
+no answer, the diff or restore fails. A list nested inside a row value (the lists in
+a device's `config_entries_subentries`, the pairs in `identifiers`) is compared
+by position, with or without the component.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative

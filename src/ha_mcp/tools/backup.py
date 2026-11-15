@@ -575,7 +575,8 @@ async def _edits_diff(
             ],
         )
         return None  # unreachable: exception_to_structured_error always raises
-    warnings: list[str] = []
+    # A tool's warnings stand beside ``data``, not inside it.
+    warnings = list(diff.pop("warnings", [])) if diff["kind"] == "dict" else []
     if diff.get("entity_missing"):
         # ``restore_snapshot`` outcome on a missing entity is
         # domain-dependent: upsert paths (automation, script,

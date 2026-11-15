@@ -1698,9 +1698,11 @@ class BackupManager:
         return target
 
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
-        """Read a snapshot and the live config for its stable target identity."""
+        """Read a snapshot and the live config for its stable target identity.
+        The envelope carries the comparison's ``warnings``, never the file's."""
         data = await asyncio.to_thread(self.read_snapshot, name)
         _validate_snapshot_envelope(data)
+        data["warnings"] = []
         domain = data["domain"]
         if _is_flow_helper_domain(domain):
             snapshot = _validate_flow_snapshot(
@@ -1722,7 +1724,7 @@ class BackupManager:
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
         elif domain in _COMPARED_ROW_DOMAINS and isinstance(data["config"], dict):
-            current = await _compared_row(
+            current, data["warnings"] = await _compared_row(
                 self._client, domain, data["entity_id"], data["config"], current
             )
         if (
@@ -1797,6 +1799,7 @@ class BackupManager:
             patch=patch,
             counts=_summarize_patch_counts(patch),
             truncated=truncated,
+            warnings=data["warnings"],
         )
 
     # ----- legacy store (pre-#1579 .ha_mcp_tools_backups/) ---------------

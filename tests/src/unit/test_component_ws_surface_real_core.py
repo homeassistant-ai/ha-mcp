@@ -58,6 +58,7 @@ _GATED_COMMANDS: dict[str, dict[str, Any]] = {
     c.WS_SYSTEM_SNAPSHOT: {},
     c.WS_ENTITY_LOOKUP: {"unique_id": "x"},
     c.WS_REGISTRIES: {"registries": []},
+    c.WS_REGISTRY_SET_FIELDS: {"registry": "area", "item_id": "x"},
     c.WS_CALL_EVENT: {"event_type": "probe_event"},
 }
 
@@ -310,6 +311,8 @@ async def test_well_formed_parameters_are_accepted(
         (c.WS_REGISTRIES, {"registries": ["bogus"]}),
         (c.WS_REGISTRIES, {"registries": "area"}),
         (c.WS_REGISTRIES, {"registries": ["area"], "category_scopes": "automation"}),
+        (c.WS_REGISTRY_SET_FIELDS, {"registry": "area"}),
+        (c.WS_REGISTRY_SET_FIELDS, {"registry": "zone", "item_id": "x"}),
     ],
 )
 async def test_malformed_parameters_are_refused_before_the_handler(

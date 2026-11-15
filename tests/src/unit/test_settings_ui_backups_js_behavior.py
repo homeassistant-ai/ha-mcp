@@ -175,3 +175,37 @@ class TestBackupRestoreDiagnostics:
         assert "sensor.occupied is already in use" in message
         assert "Safety backup:" in message
         assert _probe(result, "injected") == "0"
+
+
+def test_a_diff_shows_its_warnings_above_the_diff(settings_script: str) -> None:
+    """What the comparison could not settle is shown with the diff, as text in
+    a callout with its icon."""
+    warning = "The order of <b>labels</b> could not be told."
+    fetches = {
+        **DEFAULT_FETCHES,
+        "/backups/snap_a/diff": {
+            "status": 200,
+            "json": {"success": True, "diff": "-a\n+b", "warnings": [warning]},
+        },
+    }
+    result = run_script(
+        settings_script,
+        initial_html=MIN_DOM,
+        fetch_map=fetches,
+        settle_ms=300,
+        invoke=(
+            "await new Promise(r => setTimeout(r, 100));\n"
+            "await window.backupAction('diff', 'snap_a');\n"
+            "const body = document.getElementById('modalBody');\n"
+            "document.body.setAttribute('data-text', body.textContent);\n"
+            "document.body.setAttribute('data-injected', "
+            "body.querySelectorAll('b').length);\n"
+            "document.body.setAttribute('data-icons', "
+            "body.querySelectorAll('.ha-alert > .ha-alert-icon').length);\n"
+        ),
+    )
+    _assert_clean_init(result)
+    text = _probe(result, "text") or ""
+    assert text.index(warning) < text.index("-a")
+    assert _probe(result, "injected") == "0"
+    assert _probe(result, "icons") == "1"

@@ -215,6 +215,7 @@ async def test_settings_diff_uses_stable_snapshot_comparison(monkeypatch):
         "domain": "helper_template",
         "entity_id": "original-entry",
         "config": {"state": "saved"},
+        "warnings": [],
     }
     manager = SimpleNamespace(
         snapshot_comparison=AsyncMock(

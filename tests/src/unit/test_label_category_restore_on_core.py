@@ -22,7 +22,7 @@ from homeassistant.helpers import label_registry as lr
 
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager, BackupRestoreError
-from ha_mcp.backup_registry_items import in_snapshot_order
+from ha_mcp.backup_registry_items import reordered_lists
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
@@ -287,24 +287,77 @@ async def test_a_restored_area_keeps_its_floor(
     assert "warnings" not in outcome["result"]
 
 
-async def test_a_second_restore_matches_list_fields_in_any_order(
+async def _second_restore_with_aliases_reversed(
     hass: HomeAssistant, backup_manager: BackupManager
-) -> None:
-    """Core keeps aliases in a set and lists them in hash order, so the order the
-    snapshot holds is not the one a restored area lists them in."""
+) -> str:
+    """Restore a deleted area under another id, then hand back its snapshot,
+    edited to hold the aliases in the reverse of the order Core lists them in."""
     registry = ar.async_get(hass)
-    aliases = {f"alias {i}" for i in range(60)}
-    area = registry.async_create("Hall", icon="mdi:door", aliases=aliases)
+    area = registry.async_create("Hall", aliases={"entrance", "lobby"})
     registry.async_update(area.id, name="Corridor")
     snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
     registry.async_delete(area.id)
-
     await backup_manager.restore_snapshot(snapshot)
-    await backup_manager.restore_snapshot(snapshot)
+    (restored,) = registry.async_list_areas()
+    path = next(backup_manager.backup_dir.rglob(snapshot))
+    stored = yaml.safe_load(path.read_text())
+    stored["config"]["aliases"] = list(reversed(list(restored.aliases)))
+    path.write_text(yaml.safe_dump(stored))
+    return snapshot
 
-    assert [(a.name, a.aliases) for a in registry.areas.values()] == [
-        ("Corridor", aliases)
-    ]
+
+async def test_a_second_restore_matches_a_set_in_any_order(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core keeps an area's aliases in a set and lists them in hash order, so
+    the area the first restore created is taken whatever order the snapshot
+    holds them in, and nothing is said about the order."""
+    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    assert [a.name for a in ar.async_get(hass).areas.values()] == ["Corridor"]
+    assert not [w for w in outcome["result"]["warnings"] if "order" in w]
+
+
+async def test_a_second_restore_without_the_component_says_it_matched_in_another_order(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Only the component can say that Core keeps the aliases in a set. Without
+    it the first restore's area is still taken, with a warning that names the
+    list and the component."""
+    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+
+    outcome = await backup_manager.restore_snapshot(snapshot)
+
+    assert [a.name for a in ar.async_get(hass).areas.values()] == ["Corridor"]
+    (warning,) = [w for w in outcome["result"]["warnings"] if "order" in w]
+    assert "aliases" in warning
+    assert "ha_mcp_tools component" in warning
+
+
+async def test_a_second_restore_does_not_take_an_area_whose_ordered_list_differs(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a Core that keeps an area's aliases in order, the area with another
+    order is not the one the snapshot holds: the restore is Core's name refusal,
+    naming the area that holds the name."""
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.websocket_api.registries.declared_fields",
+        lambda entry: (),
+    )
+    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
+
+    with pytest.raises(BackupRestoreError, match="already in use") as refused:
+        await backup_manager.restore_snapshot(snapshot)
+
+    (held,) = ar.async_get(hass).areas.values()
+    assert held.id in str(refused.value)
 
 
 async def test_a_second_restore_of_an_area_whose_label_is_gone_names_the_holder(
@@ -458,7 +511,9 @@ async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
 
 
 async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
-    hass: HomeAssistant, backup_manager: BackupManager
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
 ) -> None:
     """Core keeps aliases in a set, so the restored area lists the same aliases in
     another order than the snapshot holds them; that is no difference."""
@@ -474,22 +529,14 @@ async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
 
 
 async def test_a_diff_after_a_restore_under_another_id_ignores_the_alias_order(
-    hass: HomeAssistant, backup_manager: BackupManager
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
 ) -> None:
     """The area comes back under a new id, so the diff finds it by name. Its
     aliases are compared without regard to order: the snapshot file is edited to
     hold them in the reverse of the order Core lists them in."""
-    areas = ar.async_get(hass)
-    area = areas.async_create("Hall", aliases={f"alias {i}" for i in range(60)})
-    areas.async_update(area.id, name="Corridor")
-    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
-    areas.async_delete(area.id)
-    await backup_manager.restore_snapshot(snapshot)
-    (restored,) = areas.async_list_areas()
-    path = next(backup_manager.backup_dir.rglob(snapshot))
-    stored = yaml.safe_load(path.read_text())
-    stored["config"]["aliases"] = list(reversed(list(restored.aliases)))
-    path.write_text(yaml.safe_dump(stored))
+    snapshot = await _second_restore_with_aliases_reversed(hass, backup_manager)
 
     diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
 
@@ -500,12 +547,14 @@ async def test_a_diff_after_a_restore_under_another_id_ignores_the_alias_order(
 def test_a_list_keeps_the_type_of_its_elements_when_compared(
     hass: HomeAssistant,
 ) -> None:
-    """A snapshot edited by hand to hold [1] does not match the alias "1" Core
-    lists: the live list stays as it is."""
-    area = ar.async_get(hass).async_create("Hall", aliases={"1"})
+    """A snapshot edited by hand to hold [1, 2] does not hold the aliases "1"
+    and "2" Core lists in another order: the list is compared as it is."""
+    area = ar.async_get(hass).async_create("Hall", aliases={"1", "2"})
     live = orjson.loads(orjson.dumps(area.json_fragment))
+    reverse = list(reversed(live["aliases"]))
 
-    assert in_snapshot_order(live, {**live, "aliases": [1]}) == live
+    assert reordered_lists(live, {**live, "aliases": reverse}) == ["aliases"]
+    assert reordered_lists(live, {**live, "aliases": [int(a) for a in reverse]}) == []
 
 
 async def test_a_diff_after_a_restore_shows_the_label_core_dropped(

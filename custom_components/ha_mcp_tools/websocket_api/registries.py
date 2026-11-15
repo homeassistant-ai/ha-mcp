@@ -1,10 +1,12 @@
-"""The ``registries`` read command (area, floor, label and category registries)."""
+"""The ``registries`` and ``registry_set_fields`` read commands."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
+import attr
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
@@ -16,6 +18,7 @@ from .registry import (
     _resolve_registries,
     _safe,
     _substrate_unavailable,
+    _unambiguous_device_entries,
 )
 
 
@@ -76,6 +79,74 @@ def _do_registries(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     if "category" in requested:
         result["categories"] = _category_rows(hass, category_scopes)
     return result
+
+
+# =============================================================================
+# ha_mcp_tools/registry_set_fields
+# =============================================================================
+def _do_registry_set_fields(
+    hass: HomeAssistant, params: dict[str, Any]
+) -> dict[str, Any]:
+    """Name the fields of one registry entry that Core keeps in a set.
+
+    ``{set_fields: [...] | None}``: the declared fields of the entry's class
+    whose value on this entry is a ``set`` or ``frozenset``, sorted; ``None``
+    when Core holds no such entry. Core lists a set in hash order, which differs
+    between runs, so a caller that compares two rows of the entry takes a list
+    named here as equal in any order, and every other list by position. The
+    answer is read from the entry, so a field Core starts or stops keeping in a
+    set is answered without a change here.
+
+    A field is named, not a row key: in every row Core 2026.11 serves a list of
+    more than one item of a set carries its field's name (a device's
+    ``config_entries`` holds its one config entry), and a list whose key names
+    no such field is compared by position. Only declared fields are read, never
+    a row key as an attribute: ``DeviceEntry.config_entries`` and its siblings
+    are deprecated properties that report their use.
+
+    A device is looked up where ``device_get`` looks it up (main and child
+    devices). A category id is unique within its scope only, so ``category``
+    REQUIRES ``scope`` and raises ``HomeAssistantError`` without it. A registry
+    whose accessor drifted raises as in :func:`_do_registries`.
+    """
+    kind, item_id = params["registry"], params["item_id"]
+    if kind == "category":
+        scope = params.get("scope")
+        if not scope:
+            raise HomeAssistantError(
+                "ha_mcp_tools/registry_set_fields: scope is required for a category"
+            )
+        registry = _category_registry(hass)
+        if registry is None:
+            raise _substrate_unavailable("category registry")
+        entry = registry.async_get_category(scope=scope, category_id=item_id)
+    else:
+        view = _resolve_registries(hass)
+        registry = getattr(view, kind)
+        if registry is None:
+            raise _substrate_unavailable(f"{kind} registry")
+        if kind == "device":
+            entry = _unambiguous_device_entries(view).get(item_id)
+        else:
+            getter = "async_get" if kind == "entity" else f"async_get_{kind}"
+            entry = getattr(registry, getter)(item_id)
+    if entry is None:
+        return {"set_fields": None}
+    return {
+        "set_fields": sorted(
+            field.name
+            for field in declared_fields(entry)
+            if isinstance(getattr(entry, field.name), (set, frozenset))
+        )
+    }
+
+
+def declared_fields(entry: Any) -> Any:
+    """The fields a registry entry's class declares (attrs or dataclass). Test
+    seam: a test replaces it to stand for a Core release whose entry keeps a
+    field differently (a list where today's keeps a set)."""
+    cls = type(entry)
+    return attr.fields(cls) if attr.has(cls) else dataclasses.fields(cls)
 
 
 def _registries_missing_category_scopes() -> Exception:

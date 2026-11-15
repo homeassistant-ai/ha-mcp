@@ -283,6 +283,12 @@ the info handshake carries no capability entry:
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported
   function-locally (not needed at module top).
+* ``ha_mcp_tools/registry_set_fields`` — the fields of one device, entity, area,
+  floor, label or category entry that Core keeps in a set
+  (``{set_fields: [...] | None}``, ``None`` when Core holds no such entry).
+  Core lists a set in hash order, so a backup diff, and the restore of a
+  deleted label, category, area or floor, ask this before they take a list in
+  another order as the same. A ``category`` REQUIRES its ``scope``.
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -387,7 +393,7 @@ from .lookups import (
 )
 from .oauth_callbacks import command_specs as _oauth_callback_specs
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
-from .registries import _do_registries
+from .registries import _do_registries, _do_registry_set_fields
 from .schemas import (
     _blueprint_get_schema,
     _bulk_call_service_schema,
@@ -408,6 +414,7 @@ from .schemas import (
     _reference_data_schema,
     _registries_schema,
     _registry_lookup_schema,
+    _registry_set_fields_schema,
     _search_schema,
     _server_entry_schema,
     _server_entry_update_schema,
@@ -503,6 +510,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_system_snapshot_schema(), _do_system_snapshot, None),
         (_entity_lookup_schema(), _do_entity_lookup, None),
         (_registries_schema(), _do_registries, None),
+        (_registry_set_fields_schema(), _do_registry_set_fields, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
