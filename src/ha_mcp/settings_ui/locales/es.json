@@ -789,8 +789,8 @@
       "description": "Consulta el estado actual y los atributos de una o varias entidades (luces, interruptores, sensores, climatización, persianas, cerraduras, ventiladores, etc.)."
     },
     "ha_get_system_health": {
-      "title": "Obtener estado del sistema (incl. diagnósticos de ZHA/Z-Wave/integraciones)",
-      "description": "Consulta el estado del sistema de Home Assistant, incluidos los diagnósticos de Zigbee (ZHA), Z-Wave JS y de cada integración."
+      "title": "Obtener estado del sistema (incl. redes ZHA/Z-Wave/Thread/Matter)",
+      "description": "Obtiene el estado del sistema de Home Assistant, incluyendo redes Zigbee (ZHA), Z-Wave JS, Thread y Matter."
     },
     "ha_get_todo": {
       "title": "Obtener tareas",

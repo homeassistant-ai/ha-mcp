@@ -1,202 +1,152 @@
-"""Routing tests for the exposure listing behind ``ha_get_entity``.
+"""The exposure listing behind ``ha_get_entity``, on a real ``hass``.
 
-Core's ``expose_entity/list`` returns a bare ``{entity_id: {assistant: bool}}``
-map with no names/areas, forcing a second ha_search to identify an exposed
-entity. When the component advertises ``exposure`` one ``ha_mcp_tools/exposure``
-frame returns the same map PLUS an additive ``entity_info`` enrichment
-(friendly_name/domain/area/floor/labels). These tests pin: the component-served
-list shape (Core's map unchanged, enrichment additive), and the routes to
-Core's ``homeassistant/expose_entity/list`` — capability miss and
-``unknown_command`` (which also invalidates the cached caps). The warning that
-says why the listing lacks ``entity_info`` is pinned in
-``test_entity_component_real_core.py``.
+Core's ``homeassistant/expose_entity/list`` gives a bare ``{entity_id:
+{assistant: True}}`` map. When the component advertises ``exposure`` (with
+``device_registry_child_semantics``), one ``ha_mcp_tools/exposure`` frame gives
+the same map plus ``entity_info`` (friendly name, domain, area, floor, labels,
+state). Without it, or when the component no longer knows the command, the
+listing is Core's map alone. The warning that says why is pinned in
+``test_entity_component_real_core.py``. Registries and exposure settings are
+Core's own.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
+from typing import NamedTuple
+from unittest.mock import patch
 
 import pytest
-
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
+from homeassistant.components import websocket_api
+from homeassistant.components.homeassistant.exposed_entities import (
+    async_expose_entity,
 )
-from ha_mcp.tools import component_api, entity_exposure
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import entity_exposure
+from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
+from ha_mcp.tools.entity_exposure import WS_EXPOSURE
+from ha_mcp.tools.tools_entities import EntityTools
 
-_CAPS_PRE_CHILD_SEMANTICS = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": ["exposure"],
-    "limits": {},
-}
-_CAPS_EXPOSURE = {
-    **_CAPS_PRE_CHILD_SEMANTICS,
-    "capabilities": ["exposure", "device_registry_child_semantics"],
-}
-_CAPS_NONE = {
-    "schema_version": 1,
-    "component_version": "1.1.0",
-    "capabilities": [],
-    "limits": {},
-}
+from ._component_frames import observed, older_component
 
-_INFO_A = {
-    "domain": "light",
-    "area": "Kitchen",
-    "floor": "Main",
-    "labels": ["Favorites"],
-    "friendly_name": "Lamp A",
-    "state": "on",
-}
-_LEGACY_MAP = {"light.a": {"conversation": True}, "light.b": {"cloud.alexa": True}}
+LEGACY_LIST = "homeassistant/expose_entity/list"
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy expose_entity/list fetch."""
+class Home(NamedTuple):
+    """A lamp exposed to Assist and a fan exposed to Alexa."""
 
-    def __init__(self, legacy_map: dict[str, Any]) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self._legacy_map = dict(legacy_map)
-        self.legacy_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "homeassistant/expose_entity/list":
-            self.legacy_calls += 1
-            return {
-                "success": True,
-                "result": {"exposed_entities": dict(self._legacy_map)},
-            }
-        raise AssertionError(f"unexpected ws message {msg.get('type')!r}")
+    lamp: str
+    fan: str
+    area: str
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "config", {})
+    return component_core_client
 
 
-async def _listing(
-    client: RoutingClient, assistant: str | None = None
-) -> dict[str, Any]:
-    """The exposure listing ``ha_get_entity`` returns without an entity."""
-    exposed, info, _warning = await entity_exposure.read_exposure(client)
-    return entity_exposure.list_exposures(exposed, info, assistant)
+@pytest.fixture
+async def home(hass: HomeAssistant, client: HomeAssistantClient) -> Home:
+    suffix = uuid.uuid4().hex[:8]
+    floor = fr.async_get(hass).async_create(f"Main {suffix}")
+    area = ar.async_get(hass).async_create(f"Kitchen {suffix}", floor_id=floor.floor_id)
+    label = lr.async_get(hass).async_create(f"Favorites {suffix}")
+    registry = er.async_get(hass)
+    lamp = registry.async_get_or_create("light", "test", "lamp").entity_id
+    fan = registry.async_get_or_create("fan", "test", "fan").entity_id
+    registry.async_update_entity(lamp, area_id=area.id, labels={label.label_id})
+    hass.states.async_set(lamp, "on", {"friendly_name": "Lamp A"})
+    hass.states.async_set(fan, "off", {"friendly_name": "Fan"})
+    async_expose_entity(hass, "conversation", lamp, True)
+    async_expose_entity(hass, "cloud.alexa", fan, True)
+    return Home(lamp, fan, area.name)
 
 
-def _exposure_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/exposure"
-    ]
+def _core_map(home: Home) -> dict[str, dict[str, bool]]:
+    return {home.lamp: {"conversation": True}, home.fan: {"cloud.alexa": True}}
 
 
-@pytest.mark.asyncio
-async def test_list_mode_served_with_entity_info() -> None:
-    """List mode: legacy shape plus an entity_info map keyed by entity_id."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_result={
-            "exposed_entities": _LEGACY_MAP,
-            "entity_info": {"light.a": _INFO_A, "light.b": {"domain": "light"}},
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
+async def test_the_listing_keeps_cores_map_and_names_each_entity(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    with (
+        observed(hass, WS_EXPOSURE) as frames,
+        observed(hass, LEGACY_LIST) as legacy,
+    ):
+        resp = await EntityTools(client).ha_get_entity()
 
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client)
-
-    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert resp["exposed_entities"] == _core_map(home)
     assert resp["count"] == 2
-    assert set(resp["entity_info"]) == {"light.a", "light.b"}
-    assert resp["entity_info"]["light.a"]["area"] == "Kitchen"
-    assert client.legacy_calls == 0
-    # List mode sends no entity_id.
-    assert "entity_id" not in _exposure_calls(ws)[0].kwargs
+    assert set(resp["entity_info"]) == {home.lamp, home.fan}
+    assert resp["entity_info"][home.lamp]["area"] == home.area
+    assert legacy == []
+    assert [frame.get("entity_id") for frame in frames] == [None]
 
 
-@pytest.mark.asyncio
-async def test_list_mode_entity_info_follows_assistant_filter() -> None:
-    """entity_info covers only the ids surviving the assistant filter."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_result={
-            "exposed_entities": _LEGACY_MAP,
-            "entity_info": {"light.a": _INFO_A, "light.b": {"domain": "light"}},
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
+async def test_entity_info_covers_only_the_entities_the_filter_keeps(
+    hass: HomeAssistant, client: HomeAssistantClient, home: Home
+) -> None:
+    resp = await EntityTools(client).ha_get_entity(exposed_to="cloud.alexa")
 
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client, assistant="cloud.alexa")
-
-    # Only light.b is exposed to cloud.alexa.
-    assert set(resp["exposed_entities"]) == {"light.b"}
-    assert set(resp["entity_info"]) == {"light.b"}
+    assert set(resp["exposed_entities"]) == {home.fan}
+    assert set(resp["entity_info"]) == {home.fan}
 
 
-@pytest.mark.asyncio
-async def test_no_capability_uses_legacy_list() -> None:
-    """Component without exposure → legacy expose_entity/list, no entity_info."""
-    ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_NONE)
-    client = RoutingClient(_LEGACY_MAP)
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param("exposure", id="no-exposure-command"),
+        # Placement from a component without it can be stale for a child device.
+        pytest.param("device_registry_child_semantics", id="no-child-semantics"),
+    ],
+)
+async def test_an_older_component_lists_cores_map_alone(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+) -> None:
+    older_component(monkeypatch, missing)
 
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client)
+    with (
+        observed(hass, WS_EXPOSURE) as frames,
+        observed(hass, LEGACY_LIST) as legacy,
+    ):
+        resp = await EntityTools(client).ha_get_entity()
 
-    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert resp["exposed_entities"] == _core_map(home)
     assert "entity_info" not in resp
-    assert client.legacy_calls == 1
-    assert not _exposure_calls(ws)
+    assert (len(legacy), frames) == (1, [])
 
 
-@pytest.mark.asyncio
-async def test_pre_child_semantics_exposure_capability_uses_legacy_list() -> None:
-    """An old component cannot publish stale device-derived entity placement."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_PRE_CHILD_SEMANTICS,
-        cmd_result={
-            "exposed_entities": _LEGACY_MAP,
-            "entity_info": {"light.a": _INFO_A},
-        },
-    )
-    client = RoutingClient(_LEGACY_MAP)
+async def test_a_downgraded_component_lists_cores_map_and_is_probed_again(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    home: Home,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data[websocket_api.DOMAIN], WS_EXPOSURE)
 
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client)
+    with (
+        patch.object(entity_exposure, "invalidate_caps", wraps=invalidate_caps) as drop,
+        observed(hass, LEGACY_LIST) as legacy,
+    ):
+        resp = await EntityTools(client).ha_get_entity()
 
-    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert resp["exposed_entities"] == _core_map(home)
     assert "entity_info" not in resp
-    assert client.legacy_calls == 1
-    assert not _exposure_calls(ws)
-
-
-@pytest.mark.asyncio
-async def test_unknown_command_invalidates_and_falls_back() -> None:
-    """unknown_command on the exposure frame → invalidate caps + legacy list."""
-    ws = make_ws(
-        "ha_mcp_tools/exposure",
-        info_result=_CAPS_EXPOSURE,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(_LEGACY_MAP)
-
-    with patch_ws(ws, entity_exposure):
-        resp = await _listing(client)
-
-    assert resp["exposed_entities"] == _LEGACY_MAP
-    assert "entity_info" not in resp
-    assert client.legacy_calls == 1
-    assert client not in component_api._CAPS_CACHE
+    assert len(legacy) == 1
+    drop.assert_called_once_with(client)

@@ -789,8 +789,8 @@
       "description": "Ottiene stato attuale e attributi di una o più entità (luci, interruttori, sensori, climatizzazione, tapparelle, serrature, ventilatori, ecc.)."
     },
     "ha_get_system_health": {
-      "title": "Ottieni lo stato di salute del sistema (con diagnostica di ZHA/Z-Wave e delle integrazioni)",
-      "description": "Ottiene lo stato di salute del sistema Home Assistant, compresi i dump diagnostici di Zigbee (ZHA), Z-Wave JS e delle singole integrazioni."
+      "title": "Ottieni lo stato del sistema (incl. reti ZHA/Z-Wave/Thread/Matter)",
+      "description": "Ottieni lo stato del sistema di Home Assistant, incluse le reti Zigbee (ZHA), Z-Wave JS, Thread e Matter."
     },
     "ha_get_todo": {
       "title": "Ottieni le cose da fare",

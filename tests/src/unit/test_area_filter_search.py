@@ -25,6 +25,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 
+from ._core_setup import add_test_entry
 from ._search_tool import _build_ha_search
 
 
@@ -37,9 +38,7 @@ async def registry_commands(hass: HomeAssistant) -> None:
 @pytest.fixture
 def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """The config entry the test devices belong to."""
-    entry = MockConfigEntry(domain="test")
-    entry.add_to_hass(hass)
-    return entry
+    return add_test_entry(hass)
 
 
 def _add_entity(

@@ -758,8 +758,8 @@
       "description": "取得一個或多個實體的目前狀態、狀態與屬性（燈光、開關、感測器、恆溫器、遮陽簾、鎖、fa"
     },
     "ha_get_system_health": {
-      "title": "取得系統健康狀態 (包含 ZHA/Z-Wave/整合診斷)",
-      "description": "取得 Home Assistant 系統健康狀態，包含 Zigbee (ZHA)、Z-Wave JS 以及每個整合的診斷傾印。"
+      "title": "取得系統健康狀態（包含 ZHA/Z-Wave/Thread/Matter 網路）",
+      "description": "取得 Home Assistant 系統健康狀態，包含 Zigbee (ZHA)、Z-Wave JS、Thread 與 Matter 網路。"
     },
     "ha_get_todo": {
       "title": "取得待辦事項",

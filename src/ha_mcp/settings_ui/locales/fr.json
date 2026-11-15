@@ -789,8 +789,8 @@
       "description": "Récupère l'état actuel et les attributs d'une ou plusieurs entités."
     },
     "ha_get_system_health": {
-      "title": "Obtenir l'état du système",
-      "description": "Récupère les informations d'état sur Home Assistant, Zigbee, Z-Wave et les intégrations."
+      "title": "Obtenir l'état de santé du système (incl. réseaux ZHA, Z-Wave, Thread et Matter)",
+      "description": "Obtenir l'état de santé du système Home Assistant, y compris les réseaux Zigbee (ZHA), Z-Wave JS, Thread et Matter."
     },
     "ha_get_todo": {
       "title": "Obtenir les listes de tâches",

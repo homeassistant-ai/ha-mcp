@@ -12,16 +12,12 @@ service handler stands in for the entity, and the ``state_changed`` the listener
 would deliver is applied from inside it, while the dispatch is in flight.
 """
 
-from collections.abc import Iterator
-from unittest.mock import AsyncMock
-
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import device_control
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import (
     OperationStatus,
@@ -29,17 +25,7 @@ from ha_mcp.utils.operation_manager import (
     update_pending_operations,
 )
 
-
-@pytest.fixture(autouse=True)
-def _clear_operations(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    # The state_changed listener is this server's own service; the tests
-    # deliver its event themselves.
-    monkeypatch.setattr(
-        device_control, "start_websocket_listener", AsyncMock(return_value=False)
-    )
-    get_operation_manager().operations.clear()
-    yield
-    get_operation_manager().operations.clear()
+from ._operations import operations_without_listener  # noqa: F401
 
 
 @pytest.mark.asyncio

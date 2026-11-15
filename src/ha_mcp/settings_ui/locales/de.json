@@ -789,8 +789,8 @@
       "description": "Ruft aktuellen Status und Attribute einer oder mehrerer Entitäten ab."
     },
     "ha_get_system_health": {
-      "title": "Systemzustand abrufen",
-      "description": "Ruft Zustandsinformationen zu Home Assistant, Zigbee, Z-Wave und Integrationen ab."
+      "title": "Systemgesundheit abrufen (inkl. ZHA-/Z-Wave-/Thread-/Matter-Netzwerke)",
+      "description": "Ruft die Systemgesundheit von Home Assistant ab, einschließlich Zigbee (ZHA), Z-Wave JS, Thread- und Matter-Netzwerken."
     },
     "ha_get_todo": {
       "title": "To-do-Listen abrufen",

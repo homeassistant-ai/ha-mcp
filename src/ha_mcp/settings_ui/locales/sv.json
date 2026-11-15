@@ -758,8 +758,8 @@
       "description": "Hämta aktuell status, tillstånd och attribut för en eller flera entiteter (lampor, strömbrytare, sensorer, klimat, persienner, lås, fläktar"
     },
     "ha_get_system_health": {
-      "title": "Hämta Systemhälsa (inkl. ZHA/Z-Wave/integrationsdiagnostik)",
-      "description": "Hämta Home Assistant-systemhälsa, inklusive Zigbee (ZHA), Z-Wave JS och diagnostikdumpar per integration."
+      "title": "Hämta systemhälsa (inkl. ZHA-/Z-Wave-/Thread-/Matter-nätverk)",
+      "description": "Hämta Home Assistant-systemhälsa, inklusive Zigbee (ZHA), Z-Wave JS-, Thread- och Matter-nätverk."
     },
     "ha_get_todo": {
       "title": "Hämta Att göra",

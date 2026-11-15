@@ -758,8 +758,8 @@
       "description": "Egy vagy több entitás (lámpák, kapcsolók, szenzorok, klíma, árnyékolók, zárak stb.) aktuális státuszának, állapotának és attribútumainak lekérése"
     },
     "ha_get_system_health": {
-      "title": "Rendszerállapot lekérése (beleértve a ZHA/Z-Wave/integrációs diagnosztikát)",
-      "description": "Home Assistant rendszerállapot lekérése, beleértve a Zigbee (ZHA), Z-Wave JS és integrációnkénti diagnosztikai adatok kiürítését."
+      "title": "Rendszerállapot lekérése (beleértve a ZHA / Z-Wave / Thread / Matter hálózatokat is)",
+      "description": "A Home Assistant rendszerállapotának lekérése, beleértve a Zigbee (ZHA), Z-Wave JS, Thread és Matter hálózatokat is."
     },
     "ha_get_todo": {
       "title": "Teendő lekérése",

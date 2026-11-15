@@ -9,9 +9,6 @@ The command runs on a real ``hass`` whose language is German, with Core's
 ``homeassistant`` integration loaded; its ``turn_on`` service name is
 translated by Core's own translation files, so the language that reached Core
 is read from the reply.
-
-Kept in its own module rather than in ``test_component_ws_phase2_async.py``,
-which is already over the 1,000-line ratchet limit.
 """
 
 from __future__ import annotations

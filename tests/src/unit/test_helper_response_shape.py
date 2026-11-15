@@ -1,1229 +1,616 @@
-"""Unit tests for issue #1293 — uniform response shape across helper actions.
+"""Write tools put their payload and warnings where callers look (#1293, #1332).
 
-Lock the contract for ``ha_config_set_helper`` so create / update / flow-helper
-branches return the same wrapper key (``data``) and the same warning shape
-(``warnings`` — top-level list of strings). The pre-#1293 file exposed four
-distinct shapes: nested ``helper_data["warning"]`` (create), top-level
-``response["warning"]`` (update), nested ``updated_data["warning"]`` (update
-registry path), top-level ``result["warnings"]`` plural list (flow). Callers
-doing ``result.get("warning")`` or ``result.get("helper_data")`` uniformly used
-to miss data on at least one branch.
+``ha_config_set_helper`` returns its post-write payload under ``data`` on the
+create, update and flow-helper paths, and every warning as a string in the
+top-level ``warnings`` list, never as a singular ``warning`` or nested in the
+payload. The lifecycle write tools (groups, scripts, automations, scenes) and
+the tools swept under #1341 keep the same warnings list.
+
+Every reply is Core's: the tools run on the server's own client connected to a
+real ``hass``. A failure is made in Core at the moment the tool reaches it
+(``_receipt_faults``): an entity removed while its registry update is on the
+way, the client's state reads losing their answer or its token revoked when a
+wait starts.
 """
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any, NamedTuple
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.homeassistant import async_set_stop_handler
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-    SceneResolution,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.backup_snapshot_restore import restore_backup
+from ha_mcp.tools.tools_addons import register_addon_tools
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
+from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
+from ha_mcp.tools.tools_energy import EnergyTools
+from ha_mcp.tools.tools_groups import GroupTools
+from ha_mcp.tools.tools_integrations import IntegrationTools
+from ha_mcp.tools.tools_system import SystemTools
 
-from ._created_helper_registry import with_registry
+from ._config_dir_yaml import setup_scenes, write_config_files
+from ._config_writes import automation_tools, script_tools
+from ._core_setup import add_test_entry
+from ._helper_tool_core import create_item, fresh_name, set_up, stored_item
+from ._receipt_faults import at_entity_wait, lose_state_reads, on_receipt, revoke
+from ._supervisor_core import load_supervisor_api
 
-
-@pytest.fixture
-def mock_client():
-    return MagicMock()
-
-
-@pytest.fixture
-def register_tools(mock_client):
-    from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
-
-    registered: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
-        )
-        registered[name] = method
-
-    mock_mcp = MagicMock(add_tool=capture_add_tool)
-    register_config_helper_tools(mock_mcp, mock_client)
-    return registered
+REGISTRY_UPDATE = "config/entity_registry/update"
 
 
-def _assert_uniform_shape(result: dict[str, Any], *, expect_warnings: bool) -> None:
-    """Common contract for all three branches.
-
-    - ``data`` is always the wrapper key for the post-write payload.
-    - ``warnings``, when present, is a list of strings (never a singular string).
-    - Legacy keys must not leak.
-    """
+def _assert_uniform_shape(result: dict[str, Any]) -> None:
+    """``data`` holds the payload; no legacy wrapper; warnings stay top-level."""
     assert result["success"] is True
-    assert "data" in result, f"missing 'data' key: {result.keys()}"
-    assert isinstance(result["data"], dict)
-    # Legacy keys must be gone everywhere — pure rename per #1293.
+    assert isinstance(result["data"], dict), result
     assert "helper_data" not in result, "legacy 'helper_data' wrapper still present"
     assert "updated_data" not in result, "legacy 'updated_data' wrapper still present"
-    # ``data`` itself must not nest a singular ``warning`` string anymore.
-    assert "warning" not in result["data"], (
-        f"warning leaked into data payload: {result['data']}"
-    )
-    if expect_warnings:
-        assert isinstance(result.get("warnings"), list)
-        assert all(isinstance(w, str) for w in result["warnings"])
+    assert "warning" not in result
+    assert "warning" not in result["data"], result["data"]
+    assert "warnings" not in result["data"], result["data"]
+    if "warnings" in result:
         assert result["warnings"], "warnings list present but empty"
-    else:
-        # Either absent or an empty list — both acceptable.
-        assert "warnings" not in result or result["warnings"] == []
+        assert all(isinstance(w, str) for w in result["warnings"])
+
+
+def _assert_warnings_at_top_level(result: dict[str, Any]) -> None:
+    """``warnings`` is a non-empty top-level ``list[str]``; no dict value nests a
+    ``warnings`` or ``warning`` key. ``validation`` is the reference validator's
+    own metadata (``merge_validation_meta``), outside this contract."""
+    assert "warning" not in result, "singular 'warning' key at top level"
+    warnings = result.get("warnings")
+    assert isinstance(warnings, list) and warnings, result
+    assert all(isinstance(w, str) for w in warnings), warnings
+    for key, value in result.items():
+        if key != "validation" and isinstance(value, dict):
+            assert "warnings" not in value, f"warnings nested in {key!r}"
+            assert "warning" not in value, f"'warning' nested in {key!r}"
+
+
+def _assert_warnings_shape(result: dict[str, Any]) -> None:
+    """``_assert_warnings_at_top_level`` for a tool that reports ``success``."""
+    assert result["success"] is True
+    _assert_warnings_at_top_level(result)
+
+
+def _remove_entity(entity_registry: er.EntityRegistry) -> Callable[[Any], None]:
+    """Remove the entity a registry update names before Core handles the update."""
+    return lambda msg: entity_registry.async_remove(msg["entity_id"])
+
+
+@pytest.fixture
+async def helpers(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HelperConfigTools:
+    """The helper tools on Core's storage input_booleans, without the component."""
+    await set_up(hass, "input_boolean")
+    return HelperConfigTools(core_client)
+
+
+async def _boolean(
+    client: HomeAssistantClient, entity_registry: er.EntityRegistry
+) -> str:
+    """An input_boolean Core stores; returns its entity_id."""
+    item_id = await create_item(client, "input_boolean", {})
+    entity_id = entity_registry.async_get_entity_id(
+        "input_boolean", "input_boolean", item_id
+    )
+    assert entity_id is not None
+    return entity_id
+
+
+def _category(hass: HomeAssistant) -> str:
+    return cr.async_get(hass).async_create(scope="helpers", name="Test Cat").category_id
 
 
 class TestUniformResponseShape:
-    """Issue #1293: create / update / flow paths return the same wrapper shape."""
+    """#1293: create, update and flow paths return the same wrapper shape."""
 
-    async def test_create_simple_helper_uses_data_wrapper(
-        self, register_tools, mock_client
-    ):
-        """Simple WS create returns ``data`` wrapper, no ``helper_data``."""
-        mock_client.send_websocket_message = with_registry(
-            {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
+    async def test_create_returns_the_stored_item_under_data(
+        self, core_client: HomeAssistantClient, helpers: HelperConfigTools
+    ) -> None:
+        result = await helpers.ha_config_set_helper(
+            helper_type="input_boolean", name=fresh_name()
         )
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-            )
-        _assert_uniform_shape(result, expect_warnings=True)
+
+        _assert_uniform_shape(result)
         assert result["action"] == "create"
-        assert result["data"]["id"] == "abc123"
+        stored = await stored_item(core_client, "input_boolean", result["data"]["id"])
+        assert result["data"] == stored
 
-    async def test_update_simple_helper_uses_data_wrapper(
-        self, register_tools, mock_client
-    ):
-        """Simple WS update returns ``data`` wrapper, no ``updated_data``."""
+    async def test_update_returns_the_updated_item_under_data(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        await set_up(hass, "input_select")
+        item_id = await create_item(core_client, "input_select", {"options": ["a"]})
+        entity_id = entity_registry.async_get_entity_id(
+            "input_select", "input_select", item_id
+        )
 
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/get":
-                return {
-                    "success": True,
-                    "result": {
-                        "entity_id": msg["entity_id"],
-                        "unique_id": "abc123",
-                        "platform": "input_select",
-                    },
-                }
-            if msg_type.endswith("/list"):
-                return {
-                    "success": True,
-                    "result": [
-                        {"id": "abc123", "name": "Existing", "options": ["a", "b"]}
-                    ],
-                }
-            if msg_type.endswith("/update"):
-                return {
-                    "success": True,
-                    "result": {"id": "abc123", "options": ["x", "y"]},
-                }
-            return {"success": True, "result": {}}
+        result = await HelperConfigTools(core_client).ha_config_set_helper(
+            helper_type="input_select",
+            helper_id=entity_id,
+            config={"options": ["x", "y"]},
+        )
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-        with patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_select",
-                helper_id="input_select.existing",
-                config={"options": ["x", "y"]},
-            )
-        _assert_uniform_shape(result, expect_warnings=False)
+        _assert_uniform_shape(result)
+        assert "warnings" not in result
         assert result["action"] == "update"
+        assert result["data"]["options"] == ["x", "y"]
 
-    async def test_flow_helper_create_uses_data_wrapper(
-        self, register_tools, mock_client
-    ):
-        """Flow-helper create returns ``data`` wrapper with entry_id/title.
+    async def test_flow_helper_create_returns_entry_under_data(
+        self, hass: HomeAssistant, helpers: HelperConfigTools
+    ) -> None:
+        """The entry is under ``data``; flat ``entry_id`` / ``title`` stay as the
+        identifiers callers reach for."""
+        hass.states.async_set("sensor.a", "1")
+        hass.states.async_set("sensor.b", "2")
 
-        Flat ``entry_id`` / ``title`` are also preserved as convenience
-        accessors — they're the primary identifiers callers reach for.
-        """
-        mock_client.start_config_flow = AsyncMock(
-            return_value={
-                "type": "form",
-                "flow_id": "flow-1",
-                "step_id": "user",
-                "data_schema": [
-                    {"name": "name"},
-                    {"name": "entity_ids"},
-                    {"name": "type"},
-                ],
-            }
-        )
-        mock_client.submit_config_flow_step = AsyncMock(
-            return_value={
-                "type": "create_entry",
-                "flow_id": "flow-1",
-                "result": {
-                    "entry_id": "entry-1",
-                    "title": "avg_temp",
-                    "domain": "min_max",
-                },
-            }
-        )
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "sensor.avg_temp", "config_entry_id": "entry-1"}
-                ],
-            }
-        )
-
-        result = await register_tools["ha_config_set_helper"](
+        result = await helpers.ha_config_set_helper(
             helper_type="min_max",
             name="avg_temp",
             config={"entity_ids": ["sensor.a", "sensor.b"], "type": "mean"},
-            wait=False,
         )
-        _assert_uniform_shape(result, expect_warnings=True)
-        assert result["data"]["entry_id"] == "entry-1"
-        assert result["data"]["title"] == "avg_temp"
-        # Flat accessors remain (per-action metadata, not wrapper keys).
-        assert result["entry_id"] == "entry-1"
+
+        _assert_uniform_shape(result)
+        [entry] = hass.config_entries.async_entries("min_max")
+        assert result["data"] == {"entry_id": entry.entry_id, "title": "avg_temp"}
+        assert result["entry_id"] == entry.entry_id
         assert result["title"] == "avg_temp"
         assert result["entity_ids"] == ["sensor.avg_temp"]
 
-    async def test_create_wait_failure_surfaces_top_level_warnings_list(
-        self, register_tools, mock_client
-    ):
-        """A wait exception lands in top-level ``warnings`` list, never nested."""
-        mock_client.send_websocket_message = with_registry(
-            {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("network down"),
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
+    async def test_create_wait_failure_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        helpers: HelperConfigTools,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        with at_entity_wait(hass, lambda: lose_state_reads(core_client, monkeypatch)):
+            result = await helpers.ha_config_set_helper(
+                helper_type="input_boolean", name=fresh_name()
             )
-        _assert_uniform_shape(result, expect_warnings=True)
+
+        _assert_uniform_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_update_wait_failure_surfaces_top_level_warnings_list(
-        self, register_tools, mock_client
-    ):
-        """Update wait exception lands in top-level ``warnings`` list, never nested."""
+    async def test_update_wait_failure_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        helpers: HelperConfigTools,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        entity_id = await _boolean(core_client, entity_registry)
 
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/get":
-                return {
-                    "success": True,
-                    "result": {
-                        "entity_id": msg["entity_id"],
-                        "unique_id": "abc123",
-                        "platform": "input_boolean",
-                    },
-                }
-            if msg_type.endswith("/list"):
-                return {
-                    "success": True,
-                    "result": [{"id": "abc123", "name": "Existing"}],
-                }
-            if msg_type.endswith("/update"):
-                return {"success": True, "result": {"id": "abc123"}}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-        with patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("net glitch"),
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                helper_id="input_boolean.existing",
-                name="Renamed",
+        with at_entity_wait(hass, lambda: lose_state_reads(core_client, monkeypatch)):
+            result = await helpers.ha_config_set_helper(
+                helper_type="input_boolean", helper_id=entity_id, name=fresh_name()
             )
-        _assert_uniform_shape(result, expect_warnings=True)
+
+        _assert_uniform_shape(result)
         assert any("verification failed" in w for w in result["warnings"])
 
-    async def test_create_failed_registry_update_surfaces_top_level_warning(
-        self, register_tools, mock_client
-    ):
-        """Failed ``config/entity_registry/update`` on create → warning at top level, not nested in data.
+    async def test_create_failed_registry_update_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        area_registry: ar.AreaRegistry,
+        entity_registry: er.EntityRegistry,
+        helpers: HelperConfigTools,
+    ) -> None:
+        """The area that did not land is neither echoed in ``data`` nor nested."""
+        area_id = area_registry.async_create("Kitchen").id
 
-        Locks the create-branch registry-write failure path
-        (``warnings.append("Helper created but entity registry update failed: ...")``).
-        A regression that re-nests this string under ``data``, or drops the
-        ``warnings.append`` entirely, would slip past the category test —
-        this fills that gap. The ``area.kitchen`` is registered (so the
-        upstream ``validate_registry_ids`` lookup passes) and the failure
-        happens at the post-create registry-update step itself.
-        """
-
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
-                }
-            if msg_type == "config/entity_registry/update":
-                return {
-                    "success": False,
-                    "error": {"message": "registry write rejected"},
-                }
-            return {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
-
-        mock_client.send_websocket_message = with_registry(ws_handler)
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                area_id="area.kitchen",
+        with on_receipt(hass, REGISTRY_UPDATE, _remove_entity(entity_registry)):
+            result = await helpers.ha_config_set_helper(
+                helper_type="input_boolean", name=fresh_name(), area_id=area_id
             )
-        _assert_uniform_shape(result, expect_warnings=True)
-        # Warning must surface at top level — never nested under ``data``.
-        assert "warning" not in result["data"]
-        assert "warnings" not in result["data"]
+
+        _assert_uniform_shape(result)
         assert any("entity registry update failed" in w for w in result["warnings"])
-        assert any("registry write rejected" in w for w in result["warnings"])
-        # Successful registry-write would have propagated area_id into data;
-        # the failure must not silently mark data as if it succeeded.
+        assert any("Entity not found" in w for w in result["warnings"])
         assert "area_id" not in result["data"]
 
-    async def test_create_propagates_icon_into_data_after_registry_update(
-        self, register_tools, mock_client
-    ):
-        """Successful create-path registry write echoes ``icon`` into ``data``.
+    async def test_create_echoes_icon_and_area_once_the_registry_has_them(
+        self, area_registry: ar.AreaRegistry, helpers: HelperConfigTools
+    ) -> None:
+        """Without the component the icon goes to the entity registry, not the
+        item, so only the registry write's success puts it in ``data``."""
+        area_id = area_registry.async_create("Kitchen").id
 
-        Locks the icon-propagation symmetry with the update branch
-        (``_execute_fallback_registry_update`` in ``config_helpers/update.py``). Previously the create-side
-        success branch echoed ``area_id`` and ``labels`` into
-        ``helper_data`` but skipped ``icon`` — a silent asymmetry now
-        closed. The WS create response intentionally omits ``icon`` so
-        the assertion fails closed if the propagation line ever gets
-        dropped or moved out of the success branch.
-        """
+        result = await helpers.ha_config_set_helper(
+            helper_type="input_boolean",
+            name=fresh_name(),
+            icon="mdi:toggle-switch",
+            area_id=area_id,
+        )
 
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
-                }
-            if msg_type == "config/entity_registry/update":
-                return {"success": True, "result": {}}
-            # Helper create — deliberately omit ``icon`` from the result so the
-            # only way it lands in ``data`` is via the post-registry-write
-            # propagation we're locking here.
-            return {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
-
-        mock_client.send_websocket_message = with_registry(ws_handler)
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                icon="mdi:toggle-switch",
-                area_id="area.kitchen",
-            )
-        _assert_uniform_shape(result, expect_warnings=True)
+        _assert_uniform_shape(result)
         assert result["action"] == "create"
         assert result["data"]["icon"] == "mdi:toggle-switch"
-        assert result["data"]["area_id"] == "area.kitchen"
+        assert result["data"]["area_id"] == area_id
 
-    async def test_update_failed_registry_update_surfaces_top_level_warning(
-        self, register_tools, mock_client
-    ):
-        """Failed ``config/entity_registry/update`` on update → warning at top level, not nested in data.
+    async def test_update_failed_registry_update_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        area_registry: ar.AreaRegistry,
+        entity_registry: er.EntityRegistry,
+        helpers: HelperConfigTools,
+    ) -> None:
+        area_id = area_registry.async_create("Kitchen").id
+        entity_id = await _boolean(core_client, entity_registry)
 
-        Mirror of the create-side test on the simple-update branch.
-        ``logger.warning`` was previously emitted alongside the
-        ``warnings.append`` here (create-side never logged); the post-#1303
-        contract is ``warnings.append`` only, with the message carried to
-        the caller via the response. ``area.kitchen`` is registered so
-        upstream validation passes and the failure occurs at the registry
-        write itself.
-        """
-
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/get":
-                return {
-                    "success": True,
-                    "result": {
-                        "entity_id": msg["entity_id"],
-                        "unique_id": "abc123",
-                        "platform": "input_boolean",
-                    },
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "area.kitchen", "name": "Kitchen"}],
-                }
-            if msg_type == "config/entity_registry/update":
-                return {
-                    "success": False,
-                    "error": {"message": "registry write rejected"},
-                }
-            if msg_type.endswith("/list"):
-                return {
-                    "success": True,
-                    "result": [{"id": "abc123", "name": "Existing"}],
-                }
-            if msg_type.endswith("/update"):
-                return {"success": True, "result": {"id": "abc123"}}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-        with patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ):
-            result = await register_tools["ha_config_set_helper"](
+        with on_receipt(hass, REGISTRY_UPDATE, _remove_entity(entity_registry)):
+            result = await helpers.ha_config_set_helper(
                 helper_type="input_boolean",
-                helper_id="input_boolean.existing",
-                area_id="area.kitchen",
+                helper_id=entity_id,
+                area_id=area_id,
+                wait=False,
             )
-        _assert_uniform_shape(result, expect_warnings=True)
-        assert "warning" not in result["data"]
-        assert "warnings" not in result["data"]
+
+        _assert_uniform_shape(result)
         assert any("entity registry update failed" in w for w in result["warnings"])
-        assert any("registry write rejected" in w for w in result["warnings"])
+        assert any("Entity not found" in w for w in result["warnings"])
         assert "area_id" not in result["data"]
 
-    async def test_create_failed_category_apply_surfaces_top_level_warning(
-        self, register_tools, mock_client
-    ):
-        """Failed ``apply_entity_category`` on create → warning at top level, not nested in data.
+    async def test_create_failed_category_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        helpers: HelperConfigTools,
+    ) -> None:
+        """#1293 / #1355: the category warning is lifted to ``warnings``; neither
+        it nor the category leaks into ``data``."""
+        category = _category(hass)
 
-        Issue #1293 close-out: the helper used to leak a ``category_warning`` key
-        into ``helper_data`` because ``apply_entity_category`` mutates its
-        target dict in-place. The fix routes through a temp dict and lifts the
-        warning to the top-level ``warnings`` list (mirrors the precedent in
-        ``_handle_flow_helper``'s ``cat_result`` block in
-        ``_apply_registry_updates_to_entity``).
-
-        Post-#1355: writer now appends directly to ``result_dict["warnings"]``
-        instead of setting singular ``category_warning``; the leak-check
-        assertions still hold (neither key should appear in ``data``).
-        """
-
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/category_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"category_id": "cat-123", "name": "Test Cat"}],
-                }
-            return {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
-
-        mock_client.send_websocket_message = with_registry(ws_handler)
-
-        async def fake_apply(
-            client, entity_id, category, scope, result_dict, entity_type
-        ):
-            result_dict.setdefault("warnings", []).append(
-                "Helper saved but failed to set category: forced failure"
+        with on_receipt(hass, REGISTRY_UPDATE, _remove_entity(entity_registry)):
+            result = await helpers.ha_config_set_helper(
+                helper_type="input_boolean", name=fresh_name(), category=category
             )
 
-        with (
-            patch(
-                "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "ha_mcp.tools.config_helpers.create.apply_entity_category",
-                side_effect=fake_apply,
-            ),
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                category="cat-123",
-            )
-        _assert_uniform_shape(result, expect_warnings=True)
-        assert "category_warning" not in result["data"], (
-            "category_warning leaked into data payload"
-        )
-        assert "warnings" not in result["data"], (
-            "warnings leaked into data payload — must stay top-level"
-        )
-        assert "category" not in result["data"], (
-            "category should not be set in data when apply failed"
-        )
+        _assert_uniform_shape(result)
+        assert "category_warning" not in result["data"]
+        assert "category" not in result["data"]
         assert any("failed to set category" in w for w in result["warnings"])
 
-    async def test_update_failed_category_apply_surfaces_top_level_warning(
-        self, register_tools, mock_client
-    ):
-        """Failed ``apply_entity_category`` on update → warning at top level, not nested in data.
+    async def test_update_failed_category_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        helpers: HelperConfigTools,
+    ) -> None:
+        category = _category(hass)
+        entity_id = await _boolean(core_client, entity_registry)
 
-        Mirror of the create-side test on the simple/registry update branch.
-        """
-
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/entity_registry/get":
-                return {
-                    "success": True,
-                    "result": {
-                        "entity_id": msg["entity_id"],
-                        "unique_id": "abc123",
-                        "platform": "input_boolean",
-                    },
-                }
-            if msg_type == "config/category_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"category_id": "cat-123", "name": "Test Cat"}],
-                }
-            if msg_type.endswith("/list"):
-                return {
-                    "success": True,
-                    "result": [{"id": "abc123", "name": "Existing"}],
-                }
-            if msg_type.endswith("/update"):
-                return {"success": True, "result": {"id": "abc123"}}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
-        async def fake_apply(
-            client, entity_id, category, scope, result_dict, entity_type
-        ):
-            result_dict.setdefault("warnings", []).append(
-                "Helper saved but failed to set category: forced failure"
-            )
-
-        with (
-            patch(
-                "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-                new_callable=AsyncMock,
-                return_value=True,
-            ),
-            patch(
-                "ha_mcp.tools.config_helpers.update.apply_entity_category",
-                side_effect=fake_apply,
-            ),
-        ):
-            result = await register_tools["ha_config_set_helper"](
+        with on_receipt(hass, REGISTRY_UPDATE, _remove_entity(entity_registry)):
+            result = await helpers.ha_config_set_helper(
                 helper_type="input_boolean",
-                helper_id="input_boolean.existing",
-                name="Renamed",
-                category="cat-123",
+                helper_id=entity_id,
+                name=fresh_name(),
+                category=category,
+                wait=False,
             )
-        _assert_uniform_shape(result, expect_warnings=True)
-        assert "category_warning" not in result["data"], (
-            "category_warning leaked into data payload"
-        )
-        assert "warnings" not in result["data"], (
-            "warnings leaked into data payload — must stay top-level"
-        )
-        assert "category" not in result["data"], (
-            "category should not be set in data when apply failed"
-        )
+
+        _assert_uniform_shape(result)
+        assert "category_warning" not in result["data"]
+        assert "category" not in result["data"]
         assert any("failed to set category" in w for w in result["warnings"])
 
-    async def test_no_singular_warning_key_at_top_level_or_nested(
-        self, register_tools, mock_client
-    ):
-        """``warning`` (singular string) must never appear — neither flat nor nested."""
-        mock_client.send_websocket_message = with_registry(
-            {
-                "success": True,
-                "result": {"id": "abc123", "name": "Test Switch"},
-            }
-        )
-        with patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=False,  # not registered → triggers warning code path
-        ):
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
+    async def test_unqueryable_entity_is_a_warnings_entry_not_a_warning_key(
+        self, hass: HomeAssistant, helpers: HelperConfigTools
+    ) -> None:
+        """The pre-#1293 ``helper_data["warning"]`` is ``warnings[i]`` now.
+
+        The entity's state is gone when the wait starts, so the wait runs out.
+        """
+
+        def remove_new_state() -> None:
+            [state] = hass.states.async_all("input_boolean")
+            hass.states.async_remove(state.entity_id)
+
+        with at_entity_wait(hass, remove_new_state):
+            result = await helpers.ha_config_set_helper(
+                helper_type="input_boolean", name=fresh_name()
             )
-        # The pre-#1293 contract wrote ``helper_data["warning"]``; the new
-        # contract writes ``result["warnings"][i]``.
-        assert "warning" not in result, (
-            "singular 'warning' key must not appear at top level"
-        )
-        assert "warning" not in result["data"], (
-            "singular 'warning' key must not appear inside data wrapper"
-        )
-        assert isinstance(result.get("warnings"), list)
+
+        _assert_uniform_shape(result)
         assert any("not yet queryable" in w for w in result["warnings"])
 
 
-def _assert_warnings_list_shape_core(result: dict[str, Any]) -> None:
-    """Shared warnings-list assertions for both shape helpers below.
-
-    Enforces the warnings-list contract independent of any ``success`` /
-    status-marker convention:
-
-    - ``warnings`` is a non-empty ``list[str]`` at the top level
-    - No singular ``warning`` string at the top level (legacy shape)
-    - ``warnings`` does not leak into any nested dict value (no
-      ``"data": {"warnings": [...]}`` or ``"result": {"warnings": [...]}``
-      nesting pattern that pre-#1332 callers had to chase)
-    """
-    assert "warning" not in result, (
-        "singular 'warning' key must not appear at top level"
-    )
-    assert isinstance(result.get("warnings"), list), (
-        f"warnings missing or not a list: {result.get('warnings')!r}"
-    )
-    assert all(isinstance(w, str) for w in result["warnings"]), (
-        f"non-string warning entries: {result['warnings']!r}"
-    )
-    assert result["warnings"], "warnings list present but empty"
-    # Defence against re-introduction of nested warning bags: scan every
-    # dict-typed top-level value for ``warnings`` / ``warning`` keys.
-    # ``validation`` is the intentional reference-validator metadata bag
-    # (``merge_validation_meta`` — separate concern from #1332's lifecycle
-    # warnings) and is whitelisted from the leak check.
-    nested_warnings_whitelist = {"validation"}
-    for key, value in result.items():
-        if key == "warnings" or key in nested_warnings_whitelist:
-            continue
-        if isinstance(value, dict):
-            assert "warnings" not in value, (
-                f"warnings leaked into nested '{key}': must stay top-level"
-            )
-            assert "warning" not in value, (
-                f"singular 'warning' leaked into nested '{key}'"
-            )
+async def _group_tools(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> GroupTools:
+    assert await async_setup_component(hass, "group", {})
+    return GroupTools(client)
 
 
-def _assert_warnings_list_shape(result: dict[str, Any]) -> None:
-    """Cross-cutting warnings-list contract for lifecycle-write tools (#1332).
-
-    Tighter than ``_assert_uniform_shape`` for the warnings half: applies to
-    any successful tool response, regardless of payload-wrapper key.
-
-    - ``success`` is True
-    - ``warnings`` is a non-empty ``list[str]`` at the top level
-    - No singular ``warning`` string at the top level (legacy shape)
-    - ``warnings`` does not leak into any nested dict value (no
-      ``"data": {"warnings": [...]}`` or ``"result": {"warnings": [...]}``
-      nesting pattern that pre-#1332 callers had to chase)
-    """
-    assert result["success"] is True
-    _assert_warnings_list_shape_core(result)
+async def _scene_tools(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> ConfigSceneTools:
+    await setup_scenes(hass, [])
+    return ConfigSceneTools(client)
 
 
-def _assert_warnings_list_shape_no_success(result: dict[str, Any]) -> None:
-    """Relaxed warnings-list shape contract for tools without a top-level
-    ``success`` key by design.
+AUTOMATION = {
+    "alias": "Test Auto",
+    # An event trigger: a time trigger leaves Core's timer behind the test.
+    "trigger": [{"platform": "event", "event_type": "test_event"}],
+    "action": [{"service": "light.turn_on"}],
+}
+SCENE = {"name": "Test Scene", "entities": {"light.kitchen": {"state": "on"}}}
 
-    Mirrors ``_assert_warnings_list_shape`` minus the ``success: True``
-    assertion. Used for tools whose response uses a status-marker
-    (e.g. ``status: "pending_restart"``) or a payload-bag (e.g. ``mode:
-    "dry_run"``, list-mode integrations payload, deep_search fallback)
-    instead of the ``success`` boolean — those shapes are pre-existing
-    design choices, not regressions of #1332.
 
-    The warnings-list contract itself remains identical to the strict
-    helper.
-    """
-    _assert_warnings_list_shape_core(result)
+class Family(NamedTuple):
+    """A lifecycle write tool family: its Core, its write and its removal."""
+
+    set_up: Callable[
+        [HomeAssistant, HomeAssistantClient, pytest.MonkeyPatch], Awaitable[Any]
+    ]
+    write: Callable[[Any], Awaitable[dict[str, Any]]]
+    remove: Callable[[Any], Awaitable[dict[str, Any]]]
+
+
+FAMILIES = {
+    "groups": Family(
+        _group_tools,
+        lambda t: t.ha_config_set_group(
+            object_id="test_group", entities=["light.kitchen"]
+        ),
+        lambda t: t.ha_config_remove_group(object_id="test_group"),
+    ),
+    "scripts": Family(
+        script_tools,
+        lambda t: t.ha_config_set_script(
+            script_id="test_script", config={"sequence": [{"delay": {"seconds": 1}}]}
+        ),
+        lambda t: t.ha_config_remove_script(script_id="test_script"),
+    ),
+    "automations": Family(
+        automation_tools,
+        lambda t: t.ha_config_set_automation(config=AUTOMATION),
+        lambda t: t.ha_config_remove_automation(entity_id="automation.test_auto"),
+    ),
+    "scenes": Family(
+        _scene_tools,
+        lambda t: t.ha_config_set_scene(scene_id="test_scene", config=SCENE),
+        lambda t: t.ha_config_remove_scene(scene_id="test_scene"),
+    ),
+}
+
+# The write of an existing item, for the families whose warning names it.
+UPDATES: dict[str, Callable[[Any], Awaitable[dict[str, Any]]]] = {
+    "groups": lambda t: t.ha_config_set_group(
+        object_id="test_group", name="Renamed Test Group"
+    ),
+    "automations": lambda t: t.ha_config_set_automation(
+        entity_id="automation.test_auto", config=AUTOMATION
+    ),
+}
 
 
 class TestLifecycleWriteWarningsShape:
-    """Cross-cutting shape regression for the 4 lifecycle-write families
-    migrated under #1332. Asserts the warnings-list contract holds on
-    every emission path that landed in #1337-#1340 (now consolidated into #1340).
+    """#1332: the lifecycle write families keep the warnings-list contract.
 
-    Per the narrow exception tuple decision (#1340 thread with kingpanther13):
-    only HomeAssistantConnectionError and HomeAssistantAuthError propagate
-    from wait_for_entity_registered to the set call sites — TimeoutError
-    returns False (handled separately), HomeAssistantAPIError is fully
-    swallowed by the helpers (ws_waiters.py). The set paths test those two
-    exception types. The remove paths go through ``verify_entity_removed``,
-    which turns any failed check after a successful delete into a warning
-    (its branches are tested in test_remove_helpers_wait_warnings.py), so
-    each remove path tests one failure, which pins the wiring.
+    Only HomeAssistantConnectionError and HomeAssistantAuthError leave
+    ``wait_for_entity_registered`` for the set call sites (a timeout returns
+    False, an API error is swallowed in ``ws_waiters``), so each set path meets
+    both. A remove goes through ``verify_entity_removed``, which turns any
+    failed check into a warning (its branches are tested in
+    test_remove_helpers_wait_warnings.py), so one failure pins the wiring.
     """
 
-    # ------------------------------------------------------------------
-    # Per-family tool factories.
-    # Each returns a tools instance plus a mock client wired so the
-    # underlying write succeeds and only the wait-verification step
-    # raises (the codepath under test).
-    # ------------------------------------------------------------------
-
-    @pytest.fixture
-    def groups_tools(self):
-        from ha_mcp.tools.tools_groups import GroupTools
-
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value={"success": True})
-        # An existing group.set group: no YAML warning joins the one under test.
-        client.get_entity_state = AsyncMock(return_value={"attributes": {"auto": True}})
-        client.get_states = AsyncMock(return_value=[])
-        return GroupTools(client)
-
-    @pytest.fixture
-    def scripts_tools(self, monkeypatch):
-        from ha_mcp.tools import entity_registration
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        client.upsert_script_config = AsyncMock(
-            return_value={"script_id": "test_script"}
-        )
-        client.delete_script_config = AsyncMock(
-            return_value={"script_id": "test_script"}
-        )
-        client.get_entity_state = AsyncMock(
-            return_value={"state": "off", "entity_id": "script.test_script"}
-        )
-        client.get_services = AsyncMock(return_value=[])
-        client.get_states = AsyncMock(return_value=[])
-        return ConfigScriptTools(client)
-
-    @pytest.fixture
-    def automations_tools(self):
-        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
-
-        client = MagicMock()
-        # Credential-less: no component probe, Core's REST/WS is the path.
-        client.base_url = client.token = None
-        client._resolve_automation_id = AsyncMock(return_value="test_auto_id")
-        client.get_automation_config = AsyncMock(return_value={"alias": "Test Auto"})
-        client.upsert_automation_config = AsyncMock(
-            return_value={"entity_id": "automation.test_auto"}
-        )
-        client.delete_automation_config = AsyncMock(
-            return_value={"identifier": "automation.test_auto"}
-        )
-        client.get_entity_state = AsyncMock(
-            return_value={"state": "on", "entity_id": "automation.test_auto"}
-        )
-        client.get_services = AsyncMock(return_value=[])
-        client.get_states = AsyncMock(return_value=[])
-        return AutomationConfigTools(client)
-
-    @pytest.fixture
-    def scenes_tools(self, monkeypatch):
-        from ha_mcp.tools import entity_registration
-        from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
-
-        # Issue #1168 R3 blocker 1 sleep — zero it so registry-miss
-        # retry doesn't stretch the unit-test wall clock.
-        monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
-        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
-
-        client = MagicMock()
-        client.upsert_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
-        client.delete_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
-        client.resolve_scene_id = AsyncMock(
-            side_effect=lambda sid: sid.removeprefix("scene.")
-        )
-        # The remove path resolves via ``_resolve_scene`` (issue #1971).
-        client._resolve_scene = AsyncMock(
-            side_effect=lambda sid: SceneResolution(
-                storage_key=sid.removeprefix("scene."),
-                registry_hit=False,
-                platform=None,
-            )
-        )
-        # On that registry miss the no-hash set path also asks the state machine,
-        # to tell an ``id``-less YAML scene from a genuine create (#1971). False
-        # keeps these fixtures on the create path whose warnings they assert.
-        client._scene_state_exists = AsyncMock(return_value=False)
-        client.get_entity_state = AsyncMock(
-            return_value={
-                "state": "2026-05-18T00:00:00+00:00",
-                "entity_id": "scene.test_scene",
-            }
-        )
-        client.get_services = AsyncMock(return_value=[])
-        client.get_states = AsyncMock(return_value=[])
-        # Entity resolution: empty registry → falls back to
-        # f"scene.{scene_id}" which matches what wait_for_entity_registered
-        # is patched to receive.
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return ConfigSceneTools(client)
-
-    # ------------------------------------------------------------------
-    # Groups: set × 2 exception types, remove wiring
-    # ------------------------------------------------------------------
-
-    async def test_groups_set_connection_error_yields_top_level_warnings_list(
-        self, groups_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await groups_tools.ha_config_set_group(
-                object_id="test_group",
-                entities=["light.kitchen"],
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_groups_set_auth_error_yields_top_level_warnings_list(
-        self, groups_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
-        ):
-            result = await groups_tools.ha_config_set_group(
-                object_id="test_group",
-                entities=["light.kitchen"],
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_groups_remove_check_error_yields_top_level_warnings_list(
-        self, groups_tools: Any
+    @staticmethod
+    async def _set_with_failed_wait(
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        family: str,
+        fault: Callable[[], object],
     ) -> None:
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=ValueError("forced for test"),
-        ):
-            result = await groups_tools.ha_config_remove_group(
-                object_id="test_group",
-            )
-        _assert_warnings_list_shape(result)
+        tools = await FAMILIES[family].set_up(hass, client, monkeypatch)
+
+        with at_entity_wait(hass, fault):
+            result = await FAMILIES[family].write(tools)
+
+        _assert_warnings_shape(result)
+        assert any("verification failed" in w for w in result["warnings"])
+
+    @pytest.mark.parametrize("family", FAMILIES)
+    async def test_set_wait_without_answer_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        family: str,
+    ) -> None:
+        await self._set_with_failed_wait(
+            hass,
+            core_client,
+            monkeypatch,
+            family,
+            lambda: lose_state_reads(core_client, monkeypatch),
+        )
+
+    # Core closes the revoked socket while its own close is cancelled, so
+    # aiohttp's heartbeat timer on that server socket is never cancelled.
+    @pytest.mark.parametrize("expected_lingering_timers", [True])
+    @pytest.mark.parametrize("family", FAMILIES)
+    async def test_set_wait_with_revoked_token_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        hass_access_token: str,
+        monkeypatch: pytest.MonkeyPatch,
+        family: str,
+    ) -> None:
+        """Core answers the wait's state read with 401."""
+        await self._set_with_failed_wait(
+            hass,
+            core_client,
+            monkeypatch,
+            family,
+            lambda: revoke(hass, hass_access_token),
+        )
+
+    @pytest.mark.parametrize("family", FAMILIES)
+    async def test_remove_check_failure_is_a_top_level_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        family: str,
+    ) -> None:
+        tools = await FAMILIES[family].set_up(hass, core_client, monkeypatch)
+        await FAMILIES[family].write(tools)
+
+        with at_entity_wait(hass, lambda: lose_state_reads(core_client, monkeypatch)):
+            result = await FAMILIES[family].remove(tools)
+
+        _assert_warnings_shape(result)
         assert any("removal verification failed" in w for w in result["warnings"])
 
-    async def test_groups_update_path_uses_updated_action_word(self, groups_tools):
-        # The group already exists, so action_word must be "updated". Pins
-        # the create/update branching against a regression hardcoding
-        # "created" on the update path.
-        with patch(
-            "ha_mcp.tools.tools_groups.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await groups_tools.ha_config_set_group(
-                object_id="test_group",
-                name="Renamed Test Group",
-            )
-        _assert_warnings_list_shape(result)
+    @pytest.mark.parametrize("family", UPDATES)
+    async def test_update_wait_failure_says_updated(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        family: str,
+    ) -> None:
+        """An existing item is an update: a regression hardcoding "created" on
+        the update path fails here."""
+        tools = await FAMILIES[family].set_up(hass, core_client, monkeypatch)
+        await FAMILIES[family].write(tools)
+
+        with at_entity_wait(hass, lambda: lose_state_reads(core_client, monkeypatch)):
+            result = await UPDATES[family](tools)
+
+        _assert_warnings_shape(result)
         assert any("updated but" in w for w in result["warnings"])
         assert not any("created but" in w for w in result["warnings"])
 
-    # ------------------------------------------------------------------
-    # Scripts: set × 2 exception types, remove wiring
-    # ------------------------------------------------------------------
 
-    async def test_scripts_set_connection_error_yields_top_level_warnings_list(
-        self, scripts_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await scripts_tools.ha_config_set_script(
-                script_id="test_script",
-                config={"sequence": [{"delay": {"seconds": 1}}]},
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_scripts_set_auth_error_yields_top_level_warnings_list(
-        self, scripts_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
-        ):
-            result = await scripts_tools.ha_config_set_script(
-                script_id="test_script",
-                config={"sequence": [{"delay": {"seconds": 1}}]},
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_scripts_remove_check_error_yields_top_level_warnings_list(
-        self, scripts_tools: Any
-    ) -> None:
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=ValueError("forced for test"),
-        ):
-            result = await scripts_tools.ha_config_remove_script(
-                script_id="test_script",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    # ------------------------------------------------------------------
-    # Automations: set × 2 exception types, remove wiring
-    # ------------------------------------------------------------------
-
-    async def test_automations_set_connection_error_yields_top_level_warnings_list(
-        self, automations_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await automations_tools.ha_config_set_automation(
-                config={
-                    "alias": "Test Auto",
-                    "trigger": [{"platform": "time", "at": "07:00:00"}],
-                    "action": [{"service": "light.turn_on"}],
-                },
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_automations_set_auth_error_yields_top_level_warnings_list(
-        self, automations_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
-        ):
-            result = await automations_tools.ha_config_set_automation(
-                config={
-                    "alias": "Test Auto",
-                    "trigger": [{"platform": "time", "at": "07:00:00"}],
-                    "action": [{"service": "light.turn_on"}],
-                },
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_automations_remove_check_error_yields_top_level_warnings_list(
-        self, automations_tools: Any
-    ) -> None:
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=ValueError("forced for test"),
-        ):
-            result = await automations_tools.ha_config_remove_automation(
-                entity_id="automation.test_auto",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
-
-    async def test_automations_update_path_uses_updated_action_word(
-        self, automations_tools
-    ):
-        # An existing automation is an update. Pins the create/update wording
-        # against a regression hardcoding "created" on the update path.
-        with patch(
-            "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await automations_tools.ha_config_set_automation(
-                entity_id="automation.test_auto",
-                config={
-                    "alias": "Test Auto",
-                    "trigger": [{"platform": "time", "at": "07:00:00"}],
-                    "action": [{"service": "light.turn_on"}],
-                },
-            )
-        _assert_warnings_list_shape(result)
-        assert any("updated but" in w for w in result["warnings"])
-        assert not any("created but" in w for w in result["warnings"])
-
-    # ------------------------------------------------------------------
-    # Scenes: set × 2 exception types, remove wiring
-    # ------------------------------------------------------------------
-
-    async def test_scenes_set_connection_error_yields_top_level_warnings_list(
-        self, scenes_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scenes.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantConnectionError("forced for test"),
-        ):
-            result = await scenes_tools.ha_config_set_scene(
-                scene_id="test_scene",
-                config={
-                    "name": "Test Scene",
-                    "entities": {"light.kitchen": {"state": "on"}},
-                },
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_scenes_set_auth_error_yields_top_level_warnings_list(
-        self, scenes_tools
-    ):
-        with patch(
-            "ha_mcp.tools.tools_config_scenes.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            side_effect=HomeAssistantAuthError("forced for test"),
-        ):
-            result = await scenes_tools.ha_config_set_scene(
-                scene_id="test_scene",
-                config={
-                    "name": "Test Scene",
-                    "entities": {"light.kitchen": {"state": "on"}},
-                },
-            )
-        _assert_warnings_list_shape(result)
-        assert any("verification failed" in w for w in result["warnings"])
-
-    async def test_scenes_remove_check_error_yields_top_level_warnings_list(
-        self, scenes_tools: Any
-    ) -> None:
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new_callable=AsyncMock,
-            side_effect=ValueError("forced for test"),
-        ):
-            result = await scenes_tools.ha_config_remove_scene(
-                scene_id="test_scene",
-            )
-        _assert_warnings_list_shape(result)
-        assert any("removal verification failed" in w for w in result["warnings"])
+async def _restarts(hass: HomeAssistant) -> AsyncMock:
+    """Core's restart service with its config check; the stop it ends with is
+    Core's stop-handler hook, so the test's Core records it instead of stopping."""
+    await write_config_files(hass, {"configuration.yaml": ""})
+    for domain in ("homeassistant", "config"):
+        assert await async_setup_component(hass, domain, {})
+    stop = AsyncMock()
+    async_set_stop_handler(hass, stop)
+    return stop
 
 
 class TestSweepWarningsShape:
-    """Cross-cutting warnings-list shape coverage for tools migrated under
-    #1341 (the non-lifecycle-write half of #1332).
+    """#1341: the non-lifecycle tools migrated under #1332.
 
-    Mirrors the TestLifecycleWriteWarningsShape pattern from #1340, using
-    ``_assert_warnings_list_shape`` which enforces:
-      - ``success: True`` at top level
-      - ``warnings`` is a non-empty ``list[str]`` at the top level
-      - No singular ``warning`` legacy key
-      - ``warnings`` doesn't leak into nested dicts
-
-    Coverage 6/8 of the PR-touched src files cross-cuttingly pinned,
-    split by response-shape contract:
-
-    **Strict helper (top-level ``success: True`` + warnings) — 4 of 8:**
-    - ``backup_snapshot_restore.py`` (restore_backup)
-    - ``tools_service.py`` (ha_call_event timeout)
-    - ``tools_system.py`` (ha_restart success)
-    - ``tools_energy.py`` (ha_manage_energy_prefs dry_run with validate
-      failure — response carries ``success: True`` from
-      ``len(shape_errors) == 0``)
-
-    **Relaxed helper (no top-level ``success`` — status-marker / payload-bag
-    shape) — 2 of 8:**
-    - ``tools_addons.py``: ``ha_manage_app`` config mode with
-      ``options`` returns ``status: "pending_restart"`` + top-level
-      warnings (closure tool, registered via ``register_addon_tools``)
-    - ``tools_integrations.py``: ``ha_get_integration`` single-entry
-      mode with ``include_diagnostics=False`` + ``device_id`` provided
-
-    **Not folded in (2 of 8) — multi-step WebSocket call chains where a
-    reliable cross-cutting mock needs to branch on the WS message
-    ``type`` to pass early-success steps and fail only at the target
-    emit-site. Content-level coverage already lives in the per-tool
-    unit/e2e test files cited:**
-
-    - ``search/legacy.py``: ``ha_search`` fallback path. The tool
-      calls ``await client.<state-source>`` before the fuzzy/exact
-      branch; trivial ``MagicMock()`` clients trip the
-      ``"MagicMock can't be used in 'await' expression"`` error before
-      the warning emit-site is reached. Per-tool tests in
-      ``test_tools_search.py`` exercise the fallback content already.
-    - ``tools_entities.py``: ``ha_set_entity`` with ``new_device_name``
-      flows entity-registry-lookup → entity-registry-update →
-      device-registry-lookup → device-registry-update → optional
-      expose-update. The nested ``device_rename`` warnings live deep
-      in that chain. Per-tool tests in ``test_entity_rename.py`` and
-      ``test_rename_consolidation.py`` exercise the nested-result
-      shape directly.
+    ``ha_search``'s legacy fallback and ``ha_set_entity``'s nested
+    ``device_rename`` warnings are covered in their own tool tests
+    (test_tools_search.py, test_entity_rename.py).
     """
 
-    @pytest.mark.asyncio
-    async def test_backup_restore_warnings_shape(self):
-        from ha_mcp.tools.backup_snapshot_restore import restore_backup
+    async def test_backup_restore_warnings_shape(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        stop = await _restarts(hass)
+        assert await async_setup_component(hass, "backup", {})
+        await hass.services.async_call("backup", "create", blocking=True)
+        info = await core_client.send_websocket_message({"type": "backup/info"})
+        [backup] = info["result"]["backups"]
 
-        target = {"backup_id": "abc", "agents": {"backup.local": {}}}
-        create = {"agent_ids": [], "password": "pw"}
-        ws = AsyncMock()
-        ws.send_command.side_effect = [
-            {"success": True, "result": {"backup": target}},
-            {"success": True, "result": {"config": {"create_backup": create}}},
-        ]
-        client = MagicMock()
-        client.base_url = "http://test"
-        client.token = "t"
-        client.verify_ssl = False
-        client.get_config = AsyncMock(return_value={"components": []})
-        # The restore send is exercised by test_backup_snapshot_restore.
-        with (
-            patch(
-                "ha_mcp.tools.backup_snapshot.get_connected_ws_client",
-                new=AsyncMock(return_value=(ws, None)),
-            ),
-            patch(
-                "ha_mcp.tools.backup_snapshot_restore._send_restore",
-                new=AsyncMock(return_value=None),
-            ),
-        ):
-            result = await restore_backup(client, "abc")
-        _assert_warnings_list_shape(result)
+        result = await restore_backup(core_client, backup["backup_id"])
 
-    @pytest.mark.asyncio
-    async def test_system_restart_warnings_shape(self):
-        from ha_mcp.tools.tools_system import SystemTools
+        _assert_warnings_shape(result)
+        stop.assert_awaited_once_with(hass, True)
 
-        client = AsyncMock()
-        client.check_config.return_value = {"result": "valid"}
-        client.call_service.return_value = None
-        tools = SystemTools(client)
-
-        result = await tools.ha_restart(confirm=True)
-        _assert_warnings_list_shape(result)
-
-    @pytest.mark.asyncio
-    async def test_integrations_get_integration_device_id_ignored_warnings_shape(self):
-        """Shape-pins the device_id-ignored warning emit in
-        ``ha_get_integration`` (entry_id mode, include_diagnostics=False,
-        device_id provided). Response shape is the single-entry payload
-        (no top-level ``success``) — uses the relaxed helper."""
-        from ha_mcp.tools.tools_integrations import IntegrationTools
-
-        tools = IntegrationTools.__new__(IntegrationTools)
-        tools._client = MagicMock()
-        tools._get_single_entry = AsyncMock(
-            return_value={
-                "entry_id": "abc",
-                "domain": "test_integration",
-                "state": "loaded",
-            }
-        )
-
-        result = await tools.ha_get_integration(
-            entry_id="abc",
-            device_id="dev_123",
-            include_diagnostics=False,
-        )
-        _assert_warnings_list_shape_no_success(result)
-
-    @pytest.mark.asyncio
-    async def test_addons_manage_addon_options_ignored_fields_warnings_shape(self):
-        """Shape-pins the ignored_fields warning emit in ``ha_manage_app``
-        when options include a field not in the add-on schema. Config mode
-        with ``options`` returns ``status: "pending_restart"`` (no top-level
-        ``success``) — uses the relaxed helper. Mirrors the mock pattern in
-        ``test_tools_addons.py::test_config_mode_options_unknown_fields_warned``.
-        """
-        from ha_mcp.tools.tools_addons import register_addon_tools
-
-        registered: dict[str, Any] = {}
-        mock_mcp = MagicMock()
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                registered[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mock_mcp.tool = tool_decorator
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.token = "test-token"
-        register_addon_tools(mock_mcp, client)
-        manage_addon = registered["ha_manage_app"]
-
-        async def mock_supervisor_api(client_arg, endpoint, **kwargs):
-            if endpoint == "/addons/test_addon/info":
-                return {
-                    "success": True,
-                    "result": {
-                        "options": {"log_level": "info"},
-                        "schema": [
-                            {"name": "log_level", "required": False, "type": "str"}
-                        ],
-                    },
-                }
-            return {"success": True, "result": {}}
-
-        with patch(
-            "ha_mcp.tools.tools_addons._supervisor_api_call",
-            side_effect=mock_supervisor_api,
-        ):
-            result = await manage_addon(
-                slug="test_addon",
-                options={"log_level": "debug", "zombie_field": "ghost"},
-            )
-
-        _assert_warnings_list_shape_no_success(result)
-
-    @pytest.mark.asyncio
-    async def test_energy_manage_energy_prefs_dry_run_validate_failure_warnings_shape(
+    async def test_system_restart_warnings_shape(
         self,
-    ):
-        """Shape-pins the validate_warning emit in
-        ``_dry_run`` when HA's ``energy/validate`` fails. Response carries
-        ``success: True`` at top level (set from ``len(shape_errors) == 0``)
-        — uses the STRICT helper. Listed in the no-success bucket of the
-        Item 5 analysis but actually fits the strict contract.
-        """
-        from ha_mcp.tools.tools_energy import EnergyTools
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+        stop = await _restarts(hass)
 
-        tools = EnergyTools.__new__(EnergyTools)
-        client = MagicMock(base_url=None, token=None)
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "energy not configured"}
+        result = await SystemTools(core_client).ha_restart(confirm=True)
+
+        _assert_warnings_shape(result)
+        stop.assert_awaited_once_with(hass, True)
+
+    async def test_integration_ignored_device_id_warnings_shape(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """The single-entry payload has no top-level ``success``."""
+        assert await async_setup_component(hass, "config", {})
+        entry = add_test_entry(hass)
+
+        result = await IntegrationTools(core_client).ha_get_integration(
+            entry_id=entry.entry_id, device_id="dev_123", include_diagnostics=False
         )
-        tools._client = client
 
-        # Without the component, the preview labels schema validation unavailable.
-        result = await tools._dry_run(
+        _assert_warnings_at_top_level(result)
+        assert any("device_id" in w for w in result["warnings"])
+
+    async def test_app_options_ignored_fields_warnings_shape(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Options mode answers ``status: "pending_restart"``, no ``success``."""
+        load_supervisor_api(
+            hass,
+            aioclient_mock,
+            monkeypatch,
             {
-                "energy_sources": [],
-                "device_consumption": [],
-            }
+                ("get", "/addons/test_addon/info"): {
+                    "options": {"log_level": "info"},
+                    "schema": [{"name": "log_level", "required": False, "type": "str"}],
+                },
+                ("post", "/addons/test_addon/options"): {},
+            },
+        )
+        # The server is not in an app: it reaches Supervisor through Core.
+        monkeypatch.delenv("SUPERVISOR_TOKEN")
+        registered: dict[str, Any] = {}
+        mcp = MagicMock(
+            tool=lambda *a, **k: lambda fn: registered.setdefault(fn.__name__, fn)
+        )
+        register_addon_tools(mcp, core_client)
+
+        result = await registered["ha_manage_app"](
+            slug="test_addon", options={"log_level": "debug", "zombie_field": "ghost"}
         )
 
-        _assert_warnings_list_shape(result)
+        _assert_warnings_at_top_level(result)
+        assert result["ignored_fields"] == ["zombie_field"]
+
+    async def test_energy_preview_validate_failure_warnings_shape(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Without the energy integration Core does not answer ``energy/validate``;
+        the preview still reports ``success``."""
+        result = await EnergyTools(core_client).ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [], "device_consumption": []},
+            dry_run=True,
+        )
+
+        _assert_warnings_shape(result)
+        assert any("Current-state validation failed" in w for w in result["warnings"])

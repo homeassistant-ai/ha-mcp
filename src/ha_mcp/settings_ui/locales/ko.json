@@ -789,8 +789,8 @@
       "description": "엔티티 하나 또는 여러 개의 현재 상태와 속성을 가져옵니다(조명, 스위치, 센서, 냉난방, 커버, 잠금 등)."
     },
     "ha_get_system_health": {
-      "title": "시스템 상태 조회(ZHA/Z-Wave/통합 구성요소 진단 포함)",
-      "description": "Home Assistant 시스템 상태를 가져옵니다. Zigbee(ZHA), Z-Wave JS, 통합 구성요소별 진단 덤프를 포함합니다."
+      "title": "시스템 상태 가져오기 (ZHA/Z-Wave/Thread/Matter 네트워크 포함)",
+      "description": "Zigbee(ZHA), Z-Wave JS, Thread 및 Matter 네트워크를 포함한 Home Assistant 시스템 상태를 가져옵니다."
     },
     "ha_get_todo": {
       "title": "할 일 조회",

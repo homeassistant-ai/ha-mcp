@@ -789,8 +789,8 @@
       "description": "获取一个或多个实体的当前状态、state 与属性（灯光、开关、传感器、温控、覆盖件、锁、风扇等）。"
     },
     "ha_get_system_health": {
-      "title": "获取系统健康（含 ZHA/Z-Wave/集成诊断）",
-      "description": "获取 Home Assistant 系统健康状态，包含 Zigbee（ZHA）、Z-Wave JS 及各集成诊断转储。"
+      "title": "获取系统健康状况（包含 ZHA/Z-Wave/Thread/Matter 网络）",
+      "description": "获取 Home Assistant 系统健康状况，包含 Zigbee (ZHA)、Z-Wave JS、Thread 和 Matter 网络。"
     },
     "ha_get_todo": {
       "title": "获取待办",

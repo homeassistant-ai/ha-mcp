@@ -38,12 +38,12 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
     "this request (an allow_entity_ids list, if set, still applies) so the filter "
     "does not blank every entity."
 )
-_DEVICE_REGISTRY_CONFLICT_WARNING = (
+DEVICE_REGISTRY_CONFLICT_WARNING = (
     "Entity visibility filter is enabled with an area/label dimension but the "
     "device registry contained conflicting identities; ambiguous device-derived "
     "placement and labels were excluded."
 )
-_DEVICE_REGISTRY_INVALID_AREA_WARNING = (
+DEVICE_REGISTRY_INVALID_AREA_WARNING = (
     "Entity visibility filter is enabled with an area dimension but the device "
     "registry contained invalid area relationships; affected device-derived "
     "placement was excluded."
@@ -254,11 +254,11 @@ def _visibility_warnings(
         or visibility.get("allow_labels")
     )
     if area_or_label_dimension_active and _conflicting_device_ids(view):
-        warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
+        warnings.append(DEVICE_REGISTRY_CONFLICT_WARNING)
     if (
         visibility.get("exclude_areas") or visibility.get("allow_areas")
     ) and _invalid_device_area_ids(view):
-        warnings.append(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
+        warnings.append(DEVICE_REGISTRY_INVALID_AREA_WARNING)
 
     if inventory is None:
         inventory = _visibility_inventory(view, states, visibility)
