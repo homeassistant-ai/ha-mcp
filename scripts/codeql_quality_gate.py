@@ -657,7 +657,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/incomplete-url-substring-sanitization",
-        "tests/src/unit/test_oauth_legacy_component.py",
+        "tests/src/unit/test_oauth_legacy_views.py",
         "may be at an arbitrary position",
         "",
         "Test assertion, not URL validation: the XSS-escape test checks the "
