@@ -274,7 +274,6 @@ module = [
     "tests.src.unit.test_tools_config_scripts",
     "tests.src.unit.test_tools_entities",
     "tests.src.unit.test_tools_entry_lifecycle",
-    "tests.src.unit.test_tools_filesystem",
     "tests.src.unit.test_tools_get_states",
     "tests.src.unit.test_tools_integrations",
     "tests.src.unit.test_tools_resources_patch",

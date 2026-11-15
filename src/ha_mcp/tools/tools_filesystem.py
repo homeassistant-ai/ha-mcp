@@ -96,7 +96,7 @@ _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
 # can flip at any moment — there a transport that may come back, here a config
 # entry the user can add or remove at runtime — so both stay short enough to
 # self-heal without a server restart.
-_LIVE_TOOLS_PROBE_TTL_S = 30.0
+LIVE_TOOLS_PROBE_TTL_S = 30.0
 # ``(verdict, monotonic_time)`` per client, keyed exactly like
 # ``_CALLER_TOKEN_CACHE`` above so the entry self-evicts with the client and
 # multi-client setups stay separate.
@@ -109,7 +109,7 @@ _LIVE_TOOLS_PROBE_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
 )
 
 
-def _monotonic() -> float:
+def probe_clock() -> float:
     """Monotonic clock read, isolated so tests can advance it deterministically."""
     return time.monotonic()
 
@@ -200,9 +200,9 @@ def _raise_component_too_old(detail: str) -> NoReturn:
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
                 (
-                    "If no update is listed yet, refresh HA-MCP's release data "
-                    "(ha_manage_hacs action='update_information' with its "
-                    "repository_id) and look again"
+                    "If no update is listed yet, refresh its release data and "
+                    'look again: ha_manage_hacs(action="update_information", '
+                    'repository_id="homeassistant-ai/ha-mcp")'
                 ),
             ],
         )
@@ -448,7 +448,7 @@ async def _probe_tools_services(client: Any) -> bool:
     the whole service registry — and every gated tool call on a current
     component reaches it, so an unbounded per-call probe would put that request
     in front of each file read. Memoizing the verdict for
-    ``_LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
+    ``LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
 
     A ``False`` verdict is memoized too: a user who adds the tools entry
     mid-session waits at most the TTL for the tools to start working, which is
@@ -456,7 +456,7 @@ async def _probe_tools_services(client: Any) -> bool:
     better than the restart the cached caps boolean would have required.
     """
     cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
-    if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+    if cached is not None and (probe_clock() - cached[1]) < LIVE_TOOLS_PROBE_TTL_S:
         return cached[0]
     # Serialize the refresh per client: concurrent gated calls arriving on an
     # expired entry would otherwise each pass the miss check and each fetch the
@@ -464,10 +464,10 @@ async def _probe_tools_services(client: Any) -> bool:
     lock = _LIVE_TOOLS_PROBE_LOCKS.setdefault(client, asyncio.Lock())
     async with lock:
         cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
-        if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+        if cached is not None and (probe_clock() - cached[1]) < LIVE_TOOLS_PROBE_TTL_S:
             return cached[0]
         verdict = await _is_mcp_tools_available(client)
-        _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, _monotonic())
+        _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, probe_clock())
         return verdict
 
 
@@ -479,18 +479,12 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     cached probe and enforce ``MIN_COMPONENT_VERSION`` from
     ``caps.component_version``. Caps alone do not prove the SERVICES exist,
     though: the server entry also registers the WS surface (#2289), so ``info``
-    answers on a server-entry-only install too. The component reports the
-    additive ``tools_services`` field (#2292) — but the caps snapshot is cached
-    for the client's lifetime while config entries come and go at runtime, so
-    the cached boolean is stale in BOTH directions: a pre-tools-entry ``False``
-    would block these tools until a restart, and a pre-removal ``True`` would
-    wave calls through to now-missing services and surface raw
-    service-call failures instead of the actionable error. So when the field
-    is present at all, ignore its cached value and consult the live service
-    registry (``_probe_tools_services``), which is memoized for
-    ``_LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
-    per gated call. Without the field, answering caps is taken as proof, as it
-    was before the server entry registered ``info``.
+    answers on a server-entry-only install too, and the caps snapshot is
+    cached for the client's lifetime while config entries come and go at
+    runtime (#2292, #2302). So consult the live service registry
+    (``_probe_tools_services``), which is memoized for
+    ``LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
+    per gated call.
 
     Caps is None when no component answered ``info`` (none installed, or the
     probe failed), so the same live probe is the only signal available. A
@@ -508,10 +502,6 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     caps = await get_component_caps(client)
     if caps is not None:
         _assert_caps_version_ok(caps)
-        if caps.tools_services is None:
-            # No ``tools_services`` field: only the tools entry registered
-            # ``info`` then, so answering caps DID prove the services exist.
-            return
     if not await _probe_tools_services(client):
         _raise_tools_entry_not_set_up()
 

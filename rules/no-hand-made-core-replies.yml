@@ -151,7 +151,6 @@ ignores:
   - "tests/src/unit/test_tools_dev.py"
   - "tests/src/unit/test_tools_entities.py"
   - "tests/src/unit/test_tools_entities_p2.py"
-  - "tests/src/unit/test_tools_filesystem.py"
   - "tests/src/unit/test_tools_get_states.py"
   - "tests/src/unit/test_tools_history.py"
   - "tests/src/unit/test_tools_integrations.py"

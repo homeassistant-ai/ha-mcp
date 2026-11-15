@@ -169,8 +169,8 @@ entry's `hass.data` caches so the next setup reads storage again.
 
 Privileged filesystem and YAML services remain tools-entry-only. The
 `ha_mcp_tools/info` command answers for either entry, so the server gates
-those services on Home Assistant's live service registry once the additive
-`tools_services` handshake field is present—not on the general capability list.
+those services on Home Assistant's live service registry—not the capability
+list.
 
 When changing component-backed behavior:
 

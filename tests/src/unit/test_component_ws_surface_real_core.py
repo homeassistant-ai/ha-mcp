@@ -88,9 +88,9 @@ async def test_info_advertises_the_handshake_contract(
 async def test_info_reports_whether_the_tools_services_are_registered(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    """Both entry types serve this surface (#2289), so the server's
-    filesystem/YAML gate reads ``tools_services`` instead of inferring the
-    tools entry from ``info`` answering (#2292)."""
+    """Both entry types serve this surface (#2289), so ``info`` answering does
+    not show the tools entry is set up (#2292). A server older than the
+    component reads this field; the current one reads the service registry."""
     assert (await ws_result(component_ws, c.WS_INFO))["tools_services"] is False
 
     entry = MockConfigEntry(

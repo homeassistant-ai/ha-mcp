@@ -19,6 +19,7 @@ import custom_components.ha_mcp_tools as component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_filesystem
+from ha_mcp.tools.util_helpers import unwrap_service_response
 
 from ._file_services import make_file_service
 from ._tool_errors import error_of
@@ -71,6 +72,7 @@ async def test_a_refused_component_works_again_once_it_is_updated(
     reports the component's own version; the server's floor is raised above
     it, as on a server one release ahead, and put back, as after the update."""
     await make_file_service(hass)
+    await hass.async_add_executor_job(Path(hass.config.path("www")).mkdir)
     released = tools_filesystem.MIN_COMPONENT_VERSION
     ahead = f"{int(released.split('.')[0]) + 1}.0.0"
 
@@ -89,4 +91,4 @@ async def test_a_refused_component_works_again_once_it_is_updated(
     listing = await tools_filesystem.call_mcp_tools_service(
         core_client, "list_files", {"path": "www"}
     )
-    assert isinstance(listing, dict)
+    assert unwrap_service_response(listing)["success"] is True
