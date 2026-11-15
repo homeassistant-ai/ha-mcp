@@ -434,20 +434,14 @@ async def _write_hider(
             f"{field} stays {now!r}: Home Assistant refused {saved!r}: {err}"
         )
         return result
-    reply = _manager()._require_dict(updated, _UPDATE_COMMAND)
-    entry = _manager()._require_dict(reply.get("entity_entry"), _UPDATE_COMMAND)
-    if (kept := entry.get(field)) != saved:
+    if (kept := updated["entity_entry"][field]) != saved:
         # Asked for None, Core derives disabled_by again from a disabled
         # device or integration entry; it stores hidden_by as sent.
-        why = (
-            " while the entity's device or integration entry is disabled"
-            if field == "disabled_by"
-            else ""
-        )
         warnings.append(
-            f"{field} stays {kept!r} instead of {saved!r}: Home Assistant kept it{why}"
+            f"{field} stays {kept!r} instead of {saved!r}: Home Assistant kept "
+            "it while the entity's device or integration entry is disabled"
         )
-    return {**result, **reply}
+    return {**result, **updated}
 
 
 async def _update(client: Any, entity_id: str, fields: dict[str, Any]) -> Any:
