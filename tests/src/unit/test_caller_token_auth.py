@@ -173,6 +173,10 @@ class TestFloorFollowsTheRelease:
         assert manifest["version"] == MIN_COMPONENT_VERSION
 
     def test_every_release_stamps_the_floor(self):
+        """semantic-release rewrites ``NAME = "x.y.z"`` and skips, without an
+        error, a declaration it cannot find: the floor stays one plain string
+        assignment in the file ``version_variables`` names."""
+        import ast
         import inspect
         import tomllib
 
@@ -180,9 +184,22 @@ class TestFloorFollowsTheRelease:
         release = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))[
             "tool"
         ]["semantic_release"]
-        module = Path(inspect.getfile(_version_tuple)).resolve().relative_to(repo)
-        stamped = f"{module.as_posix()}:MIN_COMPONENT_VERSION"
+        source = Path(inspect.getfile(_version_tuple)).resolve()
+        stamped = f"{source.relative_to(repo).as_posix()}:MIN_COMPONENT_VERSION"
         assert stamped in release["version_variables"]
+
+        assigned = [
+            node.value
+            for node in ast.parse(source.read_text(encoding="utf-8")).body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "MIN_COMPONENT_VERSION"
+                for target in node.targets
+            )
+        ]
+        assert len(assigned) == 1
+        assert isinstance(assigned[0], ast.Constant)
+        assert assigned[0].value == MIN_COMPONENT_VERSION
 
 
 class TestGetCallerTokenManifestVersion:
@@ -639,42 +656,6 @@ class TestCallMcpToolsServiceInjectsToken:
         # No exception means the gate passed and the downstream
         # list_files call also went through.
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
-
-    @pytest.mark.asyncio
-    async def test_stale_1_1_0_component_rejected(self):
-        """Regression for #1946: a component reporting exactly ``1.1.0`` is
-        rejected as too old.
-
-        #1882 added the packages-aware ``list_files`` + ``read_file``
-        ``include_parsed`` behaviours under an *un-bumped* ``1.1.0`` component,
-        so a ``1.1.0`` build may or may not carry them. The floor must therefore
-        exclude ``1.1.0`` (it is ``1.2.0``, the first version cut after #1882),
-        else a stale ``1.1.0`` install passes the gate and then hits raw
-        failures instead of the actionable "update" prompt. Pins that ``1.1.0``
-        never passes; this holds for any floor above it, so it also guards
-        against a regression that lowers the floor back to ``1.1.0``.
-        """
-        client = AsyncMock()
-        client.get_services.return_value = [
-            {
-                "domain": MCP_TOOLS_DOMAIN,
-                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
-            }
-        ]
-        client.call_service = AsyncMock(
-            return_value={
-                "service_response": {
-                    "success": True,
-                    "token": "tok-stale",
-                    "version": "1.1.0",
-                }
-            }
-        )
-        with pytest.raises(ToolError) as exc_info:
-            await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "1.1.0" in msg
 
     @pytest.mark.asyncio
     async def test_version_above_minimum_accepted(self):

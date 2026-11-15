@@ -729,8 +729,7 @@ def test_extra_yaml_write_keys_parsing(raw, expected):
 
 
 async def test_extra_keys_absent_from_payload_when_unset(monkeypatch):
-    """Default config must produce a byte-identical payload to before this
-    feature, so a component that predates the field keeps working."""
+    """Without extra keys configured the write sends none."""
     from ha_mcp import config as ha_mcp_config
 
     monkeypatch.delenv("HA_MCP_EXTRA_YAML_KEYS", raising=False)

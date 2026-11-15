@@ -449,9 +449,6 @@ class YamlConfigTools:
                 "disabled_packages_keys": disabled_keys,
                 "require_confirm": settings.enable_yaml_edit_confirm,
             }
-            # Only sent when the operator actually configured extra keys, so a
-            # component that predates the field keeps working unchanged for
-            # everyone else (its schema is strict and would reject the call).
             if extra_keys:
                 service_data["extra_allowed_keys"] = extra_keys
             if content is not None:

@@ -15,8 +15,8 @@ raw-text sources this one orders whole blocks and pages through the result
 with ``offset`` instead of reversing lines.
 
 The read goes through the File & YAML Tools entry's privileged ``read_file``
-service (the same route as ``ha_read_file``), which allows the path from
-component 2.2.0. Split out of ``log_sources`` under `.gemini/styleguide.md`
+service (the same route as ``ha_read_file``). Split out of ``log_sources``
+under `.gemini/styleguide.md`
 § Tool Consolidation and Module Size.
 """
 

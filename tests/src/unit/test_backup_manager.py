@@ -2277,8 +2277,7 @@ class TestYamlHandler:
     async def test_restore_omits_extra_keys_when_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Default config must keep the pre-#1887 payload, so a component
-        that predates the field still restores."""
+        """Without extra keys configured the restore sends none."""
         from ha_mcp import config as ha_mcp_config
 
         monkeypatch.delenv("HA_MCP_EXTRA_YAML_KEYS", raising=False)
@@ -2288,7 +2287,7 @@ class TestYamlHandler:
         await bm._restore_yaml(
             _StubClient(), "configuration.yaml::rest", "resource: http://a\n"
         )
-        _, data = calls[0]
+        (data,) = [d for s, d in calls if s == "edit_yaml_config"]
         assert "extra_allowed_keys" not in data
 
     async def test_restore_bad_entity_id_raises(

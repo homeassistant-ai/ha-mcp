@@ -84,10 +84,8 @@ def _pipeline() -> Any:
 #
 # Separators inside a number are kept as GROUP BOUNDARIES rather than deleted.
 # Deleting them tolerates locale punctuation but also erases the difference
-# between the "4.5:1" contrast ratio and "45:1", and between the minimum
-# version floor "1.2.4" and "12.4" -- both live English strings. That 1.2.4
-# is a number a help string states, not MIN_COMPONENT_VERSION, which is a
-# different value and not pinned here. Comparing the tuple of groups keeps
+# between the "4.5:1" contrast ratio, a live English string, and "45:1", and
+# between a version such as "1.2.4" and "12.4". Comparing the tuple of groups keeps
 # "4.5" and "4,5" equal while "45" stays a different number.
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
 # A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
@@ -229,8 +227,8 @@ def _canonical_number(token: str) -> tuple[str, ...]:
     A separator followed by groups of exactly three digits is grouping, not a
     boundary: English ships `10000`, `1440` and `65535`, and a locale writing
     `10.000` states the same number. Anything else keeps its groups, so the
-    "4.5:1" ratio and the version floor "1.2.4" a help string states stay
-    distinct from "45" and "12.4".
+    "4.5:1" ratio and a version such as "1.2.4" stay distinct from "45" and
+    "12.4".
     A decimal written to exactly three places is the ambiguous case and folds
     with the thousands; no English string has one.
     """

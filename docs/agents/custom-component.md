@@ -44,10 +44,12 @@ The component never reports a dev suffix: released servers parse the version
 segment by segment as integers, so the suffix lives only in the pre-release tag
 and the pin.
 
-`MIN_COMPONENT_VERSION` is the component version the file and YAML tools
-need: the release's own. An external server (app, Docker, pip) refuses those
-tools on a component older than itself and says to update it, so every stable
-release asks its users for the matching component.
+`MIN_COMPONENT_VERSION` is the component version every call to the File & YAML
+Tools entry's services needs: the release's own. That covers the file and YAML
+tools, their backups, the fault log read (`ha_get_logs`) and the settings UI's
+file handlers. An external server (app, Docker, pip) refuses them on a
+component older than itself and says to update it, so every stable release
+asks its users for the matching component.
 
 Between releases the number cannot tell builds apart: an unreleased build
 (master, E2E, the dev environment) reports the last release's number while
