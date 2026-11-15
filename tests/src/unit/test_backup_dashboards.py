@@ -37,6 +37,23 @@ async def dashboard_manager(
     return snapshot_manager
 
 
+@pytest.fixture
+async def migrated_manager(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    snapshot_manager: bm.BackupManager,
+) -> bm.BackupManager:
+    """``snapshot_manager`` on a ``hass`` whose default dashboard was saved
+    before this start, so Core migrates it into its ``lovelace`` row."""
+    hass_storage["lovelace"] = {
+        "version": 1,
+        "key": "lovelace",
+        "data": {"config": BODY},
+    }
+    assert await async_setup_component(hass, "lovelace", {})
+    return snapshot_manager
+
+
 async def ws_ok(client: HomeAssistantClient, message: dict[str, Any]) -> Any:
     """Send ``message`` to Core and return its result, which it must accept."""
     reply = await client.send_websocket_message(message)
@@ -369,6 +386,23 @@ async def test_restore_reports_settings_left_unrestored_after_the_config_write(
     assert excinfo.value.outcome["apply_status"] == "unknown"
     assert excinfo.value.outcome["reason"] == "settings_not_restored"
     assert await stored_config(core_client, "kitchen-dash") == BODY
+
+
+@pytest.mark.parametrize("name", ["default", "lovelace"])
+async def test_a_set_up_default_dashboard_gets_its_body_back(
+    core_client: HomeAssistantClient, migrated_manager: bm.BackupManager, name: str
+) -> None:
+    """Once Core has migrated the default config into its ``lovelace`` row, as
+    on every install that ever saved one, the row is what a restore writes."""
+    assert await dashboard_paths(core_client) == ["lovelace"]
+    handler = _handler(migrated_manager)
+    held: Any = await handler.fetch(core_client, name)
+    await ws_ok(core_client, {"type": "lovelace/config/save", "config": {"views": []}})
+
+    assert await handler.restore(core_client, name, held) is None
+
+    assert await stored_config(core_client, "lovelace") == BODY
+    assert await dashboard_paths(core_client) == ["lovelace"]
 
 
 @pytest.mark.parametrize("name", ["default", "lovelace"])

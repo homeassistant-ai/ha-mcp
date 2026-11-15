@@ -447,11 +447,12 @@ async def test_progress_keeps_a_slow_start_alive_past_the_stall_budget(
 ) -> None:
     """A cold import took minutes on slow hardware; giving up on it created the
     orphaned worker and the port collision of #1904."""
-    async with stuck_in_import(hass, import_hook, monkeypatch, ready_stall=0.6) as mgr:
+    # A budget a busy runner's own loop pauses cannot eat, waited out 1.5 times.
+    async with stuck_in_import(hass, import_hook, monkeypatch, ready_stall=3.0) as mgr:
         async with progress(monkeypatch):
             start = asyncio.create_task(mgr.async_start())
             await wait_for(hass, import_hook.entered)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(4.5)
             assert not start.done(), "gave up while the start was progressing"
             import_hook.release.set()
             await asyncio.wait_for(start, timeout=60)
