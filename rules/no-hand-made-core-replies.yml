@@ -100,7 +100,6 @@ ignores:
   - "tests/src/unit/test_graceful_shutdown.py"
   - "tests/src/unit/test_ha_bulk_control_selector.py"
   - "tests/src/unit/test_ha_call_event.py"
-  - "tests/src/unit/test_ha_manage_blueprints_actions.py"
   - "tests/src/unit/test_hacs_actions.py"
   - "tests/src/unit/test_hacs_auto_refresh.py"
   - "tests/src/unit/test_hacs_repo_registration.py"
