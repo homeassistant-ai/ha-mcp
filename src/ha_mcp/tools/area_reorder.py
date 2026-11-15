@@ -65,6 +65,7 @@ async def reorder_area_or_floor(
     return {
         "success": True,
         "kind": kind,
-        "order": ids,
+        # Core keeps each id once, at its first place.
+        "order": list(dict.fromkeys(ids or [])),
         "message": f"Successfully reordered {kind}s",
     }

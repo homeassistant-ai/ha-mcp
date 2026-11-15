@@ -249,6 +249,31 @@ async def test_areas_are_reordered_with_cores_reorder(
     assert [a.id for a in areas.async_list_areas()] == [hall.id, kitchen.id]
 
 
+async def test_a_repeated_id_in_a_complete_order_is_reported_once(
+    hass: HomeAssistant, tools: AreaTools
+) -> None:
+    """Core accepts the repeat and keeps each id once, at its first place; the
+    reply names the order Core applied, not the list that was sent."""
+    floors = fr.async_get(hass)
+    ground = floors.async_create("Ground", level=0)
+    attic = floors.async_create("Attic", level=2)
+    areas = ar.async_get(hass)
+    kitchen = areas.async_create("Kitchen")
+    hall = areas.async_create("Hall")
+
+    floor_result = await tools.ha_set_area_or_floor(
+        kind="floor", order=[attic.floor_id, ground.floor_id, attic.floor_id]
+    )
+    area_result = await tools.ha_set_area_or_floor(
+        kind="area", order=[hall.id, kitchen.id, hall.id]
+    )
+
+    assert floor_result["order"] == [attic.floor_id, ground.floor_id]
+    assert [f.floor_id for f in floors.async_list_floors()] == floor_result["order"]
+    assert area_result["order"] == [hall.id, kitchen.id]
+    assert [a.id for a in areas.async_list_areas()] == area_result["order"]
+
+
 async def test_an_incomplete_order_is_refused_with_cores_reason(
     hass: HomeAssistant, tools: AreaTools
 ) -> None:

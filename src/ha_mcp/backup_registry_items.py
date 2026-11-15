@@ -14,6 +14,8 @@ holds a deleted item's name, and reports an id that differs.
 
 from __future__ import annotations
 
+import json
+from collections import Counter
 from typing import Any
 
 from .backup_entity_ids import _manager
@@ -62,11 +64,15 @@ async def _category_rows(client: Any, scope: str) -> list[Any]:
 _AREA_OR_FLOOR = ("area", "floor")
 
 
+def _element_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=repr)
+
+
 def _same(a: Any, b: Any) -> bool:
     # Core keeps aliases and labels in sets and lists them in hash order, so a
-    # list value matches in any order.
+    # list value matches in any order. Elements keep their type: 1 is not "1".
     if isinstance(a, list) and isinstance(b, list):
-        return sorted(map(str, a)) == sorted(map(str, b))
+        return Counter(map(_element_key, a)) == Counter(map(_element_key, b))
     return bool(a == b)
 
 
@@ -328,4 +334,4 @@ async def restored_item(client: Any, domain: str, entity_id: str, config: Any) -
     if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
         return None
     row = _holding_name(await _rows(client, kind), config)
-    return row and {"kind": kind, **row, **keep}
+    return row and {"kind": kind, **in_snapshot_order(row, config), **keep}
