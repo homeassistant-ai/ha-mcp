@@ -353,8 +353,8 @@ _RESTORE_ERRORS: tuple[type[BaseException], ...] = (
 # in once exceeded; protects long-running servers from unbounded growth
 # while staying well above any realistic HA install (typical: dozens to
 # hundreds of entities edited per session).
-_TRACKER_SOFT_CAP = 10_000
-_TRACKER_PRUNE_BATCH = 1_000
+TRACKER_SOFT_CAP = 10_000
+TRACKER_PRUNE_BATCH = 1_000
 
 # Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
@@ -614,7 +614,7 @@ class BackupManager:
         self._client = client
         self._handlers: dict[str, DomainHandler] = {}
         # Throttle tracker: maps "domain:entity_id" -> monotonic-time of
-        # the last successful capture. Auto-pruned past _TRACKER_SOFT_CAP
+        # the last successful capture. Auto-pruned past TRACKER_SOFT_CAP
         # so a long-running server editing many distinct entities cannot
         # leak memory through this dict.
         self._last_snapshot: dict[str, float] = {}
@@ -1064,24 +1064,24 @@ class BackupManager:
     def _maybe_prune_trackers(self) -> None:
         """Cap per-entity tracker growth.
 
-        Once ``_last_snapshot`` exceeds ``_TRACKER_SOFT_CAP``, drop the
-        oldest ``_TRACKER_PRUNE_BATCH`` entries. The lock map is left
+        Once ``_last_snapshot`` exceeds ``TRACKER_SOFT_CAP``, drop the
+        oldest ``TRACKER_PRUNE_BATCH`` entries. The lock map is left
         alone — removing a lock that another task is awaiting would race;
         each lock is small (~64 bytes) and HA installs never reach the
         cap in practice.
         """
-        if len(self._last_snapshot) <= _TRACKER_SOFT_CAP:
+        if len(self._last_snapshot) <= TRACKER_SOFT_CAP:
             return
         # Drop the oldest entries by monotonic timestamp.
         oldest = sorted(self._last_snapshot.items(), key=lambda kv: kv[1])[
-            :_TRACKER_PRUNE_BATCH
+            :TRACKER_PRUNE_BATCH
         ]
         for key, _ in oldest:
             self._last_snapshot.pop(key, None)
         logger.info(
             "Auto-backup: pruned %d oldest tracker entries (cap=%d, now=%d entries)",
             len(oldest),
-            _TRACKER_SOFT_CAP,
+            TRACKER_SOFT_CAP,
             len(self._last_snapshot),
         )
 

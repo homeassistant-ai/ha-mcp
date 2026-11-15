@@ -108,6 +108,13 @@ def snapshot_clock(monkeypatch: pytest.MonkeyPatch) -> SnapshotClock:
     return clock
 
 
+def handler_for(manager: bm.BackupManager, domain: str) -> bm.DomainHandler:
+    """The manager's handler for ``domain``, which must be registered."""
+    handler = manager.handler_for(domain)
+    assert handler is not None
+    return handler
+
+
 async def manage_backup(client: HomeAssistantClient, **arguments: Any) -> Any:
     """Call ``ha_manage_backup`` registered on a server for ``client``."""
     mcp = FastMCP("backup-manager-tests")

@@ -22,14 +22,9 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantError
 
 from ._backup_core import backup_settings as backup_settings
 from ._backup_core import file_snapshot_manager as file_snapshot_manager
+from ._backup_core import handler_for as _handler
 from ._backup_core import snapshot_manager as snapshot_manager
 from ._config_dir_yaml import write_config_files
-
-
-def _handler(manager: bm.BackupManager, domain: str) -> bm.DomainHandler:
-    handler = manager.handler_for(domain)
-    assert handler is not None
-    return handler
 
 
 def _read(hass: HomeAssistant, path: str) -> str:

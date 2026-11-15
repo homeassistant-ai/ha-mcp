@@ -189,6 +189,39 @@ async def test_concurrent_captures_of_one_entity_write_one_snapshot(
     assert len(_files(snapshot_manager)) == 1
 
 
+async def test_throttle_forgets_the_oldest_entities_past_the_cap(
+    snapshot_manager: bm.BackupManager,
+    label_registry: lr.LabelRegistry,
+    backup_settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long-running server editing many entities does not grow its throttle
+    bookkeeping without bound: the entities captured longest ago drop out."""
+    monkeypatch.setattr(bm, "TRACKER_SOFT_CAP", 5)
+    monkeypatch.setattr(bm, "TRACKER_PRUNE_BATCH", 2)
+    monkeypatch.setattr(backup_settings, "auto_backup_throttle_minutes", 10)
+    labels = [add_label(label_registry, f"Label {i}") for i in range(7)]
+    for label_id in labels:
+        await snapshot_of(snapshot_manager, label_id)
+
+    assert await snapshot_manager.maybe_snapshot("label", labels[0]) is not None
+    assert await snapshot_manager.maybe_snapshot("label", labels[6]) is None
+
+
+async def test_throttle_keeps_every_entity_under_the_cap(
+    snapshot_manager: bm.BackupManager,
+    label_registry: lr.LabelRegistry,
+    backup_settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_settings, "auto_backup_throttle_minutes", 10)
+    labels = [add_label(label_registry, f"Label {i}") for i in range(7)]
+    for label_id in labels:
+        await snapshot_of(snapshot_manager, label_id)
+
+    assert await snapshot_manager.maybe_snapshot("label", labels[0]) is None
+
+
 async def test_two_captures_in_one_second_keep_both_states(
     snapshot_manager: bm.BackupManager,
     label_registry: lr.LabelRegistry,
