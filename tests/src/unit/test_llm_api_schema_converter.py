@@ -1,8 +1,9 @@
 """Which codec converts the server's tool schemas for Home Assistant (#1745).
 
-Stable Core converts with ``voluptuous_openapi``; Core 2026.9+ ships
-``probatio`` instead. The component prefers the first and falls back to the
-second, once per process and never on the event loop.
+The component's manifest installs ``voluptuous_openapi`` and converts with
+it; Core itself ships only ``probatio``. Without the manifest's package the
+component falls back to ``probatio``, once per process and never on the
+event loop.
 """
 
 from __future__ import annotations

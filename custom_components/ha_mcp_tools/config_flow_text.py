@@ -27,10 +27,12 @@ _LOGGER = logging.getLogger(__name__)
 # the language is unreadable or the catalog cannot be loaded, the form still
 # renders, in English, exactly as it did before.
 #
-# Kept identical to ``strings.json``'s ``common`` block, keys and values —
-# asserted by ``test_failed_lookup_shows_the_strings_json_english`` in
-# tests/src/unit/test_config_flow_options_text.py, because a fallback that has drifted
-# from the source shows different English than every catalog.
+# Every sentence of ``strings.json``'s ``common`` block must render through
+# this fallback unchanged, because a fallback that has drifted from the source
+# shows different English than every catalog;
+# ``test_every_common_sentence_has_a_scenario_that_shows_it`` and
+# ``test_failed_lookup_shows_the_strings_json_english`` in
+# tests/src/unit/test_config_flow_options_text.py check that.
 _COMMON_FALLBACKS: dict[str, str] = {
     "panel_hint": (
         "Open the [HA-MCP settings panel](/ha-mcp) for tool management and "

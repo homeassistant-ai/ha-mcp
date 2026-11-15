@@ -18,6 +18,7 @@ import pytest
 from homeassistant.components.homeassistant.exposed_entities import (
     async_listen_entity_updates,
 )
+from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
@@ -232,17 +233,20 @@ async def test_a_hider_only_core_sets_is_left_with_cores_refusal(
     )
 
 
-async def test_an_entity_of_a_disabled_device_stays_disabled_and_the_restore_says_so(
+@pytest.mark.parametrize("disabled", ["device", "config_entry"])
+async def test_an_entity_core_keeps_disabled_stays_disabled_and_the_restore_says_so(
     hass: HomeAssistant,
     entity_client: HomeAssistantClient,
     entity_handler: bm.DomainHandler,
     entity_registry: er.EntityRegistry,
     device_registry: dr.DeviceRegistry,
     desk: Desk,
+    disabled: str,
 ) -> None:
-    """Core derives an entity's disabler from its device, so restoring an
-    enabled snapshot cannot enable it. A restore that reports plain success
-    leaves the user thinking the entity is back; the other settings stay."""
+    """Core derives an entity's disabler from its device or integration entry,
+    so restoring an enabled snapshot cannot enable it. A restore that reports
+    plain success leaves the user thinking the entity is back; the other
+    settings stay."""
     config_entry = MockConfigEntry(domain="hue")
     config_entry.add_to_hass(hass)
     device = device_registry.async_get_or_create(
@@ -255,16 +259,24 @@ async def test_an_entity_of_a_disabled_device_stays_disabled_and_the_restore_say
         device_id=device.id,
     )
     snapshot = await entity_handler.fetch(entity_client, desk.entity_id)
-    device_registry.async_update_device(
-        device.id, disabled_by=dr.DeviceEntryDisabler.USER
-    )
+    if disabled == "device":
+        device_registry.async_update_device(
+            device.id, disabled_by=dr.DeviceEntryDisabler.USER
+        )
+    else:
+        await hass.config_entries.async_set_disabled_by(
+            config_entry.entry_id, ConfigEntryDisabler.USER
+        )
     entity_registry.async_update_entity(desk.entity_id, name="Other")
 
     result = await entity_handler.restore(entity_client, desk.entity_id, snapshot)
 
     entry = _entry(entity_registry, desk)
-    assert (entry.disabled_by, entry.name) == (er.RegistryEntryDisabler.DEVICE, "Desk")
-    assert any("disabled_by stays 'device'" in text for text in result["warnings"])
+    assert (entry.disabled_by, entry.name) == (
+        er.RegistryEntryDisabler(disabled),
+        "Desk",
+    )
+    assert f"disabled_by stays {disabled!r} instead of None" in result["warnings"][-1]
 
 
 async def test_an_entity_its_integration_hid_since_is_shown_again(

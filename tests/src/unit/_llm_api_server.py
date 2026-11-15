@@ -11,6 +11,7 @@ It lists what the real server stamps on ``tools/list``: per-tool
 from __future__ import annotations
 
 import asyncio
+import copy
 import socket
 import sys
 from collections.abc import AsyncIterator
@@ -56,7 +57,9 @@ class ServedTool:
 
     name: str = "ha_search"
     description: str | None = None
-    input_schema: dict[str, Any] = field(default_factory=lambda: dict(SEARCH_SCHEMA))
+    input_schema: dict[str, Any] = field(
+        default_factory=lambda: copy.deepcopy(SEARCH_SCHEMA)
+    )
     exposed: bool = True
     pinned: bool = False
     stamped: bool = True
@@ -86,13 +89,11 @@ class ServedTool:
 class LoopbackServer:
     """What the test controls on the running server, and what it saw."""
 
-    instructions: str | None = "Use the skills-first workflow."
     port: int = 0
     tools: list[ServedTool] = field(default_factory=lambda: [ServedTool()])
     call_delay: float = 0.0
     list_delay: float = 0.0
     list_error: BaseException | None = None
-    empty_list_answer: bool = False
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
 
@@ -106,10 +107,10 @@ class _Asgi:
         await self._app(scope, receive, send)
 
 
-def _build_app(state: LoopbackServer) -> Starlette:
-    server: Server[Any] = Server(
-        "ha-mcp-loopback-test", instructions=state.instructions
-    )
+def _build_app(
+    state: LoopbackServer, instructions: str | None, empty_list_answer: bool
+) -> Starlette:
+    server: Server[Any] = Server("ha-mcp-loopback-test", instructions=instructions)
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -119,7 +120,7 @@ def _build_app(state: LoopbackServer) -> Starlette:
             raise state.list_error
         return [tool.listing() for tool in state.tools]
 
-    if state.empty_list_answer:
+    if empty_list_answer:
 
         async def answer_with_nothing(_request: Any) -> types.ServerResult:
             return types.ServerResult(types.EmptyResult())
@@ -168,15 +169,11 @@ async def serve(
     list_error: BaseException | None = None,
 ) -> AsyncIterator[LoopbackServer]:
     """Run the server on a free loopback port until the block exits."""
-    state = LoopbackServer(
-        instructions=instructions,
-        empty_list_answer=empty_list_answer,
-        list_error=list_error,
-    )
+    state = LoopbackServer(list_error=list_error)
     if tools is not None:
         state.tools = tools
     config = uvicorn.Config(
-        _build_app(state),
+        _build_app(state, instructions, empty_list_answer),
         host="127.0.0.1",
         port=0,
         log_level="warning",

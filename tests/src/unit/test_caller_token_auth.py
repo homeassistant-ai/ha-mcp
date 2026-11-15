@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import DEFAULT, AsyncMock, patch
 
 import pytest
 from homeassistant.const import EVENT_CALL_SERVICE
@@ -287,6 +287,39 @@ async def test_a_rotated_token_is_refetched_and_the_call_retried_once(
         SERVICE_GET_ALLOWED_PATHS,
     ]
     assert service_calls.await_args_list[-1].args[2][CALLER_TOKEN_FIELD] == fresh
+
+
+async def test_a_token_that_stays_stale_is_retried_once_and_then_refused(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    core_client: HomeAssistantClient,
+    tools_entry: FileService,
+    service_calls: AsyncMock,
+) -> None:
+    """When the retry is refused too, the caller gets the component's
+    ``unauthorized`` after exactly two attempts, not a loop."""
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+
+    async def rotate_before_protected_call(
+        domain: str, service: str, *_: Any, **__: Any
+    ) -> Any:
+        if service != SERVICE_GET_CALLER_TOKEN:
+            assert await hass.config_entries.async_unload(entry.entry_id)
+            hass_storage.pop(TOKEN_STORE_KEY)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+        return DEFAULT
+
+    service_calls.side_effect = rotate_before_protected_call
+
+    result = await call_mcp_tools_service(core_client, SERVICE_GET_ALLOWED_PATHS, {})
+
+    assert result["service_response"]["error_code"] == "unauthorized"
+    attempts = [
+        c
+        for c in service_calls.await_args_list
+        if c.args[1] == SERVICE_GET_ALLOWED_PATHS
+    ]
+    assert len(attempts) == 2
 
 
 async def test_a_component_without_the_bootstrap_service_gets_an_update_prompt(

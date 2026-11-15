@@ -35,12 +35,8 @@ from custom_components.ha_mcp_tools import llm_api
 
 from ._registered_tools import all_registered_tools
 
-# The component's normaliser and this guard draw the same lines, so the guard
-# reads the component's own tables: which keywords are exclusive bounds, which
-# keys hold author-chosen names, and which hold instance data or an opaque
-# OpenAPI object rather than a subschema. A key spelled like a bound in one of
-# those places is a name or a value, and reading it as a bound would fail a
-# valid tool schema.
+# The guard reads the component's own keyword tables, so the two draw the
+# same lines.
 _EXCLUSIVE_KEYWORDS = tuple(exclusive for exclusive, *_ in llm_api.EXCLUSIVE_BOUNDS)
 
 # Registered only while dev mode is on; the walk must reach them too.

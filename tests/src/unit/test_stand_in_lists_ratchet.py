@@ -446,17 +446,23 @@ def test_a_guard_list_brought_back_is_not_a_new_check(
     assert any(reported in problem for problem in problems), problems
 
 
+@pytest.mark.parametrize("still_listed", [False, True], ids=["empty", "listing"])
 def test_the_rule_for_the_deleted_shared_fakes_can_be_retired(
-    ratchet: ModuleType, tmp_path: Path
+    ratchet: ModuleType, tmp_path: Path, still_listed: bool
 ) -> None:
     """Its three fake modules are gone, so the rule has nothing left to refuse;
-    removing any other rule is still reported (``rule-removed`` above)."""
+    one that still lists a file is not retired, and removing any other rule is
+    still reported (``rule-removed`` above)."""
     path = "rules/no-shared-core-fakes.yml"
     retired = _RULE.replace("no-hand-made-core-replies", "no-shared-core-fakes")
-    retired = retired.replace(f'  - "{_OLD}"\n', "")
+    if not still_listed:
+        retired = retired.replace(f'  - "{_OLD}"\n', "")
     repo = _pull_request(tmp_path, {path: None}, {**_BASE, path: retired})
 
-    assert ratchet.problems_since(repo, "HEAD") == []
+    problems = ratchet.problems_since(repo, "HEAD")
+
+    removed = "rules: no-shared-core-fakes was removed or renamed"
+    assert (removed in problems) is still_listed, problems
 
 
 def test_a_guard_list_that_names_a_file_indirectly_fails(
@@ -467,4 +473,34 @@ def test_a_guard_list_that_names_a_file_indirectly_fails(
     repo = _pull_request(tmp_path, {_GUARD_PATH: guard})
 
     with pytest.raises(ValueError, match="string literals"):
+        ratchet.problems_since(repo, "HEAD")
+
+
+@pytest.mark.parametrize(
+    ("guard", "refused"),
+    [
+        pytest.param(
+            f'_GRANDFATHERED, _X = frozenset({{"{_NEW}"}}), 0\n',
+            "plain assignment",
+            id="tuple-target",
+        ),
+        pytest.param(
+            f'_GRANDFATHERED |= {{"{_NEW}"}}\n', "plain assignment", id="augmented"
+        ),
+        pytest.param(
+            "def pytest_runtest_call(item):\n    yield\n",
+            "takes the test item",
+            id="hook-that-sees-the-test",
+        ),
+    ],
+)
+def test_a_guard_exemption_in_another_shape_fails(
+    ratchet: ModuleType, tmp_path: Path, guard: str, refused: str
+) -> None:
+    """Without a plain ``_GRANDFATHERED`` the guard counts as exempting
+    nothing, so no other shape may exempt a test."""
+    base = {**_BASE, _GUARD_PATH: "_CORE_ROOTS = frozenset()\n"}
+    repo = _pull_request(tmp_path, {_GUARD_PATH: guard}, base)
+
+    with pytest.raises(ValueError, match=refused):
         ratchet.problems_since(repo, "HEAD")

@@ -15,7 +15,7 @@ import socket
 import sys
 import threading
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from types import ModuleType
 from typing import Any
 
@@ -74,7 +74,8 @@ async def wait_for_log(caplog: pytest.LogCaptureFixture, text: str) -> None:
 
 async def cancelled(task: asyncio.Task[Any]) -> None:
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 @asynccontextmanager

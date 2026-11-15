@@ -59,16 +59,23 @@ _SERVER_DISTS = (STABLE, DEV)
 
 
 @pytest.fixture
-def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     """Keep what a started worker changes in this process from the next test.
 
     The dependency audit walks every installed package, which these tests do
-    not need (``test_dependency_diagnostics`` covers it). The worker writes two
+    not need (``test_dependency_diagnostics`` covers it); its stand-in finds
+    nothing and appends each root it is asked to audit to the yielded list. The worker writes two
     variables into ``os.environ``, registers an embedded connection and, on a
     cold start, replaces the ``ha_mcp`` modules in ``sys.modules``: all of it is
     undone here.
     """
-    monkeypatch.setattr(es, "audit_dependency_graph", lambda _root: [])
+    audited_roots: list[str] = []
+
+    def audit(root: str) -> list[Any]:
+        audited_roots.append(root)
+        return []
+
+    monkeypatch.setattr(es, "audit_dependency_graph", audit)
     for name in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED"):
         monkeypatch.setenv(name, "")
         monkeypatch.delenv(name)
@@ -79,7 +86,7 @@ def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         for name, module in sys.modules.items()
         if name == "ha_mcp" or name.startswith("ha_mcp.")
     }
-    yield
+    yield audited_roots
     reset_embedded_connection()
     reset_global_settings()
     for name in [n for n in sys.modules if n == "ha_mcp" or n.startswith("ha_mcp.")]:
@@ -227,6 +234,7 @@ class PackageIndex:
     uninstall_outcome: Callable[[str], str | BaseException | None] | None = None
     uninstall_leaves_dist_gone: bool = False
     after_worker_read: tuple[str, str] | None = None
+    requirements: AsyncMock = field(init=False)
 
     def __post_init__(self) -> None:
         self.requirements = AsyncMock(

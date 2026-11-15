@@ -151,6 +151,22 @@ async def test_the_scoped_revoke_view_is_not_found_outside_ha_auth(
     assert (await resp.json())["error"] == "not_found"
 
 
+async def test_a_revoke_body_in_an_unknown_charset_is_invalid_request(
+    open_oauth_surface: OpenSurface,
+) -> None:
+    surface = await open_oauth_surface(WEBHOOK_AUTH_HA)
+
+    resp = await surface.client.post(
+        REVOKE_URL,
+        data=b"token=anything",
+        headers={"Content-Type": "application/x-www-form-urlencoded; charset=nope"},
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_request"
+
+
 @pytest.mark.parametrize("spelling", SURFACES)
 async def test_a_core_that_does_not_answer_a_revocation_is_temporarily_unavailable(
     open_oauth_surface: OpenSurface, spelling: str

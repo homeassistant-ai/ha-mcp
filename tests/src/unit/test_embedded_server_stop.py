@@ -62,7 +62,10 @@ async def stop_while_the_worker_is_held(
     await mgr.async_stop()
     release.set()
     await worker_gone()
-    await asyncio.gather(start, return_exceptions=True)
+    # Uncancelled, the start reports a server that never came up; the entry's
+    # unload cancels it instead.
+    with pytest.raises(es.EmbeddedServerError, match="did not become reachable"):
+        await start
     return mgr.port
 
 

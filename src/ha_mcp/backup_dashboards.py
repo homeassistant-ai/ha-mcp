@@ -262,7 +262,7 @@ async def _restore_body(client: Any, entity_id: str, config: Any) -> Any:
     if url_path == "lovelace":
         # No row: the body was captured from Core's default store, which only
         # becomes a ``lovelace`` dashboard at the next Home Assistant start.
-        return await _manager()._ws_send(client, _config_write(None, config))
+        return await _restore_default_store(client, config)
     raise _manager().BackupRestoreError(
         f"Dashboard {url_path} no longer exists, and this snapshot holds no "
         "dashboard settings to re-create it from. Nothing was changed.",

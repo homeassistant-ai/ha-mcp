@@ -127,7 +127,8 @@ def _schema_converter() -> Callable[[Any], Any]:
 
 
 def reset_schema_converter() -> None:
-    """Resolve the converter again on the next conversion."""
+    """Resolve the converter again on the next conversion; tests use it to
+    switch codecs within one process."""
     _schema_converter.cache_clear()
 
 
@@ -164,12 +165,12 @@ INSTANCE_VALUES: frozenset[str] = frozenset(
 # dropped, corrupting a valid discriminated union. OpenAPI ``x-`` specification
 # extensions carry arbitrary vendor objects the same way and are matched by
 # prefix in ``is_opaque_key``.
-OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
+_OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
 
 
 def is_opaque_key(key: str) -> bool:
     """True for a keyword whose value must be copied through untouched."""
-    return key in OPAQUE_KEYWORDS or key.startswith("x-")
+    return key in _OPAQUE_KEYWORDS or key.startswith("x-")
 
 
 # Each exclusive keyword, the inclusive twin it folds into, the picker that

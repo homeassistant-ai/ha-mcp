@@ -293,19 +293,21 @@ async def test_restore_reports_settings_left_unrestored_after_the_config_write(
     assert await stored_config(core_client, "kitchen-dash") == BODY
 
 
-async def test_a_captured_dashboard_without_a_settings_row_restores_its_body(
-    core_client: HomeAssistantClient, dashboard_manager: bm.BackupManager
+@pytest.mark.parametrize("name", ["default", "lovelace"])
+async def test_a_default_dashboard_saved_since_the_last_start_restores_its_body(
+    core_client: HomeAssistantClient, dashboard_manager: bm.BackupManager, name: str
 ) -> None:
-    """The default dashboard of a fresh install has no row; its snapshot must
-    still put the body back."""
+    """A default dashboard saved since the last start has no ``lovelace`` row
+    yet; its snapshot must still put the body back."""
     await ws_ok(core_client, {"type": "lovelace/config/save", "config": BODY})
     handler = _handler(dashboard_manager)
-    held: Any = await handler.fetch(core_client, "lovelace")
+    held: Any = await handler.fetch(core_client, name)
     await ws_ok(core_client, {"type": "lovelace/config/save", "config": {"views": []}})
 
-    await handler.restore(core_client, "lovelace", held)
+    result = await handler.restore(core_client, name, held)
 
     assert await stored_config(core_client, None) == BODY
+    assert "next restart" in result["note"]
 
 
 async def _old_body_only_snapshot(manager: bm.BackupManager) -> str:

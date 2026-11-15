@@ -209,15 +209,17 @@ file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
 the mypy list below. A file taken off one list and left on another fails the
 ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
 listed file that no longer violates fails it, as does a violating file that is
-not listed) and fails any file that violates a rule without a list.
+not listed); a rule without a list fails any violating file in the
+`ast-grep scan` Fast Checks runs.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
 is not in the base appears on one, whatever else the pull request changes. A
 file that is in the base may be added only by the pull request that creates the
 check or changes what its ast-grep rule matches, because a wider rule matches
-older files. The script also fails a rule that is removed, renamed or made to
-scan fewer files.
+older files. The script also fails a rule that is removed (unless the script
+names it as retired and its list is empty), renamed or made to scan fewer
+files.
 
 A listed file is exempt for what it already holds, not for what is added to
 it. For each file on an ast-grep rule's list or a `SLF001` list that the pull

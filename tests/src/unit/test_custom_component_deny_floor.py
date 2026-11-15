@@ -200,18 +200,29 @@ class TestSymlinks:
         assert refused(await _read(files, path))
         assert refused(await _write(files, path))
 
+    @pytest.mark.parametrize("sibling_of_config", [False, True])
     async def test_a_link_out_of_the_config_dir_is_closed(
         self,
         hass: HomeAssistant,
         files: FileService,
         tmp_path_factory: pytest.TempPathFactory,
+        sibling_of_config: bool,
     ) -> None:
-        outside = tmp_path_factory.mktemp("outside")
+        """The sibling's name starts with the config directory's name, so a
+        string-prefix check would take it for inside."""
+        root = config_dir(hass)
+        if sibling_of_config:
+            outside = root.parent / f"{root.name}-evil"
+            outside.mkdir()
+        else:
+            outside = tmp_path_factory.mktemp("outside")
         (outside / "x").write_text("outside")
         await put(hass, {"www/x": "x"})
-        symlink_or_skip(config_dir(hass) / "www" / "link", outside)
+        symlink_or_skip(root / "www" / "link", outside)
 
         assert refused(await _read(files, "www/link/x"))
+        assert refused(await _write(files, "www/link/y"))
+        assert not (outside / "y").exists()
         assert (await _read(files, "www/x"))["success"] is True
 
 

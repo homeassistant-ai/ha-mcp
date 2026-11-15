@@ -108,6 +108,9 @@ class Supervisor:
     async def serve_core(
         self, method: str, url: URL, data: Any
     ) -> AiohttpClientMockResponse:
+        assert not self.drop and self.reason is None, (
+            "the Core route answers through aioclient_mock: no drop, no reason"
+        )
         if self.hang:
             await asyncio.Event().wait()
         return AiohttpClientMockResponse(

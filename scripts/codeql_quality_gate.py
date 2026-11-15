@@ -73,16 +73,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Cross-invocation use: a failed download records its time; the next "
         "_async_dom call reads it to enforce the retry cooldown.",
     ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_embedded_stubs.py",
-        "_INSTALLED",
-        "",
-        "Cross-invocation use: install() sets the module-level flag under a "
-        "'global' declaration so a second call returns early. CodeQL's "
-        "single-pass dead-store analysis misses the next-call read at the top "
-        "of install(), so the assignment looks dead.",
-    ),
     *(
         (
             "py/unused-global-variable",
@@ -284,15 +274,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "split, so this regex is imported and read by log_sources.py's "
         "_build_raw_error_log level filter. CodeQL's single-file analysis misses "
         "the cross-module import, so the declaration looks dead.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_SAMPLE_LOG",
-        "",
-        "Cross-module use: the literal is imported and read by "
-        "_error_log_test_helpers.py. CodeQL's single-file analysis misses "
-        "the cross-module import.",
     ),
     (
         "py/unused-import",

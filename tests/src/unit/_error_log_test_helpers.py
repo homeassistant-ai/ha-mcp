@@ -15,10 +15,10 @@ from ha_mcp.client.error_log_journald import (
 from ha_mcp.client.rest_client import ErrorLogPage
 from ha_mcp.tools.tools_logs import register_logs_tools
 
-from ._error_log_structured_fixtures import _SAMPLE_LOG
+from ._error_log_samples import SAMPLE_LOG
 
 
-def make_client(log_text: str = _SAMPLE_LOG, *, has_more: bool = False) -> MagicMock:
+def make_client(log_text: str = SAMPLE_LOG, *, has_more: bool = False) -> MagicMock:
     """Client stub whose ``get_error_log`` answers with one page.
 
     ``has_more`` is the client's verdict, not a property of ``log_text``: on

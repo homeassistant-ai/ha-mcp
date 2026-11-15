@@ -16,8 +16,9 @@ one in-process registry update, so a value Core refuses changes nothing; it can
 write hidden_by and disabled_by values other than ``user``, and it reports what
 Core still keeps of a removed entry. Without it, Core's ``config/entity_registry``
 commands write the fields one update at a time and take only ``user``. An
-enable goes through Core's update command on both paths, so Core's refusal for
-a disabled device and its ``require_restart`` answer apply.
+enable goes through Core's update command on both paths, so its
+``require_restart`` answer applies, and the disabler Core derives from a
+disabled device or integration entry is reported as a warning.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, Literal
 
 from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entity_ids import _manager, entity_id_locks
@@ -59,6 +60,7 @@ _RESTORED_FIELDS = ("name", "icon", "area_id", "device_class", "aliases", "label
 _NOT_RESTORED = "The device name is not part of an entity backup and was left as it is."
 _ENTRY_COMMAND = "ha_mcp_tools/entity_entry"
 _RESTORE_COMMAND = "ha_mcp_tools/entity_restore"
+_UPDATE_COMMAND = "config/entity_registry/update"
 # A component reply can be None; only this means the component ran nothing.
 _NOT_SERVED = object()
 
@@ -300,10 +302,9 @@ async def _write_back(
         update["new_entity_id"] = target
     result = await _update(client, source, update)
     warnings = [_NOT_RESTORED]
-    # Each on its own and only when changed. In Core 2026.10 an update
-    # carrying disabled_by None asks for a restart when the entity has no
-    # config entry or one that cannot unload; Core refuses values only Home
-    # Assistant itself sets, and enabling an entity whose device is disabled.
+    # Each on its own and only when changed. An update carrying disabled_by
+    # None asks for a restart when the entity has no config entry or one that
+    # cannot unload; Core refuses values only Home Assistant itself sets.
     for field in ("hidden_by", "disabled_by"):
         if config.get(field) != current.get(field):
             result = await _write_hider(
@@ -341,7 +342,7 @@ async def _restore_in_process(
     """The component's write; None when the component does not serve it.
 
     disabled_by None is not sent: the enable goes through Core's update
-    command afterwards, for its device check and its restart answer. An error
+    command afterwards, for the disabler Core derives and its restart answer. An error
     once the write was sent reaches the restore as it is, which reports the
     outcome as unknown, and is never followed by a write through Core's
     commands.
@@ -415,7 +416,7 @@ def _changed_options(current: dict[str, Any], config: dict[str, Any]) -> dict[st
 async def _write_hider(
     client: Any,
     target: str,
-    field: str,
+    field: Literal["hidden_by", "disabled_by"],
     config: dict[str, Any],
     current: dict[str, Any],
     result: dict[str, Any],
@@ -433,20 +434,23 @@ async def _write_hider(
             f"{field} stays {now!r}: Home Assistant refused {saved!r}: {err}"
         )
         return result
-    kept = (updated.get("entity_entry") or {}).get(field)
-    if kept != saved:
-        # Core derives the disabler of an entity whose device or integration
-        # entry is disabled, whatever the update asks for.
-        warnings.append(
-            f"{field} stays {kept!r}: Home Assistant set it again instead of "
-            f"{saved!r}, as it does while the entity's device or integration "
-            "entry is disabled"
+    reply = _manager()._require_dict(updated, _UPDATE_COMMAND)
+    entry = _manager()._require_dict(reply.get("entity_entry"), _UPDATE_COMMAND)
+    if (kept := entry.get(field)) != saved:
+        # Asked for None, Core derives disabled_by again from a disabled
+        # device or integration entry; it stores hidden_by as sent.
+        why = (
+            " while the entity's device or integration entry is disabled"
+            if field == "disabled_by"
+            else ""
         )
-    return {**result, **updated}
+        warnings.append(
+            f"{field} stays {kept!r} instead of {saved!r}: Home Assistant kept it{why}"
+        )
+    return {**result, **reply}
 
 
 async def _update(client: Any, entity_id: str, fields: dict[str, Any]) -> Any:
     return await _manager()._ws_send(
-        client,
-        {"type": "config/entity_registry/update", "entity_id": entity_id, **fields},
+        client, {"type": _UPDATE_COMMAND, "entity_id": entity_id, **fields}
     )

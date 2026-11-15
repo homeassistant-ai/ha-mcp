@@ -53,7 +53,7 @@ import threading
 import time
 import weakref
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -2036,7 +2036,7 @@ async def _rest_post(client: Any, path: str, payload: Any) -> Any:
     return await client._request("POST", path, json=payload)
 
 
-async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
+async def _ws_send(client: Any, message: Mapping[str, Any]) -> Any:
     """Send a WS command using the same lazy-connect pattern as other tools.
 
     Builds a one-shot WS client each call. Latency is acceptable because
