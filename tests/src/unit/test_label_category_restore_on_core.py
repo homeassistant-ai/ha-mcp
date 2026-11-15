@@ -11,6 +11,7 @@ import asyncio
 from typing import Any, cast
 from unittest.mock import patch
 
+import orjson
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
@@ -21,7 +22,7 @@ from homeassistant.helpers import label_registry as lr
 
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager, BackupRestoreError
-from ha_mcp.backup_registry_items import in_snapshot_order, restored_item
+from ha_mcp.backup_registry_items import in_snapshot_order
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
@@ -475,14 +476,20 @@ async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
 async def test_a_diff_after_a_restore_under_another_id_ignores_the_alias_order(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """The area comes back under a new id, so the diff finds it by name; its
-    aliases are still compared without regard to the order Core lists them in."""
+    """The area comes back under a new id, so the diff finds it by name. Its
+    aliases are compared without regard to order: the snapshot file is edited to
+    hold them in the reverse of the order Core lists them in."""
     areas = ar.async_get(hass)
     area = areas.async_create("Hall", aliases={f"alias {i}" for i in range(60)})
     areas.async_update(area.id, name="Corridor")
     snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
     areas.async_delete(area.id)
     await backup_manager.restore_snapshot(snapshot)
+    (restored,) = areas.async_list_areas()
+    path = next(backup_manager.backup_dir.rglob(snapshot))
+    stored = yaml.safe_load(path.read_text())
+    stored["config"]["aliases"] = list(reversed(list(restored.aliases)))
+    path.write_text(yaml.safe_dump(stored))
 
     diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
 
@@ -490,24 +497,15 @@ async def test_a_diff_after_a_restore_under_another_id_ignores_the_alias_order(
     assert not [op for op in diff["patch"] if op["path"].startswith("/aliases")], diff
 
 
-async def test_a_recreated_area_lists_its_aliases_in_the_snapshot_order() -> None:
-    """Core's order of a set differs between runs, so the wiring is pinned with a
-    row whose aliases are known to be in another order than the snapshot's."""
-    live = {"area_id": "corridor", "name": "Hall", "aliases": ["b", "a"]}
-    stored = {"name": "Hall", "aliases": ["a", "b"]}
+def test_a_list_keeps_the_type_of_its_elements_when_compared(
+    hass: HomeAssistant,
+) -> None:
+    """A snapshot edited by hand to hold [1] does not match the alias "1" Core
+    lists: the live list stays as it is."""
+    area = ar.async_get(hass).async_create("Hall", aliases={"1"})
+    live = orjson.loads(orjson.dumps(area.json_fragment))
 
-    with patch("ha_mcp.backup_registry_items._rows", return_value=[live]):
-        row = await restored_item(None, "area_or_floor", "area:hall", stored)
-
-    assert row["aliases"] == ["a", "b"]
-
-
-def test_a_list_keeps_the_type_of_its_elements_when_compared() -> None:
-    """A snapshot's [1] is not a live ["1"]: the live list stays as it is."""
-    assert in_snapshot_order({"aliases": ["1"]}, {"aliases": [1]}) == {"aliases": ["1"]}
-    assert in_snapshot_order({"aliases": ["b", "a"]}, {"aliases": ["a", "b"]}) == {
-        "aliases": ["a", "b"]
-    }
+    assert in_snapshot_order(live, {**live, "aliases": [1]}) == live
 
 
 async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
