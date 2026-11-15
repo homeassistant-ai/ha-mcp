@@ -287,7 +287,6 @@ module = [
     "tests.src.unit.test_validation_middleware",
     "tests.src.unit.test_webhook_proxy_dev_isolation",
     "tests.src.unit.test_webhook_proxy_liveness",
-    "tests.src.unit.test_webhook_proxy_oauth_unified",
     "tests.src.unit.test_webhook_proxy_sync",
     "tests.src.unit.test_websocket_client",
     "tests.src.unit.test_ws_degraders_warn",
