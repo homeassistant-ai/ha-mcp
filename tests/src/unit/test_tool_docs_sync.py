@@ -36,7 +36,7 @@ class TestToolDocsSync:
         """Tags should be native FastMCP parameter, not inside annotations dict."""
         tools_dir = REPO_ROOT / "src" / "ha_mcp" / "tools"
         files = list(tools_dir.glob("tools_*.py")) + [tools_dir / "backup.py"]
-        legacy = []
+        legacy: list[str] = []
 
         for f in sorted(files):
             if not f.exists():

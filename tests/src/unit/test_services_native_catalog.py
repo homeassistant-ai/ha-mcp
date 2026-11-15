@@ -432,7 +432,7 @@ async def test_unreadable_config_uses_english_and_warns(
             AsyncMock(side_effect=HomeAssistantConnectionError("config unavailable")),
         ),
         sent_messages(legacy_client) as sent,
-        caplog.at_level(logging.WARNING, logger="ha_mcp.tools.tools_services"),
+        caplog.at_level(logging.WARNING, logger="ha_mcp.tools.flow_translations"),
     ):
         result = await ServiceDiscoveryTools(legacy_client).ha_list_services(
             domain=DOMAIN

@@ -28,6 +28,7 @@ async def test_tool_hidden_after_the_list_was_built_is_refused(
 ) -> None:
     monkeypatch.setattr(llm_api.llm, "ToolResult", CoreToolResult, raising=False)
     session = fake_session(monkeypatch, tools=[tool_entry("ha_search", exposed=False)])
+    tool: llm_api.HaMcpCallTool | llm_api.HaMcpTool
     if via_call_tool:
         tool = llm_api.HaMcpCallTool(_URL, {"ha_search"})
         tool_input = llm_api.llm.ToolInput(
@@ -40,5 +41,6 @@ async def test_tool_hidden_after_the_list_was_built_is_refused(
     out = await tool.async_call(make_hass(), tool_input, llm_context())
 
     session.call_tool.assert_not_awaited()
+    assert isinstance(out, CoreToolResult)
     assert out.error is True
     assert out.data["error"] == "Unknown tool 'ha_search'."

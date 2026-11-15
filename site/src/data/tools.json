@@ -209,7 +209,7 @@
   {
     "name": "ha_remove_area_or_floor",
     "title": "Remove Area or Floor",
-    "description": "Remove a Home Assistant area or floor.\n\nRemoving an area unassigns its entities and devices (the entities and\ndevices themselves are not removed). Removing a floor unassigns its\nareas. May break automations referencing the removed area/floor.",
+    "description": "Remove a Home Assistant area or floor.\n\nRemoving an area unassigns its entities and devices (the entities and\ndevices themselves are not removed). Removing a floor unassigns its\nareas. May break automations referencing the removed area/floor. The\nauto-backup of this call restores the area or floor itself, not the\nentities, devices or areas it carried.",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -2793,63 +2793,19 @@
   },
   {
     "name": "ha_get_system_health",
-    "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Optional sections are selected with `include`.\n\nThe result may include ``ha_mcp_update`` ``{current, latest,\nupdate_available}``. When update_available is true, tell the user a newer\nha-mcp release is available (with ``python_required``, give ``upgrade_command``).\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- Page a list-valued diagnostics sub-tree: ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\", diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.",
+    "title": "Get System Health (incl. ZHA/Z-Wave/Thread/Matter networks)",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, Thread and Matter networks.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Each domain carries the ``name`` and key ``labels``\nthe System information dialog shows. Checks that Home Assistant runs in\nthe background are awaited up to a deadline; one still running shows as\npending, with a warning. Optional sections are selected with `include`.\n\nNot for one integration's diagnostics: use\nha_get_integration(include_diagnostics=True). Not for themes: use\nha_manage_theme(action='list'). Not for a single device's radio state:\nuse ha_get_device. Use this tool for the state of the whole\ninstallation: health checks, repairs, radio networks, Supervisor,\nstartup times and the configuration check.\n\nThe result may include ``ha_mcp_update`` ``{current, latest,\nupdate_available}``. When update_available is true, tell the user a newer\nha-mcp release is available (with ``python_required``, give ``upgrade_command``).\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- ha_get_system_health(include=\"supervisor,integration_startup\")",
     "inputSchema": {
       "properties": {
         "include": {
           "type": "str | None",
-          "description": "Comma-separated extra sections: 'repairs' (Repair items, active only unless include_dismissed_repairs=True); 'zha_network' (ZHA devices with radio signal summary: name, LQI, RSSI); 'zha_network_full' (all ZHA device details; large on 100+ device networks); 'zwave_network' (Z-Wave JS status and node summary: status, security, routing); 'thread_network' (per border-router channel, extended_pan_id and border_agent_id; not per-node Thread health); 'matter_network' (Matter integration presence: config_entry_id, state, title; per-node health is in Matter node diagnostics); 'themes' (installed theme names, count, default_theme, default_dark_theme); 'diagnostics' (per-integration diagnostics dump, integration-defined JSON; REQUIRES config_entry_id; payloads can be large — pair with diagnostics_fields or diagnostics_truncate_at_bytes); 'config_check' (validate the HA configuration, the pre-restart check ha_restart runs automatically; returns {result: valid|invalid, is_valid, errors}); 'dead_entities' (orphaned/stale entity-registry entries: config_entry_orphans whose owning integration instance is gone, and stale_restored entries HA restored on startup that the loaded integration no longer provides, each with entity_id + platform for cleanup via ha_remove_entity; unknown-state entities and merely-offline devices are excluded).",
+          "description": "Comma-separated extra sections: 'repairs' (Repair items with the title, description and data the Repairs page shows, active only unless include_dismissed_repairs=True); 'zha_network' (ZHA devices with radio signal summary: name, LQI, RSSI); 'zha_network_full' (all ZHA device details; large on 100+ device networks); 'zwave_network' (Z-Wave JS driver connection, controller and node status); 'thread_network' (the Thread datasets Home Assistant knows, and its OTBR border routers; no network keys); 'matter_network' (what the Matter panel reads: Core's Matter config entry and network topology, nodes and connections capped at 50 each); 'supervisor' (Supervisor installs: resolution info with the unhealthy and unsupported reasons, and the Core and Supervisor container stats); 'integration_startup' (each integration's setup time in seconds, slowest first); 'config_check' (validate the HA configuration, the pre-restart check ha_restart runs automatically; returns Core's {result: valid|invalid, errors, warnings}, the messages as one string or null; warnings alone stay valid); 'dead_entities' (orphaned/stale entity-registry entries: config_entry_orphans whose owning integration instance is gone, and stale_restored entries HA restored on startup that the loaded integration no longer provides, each with entity_id + platform for cleanup via ha_remove_entity; unknown-state entities and merely-offline devices are excluded).",
           "default": null
         },
         "include_dismissed_repairs": {
           "type": "bool | None",
           "description": "Include user-dismissed/ignored repairs. Only meaningful when 'repairs' is in include. Dismiss or restore one with ha_manage_updates(action='ignore_repair' / 'unignore_repair').",
           "default": false
-        },
-        "config_entry_id": {
-          "type": "str | None",
-          "description": "Config entry ID of the integration (find via ha_get_integration). Required when include contains 'diagnostics'.",
-          "default": null
-        },
-        "device_id": {
-          "type": "str | None",
-          "description": "With include='diagnostics', return the device-scoped dump for this device instead of the full integration dump. Some integrations only expose config-entry-level dumps.",
-          "default": null
-        },
-        "diagnostics_fields": {
-          "type": "list[str] | str | None",
-          "description": "Top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Accepts a JSON list or comma-separated string. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_truncate_at_bytes": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 1
-          },
-          "description": "Byte cap on the serialized diagnostics payload (post-projection / post-data_path). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_data_path": {
-          "type": "str | None",
-          "description": "Dotted path into the diagnostics data sub-tree (e.g. 'data.devices' for ZHA per-device records). Walks into the post-fields payload. Resolution failures replace data with null and surface data_path_error. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_data_offset": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 0
-          },
-          "description": "Pagination start index for list-valued diagnostics_data_path results. Only applies with include='diagnostics'.",
-          "default": 0
-        },
-        "diagnostics_data_limit": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 1
-          },
-          "description": "Pagination window for list-valued diagnostics_data_path results; data becomes {path, items, offset, limit, total, has_more}. Only applies with include='diagnostics'.",
-          "default": null
         }
       }
     },
@@ -3012,7 +2968,7 @@
   {
     "name": "ha_config_get_label",
     "title": "Get Label",
-    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns configuration for that specific label.\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities,\nha_set_device(labels=[...]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[...]) for areas.",
+    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns that label and, as `related`, Home Assistant's\nRelated set for it: the areas, devices and entities that carry it (an\nautomation, script, scene, group or person that carries it is also listed\nunder its own key), the automations and scripts that target it, and the\nareas, floors, devices, config entries and integrations of the carrying\nitems. A template that uses the label (for example `label_entities('x')`)\nis not listed. `related` is None, with a warning, when Home Assistant\ncannot answer; that does not mean the label is unused.\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities,\nha_set_device(labels=[...]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[...]) for areas.",
     "inputSchema": {
       "properties": {
         "label_id": {
@@ -3036,7 +2992,7 @@
   {
     "name": "ha_config_remove_category",
     "title": "Remove Category",
-    "description": "Delete a Home Assistant category.\n\nRemoves the category from the category registry for the given scope.\nThis will also remove the category assignment from all entities in that scope.\n\nEXAMPLES:\n- Delete category: ha_config_remove_category(\"automation\", \"my_category_id\")\n\nUse ha_config_get_category() to find category IDs.\n\n**WARNING:** Deleting a category will remove it from all assigned entities.\nThis action cannot be undone.",
+    "description": "Delete a Home Assistant category.\n\nRemoves the category from the category registry for the given scope, and\nfrom every entity in that scope that had it. The auto-backup of this call\nrestores the category itself, under a new id, not the entities that had it.\n\nTo move one entity to another category or out of its category and keep the\ncategory, use ha_set_entity(categories=...) instead.\n\nEXAMPLES:\n- Delete category: ha_config_remove_category(\"automation\", \"my_category_id\")\n\nUse ha_config_get_category() to find category IDs.",
     "inputSchema": {
       "properties": {
         "scope": {
@@ -3067,7 +3023,7 @@
   {
     "name": "ha_config_remove_label",
     "title": "Remove Label",
-    "description": "Delete a Home Assistant label.\n\nRemoves the label from the label registry. This will also remove the label\nfrom all entities, devices, and areas that have it assigned.\n\nEXAMPLES:\n- Delete label: ha_config_remove_label(\"my_label_id\")\n\nUse ha_config_get_label() to find label IDs.\n\n**WARNING:** Deleting a label will remove it from all assigned entities.\nThis action cannot be undone.",
+    "description": "Delete a Home Assistant label.\n\nRemoves the label from the label registry. Home Assistant also takes it off\nevery entity, device and area that carries it. Automations and scripts that\ntarget the label keep the reference, which then matches nothing.\n\nTo take a label off one item and keep it, use ha_set_entity,\nha_set_device or ha_set_area_or_floor instead. Before deleting, call\nha_config_get_label(label_id): its `related` lists what carries or\ntargets the label, but not a template that uses it, so an empty `related`\ndoes not prove the label unused. The auto-backup of this call restores\nthe label itself, under the id its current name gives it (a new one if\nit was renamed since it was created), not what carried it.\n\nEXAMPLES:\n- Delete label: ha_config_remove_label(\"my_label_id\")\n\nUse ha_config_get_label() to find label IDs.",
     "inputSchema": {
       "properties": {
         "label_id": {
@@ -3093,16 +3049,17 @@
   {
     "name": "ha_config_set_category",
     "title": "Create or Update Category",
-    "description": "Create or update a Home Assistant category.\n\nCreates a new category if category_id is not provided, or updates an existing category if category_id is provided.\n\nCategories are domain-scoped organizational groups for automations, scripts,\nscenes, and helpers. Unlike labels (which are cross-domain), categories are\nspecific to a single domain scope.\n\nEXAMPLES:\n- Create automation category: ha_config_set_category(\"Lighting\", scope=\"automation\")\n- Create with icon: ha_config_set_category(\"Security\", scope=\"automation\", icon=\"mdi:shield\")\n- Update category: ha_config_set_category(\"Updated Name\", scope=\"automation\", category_id=\"my_category_id\")\n\nAfter creating a category, use ha_set_entity(categories={\"automation\": \"category_id\"}) to assign it.",
+    "description": "Create or update a Home Assistant category.\n\nCreates a new category if category_id is not provided, or updates an existing category if category_id is provided.\n\nCategories are domain-scoped organizational groups for automations, scripts,\nscenes, and helpers. Unlike labels (which are cross-domain), categories are\nspecific to a single domain scope.\n\nEXAMPLES:\n- Create automation category: ha_config_set_category(scope=\"automation\", name=\"Lighting\")\n- Create with icon: ha_config_set_category(scope=\"automation\", name=\"Security\", icon=\"mdi:shield\")\n- Update category: ha_config_set_category(scope=\"automation\", category_id=\"my_category_id\", name=\"Updated Name\")\n\nAfter creating a category, use ha_set_entity(categories={\"automation\": \"category_id\"}) to assign it.",
     "inputSchema": {
       "properties": {
-        "name": {
-          "type": "str",
-          "description": "Display name for the category"
-        },
         "scope": {
           "type": "str",
           "description": "Domain scope for the category (e.g., 'automation', 'script', 'scene', 'helpers')."
+        },
+        "name": {
+          "type": "str | None",
+          "description": "Display name. Required to create; omit on update to keep it.",
+          "default": null
         },
         "category_id": {
           "type": "str | None",
@@ -3111,12 +3068,11 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
           "default": null
         }
       },
       "required": [
-        "name",
         "scope"
       ]
     },
@@ -3134,12 +3090,13 @@
   {
     "name": "ha_config_set_label",
     "title": "Create or Update Label",
-    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing\nlabel if label_id is provided. Labels are a cross-domain tagging system\nfor entities, devices, and areas.\n\nEXAMPLES:\n- Create: ha_config_set_label(\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update: ha_config_set_label(\"Updated Name\", label_id=\"my_label_id\", color=\"blue\")\n- Create and apply to areas: ha_config_set_label(\"Site Home\", areas=[\"kitchen\", \"living_room\"])\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities,\nha_set_device(labels=[\"label_id\"]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[\"label_id\"]) for areas (replaces the area's set).",
+    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing\nlabel if label_id is provided. Labels are a cross-domain tagging system\nfor entities, devices, and areas.\n\nEXAMPLES:\n- Create: ha_config_set_label(name=\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update: ha_config_set_label(label_id=\"my_label_id\", color=\"blue\")\n- Create and apply to areas: ha_config_set_label(name=\"Site Home\", areas=[\"kitchen\", \"living_room\"])\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities,\nha_set_device(labels=[\"label_id\"]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[\"label_id\"]) for areas (replaces the area's set).",
     "inputSchema": {
       "properties": {
         "name": {
-          "type": "str",
-          "description": "Display name for the label"
+          "type": "str | None",
+          "description": "Display name. Required to create; omit on update to keep it.",
+          "default": null
         },
         "label_id": {
           "type": "str | None",
@@ -3148,17 +3105,17 @@
         },
         "color": {
           "type": "str | None",
-          "description": "Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733')",
+          "description": "Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733'); '' or ' ' clears it",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
           "default": null
         },
         "description": {
           "type": "str | None",
-          "description": "Description of the label's purpose",
+          "description": "Description of the label's purpose; '' or ' ' clears it",
           "default": null
         },
         "areas": {
@@ -3166,10 +3123,7 @@
           "description": "Area IDs to apply this label to (adds the label without removing existing ones). Omit to leave area assignments unchanged; an empty list is a no-op (assigns nothing and removes nothing). To clear an area's labels use ha_set_area_or_floor(kind='area', labels=[]).",
           "default": null
         }
-      },
-      "required": [
-        "name"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -3185,7 +3139,7 @@
   {
     "name": "ha_manage_radio",
     "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
-    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor node diagnostics and network summaries prefer ha_get_device /\nha_get_system_health, which mirror 'diagnostics' and 'network_status'.\nThis tool also exposes active 'ping' probes and parameter reads.\nZ-Wave 'get_config_params' lists cached configuration values/metadata;\n'get_config_param' reads one from the cache or explicitly from the device.\nNeither enables or creates entities. Write actions perform\ninclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI. HA administrator access is required for parameter reads.",
+    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor node diagnostics and network summaries prefer ha_get_device /\nha_get_system_health; 'diagnostics' and 'network_status' here return\nthis tool's own, smaller shapes.\nThis tool also exposes active 'ping' probes and parameter reads.\nZ-Wave 'get_config_params' lists cached configuration values/metadata;\n'get_config_param' reads one from the cache or explicitly from the device.\nNeither enables or creates entities. Write actions perform\ninclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI. HA administrator access is required for parameter reads.",
     "inputSchema": {
       "properties": {
         "radio": {

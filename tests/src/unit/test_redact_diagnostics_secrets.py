@@ -23,10 +23,18 @@ def _load():
     spec = importlib.util.spec_from_file_location(
         "redact_diagnostics_secrets", SCRIPT_PATH
     )
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _member(tf: tarfile.TarFile, name: str) -> bytes:
+    handle = tf.extractfile(name)
+    assert handle is not None, f"{name} is not a regular file in the archive"
+    return handle.read()
 
 
 redact = _load()
@@ -64,11 +72,11 @@ def test_redacts_hacs_token_and_preserves_other_members(tmp_path):
     )
     assert redact.redact_storage_tar(tar) == 1
     with tarfile.open(tar) as tf:
-        doc = json.loads(tf.extractfile("./core.config_entries").read())
+        doc = json.loads(_member(tf, "./core.config_entries"))
         assert doc["data"]["entries"][0]["data"]["token"] == "**REDACTED**"
         assert "ghs_secret_value" not in json.dumps(doc)
         # Non-config-entries members ride through byte-identical.
-        assert tf.extractfile("./hacs.data").read() == b'{"repositories": {}}'
+        assert _member(tf, "./hacs.data") == b'{"repositories": {}}'
 
 
 def test_redacts_all_credential_keys_across_entries(tmp_path):
@@ -84,7 +92,7 @@ def test_redacts_all_credential_keys_across_entries(tmp_path):
     )
     assert redact.redact_storage_tar(tar) == 3
     with tarfile.open(tar) as tf:
-        doc = json.loads(tf.extractfile("./core.config_entries").read())
+        doc = json.loads(_member(tf, "./core.config_entries"))
     a, b = doc["data"]["entries"]
     assert a["data"] == {"password": "**REDACTED**", "host": "h"}
     assert b["data"] == {"client_secret": "**REDACTED**", "api_key": "**REDACTED**"}
@@ -113,5 +121,5 @@ def test_main_redacts_recursively(tmp_path):
     assert redact.main(["prog", str(tmp_path)]) == 0
     for gw in ("gw0", "gw1"):
         with tarfile.open(tmp_path / f"haos-test-image-{gw}" / "storage.tar") as tf:
-            doc = json.loads(tf.extractfile("./core.config_entries").read())
+            doc = json.loads(_member(tf, "./core.config_entries"))
         assert doc["data"]["entries"][0]["data"]["token"] == "**REDACTED**"

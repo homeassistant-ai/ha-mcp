@@ -158,7 +158,7 @@ def test_lane_timeout_matches_the_fetch_budget_docstring() -> None:
 
 
 def _setup_uv_sites() -> list[tuple[Path, dict[str, Any]]]:
-    sites = []
+    sites: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):

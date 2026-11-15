@@ -10,18 +10,15 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.backup_manager import BackupManager, get_backup_manager
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.backup_manager import BackupManager
 from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_restore_helpers import backup_tool, use_backup_manager
@@ -30,17 +27,8 @@ Deletion = tuple[BackupManager, Path, Path, Path]
 
 
 @pytest.fixture
-async def manager(
-    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
-) -> BackupManager:
-    assert await async_setup_component(hass, "config", {})
-    settings = SimpleNamespace(
-        enable_auto_backup=True,
-        auto_backup_throttle_minutes=0,
-        auto_backup_retain_per_entity=5,
-        auto_backup_dir=str(tmp_path),
-    )
-    return get_backup_manager(core_client, settings)
+def manager(backup_manager: BackupManager) -> BackupManager:
+    return backup_manager
 
 
 async def _capture(hass: HomeAssistant, manager: BackupManager, title: str) -> Path:

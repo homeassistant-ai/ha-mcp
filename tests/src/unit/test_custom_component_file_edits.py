@@ -379,11 +379,11 @@ class TestEditFileService:
         cancelled.cancel()
         await asyncio.sleep(0)
         thread_may_finish.set()
-        outcome, response = await asyncio.gather(
-            cancelled, following, return_exceptions=True
-        )
+        results = await asyncio.gather(cancelled, following, return_exceptions=True)
+        outcome, response = results
 
         assert isinstance(outcome, asyncio.CancelledError)
+        assert isinstance(response, dict)
         assert response["success"] is True
         assert hass.most_running == 1
         assert target.read_bytes() == b"1 2\n"

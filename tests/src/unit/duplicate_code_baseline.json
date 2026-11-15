@@ -709,7 +709,6 @@
   ],
   "dc91dce8ce2f": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestCategoryGetMissingReturnsResourceNotFound.tools",
-    "tests/src/unit/test_error_code_consistency_1297.py::TestCategoryMutationRoutesNotFoundToResourceNotFound.tools",
     "tests/src/unit/test_identifier_validation_family.py::TestCategoriesIdentifierValidation.tools"
   ],
   "dd5267ee553d": [

@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
@@ -247,12 +247,17 @@ class TestCheckCli:
 
     def test_main_routes_the_check_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
-        monkeypatch.setattr(
-            generate_locales, "check", lambda: calls.append("check") or 0
-        )
-        monkeypatch.setattr(
-            generate_locales, "write", lambda: calls.append("write") or 0
-        )
+
+        def fake_check() -> int:
+            calls.append("check")
+            return 0
+
+        def fake_write() -> int:
+            calls.append("write")
+            return 0
+
+        monkeypatch.setattr(generate_locales, "check", fake_check)
+        monkeypatch.setattr(generate_locales, "write", fake_write)
         monkeypatch.setattr(sys, "argv", ["generate_locales.py", "--check"])
         assert generate_locales.main() == 0
         monkeypatch.setattr(sys, "argv", ["generate_locales.py"])

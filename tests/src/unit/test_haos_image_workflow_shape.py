@@ -34,7 +34,7 @@ echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 """
 
 
-def _workflow(path: Path) -> dict[str, Any]:
+def _workflow(path: Path) -> dict[Any, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 

@@ -848,6 +848,25 @@ def raise_core_refusal(
     )
 
 
+def refuse_blank_name(name: str | None, context: dict[str, Any]) -> None:
+    """Refuse a blank ``name`` of a label or category (``None`` leaves it as is).
+
+    An HA-MCP safeguard: Core stores a blank name, and a blank value clears the
+    other fields, so a blank name is refused instead of read as "clear it".
+    """
+    if name is not None:
+        validate_identifier_not_empty(
+            name,
+            "name",
+            message=(
+                "name must not be blank (an HA-MCP safeguard: Core accepts a "
+                "blank name, and a blank value clears the other fields)"
+            ),
+            suggestions=["Pass a non-empty name, or omit name on update to keep it"],
+            context=context,
+        )
+
+
 def clear_or_keep(value: str | None, param_name: str) -> str | None:
     """``clearable_value`` for params where None means "not passed": blank → ''."""
     return None if value is None else clearable_value(value, param_name) or ""

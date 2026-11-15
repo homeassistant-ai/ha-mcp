@@ -195,10 +195,10 @@ class TestCategoryCRUD:
         Test deleting a non-existent category returns a structured error,
         not success=True.
 
-        Source path: WebSocket ``result.success=False`` with a ``"not found"``
-        error string routes through the per-#1297 RESOURCE_NOT_FOUND branch
-        in ``tools_categories.ha_config_remove_category`` (KP13 review #4 —
-        category mutation paths now classify not-found as RESOURCE_NOT_FOUND
+        Source path: Core's ``result.success=False`` with the exact text
+        ``"Category ID doesn't exist"`` routes through the RESOURCE_NOT_FOUND
+        branch in ``tools_categories.ha_config_remove_category`` (KP13 review
+        #4 — category mutation paths classify not-found as RESOURCE_NOT_FOUND
         instead of the generic SERVICE_CALL_FAILED).
         """
         logger.info("Testing delete non-existent category")

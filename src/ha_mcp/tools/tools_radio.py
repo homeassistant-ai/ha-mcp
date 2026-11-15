@@ -3,8 +3,8 @@
 One multi-modal tool for managing every radio Home Assistant speaks — Z-Wave
 (zwave_js), Zigbee (ZHA), Matter, and Thread/OTBR. Read-only diagnostics also
 live in ``ha_get_device`` and ``ha_get_system_health`` (next to the existing
-Z-Wave/Zigbee surfaces); they are mirrored here so they are at hand mid-
-management. This tool additionally performs writes those read tools do not, so
+Z-Wave/Zigbee surfaces); smaller reads of the same networks are kept here so
+they are at hand mid-management. This tool additionally performs writes those read tools do not, so
 it is not a subset of either.
 
 Per-radio logic lives in ``radio/<name>.py``; this module is the dispatcher.
@@ -159,7 +159,8 @@ class RadioTools:
         """Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
         For node diagnostics and network summaries prefer ha_get_device /
-        ha_get_system_health, which mirror 'diagnostics' and 'network_status'.
+        ha_get_system_health; 'diagnostics' and 'network_status' here return
+        this tool's own, smaller shapes.
         This tool also exposes active 'ping' probes and parameter reads.
         Z-Wave 'get_config_params' lists cached configuration values/metadata;
         'get_config_param' reads one from the cache or explicitly from the device.

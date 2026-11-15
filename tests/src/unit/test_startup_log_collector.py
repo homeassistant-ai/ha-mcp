@@ -15,6 +15,8 @@ of Home Assistant (reported against tapo_control's ``latest_version`` property).
 import logging
 import threading
 
+import pytest
+
 from ha_mcp.utils.usage_logger import (
     MAX_STARTUP_LOG_ENTRIES,
     StartupLogCollector,
@@ -126,7 +128,9 @@ class TestStartupLogCollectorReentrancy:
             lambda: log.debug("outer %s", _LogsOnRepr(log, depth=25))
         )
 
-    def test_unformattable_record_is_recorded_not_raised(self):
+    def test_unformattable_record_is_recorded_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         class Explodes:
             def __repr__(self) -> str:
                 raise ValueError("boom")
@@ -135,7 +139,7 @@ class TestStartupLogCollectorReentrancy:
         log = _make_logger("test_2357.unformattable", collector)
 
         handled: list[logging.LogRecord] = []
-        collector.handleError = handled.append  # type: ignore[method-assign]
+        monkeypatch.setattr(collector, "handleError", handled.append)
 
         log.debug("bad %s", Explodes())
 

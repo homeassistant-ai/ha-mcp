@@ -253,9 +253,11 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
 
 def test_vendored_packages_agree_on_each_others_pins():
     pins = _pins()
-    mcp_needs = {canonicalize_name(r.name): r for r in _vendored_requirements("mcp")}
+    mcp_needs: dict[str, Requirement] = {
+        canonicalize_name(r.name): r for r in _vendored_requirements("mcp")
+    }
     assert mcp_needs["mcp-types"].specifier.contains(pins["mcp-types"])
-    fastmcp_needs = {
+    fastmcp_needs: dict[str, Requirement] = {
         canonicalize_name(r.name): r for r in _vendored_requirements("fastmcp")
     }
     assert fastmcp_needs["mcp"].specifier.contains(pins["mcp"])

@@ -810,7 +810,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
-- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
+- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, Thread and Matter networks.
 - `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, reconfigure, or send its own commands.
 
 ### Labels & Categories
