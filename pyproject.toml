@@ -585,7 +585,7 @@ dev = [
     # equals the integration's manifest in the Core above;
     # test_dev_integration_pins.py keeps them equal.
     "python-otbr-api==3.1.0",
-    "pyroute2==0.9.6",
+    "pyroute2==0.9.7",
     "zwave-js-server-python==0.74.0",
     "matter-python-client==1.5.5",
     "matter-ble-proxy==0.7.1",
