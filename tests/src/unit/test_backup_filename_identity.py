@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 import tempfile
 from pathlib import Path
 from threading import Barrier
@@ -123,3 +124,38 @@ async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
     assert first.name != second.name
     assert manager.read_snapshot(first.name)["entity_id"] == longer
     assert manager.read_snapshot(second.name)["entity_id"] == shorter
+
+
+async def test_publication_preserves_a_snapshot_created_at_the_selected_name(
+    hass: HomeAssistant, manager: BackupManager
+) -> None:
+    longer = "a" * 113
+    digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
+    shorter = f"{longer[:103]}-{digest}"
+    stamp = "20260101_000000"
+    existing = await capture(hass, manager, shorter)
+    payload = existing.read_bytes()
+    occupied = existing.with_name(f"integration.{shorter}.{stamp}.yaml")
+    existing.unlink()
+
+    def occupy_before_publish(publish):
+        def competing_write(source, target):
+            if Path(target) == occupied:
+                with occupied.open("xb") as stream:
+                    stream.write(payload)
+            return publish(source, target)
+
+        return competing_write
+
+    with (
+        patch("ha_mcp.backup_manager._now_ts", return_value=stamp),
+        patch("ha_mcp.backup_manager.os", wraps=os) as backup_os,
+    ):
+        backup_os.replace.side_effect = occupy_before_publish(os.replace)
+        backup_os.link.side_effect = occupy_before_publish(os.link)
+        written = await capture(hass, manager, longer)
+
+    assert written.name == f"integration.{shorter}.{stamp}_01.yaml"
+    assert occupied.read_bytes() == payload
+    assert manager.read_snapshot(written.name)["entity_id"] == longer
+    assert not list(written.parent.glob("*.tmp"))

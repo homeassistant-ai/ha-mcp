@@ -147,7 +147,6 @@ logger = logging.getLogger(__name__)
 _MAX_PATCH_OPS = 200
 
 SCHEMA_VERSION = 1
-_SNAPSHOT_PUBLISH_LOCK = threading.Lock()
 
 # Expected failure modes for the capture pipeline. Anything outside this
 # tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
@@ -368,7 +367,7 @@ _TRACKER_PRUNE_BATCH = 1_000
 # Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
 # when entity_id contains dots (after sanitization, dots are kept). ``_NN``
-# is the same-second sequence (see ``_unclaimed_target``): the timestamp is
+# is the same-second sequence (see ``_publish_snapshot``): the timestamp is
 # a second and the throttle defaults to 0, so a second capture of one entity
 # inside that second takes the next free suffix rather than replacing the
 # first. ``_`` sorts after ``.``, so a suffixed name stays newest-last.
@@ -380,7 +379,7 @@ _FILENAME_RE = re.compile(
 
 # Captures of one entity inside one second before the manager gives up on a
 # free name. Two is the realistic case (a save then a delete of the same
-# blueprint); the cap only bounds the ``exists()`` probe.
+# blueprint); the cap bounds the number of publication attempts.
 _MAX_SAME_SECOND = 100
 
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
@@ -1075,9 +1074,7 @@ class BackupManager:
                 raise
             with stream:
                 stream.write("# ha_mcp_backup\n" + body)
-            with _SNAPSHOT_PUBLISH_LOCK:
-                target = self._unclaimed_target(domain, safe, ts)
-                os.replace(tmp_name, str(target))
+            target = self._publish_snapshot(tmp_name, domain, safe, ts)
         finally:
             with suppress(OSError):
                 Path(tmp_name).unlink()
@@ -1086,21 +1083,15 @@ class BackupManager:
         logger.info("Auto-backup: snapshot written")
         return target
 
-    def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
-        """First filename for ``ts`` that no snapshot of this entity holds yet.
-
-        The bare name is taken when it is free; each later capture inside the
-        same second appends ``_01``, ``_02``, ... so the atomic replace in
-        ``_write_snapshot`` can never discard an earlier pre-write state.
-        ``maybe_snapshot`` serialises captures per key, so the ``exists()``
-        probe is not racing another capture of the same entity.
-        """
-        target = self._dir / f"{domain}.{safe}.{ts}.yaml"
-        for seq in range(1, _MAX_SAME_SECOND):
-            if not target.exists():
-                return target
-            target = self._dir / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
-        if not target.exists():
+    def _publish_snapshot(self, source: str, domain: str, safe: str, ts: str) -> Path:
+        stem = f"{domain}.{safe}.{ts}"
+        for seq in range(_MAX_SAME_SECOND):
+            suffix = f"_{seq:02d}" if seq else ""
+            target = self._dir / f"{stem}{suffix}.yaml"
+            try:
+                os.link(source, target)
+            except FileExistsError:
+                continue
             return target
         raise OSError(
             f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
