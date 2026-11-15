@@ -269,7 +269,6 @@ module = [
     "tests.src.unit.test_tools_entry_lifecycle",
     "tests.src.unit.test_tools_get_states",
     "tests.src.unit.test_tools_integrations",
-    "tests.src.unit.test_tools_resources_patch",
     "tests.src.unit.test_tools_system",
     "tests.src.unit.test_tools_todo",
     "tests.src.unit.test_tools_todo_bridge",

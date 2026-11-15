@@ -153,7 +153,6 @@ ignores:
   - "tests/src/unit/test_tools_history.py"
   - "tests/src/unit/test_tools_integrations.py"
   - "tests/src/unit/test_tools_resources.py"
-  - "tests/src/unit/test_tools_resources_patch.py"
   - "tests/src/unit/test_tools_system.py"
   - "tests/src/unit/test_tools_todo.py"
   - "tests/src/unit/test_tools_updates.py"
