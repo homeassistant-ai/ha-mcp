@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 ALL_INTERFACES_V4 = "0.0.0.0"
 
 
-def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
+def wildcard_listen_sockets(host: str, port: int) -> list[ListenSocket] | None:
     """Bind ``port`` on every IPv4 and IPv6 address when ``host`` is ``0.0.0.0``.
 
     Returns ``None`` for any other host, which uvicorn then binds itself. Like
@@ -31,13 +31,13 @@ def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
     """
     if host != ALL_INTERFACES_V4:
         return None
-    sockets: list[_ListenSocket] = []
+    sockets: list[ListenSocket] = []
     try:
         for family, kind, proto, _name, address in socket.getaddrinfo(
             None, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE
         ):
             try:
-                sock = _ListenSocket(family, kind, proto)
+                sock = ListenSocket(family, kind, proto)
             except OSError:
                 continue
             sockets.append(sock)
@@ -61,7 +61,7 @@ def wildcard_listen_sockets(host: str, port: int) -> list[_ListenSocket] | None:
 
 
 def _ipv6_bind_skippable(
-    err: OSError, family: int, sockets: list[_ListenSocket], port: int
+    err: OSError, family: int, sockets: list[ListenSocket], port: int
 ) -> bool:
     """Return True when a failed IPv6 bind should leave the server on IPv4."""
     if family != socket.AF_INET6:
@@ -78,7 +78,7 @@ def _ipv6_bind_skippable(
     return False
 
 
-def announce_when_listening(sockets: list[_ListenSocket], host: str, port: int) -> None:
+def announce_when_listening(sockets: list[ListenSocket], host: str, port: int) -> None:
     """Log uvicorn's "Uvicorn running on ..." line once ``sockets`` are serving.
 
     uvicorn skips that line when handed pre-bound sockets, assuming a process
@@ -99,7 +99,7 @@ def announce_when_listening(sockets: list[_ListenSocket], host: str, port: int) 
         sock.on_listen = listened
 
 
-class _ListenSocket(socket.socket):
+class ListenSocket(socket.socket):
     """A socket that reports the ``listen()`` call that starts serving it."""
 
     on_listen: Callable[[socket.socket], None] | None = None
