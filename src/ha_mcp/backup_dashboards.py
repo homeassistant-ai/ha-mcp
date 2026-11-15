@@ -259,6 +259,10 @@ async def _restore_body(client: Any, entity_id: str, config: Any) -> Any:
         raise HomeAssistantError("Could not read lovelace/dashboards/list")
     if match and match["url_path"] != url_path:
         return await _save(client, match["url_path"], config)
+    if url_path == "lovelace":
+        # No row: the body was captured from Core's default store, which only
+        # becomes a ``lovelace`` dashboard at the next Home Assistant start.
+        return await _manager()._ws_send(client, _config_write(None, config))
     raise _manager().BackupRestoreError(
         f"Dashboard {url_path} no longer exists, and this snapshot holds no "
         "dashboard settings to re-create it from. Nothing was changed.",

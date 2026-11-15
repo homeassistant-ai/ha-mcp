@@ -2065,8 +2065,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         auth = str(get_error_code(error or {})).startswith("AUTH_")
         raise (HomeAssistantAuthError if auth else HomeAssistantConnectionError)(msg)
     try:
-        cmd_type = message.pop("type")
-        envelope = await ws_client.send_command(cmd_type, **message)
+        fields = {key: value for key, value in message.items() if key != "type"}
+        envelope = await ws_client.send_command(message["type"], **fields)
     finally:
         # Best-effort close: narrow to transport/network errors; let
         # other exceptions propagate so they show up in logs rather

@@ -223,7 +223,7 @@ async def test_a_hider_only_core_sets_is_left_with_cores_refusal(
     )
 
 
-async def test_an_entity_of_a_disabled_device_stays_disabled_as_its_settings_come_back(
+async def test_an_entity_of_a_disabled_device_stays_disabled_and_the_restore_says_so(
     hass: HomeAssistant,
     entity_client: HomeAssistantClient,
     entity_handler: bm.DomainHandler,
@@ -232,7 +232,8 @@ async def test_an_entity_of_a_disabled_device_stays_disabled_as_its_settings_com
     desk: Desk,
 ) -> None:
     """Core derives an entity's disabler from its device, so restoring an
-    enabled snapshot cannot enable it; the settings written with it stay."""
+    enabled snapshot cannot enable it. A restore that reports plain success
+    leaves the user thinking the entity is back; the other settings stay."""
     config_entry = MockConfigEntry(domain="hue")
     config_entry.add_to_hass(hass)
     device = device_registry.async_get_or_create(
@@ -250,10 +251,11 @@ async def test_an_entity_of_a_disabled_device_stays_disabled_as_its_settings_com
     )
     entity_registry.async_update_entity(desk.entity_id, name="Other")
 
-    await entity_handler.restore(entity_client, desk.entity_id, snapshot)
+    result = await entity_handler.restore(entity_client, desk.entity_id, snapshot)
 
     entry = _entry(entity_registry, desk)
     assert (entry.disabled_by, entry.name) == (er.RegistryEntryDisabler.DEVICE, "Desk")
+    assert any("disabled_by stays 'device'" in text for text in result["warnings"])
 
 
 async def test_an_entity_its_integration_hid_since_is_shown_again(

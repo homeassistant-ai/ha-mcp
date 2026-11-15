@@ -421,10 +421,11 @@ async def _write_hider(
     result: dict[str, Any],
     warnings: list[str],
 ) -> dict[str, Any]:
-    """Send one hidden_by or disabled_by value; keep Core's refusal as a warning."""
+    """Send one hidden_by or disabled_by value; warn when Core refuses it or
+    keeps another one."""
     saved, now = config.get(field), current.get(field)
     try:
-        return {**result, **await _update(client, target, {field: saved})}
+        updated = await _update(client, target, {field: saved})
     except HomeAssistantCommandError as err:
         if err.code not in ("invalid_format", "invalid_info"):
             raise
@@ -432,6 +433,16 @@ async def _write_hider(
             f"{field} stays {now!r}: Home Assistant refused {saved!r}: {err}"
         )
         return result
+    kept = (updated.get("entity_entry") or {}).get(field)
+    if kept != saved:
+        # Core derives the disabler of an entity whose device or integration
+        # entry is disabled, whatever the update asks for.
+        warnings.append(
+            f"{field} stays {kept!r}: Home Assistant set it again instead of "
+            f"{saved!r}, as it does while the entity's device or integration "
+            "entry is disabled"
+        )
+    return {**result, **updated}
 
 
 async def _update(client: Any, entity_id: str, fields: dict[str, Any]) -> Any:
