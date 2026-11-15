@@ -62,6 +62,7 @@ from .response_helpers import compact_service_result, project_entity_record
 from .service_response import (
     COMPONENT_RESPONSE_UNCONFIRMED_WARNING,
     SERVICE_FAILED_AFTER_DISPATCH_HINT,
+    list_changed_states,
     note_rejected_response,
     response_call_failed_hint,
     split_return_response_envelope,
@@ -1550,13 +1551,9 @@ class ServiceTools(EventCallMixin):
             if isinstance(transition, dict)
             and isinstance(transition.get("new_state"), dict)
         ]
-        # A call asking for a response also lists every state written under its
-        # context, in order, as Core's REST call does; a confirmed state written
-        # under another context follows them.
-        changed = component_result.get("changed_states")
-        if isinstance(changed, list):
-            records = [state for state in changed if isinstance(state, dict)]
-            new_states = records + [s for s in new_states if s not in records]
+        new_states = list_changed_states(
+            component_result.get("changed_states"), new_states
+        )
         projected_result, projection_warnings = self._project_service_result(
             new_states,
             entity_id=entity_id,

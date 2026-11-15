@@ -73,6 +73,25 @@ SERVICE_FAILED_AFTER_DISPATCH_HINT = (
 )
 
 
+def list_changed_states(
+    changed: Any, confirmed: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The states a response call wrote under its context, in order, as Core's
+    REST call lists them, then each confirmed state they do not hold (one
+    written under another context).
+
+    ``last_reported`` is left out of that comparison: it moves when the same
+    state is reported again, and the component serves it live.
+    """
+    if not isinstance(changed, list):
+        return confirmed
+    records = [state for state in changed if isinstance(state, dict)]
+    written = [{**state, "last_reported": None} for state in records]
+    return records + [
+        state for state in confirmed if {**state, "last_reported": None} not in written
+    ]
+
+
 def note_rejected_response(
     response: dict[str, Any], error: dict[str, Any] | None
 ) -> None:
