@@ -4,76 +4,149 @@ The panel gives every install type the add-on's "Open Web UI" experience without
 exposing the loopback secret path: an admin-gated session endpoint mints a
 short-lived HttpOnly cookie, and a cookie-validated proxy forwards to the
 in-process server's settings routes.
+
+Requests go over HTTP to the views bound in a real ``hass``; the settings server
+behind the proxy is a real aiohttp server on loopback.
 """
 
 from __future__ import annotations
 
-import time
-from unittest.mock import AsyncMock, MagicMock
+import gzip
+import shutil
+import subprocess
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+from freezegun.api import FrozenDateTimeFactory
+from homeassistant.auth.const import GROUP_ID_ADMIN, GROUP_ID_READ_ONLY
 from homeassistant.components import frontend
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry, MockUser
+from pytest_homeassistant.typing import ClientSessionGenerator
+from yarl import URL
 
 from custom_components.ha_mcp_tools import ui_panel
-from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DOMAIN
+from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DATA_WEBHOOK_ID, DOMAIN
+from custom_components.ha_mcp_tools.mcp_webhook import (
+    WEBHOOK_AUTH_NONE,
+    async_register_webhook,
+    async_unregister_webhook,
+)
 
-from ._embedded_helpers import FakeSession, FakeUpstream, stream_ready
+# The HTTP surface the boot page, the session endpoint and the proxy share.
+_BASE = "/api/ha_mcp_tools/ui"
+_BOOT = f"{_BASE}/boot"
+_SESSION = f"{_BASE}/session"
+_APP = f"{_BASE}/app/"
+_SECRET = "/private_abc"
+_LOCALE_COOKIE = "ha_mcp_locale"
 
-_TARGET = "http://127.0.0.1:9584/private_abc"
-
-
-def _make_user(
-    *,
-    user_id: str = "u1",
-    is_admin: bool = True,
-    is_active: bool = True,
-    system_generated: bool = False,
-) -> MagicMock:
-    user = MagicMock(name="user")
-    user.id = user_id
-    user.is_admin = is_admin
-    user.is_active = is_active
-    user.system_generated = system_generated
-    return user
+_Responder = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
-def _make_hass(*, user: MagicMock | None = None) -> MagicMock:
-    hass = MagicMock(name="hass")
-    hass.data = {}
-    hass.auth.async_get_user = AsyncMock(return_value=user)
-    return hass
+@dataclass
+class _Seen:
+    """What the settings server received from the proxy."""
+
+    method: str
+    path_qs: str
+    headers: dict[str, str]
+    body: bytes
 
 
-def _make_request(
-    *,
-    hass: MagicMock,
-    method: str = "GET",
-    headers: dict[str, str] | None = None,
-    cookies: dict[str, str] | None = None,
-    query_string: str = "",
-    scheme: str = "https",
-    hass_user: MagicMock | None = None,
-    body: bytes = b"",
-) -> MagicMock:
-    req = MagicMock(name="request")
-    req.method = method
-    req.headers = dict(headers or {})
-    req.cookies = dict(cookies or {})
-    req.query_string = query_string
-    req.scheme = scheme
-    req.app = {"hass": hass}
-    req.read = AsyncMock(return_value=body)
-    req.get = MagicMock(
-        side_effect=lambda key, default=None: {"hass_user": hass_user}.get(key, default)
+@dataclass
+class _SettingsServer:
+    """The in-process server's settings routes, on a real loopback listener."""
+
+    server: TestServer
+    seen: list[_Seen] = field(default_factory=list)
+    respond: _Responder | None = None
+
+    async def handle(self, request: web.Request) -> web.StreamResponse:
+        self.seen.append(
+            _Seen(
+                request.method,
+                request.path_qs,
+                {key.lower(): value for key, value in request.headers.items()},
+                await request.read(),
+            )
+        )
+        if self.respond is not None:
+            return await self.respond(request)
+        return web.json_response({"ok": True})
+
+
+@pytest.fixture
+async def settings_server(
+    aiohttp_server: Callable[[web.Application], Awaitable[TestServer]],
+    socket_enabled: None,
+) -> _SettingsServer:
+    holder: list[_SettingsServer] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        return await holder[0].handle(request)
+
+    app = web.Application()
+    app.router.add_route("*", _SECRET + "/{tail:.*}", handler)
+    server = _SettingsServer(await aiohttp_server(app))
+    holder.append(server)
+    return server
+
+
+@pytest.fixture
+async def http_ready(hass: HomeAssistant) -> None:
+    assert await async_setup_component(hass, "http", {})
+
+
+@pytest.fixture
+async def panel_views(hass: HomeAssistant, http_ready: None) -> None:
+    await ui_panel.async_register_ui_panel(hass)
+
+
+@pytest.fixture
+async def running_server(
+    hass: HomeAssistant, panel_views: None, settings_server: _SettingsServer
+) -> AsyncIterator[_SettingsServer]:
+    """The server is up: its forwarding config is stored the way setup stores it."""
+    entry = MockConfigEntry(domain=DOMAIN, data={DATA_WEBHOOK_ID: "wh-ui-panel"})
+    port = settings_server.server.port
+    assert port is not None
+    await async_register_webhook(
+        hass,
+        entry,
+        port=port,
+        secret_path=_SECRET,
+        auth_mode=WEBHOOK_AUTH_NONE,
+        register_endpoint=False,
     )
-    stream_ready(req)
-    return req
+    yield settings_server
+    await async_unregister_webhook(hass)
 
 
-def _running_hass(session: FakeSession) -> MagicMock:
-    hass = _make_hass(user=_make_user())
-    hass.data[DOMAIN] = {DATA_WEBHOOK: {"target_url": _TARGET, "session": session}}
-    return hass
+async def _mint(
+    hass_client: ClientSessionGenerator, access_token: str | None = None
+) -> dict[str, str]:
+    """Sign in as the user and return the session cookie the browser would hold."""
+    client = await hass_client(access_token) if access_token else await hass_client()
+    resp = await client.post(_SESSION)
+    assert resp.status == 200
+    return {name: morsel.value for name, morsel in resp.cookies.items()}
+
+
+async def _proxy_get(
+    hass_client_no_auth: ClientSessionGenerator,
+    cookies: dict[str, str] | None,
+    headers: dict[str, str] | None = None,
+) -> tuple[TestClient, int]:
+    client = await hass_client_no_auth()
+    resp = await client.get(_APP + "settings", cookies=cookies, headers=headers)
+    return client, resp.status
 
 
 # ---------------------------------------------------------------------------
@@ -82,123 +155,171 @@ def _running_hass(session: FakeSession) -> MagicMock:
 
 
 class TestSessionMint:
-    async def test_admin_gets_httponly_strict_scoped_cookie(self):
-        hass = _make_hass()
-        user = _make_user(user_id="admin-1", is_admin=True)
-        request = _make_request(hass=hass, method="POST", hass_user=user)
+    async def test_admin_gets_httponly_strict_scoped_cookie(
+        self, panel_views: None, hass_client: ClientSessionGenerator
+    ) -> None:
+        client = await hass_client()
 
-        resp = await ui_panel._SessionView().post(request)
+        resp = await client.post(_SESSION)
 
         assert resp.status == 200
-        cookie = resp.cookies[ui_panel._COOKIE_NAME]
+        (cookie,) = resp.cookies.values()
         assert cookie["httponly"] is True
         assert cookie["samesite"] == "Strict"
-        assert cookie["path"] == ui_panel._COOKIE_PATH
-        assert int(cookie["max-age"]) == ui_panel._SESSION_TTL_SECONDS
-        # The token is recorded server-side, mapped to the admin user.
-        store = hass.data[ui_panel._SESSIONS_KEY]
-        assert store[cookie.value]["user_id"] == "admin-1"
+        # The browser sends it to the settings app, and only there.
+        assert (_APP + "settings").startswith(cookie["path"] + "/")
+        assert not _SESSION.startswith(cookie["path"] + "/")
+        assert int(cookie["max-age"]) == (await resp.json())["ttl"] > 0
 
-    async def test_non_admin_is_refused_without_minting(self):
-        hass = _make_hass()
-        user = _make_user(is_admin=False)
-        request = _make_request(hass=hass, method="POST", hass_user=user)
+    async def test_non_admin_is_refused_without_a_cookie(
+        self,
+        panel_views: None,
+        hass_client: ClientSessionGenerator,
+        hass_read_only_access_token: str,
+    ) -> None:
+        client = await hass_client(hass_read_only_access_token)
 
-        resp = await ui_panel._SessionView().post(request)
+        resp = await client.post(_SESSION)
 
         assert resp.status == 403
-        assert (
-            ui_panel._SESSIONS_KEY not in hass.data
-            or not hass.data[ui_panel._SESSIONS_KEY]
-        )
+        assert not resp.cookies
 
-    async def test_missing_user_is_refused(self):
-        hass = _make_hass()
-        request = _make_request(hass=hass, method="POST", hass_user=None)
-        resp = await ui_panel._SessionView().post(request)
-        assert resp.status == 403
+    async def test_session_without_home_assistant_sign_in_is_refused(
+        self, panel_views: None, hass_client_no_auth: ClientSessionGenerator
+    ) -> None:
+        client = await hass_client_no_auth()
 
-    async def test_cookie_secure_only_on_https(self):
-        hass = _make_hass()
-        user = _make_user()
-        https = _make_request(hass=hass, method="POST", hass_user=user, scheme="https")
-        http = _make_request(hass=hass, method="POST", hass_user=user, scheme="http")
+        resp = await client.post(_SESSION)
 
-        https_resp = await ui_panel._SessionView().post(https)
-        http_resp = await ui_panel._SessionView().post(http)
+        assert resp.status == 401
+        assert not resp.cookies
 
-        assert https_resp.cookies[ui_panel._COOKIE_NAME]["secure"] is True
-        assert http_resp.cookies[ui_panel._COOKIE_NAME]["secure"] is False
+    async def test_cookie_is_secure_only_when_reached_over_https(
+        self, panel_views: None, hass_client: ClientSessionGenerator
+    ) -> None:
+        client = await hass_client()
 
-    async def test_forwarded_proto_marks_cookie_secure(self):
-        hass = _make_hass()
-        user = _make_user()
-        request = _make_request(
-            hass=hass,
-            method="POST",
-            hass_user=user,
-            scheme="http",
-            headers={"X-Forwarded-Proto": "https"},
-        )
-        resp = await ui_panel._SessionView().post(request)
-        assert resp.cookies[ui_panel._COOKIE_NAME]["secure"] is True
+        plain = await client.post(_SESSION)
+        proxied = await client.post(_SESSION, headers={"X-Forwarded-Proto": "https"})
+
+        assert not next(iter(plain.cookies.values()))["secure"]
+        assert next(iter(proxied.cookies.values()))["secure"] is True
 
 
 class TestSessionValidation:
-    async def test_valid_admin_session_passes(self):
-        hass = _make_hass(user=_make_user(is_admin=True))
-        token = ui_panel._mint_session(hass, "u1")
-        assert await ui_panel._session_user_is_admin(hass, token) is True
+    async def test_admin_session_opens_the_proxy(
+        self,
+        running_server: _SettingsServer,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        cookies = await _mint(hass_client)
 
-    async def test_unknown_token_fails(self):
-        hass = _make_hass(user=_make_user())
-        assert await ui_panel._session_user_is_admin(hass, "nope") is False
+        _, status = await _proxy_get(hass_client_no_auth, cookies)
 
-    async def test_missing_token_fails(self):
-        hass = _make_hass(user=_make_user())
-        assert await ui_panel._session_user_is_admin(hass, None) is False
+        assert status == 200
 
-    async def test_expired_session_fails_and_is_dropped(self):
-        hass = _make_hass(user=_make_user())
-        token = ui_panel._mint_session(hass, "u1")
-        hass.data[ui_panel._SESSIONS_KEY][token]["expires"] = time.monotonic() - 1
+    @pytest.mark.parametrize("cookie_value", [None, "nope"])
+    async def test_missing_or_unknown_session_is_refused(
+        self,
+        running_server: _SettingsServer,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+        cookie_value: str | None,
+    ) -> None:
+        cookies = {
+            name: cookie_value for name in await _mint(hass_client) if cookie_value
+        }
 
-        assert await ui_panel._session_user_is_admin(hass, token) is False
-        assert token not in hass.data[ui_panel._SESSIONS_KEY]
+        _, status = await _proxy_get(hass_client_no_auth, cookies)
 
-    async def test_demoted_user_fails_and_is_dropped(self):
-        hass = _make_hass(user=_make_user(is_admin=False))
-        token = ui_panel._mint_session(hass, "u1")
+        assert status == 401
+        assert not running_server.seen
 
-        assert await ui_panel._session_user_is_admin(hass, token) is False
-        assert token not in hass.data[ui_panel._SESSIONS_KEY]
+    async def test_expired_session_is_refused(
+        self,
+        running_server: _SettingsServer,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+        freezer: FrozenDateTimeFactory,
+    ) -> None:
+        client = await hass_client()
+        resp = await client.post(_SESSION)
+        ttl = (await resp.json())["ttl"]
+        cookies = {name: morsel.value for name, morsel in resp.cookies.items()}
 
-    async def test_deleted_user_fails(self):
-        hass = _make_hass(user=None)
-        token = ui_panel._mint_session(hass, "u1")
-        assert await ui_panel._session_user_is_admin(hass, token) is False
+        freezer.tick(timedelta(seconds=ttl - 60))
+        _, before = await _proxy_get(hass_client_no_auth, cookies)
+        freezer.tick(timedelta(seconds=120))
+        _, after = await _proxy_get(hass_client_no_auth, cookies)
 
-    async def test_deleted_user_session_entry_is_dropped(self):
-        # Review gap: rejection must also evict the session entry (like the
-        # demoted-admin sibling) so a later re-add of the user id cannot ride
-        # the stale token.
-        hass = _make_hass(user=None)
-        token = ui_panel._mint_session(hass, "u1")
-        await ui_panel._session_user_is_admin(hass, token)
-        assert token not in ui_panel._sessions(hass)
+        assert (before, after) == (200, 401)
 
-    async def test_inactive_user_fails_and_is_dropped(self):
-        # Same acceptance bar as the ha_auth webhook gate (review finding).
-        hass = _make_hass(user=_make_user(is_admin=True, is_active=False))
-        token = ui_panel._mint_session(hass, "u1")
-        assert await ui_panel._session_user_is_admin(hass, token) is False
-        assert token not in ui_panel._sessions(hass)
+    async def test_demoted_admin_loses_the_session_for_good(
+        self,
+        running_server: _SettingsServer,
+        hass: HomeAssistant,
+        hass_admin_user: MockUser,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        cookies = await _mint(hass_client)
+        _, signed_in = await _proxy_get(hass_client_no_auth, cookies)
 
-    async def test_system_generated_user_fails_and_is_dropped(self):
-        hass = _make_hass(user=_make_user(is_admin=True, system_generated=True))
-        token = ui_panel._mint_session(hass, "u1")
-        assert await ui_panel._session_user_is_admin(hass, token) is False
-        assert token not in ui_panel._sessions(hass)
+        await hass.auth.async_update_user(
+            hass_admin_user, group_ids=[GROUP_ID_READ_ONLY]
+        )
+        _, demoted = await _proxy_get(hass_client_no_auth, cookies)
+        await hass.auth.async_update_user(hass_admin_user, group_ids=[GROUP_ID_ADMIN])
+        _, promoted_again = await _proxy_get(hass_client_no_auth, cookies)
+
+        assert (signed_in, demoted, promoted_again) == (200, 401, 401)
+
+    async def test_deleted_user_loses_the_session(
+        self,
+        running_server: _SettingsServer,
+        hass: HomeAssistant,
+        hass_admin_user: MockUser,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        cookies = await _mint(hass_client)
+
+        await hass.auth.async_remove_user(hass_admin_user)
+        _, status = await _proxy_get(hass_client_no_auth, cookies)
+
+        assert status == 401
+        assert not running_server.seen
+
+    async def test_deactivated_user_loses_the_session_for_good(
+        self,
+        running_server: _SettingsServer,
+        hass: HomeAssistant,
+        hass_admin_user: MockUser,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        cookies = await _mint(hass_client)
+
+        await hass.auth.async_deactivate_user(hass_admin_user)
+        _, deactivated = await _proxy_get(hass_client_no_auth, cookies)
+        await hass.auth.async_activate_user(hass_admin_user)
+        _, reactivated = await _proxy_get(hass_client_no_auth, cookies)
+
+        assert (deactivated, reactivated) == (401, 401)
+
+    async def test_system_user_session_is_refused(
+        self,
+        running_server: _SettingsServer,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+        hass_supervisor_access_token: str,
+    ) -> None:
+        cookies = await _mint(hass_client, hass_supervisor_access_token)
+
+        _, status = await _proxy_get(hass_client_no_auth, cookies)
+
+        assert status == 401
 
 
 # ---------------------------------------------------------------------------
@@ -206,233 +327,239 @@ class TestSessionValidation:
 # ---------------------------------------------------------------------------
 
 
-def _valid_cookie(hass: MagicMock) -> dict[str, str]:
-    token = ui_panel._mint_session(hass, "u1")
-    return {ui_panel._COOKIE_NAME: token}
+@pytest.fixture
+async def admin_cookies(
+    running_server: _SettingsServer, hass_client: ClientSessionGenerator
+) -> dict[str, str]:
+    return await _mint(hass_client)
 
 
 class TestProxyForwarding:
-    async def test_missing_cookie_returns_401(self):
-        hass = _running_hass(FakeSession(upstream=FakeUpstream()))
-        request = _make_request(hass=hass)  # no cookie
-        resp = await ui_panel._ProxyView().get(request, "settings")
-        assert resp.status == 401
+    async def test_server_down_returns_503(
+        self,
+        panel_views: None,
+        hass_client: ClientSessionGenerator,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        cookies = await _mint(hass_client)
 
-    async def test_server_down_returns_503(self):
-        hass = _make_hass(user=_make_user())  # no DATA_WEBHOOK
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-        resp = await ui_panel._ProxyView().get(request, "settings")
-        assert resp.status == 503
+        _, status = await _proxy_get(hass_client_no_auth, cookies)
 
-    async def test_path_traversal_rejected(self):
-        hass = _running_hass(FakeSession(upstream=FakeUpstream()))
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-        resp = await ui_panel._ProxyView().get(request, "../secrets")
+        assert status == 503
+
+    async def test_path_traversal_is_rejected(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        client = await hass_client_no_auth()
+
+        resp = await client.get(
+            URL(_APP + "%2e%2e/secrets", encoded=True), cookies=admin_cookies
+        )
+
         assert resp.status == 400
+        assert not running_server.seen
 
-    async def test_forwards_with_cfg_from_local_only_setup(self, monkeypatch):
-        # #1803 end-to-end at unit level: the forwarding config stored by
-        # async_register_webhook(register_endpoint=False) must be directly
-        # consumable by the panel proxy — a cfg key rename on either side of
-        # the seam would 503 the sidebar panel again with both halves' own
-        # tests still green.
-        from custom_components.ha_mcp_tools import mcp_webhook as mw
-        from custom_components.ha_mcp_tools.const import DATA_WEBHOOK_ID
+    async def test_forwards_page_and_passes_through_html(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        async def page(request: web.Request) -> web.StreamResponse:
+            return web.Response(body=b"<html>settings</html>", content_type="text/html")
 
-        upstream = FakeUpstream(
-            status=200,
-            headers={"Content-Type": "text/html; charset=utf-8"},
-            body=b"<html>settings</html>",
-        )
-        session = FakeSession(upstream=upstream)
-        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: session)
-        hass = _make_hass(user=_make_user())
-        entry = MagicMock()
-        entry.data = {DATA_WEBHOOK_ID: "wh-seam"}
+        running_server.respond = page
+        client = await hass_client_no_auth()
 
-        await mw.async_register_webhook(
-            hass,
-            entry,
-            port=9584,
-            secret_path="/private_x",
-            auth_mode=mw.WEBHOOK_AUTH_NONE,
-            register_endpoint=False,
-        )
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-
-        resp = await ui_panel._ProxyView().get(request, "settings")
+        resp = await client.get(_APP + "settings", cookies=admin_cookies)
 
         assert resp.status == 200
-        assert session.calls[0]["url"] == "http://127.0.0.1:9584/private_x/settings"
-
-    async def test_forwards_page_and_passes_through_html(self):
-        upstream = FakeUpstream(
-            status=200,
-            headers={"Content-Type": "text/html; charset=utf-8"},
-            body=b"<html>settings</html>",
-        )
-        session = FakeSession(upstream=upstream)
-        hass = _running_hass(session)
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-
-        resp = await ui_panel._ProxyView().get(request, "settings")
-
-        assert resp.status == 200
-        assert resp.body == b"<html>settings</html>"
-        # Content-Type passes through unchanged (NOT coerced to JSON like the
-        # webhook proxy does for untrusted MCP clients).
-        assert resp.headers["Content-Type"] == "text/html; charset=utf-8"
+        assert await resp.read() == b"<html>settings</html>"
+        # Passes through unchanged (NOT coerced to JSON like the webhook proxy
+        # does for untrusted MCP clients).
+        assert resp.content_type == "text/html"
         # Forwarded to the loopback settings route under the secret path.
-        assert session.calls[0]["url"] == f"{_TARGET}/settings"
+        assert running_server.seen[0].path_qs == f"{_SECRET}/settings"
 
-    async def test_relay_strips_encoding_and_length_response_headers(self):
-        # aiohttp's read() transparently DECOMPRESSES the upstream body, so
-        # relaying the upstream's Content-Encoding / Content-Length /
-        # Transfer-Encoding would make the browser re-inflate an already
-        # inflated body (every gzipped settings response renders as garbage).
-        # Pin the response-side stripping (the request side is pinned above).
-        upstream = FakeUpstream(
-            status=200,
-            headers={
-                "Content-Type": "text/html; charset=utf-8",
-                "Content-Encoding": "gzip",
-                "Content-Length": "999",
-                "Transfer-Encoding": "chunked",
-                "Cache-Control": "no-store",
-            },
-            body=b"<html>inflated</html>",
-        )
-        session = FakeSession(upstream=upstream)
-        hass = _running_hass(session)
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
+    async def test_relayed_page_is_not_inflated_twice(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        """A gzipped settings page renders, not garbage: the body is inflated once."""
 
-        resp = await ui_panel._ProxyView().get(request, "settings")
+        async def gzipped(request: web.Request) -> web.StreamResponse:
+            return web.Response(
+                body=gzip.compress(b"<html>inflated</html>"),
+                headers={
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Encoding": "gzip",
+                    "Cache-Control": "no-store",
+                },
+            )
+
+        running_server.respond = gzipped
+        client = await hass_client_no_auth()
+
+        resp = await client.get(_APP + "settings", cookies=admin_cookies)
 
         assert resp.status == 200
-        assert "Content-Encoding" not in resp.headers
-        assert "Transfer-Encoding" not in resp.headers
-        # aiohttp recomputes Content-Length from the actual body if at all;
-        # the stale upstream value must not survive the relay.
-        assert resp.headers.get("Content-Length") != "999"
-        # Benign headers still pass through.
+        assert await resp.read() == b"<html>inflated</html>"
         assert resp.headers["Content-Type"] == "text/html; charset=utf-8"
         assert resp.headers["Cache-Control"] == "no-store"
 
-    async def test_forwards_subpath_with_query_and_strips_sensitive_headers(self):
-        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
-        hass = _running_hass(session)
-        request = _make_request(
-            hass=hass,
-            method="GET",
-            cookies=_valid_cookie(hass),
-            query_string="name=x",
+    async def test_forwards_subpath_with_query_and_strips_sensitive_headers(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_access_token: str,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        client = await hass_client_no_auth()
+
+        await client.get(
+            _APP + "api/settings/backups?name=x",
+            cookies=admin_cookies,
             headers={
-                "Authorization": "Bearer leak",
-                "Cookie": "ha_mcp_tools_ui_session=leak",
+                "Authorization": f"Bearer {hass_access_token}",
                 "Host": "example",
                 "Accept": "application/json",
             },
         )
 
-        await ui_panel._ProxyView().get(request, "api/settings/backups")
+        seen = running_server.seen[0]
+        assert seen.path_qs == f"{_SECRET}/api/settings/backups?name=x"
+        assert "authorization" not in seen.headers
+        assert "cookie" not in seen.headers
+        assert seen.headers["host"] != "example"
+        assert seen.headers["accept"] == "application/json"
 
-        call = session.calls[0]
-        assert call["url"] == f"{_TARGET}/api/settings/backups?name=x"
-        fwd = {k.lower() for k in call["headers"]}
-        assert "authorization" not in fwd
-        assert "cookie" not in fwd
-        assert "host" not in fwd
-        assert "accept" in fwd  # innocuous headers pass through
+    @pytest.mark.parametrize("method", ["post", "put", "delete"])
+    async def test_write_requests_forward_method_and_body(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+        method: str,
+    ) -> None:
+        client = await hass_client_no_auth()
 
-    async def test_forwards_only_allowlisted_locale_cookie(self):
-        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
-        hass = _running_hass(session)
+        resp = await getattr(client, method)(
+            _APP + "api/settings/tools", cookies=admin_cookies, data=b'{"tools":[]}'
+        )
+
+        assert resp.status == 200
+        seen = running_server.seen[0]
+        assert (seen.method, seen.body) == (method.upper(), b'{"tools":[]}')
+
+    async def test_forwards_only_the_locale_cookie(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
         cookies = {
-            **_valid_cookie(hass),
-            ui_panel._LOCALE_COOKIE_NAME: "ru-RU",
+            **admin_cookies,
+            _LOCALE_COOKIE: "ru-RU",
             "other_browser_cookie": "must-not-leak",
         }
-        request = _make_request(
-            hass=hass,
-            cookies=cookies,
-            headers={
-                "Cookie": (
-                    "ha_mcp_tools_ui_session=secret; ha_mcp_locale=ru-RU; "
-                    "other_browser_cookie=must-not-leak"
-                )
-            },
-        )
 
-        await ui_panel._ProxyView().get(request, "settings")
+        await _proxy_get(hass_client_no_auth, cookies)
 
-        forwarded = session.calls[0]["headers"]
-        assert forwarded["Cookie"] == "ha_mcp_locale=ru-RU"
-        assert "ha_mcp_tools_ui_session" not in forwarded["Cookie"]
-        assert "other_browser_cookie" not in forwarded["Cookie"]
+        assert running_server.seen[0].headers["cookie"] == "ha_mcp_locale=ru-RU"
 
-    @pytest.mark.parametrize("locale", ["ru; admin=true", "x" * 65])
-    async def test_rejects_unsafe_locale_cookie(self, locale: str):
-        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
-        hass = _running_hass(session)
-        cookies = {**_valid_cookie(hass), ui_panel._LOCALE_COOKIE_NAME: locale}
-        request = _make_request(hass=hass, cookies=cookies)
-
-        await ui_panel._ProxyView().get(request, "settings")
-
-        forwarded = {key.lower() for key in session.calls[0]["headers"]}
-        assert "cookie" not in forwarded
-
-    async def test_post_body_is_forwarded(self):
-        session = FakeSession(upstream=FakeUpstream(body=b"{}"))
-        hass = _running_hass(session)
-        request = _make_request(
-            hass=hass,
-            method="POST",
-            cookies=_valid_cookie(hass),
-            body=b'{"tools":[]}',
-        )
-        await ui_panel._ProxyView().post(request, "api/settings/tools")
-        assert session.calls[0]["data"] == b'{"tools":[]}'
-        assert session.calls[0]["method"] == "POST"
-
-    async def test_upstream_client_error_maps_to_502(
-        self, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize(
+        ("locale", "forwarded"),
+        [
+            ("ru-RU", True),
+            ("en_US", True),
+            ("a" * 64, True),
+            ("-ru", False),
+            ("ru-", False),
+            ("ru--RU", False),
+            ("en__US", False),
+            ("", False),
+            ("café", False),
+            ("٣", False),
+            ("a" * 65, False),
+            ('"ru; admin=true"', False),
+        ],
+    )
+    async def test_locale_cookie_is_forwarded_only_when_safe(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+        locale: str,
+        forwarded: bool,
     ) -> None:
-        from aiohttp import ClientError
+        (session_name,) = admin_cookies
+        header = (
+            f"{session_name}={admin_cookies[session_name]}; {_LOCALE_COOKIE}={locale}"
+        )
 
-        # A pool-acquire timeout names the target URL; its path is the secret.
-        err = ClientError("Connection timeout to host http://127.0.0.1/p_s3cr3t")
-        hass = _running_hass(FakeSession(exc=err))
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-        resp = await ui_panel._ProxyView().get(request, "settings")
+        await _proxy_get(hass_client_no_auth, None, headers={"Cookie": header})
+
+        cookie = running_server.seen[0].headers.get("cookie")
+        assert cookie == (f"{_LOCALE_COOKIE}={locale}" if forwarded else None)
+
+    async def test_unreachable_server_maps_to_502_without_the_secret_path(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        await running_server.server.close()
+        client = await hass_client_no_auth()
+
+        resp = await client.get(_APP + "settings", cookies=admin_cookies)
+
         assert resp.status == 502
         assert "upstream request failed" in caplog.text
-        assert "p_s3cr3t" not in caplog.text
+        assert _SECRET not in caplog.text
 
-    async def test_unexpected_error_maps_to_500(self):
-        session = FakeSession(exc=RuntimeError("weird"))
-        hass = _running_hass(session)
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
-        resp = await ui_panel._ProxyView().get(request, "settings")
-        assert resp.status == 500
+    async def test_unexpected_error_maps_to_500(
+        self,
+        hass: HomeAssistant,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        forwarding = hass.data[DOMAIN]
+        assert forwarding is not None
+        await forwarding[DATA_WEBHOOK]["session"].close()
 
-    async def test_event_stream_is_streamed_with_anti_buffering(self):
-        upstream = FakeUpstream(
-            status=200,
-            headers={"Content-Type": "text/event-stream"},
-            chunks=[b"data: a\n\n", b"data: b\n\n"],
-        )
-        session = FakeSession(upstream=upstream)
-        hass = _running_hass(session)
-        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
+        _, status = await _proxy_get(hass_client_no_auth, admin_cookies)
 
-        resp = await ui_panel._ProxyView().get(request, "api/settings/stream")
+        assert status == 500
 
-        assert resp.prepared is True
+    async def test_event_stream_is_streamed_with_anti_buffering(
+        self,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        async def events(request: web.Request) -> web.StreamResponse:
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(b"data: a\n\n")
+            await response.write(b"data: b\n\n")
+            await response.write_eof()
+            return response
+
+        running_server.respond = events
+        client = await hass_client_no_auth()
+
+        resp = await client.get(_APP + "api/settings/stream", cookies=admin_cookies)
+
         assert resp.headers["X-Accel-Buffering"] == "no"
-        writer = request._payload_writer
-        assert b"".join(writer.chunks) == b"data: a\n\ndata: b\n\n"
-        assert writer.eof is True
+        assert resp.content_type == "text/event-stream"
+        assert await resp.read() == b"data: a\n\ndata: b\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -441,137 +568,96 @@ class TestProxyForwarding:
 
 
 class TestBootView:
-    async def test_serves_boot_page(self):
-        resp = await ui_panel._BootView().get(_make_request(hass=_make_hass()))
+    async def test_page_is_public_and_embeds_script_and_session_url(
+        self, panel_views: None, hass_client_no_auth: ClientSessionGenerator
+    ) -> None:
+        """A bare iframe GET carries no bearer, so the boot page is not behind auth."""
+        client = await hass_client_no_auth()
+
+        resp = await client.get(_BOOT)
+        page = await resp.text()
+
+        assert resp.status == 200
         assert resp.content_type == "text/html"
-        assert ui_panel._SESSION_URL.encode() in resp.body
-        # The script builds APP_BASE_URL as _APP_PREFIX + "settings", so only the
-        # prefix appears literally in the served body.
-        assert ui_panel._APP_PREFIX.encode() in resp.body
-        assert b"root.hass.language" in resp.body
-        assert b"?ha_lang=" in resp.body
-        assert b"encodeURIComponent(language)" in resp.body
-        assert b"<iframe" in resp.body
-
-    def test_view_auth_model_is_pinned(self):
-        # A bare iframe GET cannot carry a bearer: the boot page and the proxy
-        # must stay public (the proxy's credential is the session cookie); the
-        # session minter must stay behind HA auth. Unit tests call the views
-        # directly, so only these assertions catch a requires_auth flip.
-        assert ui_panel._BootView.requires_auth is False
-        assert ui_panel._SessionView.requires_auth is True
-        assert ui_panel._ProxyView.requires_auth is False
-
-
-class TestPanelRegistration:
-    async def test_registers_views_once_and_panel(self):
-        hass = _make_hass()
-        hass.http = MagicMock()
-
-        await ui_panel.async_register_ui_panel(hass)
-
-        assert hass.http.register_view.call_count == 3
-        assert hass.data[ui_panel._VIEWS_REGISTERED_KEY] is True
-        panels = hass.data[frontend.DATA_PANELS]
-        assert ui_panel.PANEL_URL_PATH in panels
-        panel = panels[ui_panel.PANEL_URL_PATH]
-        assert panel.component_name == "iframe"
-        assert panel.config == {"url": ui_panel._BOOT_URL}
-        assert panel.require_admin is True
-
-    async def test_second_register_does_not_rebind_views(self):
-        hass = _make_hass()
-        hass.http = MagicMock()
-
-        await ui_panel.async_register_ui_panel(hass)
-        await ui_panel.async_register_ui_panel(hass)
-
-        # Views bound once per session; panel guarded by async_panel_exists.
-        assert hass.http.register_view.call_count == 3
-
-    async def test_unregister_removes_panel(self):
-        hass = _make_hass()
-        hass.http = MagicMock()
-        await ui_panel.async_register_ui_panel(hass)
-
-        ui_panel.async_unregister_ui_panel(hass)
-
-        assert ui_panel.PANEL_URL_PATH not in hass.data[frontend.DATA_PANELS]
-
-
-class TestBootPage:
-    def test_boot_page_embeds_script_and_session_url(self):
-        page = ui_panel.render_boot_page()
-        assert ui_panel._SESSION_URL in page
+        assert page == ui_panel.render_boot_page()
         assert ui_panel.render_boot_script() in page
+        assert _SESSION in page
+        # The script builds the app URL as this prefix + "settings".
+        assert _APP in page
+        assert "root.hass.language" in page
+        assert "?ha_lang=" in page
+        assert "encodeURIComponent(language)" in page
+        assert "<iframe" in page
 
-    def test_boot_script_handles_stale_tokens_without_retry_storm(self):
-        # #1802: POSTing a stale bearer in a retry loop trips http.ban and
-        # IP-banned users from their own instance. The script must refresh an
-        # expired token before use and treat a 401 as terminal (no auto-retry).
-        js = ui_panel.render_boot_script()
-        assert "refreshAccessToken" in js
-        assert "resp.status === 401" in js
+    async def test_boot_script_handles_stale_tokens_without_retry_storm(
+        self, panel_views: None, hass_client_no_auth: ClientSessionGenerator
+    ) -> None:
+        """#1802: a retried stale bearer got users IP-banned from their instance.
 
-    def test_app_url_sits_under_cookie_path(self):
-        # The embedded app URL must live under the session cookie's path scope
-        # or the browser never attaches the cookie and the settings app 401s.
-        # (The script concatenates _APP_PREFIX + "settings", so assert on the
-        # prefix and check the scope alignment in Python.)
-        assert ui_panel._APP_PREFIX in ui_panel.render_boot_script()
-        app_url = ui_panel._APP_PREFIX + "settings"
-        assert app_url.startswith(ui_panel._COOKIE_PATH + "/")
+        The script refreshes an expired token before use and treats a 401 as
+        terminal (no auto-retry).
+        """
+        client = await hass_client_no_auth()
 
-    def test_panel_config_shape(self):
-        cfg = ui_panel.panel_config()
-        assert cfg["component_name"] == "iframe"
-        assert cfg["frontend_url_path"] == ui_panel.PANEL_URL_PATH
-        assert cfg["require_admin"] is True
-        assert cfg["config"] == {"url": ui_panel._BOOT_URL}
+        page = await (await client.get(_BOOT)).text()
 
-    def test_boot_script_is_valid_javascript(self):
-        # Parse coverage for the served boot script. It cannot join the
-        # _js_harness _PY_RENDERERS set (that discovery runs without Home
-        # Assistant installed, and this module imports aiohttp), so it gets its
-        # own node syntax check here — skipped cleanly when node is absent.
-        import os
-        import shutil
-        import subprocess
-        import tempfile
+        assert "refreshAccessToken" in page
+        assert "resp.status === 401" in page
 
+    def test_boot_script_is_valid_javascript(self, tmp_path: Path) -> None:
         node = shutil.which("node")
         if node is None:
             pytest.skip("node is not available")
-        js = ui_panel.render_boot_script()
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".js", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(js)
-            path = handle.name
-        try:
-            result = subprocess.run(
-                [node, "--check", path], capture_output=True, text=True, check=False
-            )
-        finally:
-            os.unlink(path)
+        script = tmp_path / "boot.js"
+        script.write_text(ui_panel.render_boot_script(), encoding="utf-8")
+
+        result = subprocess.run(
+            [node, "--check", str(script)], capture_output=True, text=True, check=False
+        )
+
         assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(
-    ("value", "ok"),
-    [
-        ("ru-RU", True),
-        ("en_US", True),
-        ("de", True),
-        ("a" * 64, True),
-        ("-ru", False),
-        ("ru-", False),
-        ("ru--RU", False),
-        ("en__US", False),
-        ("", False),
-        ("café", False),
-        ("٣", False),
-    ],
-)
-def test_is_valid_locale_cookie_value(value: str, ok: bool) -> None:
-    assert ui_panel._is_valid_locale_cookie_value(value) is ok
+class TestPanelRegistration:
+    async def test_registers_the_views_and_an_admin_only_iframe_panel(
+        self,
+        hass: HomeAssistant,
+        http_ready: None,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        await ui_panel.async_register_ui_panel(hass)
+
+        panel = hass.data[frontend.DATA_PANELS][ui_panel.PANEL_URL_PATH]
+        assert panel.component_name == "iframe"
+        assert panel.require_admin is True
+        client = await hass_client_no_auth()
+        # The panel opens the boot page; the other two views are bound as well.
+        assert panel.config is not None
+        assert (await client.get(panel.config["url"])).status == 200
+        assert (await client.post(_SESSION)).status == 401
+        assert (await client.get(_APP + "settings")).status == 401
+
+    async def test_second_register_keeps_one_panel_and_does_not_rebind_views(
+        self,
+        hass: HomeAssistant,
+        http_ready: None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        await ui_panel.async_register_ui_panel(hass)
+        await ui_panel.async_register_ui_panel(hass)
+
+        # Binding a view twice fails in aiohttp and is logged by the component.
+        assert "failed to register" not in caplog.text
+        assert ui_panel.PANEL_URL_PATH in hass.data[frontend.DATA_PANELS]
+
+    async def test_unregister_removes_the_panel_and_keeps_the_views(
+        self,
+        hass: HomeAssistant,
+        panel_views: None,
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        ui_panel.async_unregister_ui_panel(hass)
+
+        assert ui_panel.PANEL_URL_PATH not in hass.data[frontend.DATA_PANELS]
+        client = await hass_client_no_auth()
+        assert (await client.get(_BOOT)).status == 200
