@@ -758,8 +758,8 @@
       "description": "Haal de huidige status, toestand en attributen op van één of meer entiteiten (lampen, schakelaars, sensoren, klimaat, covers, sloten, fa"
     },
     "ha_get_system_health": {
-      "title": "Haal Systeemgezondheid op (incl. ZHA/Z-Wave/integratiediagnostiek)",
-      "description": "Haal Home Assistant-systeemgezondheid op, inclusief Zigbee (ZHA), Z-Wave JS en diagnostische dumps per integratie."
+      "title": "Systeemstatus ophalen (incl. ZHA/Z-Wave/Thread/Matter-netwerken)",
+      "description": "Haal de systeemstatus van Home Assistant op, inclusief Zigbee (ZHA)-, Z-Wave JS-, Thread- en Matter-netwerken."
     },
     "ha_get_todo": {
       "title": "Haal Taken op",

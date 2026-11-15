@@ -758,8 +758,8 @@
       "description": "Pobierz bieżący status, stan i atrybuty jednej lub więcej encji (świateł, przełączników, czujników, klimatyzacji, osłon, zamków, fa"
     },
     "ha_get_system_health": {
-      "title": "Pobierz kondycję systemu (w tym diagnostykę ZHA/Z-Wave/integracji)",
-      "description": "Pobierz kondycję systemu Home Assistant, w tym Zigbee (ZHA), Z-Wave JS oraz zrzuty diagnostyczne dla poszczególnych integracji."
+      "title": "Pobierz stan systemu (w tym sieci ZHA / Z-Wave / Thread / Matter)",
+      "description": "Pobiera stan systemu Home Assistant, w tym sieci Zigbee (ZHA), Z-Wave JS, Thread i Matter."
     },
     "ha_get_todo": {
       "title": "Pobierz listę zadań",

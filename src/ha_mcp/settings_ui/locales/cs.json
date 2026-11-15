@@ -758,8 +758,8 @@
       "description": "Získat aktuální stav, stav a atributy jedné nebo více entit (světla, spínače, senzory, klima, žaluzie, zámky, fa"
     },
     "ha_get_system_health": {
-      "title": "Získat stav systému (vč. diagnostiky ZHA/Z-Wave/integrace)",
-      "description": "Získat stav systému Home Assistant, včetně Zigbee (ZHA), Z-Wave JS a diagnostických výpisů pro jednotlivé integrace."
+      "title": "Získat stav systému (vč. sítí ZHA / Z-Wave / Thread / Matter)",
+      "description": "Získat stav systému Home Assistant včetně sítí Zigbee (ZHA), Z-Wave JS, Thread a Matter."
     },
     "ha_get_todo": {
       "title": "Získat úkoly",

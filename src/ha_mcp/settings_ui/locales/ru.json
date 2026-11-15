@@ -789,8 +789,8 @@
       "description": "Получить текущее состояние и атрибуты одной или нескольких сущностей."
     },
     "ha_get_system_health": {
-      "title": "Получить состояние системы",
-      "description": "Получить сведения о состоянии Home Assistant, Zigbee, Z-Wave и интеграций."
+      "title": "Получить состояние системы (вкл. сети ZHA/Z-Wave/Thread/Matter)",
+      "description": "Получить состояние системы Home Assistant, включая сети Zigbee (ZHA), Z-Wave JS, Thread и Matter."
     },
     "ha_get_todo": {
       "title": "Получить списки дел",

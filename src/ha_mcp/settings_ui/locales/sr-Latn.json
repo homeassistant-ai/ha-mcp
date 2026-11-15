@@ -758,8 +758,8 @@
       "description": "Preuzmite trenutni status, stanje i atribute jednog ili više entiteta (svetla, prekidači, senzori, klima, roletne, brave, fa"
     },
     "ha_get_system_health": {
-      "title": "Preuzmi zdravlje sistema (uklj. ZHA/Z-Wave/dijagnostiku integracija)",
-      "description": "Preuzmite zdravlje Home Assistant sistema, uključujući Zigbee (ZHA), Z-Wave JS i izveštaje o dijagnostici po integracijama."
+      "title": "Preuzmi zdravlje sistema (uklj. ZHA/Z-Wave/Thread/Matter mreže)",
+      "description": "Preuzmi zdravlje Home Assistant sistema, uključujući Zigbee (ZHA), Z-Wave JS, Thread i Matter mreže."
     },
     "ha_get_todo": {
       "title": "Preuzmi obaveze",
