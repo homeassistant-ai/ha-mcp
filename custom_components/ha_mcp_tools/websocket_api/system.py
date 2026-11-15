@@ -73,18 +73,11 @@ def _do_template_diagnose(
 def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
     """Return the handshake payload.
 
-    ``timezone`` (``hass.config.time_zone``) and ``tools_services`` (whether
-    the tools entry's HA services are registered) are additive fields consumers
-    detect by presence — they carry NO capability entry and do NOT bump
+    ``timezone`` (``hass.config.time_zone``) is an additive field consumers
+    detect by presence — it carries NO capability entry and does NOT bump
     ``schema_version``. ``hass`` is optional (defaulting to ``None`` so a direct
     ``_do_info()`` still works for callers that only need the static handshake);
-    when absent, they and ``webhook_auth`` degrade to ``None``.
-
-    ``tools_services`` exists because 2.1.0 registers this command surface from
-    BOTH entry types (#2289): ``info`` answering no longer implies the tools
-    entry — and its filesystem/YAML services — are present (#2292). The server's
-    filesystem/YAML gate reads this field to keep raising its actionable
-    "tools entry not set up" error on server-entry-only installs.
+    when absent, it and ``webhook_auth`` degrade to ``None``.
 
     ``webhook_auth`` (#2584) is the server entry's webhook auth mode, shown by
     ``ha_report_issue``; same additive contract.
@@ -95,7 +88,6 @@ def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
         "capabilities": list(CAPABILITIES),
         "limits": dict(LIMITS),
         "timezone": _config_time_zone(hass),
-        "tools_services": _tools_services_loaded(hass),
         "webhook_auth": _server_webhook_auth(hass),
     }
 
@@ -105,23 +97,6 @@ def _config_time_zone(hass: HomeAssistant | None) -> str | None:
     config = getattr(hass, "config", None)
     tz = getattr(config, "time_zone", None)
     return tz if isinstance(tz, str) and tz else None
-
-
-def _tools_services_loaded(hass: HomeAssistant | None) -> bool | None:
-    """True when the tools entry's filesystem/YAML HA services are registered.
-
-    Probes the service registry itself (``read_file`` — one of the services
-    ``_async_setup_tools_entry`` registers and its unload removes) rather than
-    the config-entry list, so the answer tracks what a caller can actually
-    invoke. ``None`` when ``hass`` is absent (the direct ``_do_info()`` call);
-    the WS handler always passes ``hass``, so the wire value is a bool.
-    """
-    services = getattr(hass, "services", None)
-    if services is None:
-        return None
-    # Literal matches SERVICE_READ_FILE in __init__.py (importing it here would
-    # be circular).
-    return bool(services.has_service(DOMAIN, "read_file"))
 
 
 def _server_webhook_auth(hass: HomeAssistant | None) -> str | None:
