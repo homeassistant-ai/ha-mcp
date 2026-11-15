@@ -208,7 +208,6 @@ module = [
     "tests.src.unit.test_e2e_failure_diagnostics",
     "tests.src.unit.test_e2e_lane_env_shape",
     "tests.src.unit.test_e2e_session_fixture_cleanup",
-    "tests.src.unit.test_embedded_version_dist",
     "tests.src.unit.test_embedded_worker_teardown_2127",
     "tests.src.unit.test_entity_backup_component",
     "tests.src.unit.test_entity_expose_changed",
