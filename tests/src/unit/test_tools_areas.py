@@ -218,12 +218,7 @@ class TestSetAreaFloorReferenceValidation:
 
     @staticmethod
     def _ws_handler(*floor_ids):
-        """Answer the floor-registry preflight, then ack the area write.
-
-        The ack also answers the area-registry read of an update, but holds no
-        list, so the existence check is skipped with a warning; the check itself
-        is tested on real Core.
-        """
+        """Answer the floor-registry preflight, then ack the area write."""
 
         async def handler(msg):
             if msg.get("type") == "config/floor_registry/list":
@@ -274,14 +269,10 @@ class TestSetAreaFloorReferenceValidation:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert self._sent_types(tools) == [
-            "config/area_registry/list",
-            "config/floor_registry/list",
-        ]
+        assert self._sent_types(tools) == ["config/floor_registry/list"]
 
-    async def test_empty_floor_id_clears_without_floor_lookup(self, tools):
-        """floor_id='' is the documented clear sentinel: no floor to validate, only
-        the id-exists read."""
+    async def test_empty_floor_id_clears_without_lookup(self, tools):
+        """floor_id='' is the documented clear sentinel — no floor to validate."""
         tools._client.send_websocket_message.side_effect = self._ws_handler()
 
         result = await tools.ha_set_area_or_floor(
@@ -289,10 +280,7 @@ class TestSetAreaFloorReferenceValidation:
         )
 
         assert result["success"] is True
-        assert self._sent_types(tools) == [
-            "config/area_registry/list",
-            "config/area_registry/update",
-        ]
+        assert self._sent_types(tools) == ["config/area_registry/update"]
 
     async def test_existing_floor_accepted(self, tools):
         tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
@@ -551,7 +539,6 @@ class TestSetAreaLabels:
             call.args[0]
             for call in tools._client.send_websocket_message.call_args_list
             if call.args[0]["type"].startswith("config/area_registry/")
-            and not call.args[0]["type"].endswith("/list")
         )
 
     async def test_labels_rejected_for_floor(self, tools):
@@ -579,16 +566,13 @@ class TestSetAreaLabels:
         assert error_data["unknown_labels"] == ["ghost_label"]
         assert self._sent_types(tools) == ["config/label_registry/list"]
 
-    async def test_empty_labels_clears_without_label_lookup(self, tools):
+    async def test_empty_labels_clears_without_lookup(self, tools):
         tools._client.send_websocket_message.side_effect = self._ws_handler()
 
         result = await tools.ha_set_area_or_floor(kind="area", id="kitchen", labels=[])
 
         assert result["success"] is True
-        assert self._sent_types(tools) == [
-            "config/area_registry/list",
-            "config/area_registry/update",
-        ]
+        assert self._sent_types(tools) == ["config/area_registry/update"]
         assert self._write_message(tools)["labels"] == []
 
     async def test_create_includes_labels(self, tools):

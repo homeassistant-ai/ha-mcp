@@ -287,6 +287,16 @@ async def test_a_restored_area_keeps_its_floor(
     assert "warnings" not in outcome["result"]
 
 
+def _store_aliases_reversed(
+    backup_manager: BackupManager, snapshot: str, area: ar.AreaEntry
+) -> None:
+    """Edit the snapshot to hold the aliases in the reverse of Core's order."""
+    path = next(backup_manager.backup_dir.rglob(snapshot))
+    stored = yaml.safe_load(path.read_text())
+    stored["config"]["aliases"] = list(reversed(list(area.aliases)))
+    path.write_text(yaml.safe_dump(stored))
+
+
 async def _second_restore_with_aliases_reversed(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> str:
@@ -299,10 +309,7 @@ async def _second_restore_with_aliases_reversed(
     registry.async_delete(area.id)
     await backup_manager.restore_snapshot(snapshot)
     (restored,) = registry.async_list_areas()
-    path = next(backup_manager.backup_dir.rglob(snapshot))
-    stored = yaml.safe_load(path.read_text())
-    stored["config"]["aliases"] = list(reversed(list(restored.aliases)))
-    path.write_text(yaml.safe_dump(stored))
+    _store_aliases_reversed(backup_manager, snapshot, restored)
     return snapshot
 
 
@@ -515,13 +522,16 @@ async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
 ) -> None:
-    """Core keeps aliases in a set, so the restored area lists the same aliases in
-    another order than the snapshot holds them; that is no difference."""
+    """Core keeps aliases in a set, so the order the snapshot holds them in is
+    no difference: the snapshot file is edited to hold them in the reverse of the
+    order Core lists the restored area's in."""
     areas = ar.async_get(hass)
-    area = areas.async_create("Hall", aliases={f"alias {i}" for i in range(60)})
+    area = areas.async_create("Hall", aliases={"entrance", "lobby"})
     snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
     areas.async_delete(area.id)
     await backup_manager.restore_snapshot(snapshot)
+    (restored,) = areas.async_list_areas()
+    _store_aliases_reversed(backup_manager, snapshot, restored)
 
     diff = await backup_manager.diff_snapshot(snapshot)
 

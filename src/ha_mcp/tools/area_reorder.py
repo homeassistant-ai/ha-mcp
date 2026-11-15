@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic.fields import FieldInfo
 
+from ..backup_registry_items import registry_rows
 from ..errors import ErrorCode, create_error_response
 from .coercion import UNSET, parse_string_list_param
 from .helpers import (
@@ -26,6 +27,11 @@ def _passed_params(plain: dict[str, Any], clearable: dict[str, Any]) -> list[str
     ]
 
 
+async def _order(client: Any, kind: str) -> list[str]:
+    """The ids of the areas or floors, in the order Core lists them."""
+    return [row[f"{kind}_id"] for row in await registry_rows(client, kind)]
+
+
 async def reorder_area_or_floor(
     client: Any,
     kind: str,
@@ -33,8 +39,13 @@ async def reorder_area_or_floor(
     plain: dict[str, Any],
     clearable: dict[str, Any],
 ) -> dict[str, Any]:
-    """Send Core's reorder command; Core checks the list is complete."""
-    context = {"operation": "reorder", "kind": kind}
+    """Send Core's reorder command; Core checks the list is complete.
+
+    No backup is taken of a reorder, so the order is read before the command
+    and returned as ``previous_order``; ``order`` is read from Core after it,
+    and is None when that read fails.
+    """
+    context: dict[str, Any] = {"operation": "reorder", "kind": kind}
     try:
         ids = parse_string_list_param(order, "order")
     except ValueError as e:
@@ -55,6 +66,8 @@ async def reorder_area_or_floor(
             )
         )
     try:
+        previous = await _order(client, kind)
+        context["previous_order"] = previous
         result = await client.send_websocket_message(
             {"type": f"config/{kind}_registry/reorder", f"{kind}_ids": ids}
         )
@@ -62,10 +75,23 @@ async def reorder_area_or_floor(
         exception_to_structured_error(e, context=context)
     if not result.get("success"):
         raise_core_refusal(f"Failed to reorder {kind}s", result, context=context)
-    return {
+    reply: dict[str, Any] = {
         "success": True,
         "kind": kind,
-        # Core keeps each id once, at its first place.
-        "order": list(dict.fromkeys(ids or [])),
+        "previous_order": previous,
+        "order": None,
+        "warnings": [
+            "A reorder is not covered by the auto-backup: previous_order is the "
+            "only record of the order it replaced. Pass it as order to go back."
+        ],
         "message": f"Successfully reordered {kind}s",
     }
+    try:
+        reply["order"] = await _order(client, kind)
+    except Exception as e:  # noqa: BLE001
+        # Core applied the reorder; a failed read of it is not a failed write.
+        reply["warnings"].append(
+            f"The {kind}s were reordered, but the new order could not be read "
+            f"back ({e}). Read it with ha_list_floors_areas()."
+        )
+    return reply

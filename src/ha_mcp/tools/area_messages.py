@@ -65,14 +65,17 @@ _AREA_PARAMS = (
 
 def validate_cross_kind_params(
     kind: str,
-    level: int | None,
+    level: Any,
     floor_id: str | None,
     picture: str | None,
     labels: list[str] | None = None,
     temperature_entity_id: str | None = None,
     humidity_entity_id: str | None = None,
 ) -> None:
-    """Reject params that don't belong to *kind* before building a set message."""
+    """Reject params that don't belong to *kind* before building a set message.
+
+    ``level`` is ``UNSET`` when the caller omitted it, else an int or None.
+    """
     # Reject cross-kind params loudly so silent intent loss can't happen
     # (e.g., kind='floor' with picture='...' previously dropped the picture
     # without a diagnostic). Floors have no labels in HA core.
@@ -174,11 +177,14 @@ def build_area_create_message(
 def build_floor_update_message(
     floor_id: str,
     name: str | None,
-    level: int | None,
+    level: Any,
     icon: str | None,
     parsed_aliases: list[str] | None,
 ) -> dict[str, Any]:
-    """Build a WebSocket message for updating an existing floor."""
+    """Build a WebSocket message for updating an existing floor.
+
+    A ``level`` of ``UNSET`` is left out; None clears the level.
+    """
     message: dict[str, Any] = {
         "type": "config/floor_registry/update",
         "floor_id": floor_id,
@@ -196,11 +202,14 @@ def build_floor_update_message(
 
 def build_floor_create_message(
     name: str,
-    level: int | None,
+    level: Any,
     icon: str | None,
     parsed_aliases: list[str] | None,
 ) -> dict[str, Any]:
-    """Build a WebSocket message for creating a new floor."""
+    """Build a WebSocket message for creating a new floor.
+
+    A ``level`` of ``UNSET`` or None is left out.
+    """
     message: dict[str, Any] = {
         "type": "config/floor_registry/create",
         "name": name,

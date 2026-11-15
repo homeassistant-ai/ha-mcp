@@ -832,8 +832,8 @@ class TestAreaFloorIntegration:
             created.append(floor_data["floor_id"])
             cleanup_tracker.track("floor", created[-1])
 
-        # Core wants every floor id exactly once: keep the others as they are
-        # and put ours last, highest level first.
+        # Core refuses a list that misses an existing floor id: keep the others
+        # as they are and put ours last, highest level first.
         listed = parse_mcp_result(
             await mcp_client.call_tool("ha_list_floors_areas", {})
         )

@@ -15,6 +15,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..backup_registry_items import registry_rows
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.registry_update_lock import registry_update_lock
 from .area_messages import (
@@ -153,9 +154,7 @@ class AreaTools:
                     'orphaned_areas) to only the specified keys. E.g. ["area_id", "name"] '
                     "returns slim area records. None = full records. Unknown keys yield "
                     "empty records. Keys are those of Home Assistant's area registry "
-                    "row: area_id, name, icon, floor_id, aliases, picture, labels, "
-                    "temperature_entity_id, humidity_entity_id, created_at, "
-                    "modified_at."
+                    "row, e.g. floor_id."
                 ),
             ),
         ] = None,
@@ -165,7 +164,7 @@ class AreaTools:
 
         Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
 
-        Floors are not re-sorted by level. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
+        ha_set_area_or_floor(order=...) sets the order of the floors. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
         """
         # Validate projection params before any WS round-trips so a bad shape
         # fails fast without burning two registry reads.
@@ -336,7 +335,7 @@ class AreaTools:
         identifier: str | None,
         name: str | None,
         floor_id: str | None,
-        level: int | None,
+        level: Any,
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
@@ -415,34 +414,26 @@ class AreaTools:
             id_key = "floor_id"
         return message, result_key, id_key, operation, name
 
-    async def _require_existing(self, kind: str, identifier: str) -> None:
-        """Raise RESOURCE_NOT_FOUND when an update names an area or floor Core lacks.
+    async def _raise_if_unknown(self, kind: str, identifier: str) -> None:
+        """Raise RESOURCE_NOT_FOUND when Core refused the update of an id it lacks.
 
         Core's update commands do not catch the ``KeyError`` for an unknown id,
-        so the refusal reaches the caller as an opaque "Unknown error". A refused
-        read lets the write go on, with a warning in the log; an id Core lacks then
-        ends as Core's own "Unknown error".
+        so that refusal is the "Unknown error" Core gives for every error they
+        do not catch. The registry tells the two apart, and is read only then.
         """
         id_key = f"{kind}_id"
-        listed = await self._client.send_websocket_message(
-            {"type": f"config/{kind}_registry/list"}
-        )
-        rows = listed.get("result") if listed.get("success") else None
-        if not isinstance(rows, list):
-            logger.warning(
-                "Could not check that %s %s exists; the update goes on: %r",
-                kind,
-                identifier,
-                listed.get("error", "no list in the answer"),
-            )
-            return
+        rows = await registry_rows(self._client, kind)
         if any(isinstance(r, dict) and r.get(id_key) == identifier for r in rows):
             return
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 f"{kind.capitalize()} not found: {identifier}",
-                context={"kind": kind, id_key: identifier},
+                context={
+                    "kind": kind,
+                    id_key: identifier,
+                    "ha_error_code": "unknown_error",
+                },
                 suggestions=[
                     f"To create a new {kind}, omit id",
                     f"To update an existing {kind}, pass its exact {id_key} "
@@ -610,7 +601,7 @@ class AreaTools:
         name="ha_set_area_or_floor",
         tags={"Areas & Floors"},
         annotations=write_hints(
-            "Create or Update Area or Floor",
+            "Create, Update or Reorder Areas or Floors",
             destructive=True,
             idempotent=False,
             open_world=False,
@@ -717,8 +708,9 @@ class AreaTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Reorder every area or floor of this kind: all existing ids in "
-                    "the new order, each exactly once (Core refuses anything else)."
+                    "Reorder the areas or floors of this kind: every existing id, in "
+                    "the new order; Core refuses a list that misses an existing id or "
+                    "names an unknown one."
                 ),
                 default=None,
             ),
@@ -731,6 +723,7 @@ class AreaTools:
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
         Pass order alone to set the order Home Assistant lists areas or floors in.
+        A reorder is not covered by the auto-backup; its reply names the order it replaced as previous_order.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
@@ -801,8 +794,6 @@ class AreaTools:
             async with (
                 registry_update_lock(kind, id) if id is not None else nullcontext()
             ):
-                if id is not None:
-                    await self._require_existing(kind, id)
                 # Issue #2159: the area registry stores an unknown floor_id
                 # verbatim, and an unknown label_id is dropped on the way in
                 # (HA filters the set through the label registry) — both end as a
@@ -838,6 +829,8 @@ class AreaTools:
                 ctx["name"] = name
             if id:
                 ctx[id_key] = id
+                if result.get("error_code") == "unknown_error":
+                    await self._raise_if_unknown(kind, id)
             raise_core_refusal(f"Failed to {operation} {kind}", result, context=ctx)
 
         except ToolError:

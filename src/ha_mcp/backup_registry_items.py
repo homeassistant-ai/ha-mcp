@@ -32,7 +32,8 @@ from .backup_entity_ids import _manager
 from .client.rest_client import HomeAssistantCommandError
 
 
-async def _rows(client: Any, kind: str) -> list[Any]:
+async def registry_rows(client: Any, kind: str) -> list[Any]:
+    """The rows of the label, area or floor registry, in the order Core lists them."""
     # Route the read through the component's ``registries`` capability when
     # available (one in-process read of the registry) instead of dumping the
     # whole registry via WS. Lazy import to avoid the backup_manager → tools →
@@ -52,7 +53,7 @@ async def _rows(client: Any, kind: str) -> list[Any]:
 
 
 async def _category_rows(client: Any, scope: str) -> list[Any]:
-    # Same component-first routing as ``_rows``; categories are scoped, so the
+    # Same component-first routing as ``registry_rows``; categories are scoped, so the
     # requested scope rides ``category_scopes``.
     from .tools.component_registries import fetch_registries_via_component
 
@@ -107,7 +108,7 @@ async def _set_fields(
     command not sent) or refuses. An entry the component does not find is
     answered like one with no set (``[]``). The command sent and left without
     an answer raises."""
-    from .tools.component_api import ask_component  # import cycle, as _rows
+    from .tools.component_api import ask_component  # import cycle, as registry_rows
 
     reply = await ask_component(
         client,
@@ -121,7 +122,8 @@ async def _set_fields(
 
 def _order_untold(what: str, lists: list[str]) -> str:
     """The warning for lists whose order the component did not rule on."""
-    from .tools.component_api import COMPONENT_VIA_HACS  # import cycle, as _rows
+    # Import cycle, as registry_rows.
+    from .tools.component_api import COMPONENT_VIA_HACS
 
     return (
         f"{what} the items in {', '.join(sorted(lists))} in another order than in "
@@ -230,7 +232,8 @@ async def _restore_item(
                 client, {"type": f"config/{registry}/create", **extra_ids, **fields}
             )
         except HomeAssistantCommandError as err:
-            from .tools.helpers import core_error_message  # import cycle, as _rows
+            # Import cycle, as registry_rows.
+            from .tools.helpers import core_error_message
 
             core = core_error_message(err)
             holder = (
@@ -258,12 +261,12 @@ async def _restore_item(
 
 
 async def fetch_label(client: Any, entity_id: str) -> Any:
-    rows = await _rows(client, "label")
+    rows = await registry_rows(client, "label")
     return next((r for r in rows if r.get("label_id") == entity_id), None)
 
 
 async def restore_label(client: Any, entity_id: str, config: Any) -> Any:
-    rows = await _rows(client, "label")
+    rows = await registry_rows(client, "label")
     payload = _manager()._strip_readonly(config, "label_id")
     return await _restore_item(
         client,
@@ -307,7 +310,7 @@ async def fetch_area_or_floor(client: Any, entity_id: str) -> Any:
     kind, _, real_id = entity_id.partition(":")
     if kind not in _AREA_OR_FLOOR or not real_id:
         return None
-    for item in await _rows(client, kind):
+    for item in await registry_rows(client, kind):
         if item.get(f"{kind}_id") == real_id:
             return {"kind": kind, **item}
     return None
@@ -320,7 +323,7 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
     # ``floor_id`` is the id of a floor but a field of an area.
     stored = _manager()._strip_readonly(config, "kind", f"{kind}_id")
     async with _manager().registry_update_lock(kind, real_id):
-        rows = await _rows(client, kind)
+        rows = await registry_rows(client, kind)
         row = await _restore_item(
             client,
             rows,
@@ -351,7 +354,7 @@ async def _area_warnings(client: Any, stored: dict[str, Any], row: Any) -> list[
         )
     floor_id = row.get("floor_id")
     if floor_id and floor_id not in {
-        f.get("floor_id") for f in await _rows(client, "floor")
+        f.get("floor_id") for f in await registry_rows(client, "floor")
     }:
         warnings.append(
             f"The area is on floor {floor_id}, which no longer exists, and Core "
@@ -375,7 +378,7 @@ async def _restored_item(client: Any, domain: str, entity_id: str, config: Any) 
     differs.
     """
     if domain == "label":
-        return _holding_name(await _rows(client, "label"), config)
+        return _holding_name(await registry_rows(client, "label"), config)
     if domain == "category":
         scope = entity_id.partition(":")[0]
         row = _holding_name(await _category_rows(client, scope), config)
@@ -383,7 +386,7 @@ async def _restored_item(client: Any, domain: str, entity_id: str, config: Any) 
     kind = entity_id.partition(":")[0]
     if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
         return None
-    row = _holding_name(await _rows(client, kind), config)
+    row = _holding_name(await registry_rows(client, kind), config)
     return row and {"kind": kind, **row}
 
 
