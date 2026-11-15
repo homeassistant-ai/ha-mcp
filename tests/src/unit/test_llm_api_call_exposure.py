@@ -9,15 +9,11 @@ from __future__ import annotations
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import llm
 
 from custom_components.ha_mcp_tools import llm_api
 
-from ._llm_api_helpers import (
-    CoreToolResult,
-    fake_session,
-    llm_context,
-    tool_entry,
-)
+from ._llm_api_helpers import fake_session, llm_context, tool_entry
 
 _URL = "http://127.0.0.1:9584/private_x"
 
@@ -26,7 +22,6 @@ _URL = "http://127.0.0.1:9584/private_x"
 async def test_tool_hidden_after_the_list_was_built_is_refused(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, via_call_tool: bool
 ) -> None:
-    monkeypatch.setattr(llm_api.llm, "ToolResult", CoreToolResult, raising=False)
     session = fake_session(monkeypatch, tools=[tool_entry("ha_search", exposed=False)])
     tool: llm_api.HaMcpCallTool | llm_api.HaMcpTool
     if via_call_tool:
@@ -41,6 +36,6 @@ async def test_tool_hidden_after_the_list_was_built_is_refused(
     out = await tool.async_call(hass, tool_input, llm_context())
 
     session.call_tool.assert_not_awaited()
-    assert isinstance(out, CoreToolResult)
+    assert isinstance(out, llm.ToolResult)
     assert out.error is True
     assert out.data["error"] == "Unknown tool 'ha_search'."

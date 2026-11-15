@@ -198,17 +198,18 @@ async def test_event_stream_reaches_the_client_while_the_server_still_writes(
     await register(WEBHOOK_AUTH_NONE)
     client = await hass_client_no_auth()
 
-    resp = await client.post(WEBHOOK_PATH, data=b"{}")
     try:
+        resp = await asyncio.wait_for(client.post(WEBHOOK_PATH, data=b"{}"), 5)
         assert resp.headers["Content-Type"] == "text/event-stream"
         assert resp.headers["X-Accel-Buffering"] == "no"
         assert resp.headers["Content-Encoding"] == "identity"
         assert resp.headers["Cache-Control"] == "no-cache, no-transform"
         assert resp.headers["Mcp-Session-Id"] == "stream-sess"
         assert await asyncio.wait_for(resp.content.readany(), 5) == first
+        release.set()
+        assert await asyncio.wait_for(resp.read(), 5) == second
     finally:
         release.set()
-    assert await asyncio.wait_for(resp.read(), 5) == second
 
 
 async def test_stream_cut_by_the_server_is_logged_and_ended_cleanly(

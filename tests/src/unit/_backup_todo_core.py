@@ -114,7 +114,9 @@ async def add_item(
     await write_item(hass, "add_item", summary, entity_id=entity_id, **fields)
     uid = uid_of(hass, summary, entity_id)
     if completed:
-        await write_item(hass, "update_item", uid, status="completed")
+        await write_item(
+            hass, "update_item", uid, entity_id=entity_id, status="completed"
+        )
     return uid
 
 

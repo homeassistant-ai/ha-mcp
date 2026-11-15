@@ -13,8 +13,10 @@ and the manager reads it back over the client.
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Self
 
 import pytest
@@ -96,7 +98,7 @@ class SnapshotClock:
 
 @pytest.fixture
 def snapshot_clock(monkeypatch: pytest.MonkeyPatch) -> SnapshotClock:
-    """A clock the test sets for the manager's snapshot stamps."""
+    """A clock the test sets for the manager's snapshot stamps and its age cutoff."""
     clock = SnapshotClock()
 
     class _Moment(datetime):
@@ -104,7 +106,13 @@ def snapshot_clock(monkeypatch: pytest.MonkeyPatch) -> SnapshotClock:
         def now(cls, tz: tzinfo | None = None) -> Self:
             return cls.fromisoformat(clock.moment.isoformat())
 
+    def epoch() -> float:
+        return clock.moment.timestamp()
+
     monkeypatch.setattr(bm, "datetime", _Moment)
+    monkeypatch.setattr(
+        bm, "time", SimpleNamespace(time=epoch, monotonic=time.monotonic)
+    )
     return clock
 
 

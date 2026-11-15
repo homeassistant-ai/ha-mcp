@@ -11,6 +11,7 @@ behind the proxy is a real aiohttp server on loopback.
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import shutil
 import subprocess
@@ -555,10 +556,13 @@ class TestProxyForwarding:
         admin_cookies: dict[str, str],
         hass_client_no_auth: ClientSessionGenerator,
     ) -> None:
+        release = asyncio.Event()
+
         async def events(request: web.Request) -> web.StreamResponse:
             response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
             await response.prepare(request)
             await response.write(b"data: a\n\n")
+            await release.wait()
             await response.write(b"data: b\n\n")
             await response.write_eof()
             return response
@@ -566,11 +570,17 @@ class TestProxyForwarding:
         running_server.respond = events
         client = await hass_client_no_auth()
 
-        resp = await client.get(_APP + "api/settings/stream", cookies=admin_cookies)
-
-        assert resp.headers["X-Accel-Buffering"] == "no"
-        assert resp.content_type == "text/event-stream"
-        assert await resp.read() == b"data: a\n\ndata: b\n\n"
+        try:
+            resp = await asyncio.wait_for(
+                client.get(_APP + "api/settings/stream", cookies=admin_cookies), 5
+            )
+            assert resp.headers["X-Accel-Buffering"] == "no"
+            assert resp.content_type == "text/event-stream"
+            assert await asyncio.wait_for(resp.content.readany(), 5) == b"data: a\n\n"
+            release.set()
+            assert await asyncio.wait_for(resp.read(), 5) == b"data: b\n\n"
+        finally:
+            release.set()
 
 
 # ---------------------------------------------------------------------------

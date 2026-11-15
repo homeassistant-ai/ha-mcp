@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -149,8 +150,13 @@ async def test_a_wrapped_write_runs_after_its_target_is_snapshotted(
 
 async def test_a_capture_that_gets_no_answer_does_not_block_the_write(
     unreachable_client: HomeAssistantClient,
+    backup_settings: config.Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Capture is best-effort: a capture error must not block the write."""
+    manager = bm.get_backup_manager(unreachable_client, backup_settings)
+    capture = AsyncMock(wraps=manager.maybe_snapshot)
+    monkeypatch.setattr(manager, "maybe_snapshot", capture)
     ran: list[str] = []
 
     @with_auto_backup(domain="label", id_param="label_id", client=unreachable_client)
@@ -159,6 +165,7 @@ async def test_a_capture_that_gets_no_answer_does_not_block_the_write(
         return "ok"
 
     assert await fake_tool(label_id="kitchen") == "ok"
+    capture.assert_awaited_once()
     assert ran == ["kitchen"]
 
 

@@ -26,8 +26,11 @@ from ._webhook_proxy_oauth_core import (
     DEV,
     GOOGLE_REDIRECT_URIS,
     KEY,
+    LOOPBACK_CLIENT,
+    LOOPBACK_REDIRECT,
     OAUTH_BASE,
     CimdWeb,
+    CoreAuth,
     ProxyStarter,
     b64url,
     hand_signed_envelope,
@@ -38,6 +41,9 @@ from ._webhook_proxy_oauth_core import (
 )
 from ._webhook_proxy_oauth_core import (
     component as component,
+)
+from ._webhook_proxy_oauth_core import (
+    core_auth as core_auth,
 )
 from ._webhook_proxy_oauth_core import (
     fs_root as fs_root,
@@ -485,7 +491,7 @@ def test_tampering_a_rotated_key_and_bad_payloads_are_invalid(
     future_version = hand_signed_envelope(
         KEY, {"v": 2, "t": "core-refresh", "c": "https://a.example", "p": "x"}
     )
-    assert indirect.unwrap_refresh_token(KEY, future_version, "cid") is states.INVALID
+    assert indirect.unwrap_refresh_token(KEY, future_version, None) is states.INVALID
 
 
 def test_a_missing_presenter_unwraps_any_intact_envelope(
@@ -601,11 +607,36 @@ def test_revocation_caps_the_unverified_parse(component: ModuleType) -> None:
     assert indirect.core_token_for_revocation(KEY, ours) == huge
 
 
+@pytest.mark.parametrize("refresh_token_is_valid", [True, False])
+async def test_core_refresh_answers_are_relayed_byte_identical(
+    component: ModuleType, core_auth: CoreAuth, refresh_token_is_valid: bool
+) -> None:
+    """Core's real answer to a refresh, success or invalid_grant, carries no
+    refresh_token to wrap and is relayed untouched."""
+    indirect = submodule(component, "oauth_indirect")
+    tokens = await core_auth.tokens_for(LOOPBACK_CLIENT, LOOPBACK_REDIRECT)
+    refresh_token = tokens["refresh_token"] if refresh_token_is_valid else "not-a-token"
+    response = await core_auth.client.post(
+        "/auth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": LOOPBACK_CLIENT,
+        },
+    )
+    body = await response.read()
+    assert response.status == (200 if refresh_token_is_valid else 400)
+
+    rewritten = indirect.rewrite_token_response_body(
+        KEY, body, "https://a.example", "cid"
+    )
+
+    assert rewritten is body
+
+
 @pytest.mark.parametrize(
     "body",
     [
-        b'{"access_token":"x","token_type":"Bearer"}',  # Core's refresh response
-        b'{"error":"invalid_grant"}',
         b'{"refresh_token":null}',
         b'{"refresh_token":42}',
         b'["not","an","object"]',

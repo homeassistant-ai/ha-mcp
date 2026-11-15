@@ -286,10 +286,13 @@ async def test_an_accounts_login_switches_the_server_and_is_never_stored(
 ) -> None:
     """The login is exchanged for a token issued for the account; neither the
     username nor the password is kept."""
-    account = await add_local_account(hass, local_auth, "ha-mcp", "pw")
+    password = "never-kept-0f3c9a"
+    account = await add_local_account(hass, local_auth, "ha-mcp", password)
     entry = add_options_entry(hass, data={DATA_WEBHOOK_ID: "w"})
 
-    result = await _save(hass, entry, {ADMIN_USERNAME: "ha-mcp", ADMIN_PASSWORD: "pw"})
+    result = await _save(
+        hass, entry, {ADMIN_USERNAME: "ha-mcp", ADMIN_PASSWORD: password}
+    )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert ADMIN_USERNAME not in result["data"]
@@ -298,7 +301,9 @@ async def test_an_accounts_login_switches_the_server_and_is_never_stored(
     assert issued is not None
     assert issued.user.id == account.id
     assert entry.data[DATA_ISSUED_TOKEN_ID] == issued.id
-    assert "pw" not in str(entry.data) + str(entry.options)
+    # Searched as text so a nested copy is found too; the password cannot
+    # turn up by chance in the generated ids and tokens.
+    assert password not in str(entry.data) + str(entry.options)
 
 
 async def test_leaving_the_token_empty_keeps_the_current_one(

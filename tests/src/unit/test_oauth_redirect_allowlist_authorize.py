@@ -6,9 +6,7 @@ not list, and a refusal must be readable in the log without being forgeable.
 
 from __future__ import annotations
 
-import itertools
 import logging
-import time
 import uuid
 
 import pytest
@@ -35,7 +33,6 @@ from ._oauth_autoapprove_core import open_oauth_surface as open_oauth_surface
 
 CHATGPT = "https://chatgpt.example/connector/cb"
 REFUSED_LINE = "not on the OAuth callback list"
-_runs = itertools.count(1)
 
 
 class RefusalClock:
@@ -50,9 +47,12 @@ class RefusalClock:
 
 @pytest.fixture(autouse=True)
 def refusal_clock(monkeypatch: pytest.MonkeyPatch) -> RefusalClock:
-    """Each test starts a full interval after the previous refusal was logged."""
-    clock = RefusalClock(time.monotonic() + next(_runs) * 100_000.0)
+    """Each test gets a fixed clock and a refusal log with no earlier refusal."""
+    clock = RefusalClock(1_000.0)
     monkeypatch.setattr(oauth_autoapprove, "time", clock)
+    monkeypatch.setattr(
+        oauth_autoapprove, "_refusal_log", {"last": float("-inf"), "suppressed": 0}
+    )
     return clock
 
 

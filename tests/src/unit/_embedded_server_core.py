@@ -56,6 +56,7 @@ INDEX_VERSION = "8.6.0"
 # The version of the ha-mcp that is really installed here, and so really runs.
 REAL_VERSION = importlib.metadata.version(STABLE)
 _SERVER_DISTS = (STABLE, DEV)
+_WORKER_JOIN_SECONDS = 10
 
 
 @pytest.fixture
@@ -76,6 +77,8 @@ def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
         return []
 
     monkeypatch.setattr(es, "audit_dependency_graph", audit)
+    # Readiness is polled every 0.5s by default: a test pays it on every start.
+    shorten(monkeypatch, ready_poll=0.05)
     for name in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED"):
         monkeypatch.setenv(name, "")
         monkeypatch.delenv(name)
@@ -87,6 +90,9 @@ def embedded_server_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
         if name == "ha_mcp" or name.startswith("ha_mcp.")
     }
     yield audited_roots
+    for worker in threading.enumerate():
+        if worker.name == WORKER_THREAD:
+            worker.join(timeout=_WORKER_JOIN_SECONDS)
     reset_embedded_connection()
     reset_global_settings()
     for name in [n for n in sys.modules if n == "ha_mcp" or n.startswith("ha_mcp.")]:

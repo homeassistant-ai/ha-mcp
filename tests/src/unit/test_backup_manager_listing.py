@@ -7,7 +7,6 @@ and restored through the backup manager's public calls.
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -24,6 +23,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ._backup_core import (
+    SnapshotClock,
     add_label,
     captured_name,
     manage_backup,
@@ -31,6 +31,7 @@ from ._backup_core import (
     snapshot_of,
 )
 from ._backup_core import backup_settings as backup_settings
+from ._backup_core import snapshot_clock as snapshot_clock
 from ._backup_core import snapshot_manager as snapshot_manager
 
 
@@ -121,13 +122,17 @@ async def test_delete_snapshot_removes_the_file(
 
 
 async def test_bulk_delete_by_age_keeps_recent_snapshots(
-    snapshot_manager: bm.BackupManager, label_registry: lr.LabelRegistry
+    snapshot_manager: bm.BackupManager,
+    label_registry: lr.LabelRegistry,
+    snapshot_clock: SnapshotClock,
 ) -> None:
     kitchen = add_label(label_registry, "Kitchen")
+    now = snapshot_clock.moment.timestamp()
     old = await snapshot_of(snapshot_manager, kitchen)
-    forty_days_ago = time.time() - 40 * 86400
-    os.utime(old, (forty_days_ago, forty_days_ago))
+    os.utime(old, (now - 40 * 86400, now - 40 * 86400))
+    snapshot_clock.tick()
     recent = await snapshot_of(snapshot_manager, kitchen)
+    os.utime(recent, (now - 29 * 86400, now - 29 * 86400))
 
     bulk = snapshot_manager.delete_bulk(older_than_days=30)
 

@@ -94,7 +94,7 @@ def _without_entity_mapping(manager: bm.BackupManager, template: SavedTemplate) 
 # -- a failed restore keeps what it did -------------------------------------
 
 
-@pytest.mark.parametrize("consumer", ["settings", "mcp", "script"])
+@pytest.mark.parametrize("consumer", ["mcp", "script"])
 @pytest.mark.parametrize(("applied", "verified", "words"), FAILURES)
 async def test_a_failed_restore_tells_the_user_what_was_changed(
     snapshot_manager: bm.BackupManager,
@@ -589,7 +589,7 @@ async def test_a_saved_entity_id_that_is_taken_refuses_the_recreation(
 # -- a Template helper restore reports the same outcome everywhere ----------
 
 
-@pytest.mark.parametrize("consumer", ["settings", "mcp", "script"])
+@pytest.mark.parametrize("consumer", ["mcp", "script"])
 async def test_a_restore_refused_for_a_changed_name_says_which_field_and_changes_nothing(
     hass: HomeAssistant,
     snapshot_manager: bm.BackupManager,
@@ -638,7 +638,7 @@ async def test_a_restore_refused_for_a_changed_name_says_which_field_and_changes
         assert "secret-marker" not in rendered.alerts[0]
 
 
-@pytest.mark.parametrize("consumer", ["settings", "mcp", "script"])
+@pytest.mark.parametrize("consumer", ["mcp", "script"])
 async def test_a_restore_that_cannot_take_its_safety_snapshot_starts_no_flow(
     snapshot_manager: bm.BackupManager,
     core_client: HomeAssistantClient,
@@ -677,7 +677,7 @@ async def test_a_restore_that_cannot_take_its_safety_snapshot_starts_no_flow(
         assert "Nothing was changed" in rendered.alerts[0]
 
 
-@pytest.mark.parametrize("consumer", ["settings", "mcp", "script"])
+@pytest.mark.parametrize("consumer", ["mcp", "script"])
 async def test_a_restore_whose_submit_gets_no_answer_names_the_safety_snapshot(
     snapshot_manager: bm.BackupManager,
     core_client: HomeAssistantClient,

@@ -263,23 +263,6 @@ async def test_removing_the_entry_leaves_a_pasted_token_valid(
 
 
 @pytest.mark.usefixtures("socket_enabled")
-async def test_a_start_with_an_override_replaces_the_cached_server_modules(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Without it an entry reload reinstalls the package and keeps serving the old
-    code until Home Assistant restarts; ``ha_mcp_other`` is not a server module."""
-    before = generation()
-    monkeypatch.setitem(sys.modules, "ha_mcp.stale_probe", ModuleType("probe"))
-    other = ModuleType("ha_mcp_other")
-    monkeypatch.setitem(sys.modules, "ha_mcp_other", other)
-
-    async with running_server(hass, options=OVERRIDE):
-        assert generation() is not before
-        assert "ha_mcp.stale_probe" not in sys.modules
-        assert sys.modules["ha_mcp_other"] is other
-
-
-@pytest.mark.usefixtures("socket_enabled")
 async def test_a_start_with_no_server_modules_cached_imports_them_fresh(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -322,15 +305,22 @@ async def test_a_changed_install_replaces_the_warm_module_cache(
 
 @pytest.mark.usefixtures("socket_enabled")
 async def test_an_override_replaces_the_cache_even_when_the_version_matches(
-    hass: HomeAssistant,
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A re-pointed tarball or pin can change the code under the same version
-    string, which a version-keyed skip would serve stale."""
+    string, which a version-keyed skip would serve stale; without the purge an
+    entry reload keeps serving the old code until Home Assistant restarts.
+    ``ha_mcp_other`` is not a server module and stays."""
     async with running_server(hass):
         warm = generation()
+    monkeypatch.setitem(sys.modules, "ha_mcp.stale_probe", ModuleType("probe"))
+    other = ModuleType("ha_mcp_other")
+    monkeypatch.setitem(sys.modules, "ha_mcp_other", other)
 
     async with running_server(hass, options=OVERRIDE):
         assert generation() is not warm
+        assert "ha_mcp.stale_probe" not in sys.modules
+        assert sys.modules["ha_mcp_other"] is other
 
 
 # -- the running code against the installed one ------------------------------

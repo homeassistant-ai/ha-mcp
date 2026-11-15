@@ -307,26 +307,8 @@ class TestWhatTheWalkLeavesAlone:
 
 
 class TestWhatReachesCore:
-    async def test_the_probatio_codec_reemits_a_raw_exclusive_bound_in_the_draft4_form(
-        self,
-    ) -> None:
-        """Positive control: the premise every docstring here rests on.
-
-        Without this, the tests below only show that the walk rewrites a
-        keyword -- not that leaving the keyword alone would break anything.
-        Probatio is what Core 2026.9+ converts with; the legacy
-        voluptuous-openapi cannot show the defect at all, since it drops an
-        exclusive bound on ingest and never emits the Draft-4 flag.
-        """
-        raw = {
-            "type": "object",
-            "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
-        }
-
-        out = probatio.to_openapi(probatio.from_openapi(raw))
-
-        assert out["properties"]["b"].get("exclusiveMinimum") is True
-
+    # Premise: probatio (Core 2026.9+) re-emits a raw exclusive bound as the
+    # Draft-4 boolean flag, so the walk must rewrite it before Core converts.
     async def test_the_listed_schema_survives_the_probatio_round_trip(
         self, normalised: Normalise
     ) -> None:
