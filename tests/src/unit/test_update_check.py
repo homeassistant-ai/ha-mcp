@@ -141,36 +141,24 @@ class TestGetUpdateInfoGating:
 class TestGetUpdateInfoChannels:
     """Stable vs dev: each channel compares against its own PyPI package."""
 
-    def test_stable_install_queries_ha_mcp_and_reports_update(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_stable_install_queries_ha_mcp_and_reports_update(
+        self, pypi: PyPI
     ) -> None:
-        captured: dict[str, str] = {}
-
-        def fetch(package: str) -> PyPIRelease | None:
-            captured["package"] = package
-            return PyPIRelease("7.9.0")
-
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
-        info = get_update_info()
-        assert captured["package"] == "ha-mcp"
+        pypi.publish("ha-mcp", "7.9.0")
+        info = await asyncio.to_thread(get_update_info)
+        assert pypi.asked == ["ha-mcp"]
         assert info == UpdateInfo("7.8.0", "7.9.0", True)
 
-    def test_dev_install_queries_ha_mcp_dev_and_reports_update(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_dev_install_queries_ha_mcp_dev_and_reports_update(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         """Dev parity: a ``.dev`` install compares against the ``ha-mcp-dev``
         package and surfaces newer dev builds (matching the add-on dev channel)."""
-        captured: dict[str, str] = {}
-
-        def fetch(package: str) -> PyPIRelease | None:
-            captured["package"] = package
-            return PyPIRelease("7.8.0.dev720")
-
+        pypi.publish("ha-mcp-dev", "7.8.0.dev720")
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev714")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
         get_update_info.cache_clear()
-        info = get_update_info()
-        assert captured["package"] == "ha-mcp-dev"
+        info = await asyncio.to_thread(get_update_info)
+        assert pypi.asked == ["ha-mcp-dev"]
         assert info == UpdateInfo("7.8.0.dev714", "7.8.0.dev720", True)
 
     async def test_up_to_date_reports_not_available(self, pypi: PyPI) -> None:
@@ -312,20 +300,14 @@ class TestFetchSupervisorAddonInfo:
 class TestInMemoryMemo:
     """The check runs once per process (memoized), not on every call."""
 
-    def test_memoized_until_cleared(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[str] = []
-
-        def fetch(package: str) -> PyPIRelease | None:
-            calls.append(package)
-            return PyPIRelease("7.9.0")
-
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
-        get_update_info()
-        get_update_info()
-        assert len(calls) == 1  # second call reused the in-memory result
+    async def test_memoized_until_cleared(self, pypi: PyPI) -> None:
+        pypi.publish("ha-mcp", "7.9.0")
+        await asyncio.to_thread(get_update_info)
+        await asyncio.to_thread(get_update_info)
+        assert len(pypi.asked) == 1  # second call reused the in-memory result
         get_update_info.cache_clear()
-        get_update_info()
-        assert len(calls) == 2  # re-checked after cache_clear
+        await asyncio.to_thread(get_update_info)
+        assert len(pypi.asked) == 2  # re-checked after cache_clear
 
 
 class TestFetchLatestFromPypi:
