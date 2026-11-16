@@ -118,7 +118,7 @@ NAMED_RELOADS = {
 # Core's reload-all runs the configuration check and then every reload inside
 # one call, so it gets longer than the client's default wait for one command.
 RELOAD_WAIT_SECONDS = 120.0
-_RELOAD_ALL_FAILED = (
+RELOAD_ALL_FAILED_HINT = (
     "A failed configuration check stops reload-all before anything reloads. "
     "Any other failure is one integration's: the rest still reloaded, and "
     "Home Assistant's log names the one that failed"
@@ -220,13 +220,16 @@ class SystemTools:
     ) -> dict[str, Any]:
         """Execute a Home Assistant configuration reload without a full restart.
 
-        Reloads configuration so changes take effect without restarting Home
-        Assistant. Use it after editing automation/script YAML, adding YAML
-        helpers, or changing customize.yaml or themes. target="all" is Home
-        Assistant's own reload-all; it checks the configuration first and
-        refuses, with the reason, when the check fails. A single integration's
-        reload does not check first: some (template is one) log a
-        configuration they reject and keep running, so read the result back.
+        WHEN NOT TO USE: the first YAML block of an integration, which is not
+        loaded and so has nothing to reload; that needs ha_restart.
+
+        Use it after editing automation/script YAML, adding YAML helpers, or
+        changing customize.yaml or themes.
+
+        Reload-all checks the configuration first and refuses, with the
+        reason, when the check fails. A single integration's reload does not
+        check first: some (template is one) log a configuration they reject
+        and keep running, so read the result back.
 
         EXAMPLES:
         - ha_reload_core(target="automation")
@@ -351,7 +354,7 @@ class SystemTools:
             "Check Home Assistant logs for details",
         ]
         if target == "all":
-            suggestions.append(_RELOAD_ALL_FAILED)
+            suggestions.append(RELOAD_ALL_FAILED_HINT)
         raise_core_refusal(
             f"{domain}.{service} failed", reply, {"target": target}, suggestions
         )

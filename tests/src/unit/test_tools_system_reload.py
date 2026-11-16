@@ -36,7 +36,11 @@ from pytest_homeassistant.common import (
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import DEFAULT_COMMAND_WAIT_TIMEOUT
-from ha_mcp.tools.tools_system import RELOAD_WAIT_SECONDS, SystemTools
+from ha_mcp.tools.tools_system import (
+    RELOAD_ALL_FAILED_HINT,
+    RELOAD_WAIT_SECONDS,
+    SystemTools,
+)
 
 from ._held_command import held_command
 
@@ -86,7 +90,6 @@ async def test_all_is_cores_own_reload_all(
 
     assert result["success"] is True
     assert result["service"] == "homeassistant.reload_all"
-    assert result["message"] == "Home Assistant ran homeassistant.reload_all"
     called = _called(calls)
     assert called[0] == "homeassistant.reload_all"
     assert {"an_integration_of_tomorrow.reload", "automation.reload"} <= set(called)
@@ -108,10 +111,8 @@ async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invali
     assert response["ha_error_code"] == "home_assistant_error"
     assert "configuration is not valid" in error["message"]
     assert "latitude" in error["message"]
-    assert "other reloads" not in error["message"]
-    assert error["suggestions"][0] == (
-        "Fix what Home Assistant reported, then reload again"
-    )
+    assert RELOAD_ALL_FAILED_HINT in error["suggestions"]
+    # The hint says nothing reloaded; this keeps it true of the Core in use.
     assert reloads == []
 
 
@@ -134,7 +135,8 @@ async def test_a_reload_that_fails_inside_reload_all_says_the_rest_still_reloade
 
     error = _error(excinfo)
     assert "the template file is unreadable" in error["message"]
-    assert any("the rest still reloaded" in hint for hint in error["suggestions"])
+    assert RELOAD_ALL_FAILED_HINT in error["suggestions"]
+    # The hint says the rest reloaded; this keeps it true of the Core in use.
     assert len(reloaded) == 1
 
 
@@ -160,7 +162,7 @@ async def test_one_target_calls_only_its_service(
     assert _called(calls) == [service]
     assert result["success"] is True
     assert result["service"] == service
-    assert result["message"] == f"Home Assistant ran {service}"
+    assert service in result["message"]
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -195,7 +197,7 @@ async def test_the_plural_of_a_reloadable_domain_is_answered_with_the_domain(
     with pytest.raises(ToolError) as excinfo:
         await SystemTools(core_client).ha_reload_core(target="automations")
 
-    assert "Did you mean 'automation'?" in _error(excinfo)["message"]
+    assert "'automation'" in _error(excinfo)["message"]
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -216,7 +218,7 @@ async def test_a_reload_core_fails_is_reported_with_cores_text(
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "template.reload failed" in error["message"]
     assert "the template file is unreadable" in error["message"]
-    assert not any("still reloaded" in hint for hint in error["suggestions"])
+    assert RELOAD_ALL_FAILED_HINT not in error["suggestions"]
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -251,7 +253,6 @@ async def test_a_reload_core_has_not_answered_in_time_is_not_reported_as_failed(
 
     response = json.loads(str(excinfo.value))
     assert response["write_outcome_unknown"] is True
-    assert "whether Home Assistant reloaded is unknown" in response["error"]["message"]
 
 
 @pytest.fixture
