@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
@@ -241,23 +242,22 @@ async def test_unknown_recreation_logs_step_and_type_without_remote_payload(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The answer to the creation flow gets no reply."""
-    answered: list[tuple[str | None, Any]] = []
-
-    async def no_reply(flow_id: str, answer: Any) -> None:
-        live = {
-            flow["flow_id"]: flow["handler"]
-            for flow in hass.config_entries.flow.async_progress()
-        }
-        answered.append((live.get(flow_id), answer))
-        raise HomeAssistantConnectionError("private upstream payload")
-
-    monkeypatch.setattr(component_core_client, "submit_config_flow_step", no_reply)
+    """The answer to the creation flow's menu gets no reply."""
+    monkeypatch.setattr(
+        component_core_client,
+        "submit_config_flow_step",
+        submit := AsyncMock(
+            side_effect=HomeAssistantConnectionError("private upstream payload")
+        ),
+    )
 
     with caplog.at_level(logging.WARNING), pytest.raises(bm.BackupRestoreError):
         await deleted_template.manager.restore_snapshot(deleted_template.name)
 
-    assert answered == [("template", {"next_step_id": "sensor"})]
+    # The one flow Core has open is the creation flow, and it got the answer.
+    (flow,) = hass.config_entries.flow.async_progress()
+    assert flow["handler"] == "template"
+    submit.assert_awaited_once_with(flow["flow_id"], {"next_step_id": "sensor"})
     assert "step=create_entry" in caplog.text
     assert "CreationFlowError" in caplog.text
     assert "private upstream payload" not in caplog.text
