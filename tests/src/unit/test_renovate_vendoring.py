@@ -11,6 +11,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 _PIN_FILE = "src/ha_mcp/_vendor/requirements.txt"
 _WEBSOCKETS_COMMAND = "python3 -I scripts/vendor_websockets.py"
 _FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
+_LOCK_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
 _PIN_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py"
 _HOOKS = {
     _WEBSOCKETS_COMMAND: (["websockets"], ["src/ha_mcp/_vendor/websockets/**"]),
@@ -71,40 +72,28 @@ def test_vendored_fastmcp_packages_update_together() -> None:
 
 
 @pytest.mark.parametrize(
-    ("command", "allowed"),
+    "command",
     [
-        (_WEBSOCKETS_COMMAND, True),
-        (_FASTMCP_COMMAND, True),
-        (_WEBSOCKETS_COMMAND + " --extra", False),
-        (_FASTMCP_COMMAND + " --extra", False),
-        (_WEBSOCKETS_COMMAND + "; echo unsafe", False),
-        ("echo unsafe && " + _FASTMCP_COMMAND, False),
-        ("python3 -I scripts/vendor_websocketsXpy", False),
-        ("python3 -I scripts/vendor_fastmcpXpy", False),
-        ("python3 scripts/vendor_websockets.py", False),
-        ("python3 scripts/vendor_fastmcp.py", False),
-        ("python3 -I scripts/another_script.py", False),
-        ("uv lock", True),
-        ("uv lock --upgrade", False),
-        ("uv lock; echo unsafe", False),
-        (
-            "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock",
-            True,
-        ),
-        (
-            "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock --extra",
-            False,
-        ),
-        ("uv run --no-project --with packaging python -I scripts/other.py", False),
-        (_PIN_SYNC_COMMAND + " --extra", False),
+        _WEBSOCKETS_COMMAND + " --extra",
+        _FASTMCP_COMMAND + " --extra",
+        _WEBSOCKETS_COMMAND + "; echo unsafe",
+        "echo unsafe && " + _FASTMCP_COMMAND,
+        "python3 -I scripts/vendor_websocketsXpy",
+        "python3 -I scripts/vendor_fastmcpXpy",
+        "python3 scripts/vendor_websockets.py",
+        "python3 scripts/vendor_fastmcp.py",
+        "python3 -I scripts/another_script.py",
+        "uv lock --upgrade",
+        "uv lock; echo unsafe",
+        _LOCK_SYNC_COMMAND + " --extra",
+        "uv run --no-project --with packaging python -I scripts/other.py",
+        _PIN_SYNC_COMMAND + " --extra",
     ],
 )
-def test_only_the_exact_post_upgrade_commands_are_authorized(
-    command: str, allowed: bool
-) -> None:
+def test_a_variant_of_a_post_upgrade_command_is_not_authorized(command: str) -> None:
     _, env = _configuration()
     patterns = json.loads(env.get("RENOVATE_ALLOWED_COMMANDS", "[]"))
-    assert any(re.search(pattern, command) for pattern in patterns) is allowed
+    assert not any(re.search(pattern, command) for pattern in patterns)
     assert env.get("RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS") == "false"
 
 
@@ -118,7 +107,13 @@ def test_every_configured_post_upgrade_command_is_authorized() -> None:
         for rule in config["packageRules"]
         for command in rule.get("postUpgradeTasks", {}).get("commands", [])
     ]
-    assert _PIN_SYNC_COMMAND in commands
+    assert {
+        _WEBSOCKETS_COMMAND,
+        _FASTMCP_COMMAND,
+        _PIN_SYNC_COMMAND,
+        "uv lock",
+        _LOCK_SYNC_COMMAND,
+    } <= set(commands)
     for command in commands:
         assert any(re.search(pattern, command) for pattern in patterns), command
 

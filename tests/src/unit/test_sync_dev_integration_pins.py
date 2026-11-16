@@ -151,7 +151,10 @@ def test_core_bump_moves_adds_and_drops_pins_in_both_files(
     requested = _serve(
         monkeypatch,
         "2026.12.0",
-        _manifests(zha=["zha==2.5.0", "New_Lib[b]==0.1.0"], knx=["new-lib[a]==0.1.0"]),
+        _manifests(
+            zha=["zha==2.5.0", "New_Lib[b]==0.1.0"],
+            knx=["new-lib[a]==0.1.0", 'marked==1.0; python_version < "3.15"'],
+        ),
     )
 
     assert sync.main(tmp_path) == 0
@@ -159,12 +162,18 @@ def test_core_bump_moves_adds_and_drops_pins_in_both_files(
     dev = tomllib.loads(pyproject.read_text("utf-8"))["dependency-groups"]["dev"]
     assert dev == [
         "homeassistant==2026.12.0",
+        'marked==1.0; python_version < "3.15"',
         "New_Lib[a,b]==0.1.0",
         "zha==2.5.0",
         "ruff==0.14.0",
     ]
     ignore = yaml.safe_load(dependabot.read_text("utf-8"))["updates"][0]["ignore"]
-    assert [entry["dependency-name"] for entry in ignore] == ["mcp", "new-lib", "zha"]
+    assert [entry["dependency-name"] for entry in ignore] == [
+        "mcp",
+        "marked",
+        "new-lib",
+        "zha",
+    ]
     assert set(requested) == {
         _MANIFEST_URL.format(version="2026.12.0", domain=domain)
         for domain in sync.INTEGRATIONS

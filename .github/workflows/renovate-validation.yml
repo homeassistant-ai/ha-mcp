@@ -11,6 +11,8 @@ on:
       - tests/src/unit/test_renovate_auto_merge.py
       - scripts/vendor_websockets.py
       - scripts/vendor_fastmcp.py
+      - scripts/sync_dev_integration_pins.py
+      - scripts/check_ha_constraint_alignment.py
       - tests/renovate/**
   workflow_dispatch:
 
@@ -69,7 +71,7 @@ jobs:
               node /source/tests/renovate/dashboard-events.mjs
               node /source/tests/renovate/auto-merge.mjs
             '
-      - name: Verify vendored updates with the scanner's executor
+      - name: Verify vendored and Core pin updates with the scanner's executor
         env:
           ENGINE: ${{ steps.validate.outputs.engine }}
         # No GitHub credentials. The fixture updates a disposable local repo.
