@@ -67,8 +67,13 @@ def start_zwave_mock() -> tuple[DockerContainer, str]:
         # The install happens inside this wait.
         .waiting_for(LogMessageWaitStrategy(_READY).with_startup_timeout(300))
     )
-    container.start()
-    address = container.get_docker_client().bridge_ip(
-        container.get_wrapped_container().id
-    )
+    try:
+        container.start()
+        address = container.get_docker_client().bridge_ip(
+            container.get_wrapped_container().id
+        )
+    except BaseException:
+        # A start that timed out leaves its container running.
+        container.stop()
+        raise
     return container, f"ws://{address}:3000"

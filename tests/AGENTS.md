@@ -125,7 +125,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   (`entity_registry`, `device_registry`, `area_registry`, ...),
   `hass.states.async_set`, `async_setup_component`, and `hass_ws_client`
   (`component_ws` in `src/unit/conftest.py` registers the `ha_mcp_tools/*`
-  commands on it).
+  commands on it). An entity of an entity integration (`camera`, `todo`, ...)
+  is a subclass of that integration's entity class registered with Core's
+  `setup_test_component_platform`, as Core's own tests do: the integration
+  under test is still Core's, and the platform is the device below it.
 - No stand-in module: nothing but the imported module in `sys.modules` for
   `homeassistant.*`, `aiohttp`, `voluptuous` or `yarl`.
 - Config entries are set up by Core (`hass.config_entries.async_setup`), which

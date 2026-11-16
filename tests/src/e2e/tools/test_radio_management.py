@@ -418,31 +418,35 @@ async def zwave_network(
     for every test outside the class.
     """
     container, url = await asyncio.to_thread(start_zwave_mock)
+    entry_id: str | None = None
     try:
         async with MCPAssertions(mcp_client) as mcp:
             created = await mcp.call_tool_success(
                 "ha_set_integration", {"domain": "zwave_js", "config": {"url": url}}
             )
-            entry_id = created["entry_id"]
-            try:
-                await wait_for_tool_result(
-                    mcp_client,
-                    tool_name="ha_manage_radio",
-                    arguments={"radio": "zwave", "action": "network_status"},
-                    predicate=lambda data: len(data.get("nodes", ())) == 2,
-                    timeout=60,
-                    description="the mock Z-Wave network is loaded",
-                )
-                device_id = await _switch_device_id(ha_client)
-                await _parameters_listed(mcp_client, device_id)
-                yield ZwaveNetwork(entry_id, device_id)
-            finally:
-                await mcp.call_tool_success(
-                    "ha_remove_helpers_integrations",
-                    {"target": entry_id, "confirm": True},
-                )
+        entry_id = created["entry_id"]
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_manage_radio",
+            arguments={"radio": "zwave", "action": "network_status"},
+            predicate=lambda data: len(data.get("nodes", ())) == 2,
+            timeout=60,
+            description="the mock Z-Wave network is loaded",
+        )
+        device_id = await _switch_device_id(ha_client)
+        await _parameters_listed(mcp_client, device_id)
+        yield ZwaveNetwork(entry_id, device_id)
     finally:
-        await asyncio.to_thread(container.stop)
+        with CleanupSteps() as cleanup:
+            if entry_id is not None:
+                with cleanup.step():
+                    async with MCPAssertions(mcp_client) as mcp:
+                        await mcp.call_tool_success(
+                            "ha_remove_helpers_integrations",
+                            {"target": entry_id, "confirm": True},
+                        )
+            with cleanup.step():
+                await asyncio.to_thread(container.stop)
 
 
 async def _inclusion_state(mcp_client: Client) -> int:
