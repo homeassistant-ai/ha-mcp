@@ -117,8 +117,10 @@ class TestSettingsMatrix:
             )
 
     async def test_set_refuses_a_display_only_setting(
-        self, dev_tools: DevTools
+        self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Set in the environment, the setting is refused as pinned instead.
+        monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
         with pytest.raises(ToolError, match="display-only"):
             await dev_tools.ha_dev_manage_settings(
                 action="set", setting="homeassistant_url", value="http://x"

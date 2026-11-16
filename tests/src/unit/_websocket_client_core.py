@@ -44,6 +44,24 @@ async def collect() -> None:
     gc.collect()
 
 
+async def released(ref: weakref.ref[Any]) -> None:
+    """Nothing holds ``ref``'s object once the loop has let go of what it last ran.
+
+    The loop's own handles go within a few steps; an object the client kept
+    stays, and the failure names what holds it.
+    """
+    for _ in range(50):
+        await collect()
+        if ref() is None:
+            return
+        await asyncio.sleep(0.01)
+    holders = [
+        f"{type(holder).__name__}: {holder!r:.200}"
+        for holder in gc.get_referrers(ref())
+    ]
+    raise AssertionError(f"still held by {holders}")
+
+
 class Registered:
     """Weak references to what the client registered while recording."""
 

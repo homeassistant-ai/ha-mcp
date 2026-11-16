@@ -36,6 +36,7 @@ from ._websocket_client_core import (
     client_log,
     collect,
     registered,
+    released,
     settled,
     short_cleanup,
     stalled_send,
@@ -124,8 +125,7 @@ async def test_an_unanswered_subscribe_gives_up_and_leaves_no_pending_future(
                 del subscribe
 
                 # Only the subscribe's own: the release is a command of its own.
-                await collect()
-                assert seen.pending[0]() is None
+                await released(seen.pending[0])
                 unread.close()
                 await settled(client, spawned)
 

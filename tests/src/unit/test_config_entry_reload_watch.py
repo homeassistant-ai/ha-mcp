@@ -297,12 +297,15 @@ async def test_the_entry_subscription_is_released_however_the_submit_ends(
     pushed every later entry change."""
     entry = await set_up_entry(hass)
 
+    async def failing_submit() -> None:
+        async with watch_entry_reload(core_client, entry.entry_id):
+            raise ValueError("the submit failed")
+
     with received(hass, "config_entries/subscribe", "unsubscribe_events") as seen:
         async with watch_entry_reload(core_client, entry.entry_id):
             await reconfigure(hass, entry, "new")
         with pytest.raises(ValueError, match="the submit failed"):
-            async with watch_entry_reload(core_client, entry.entry_id):
-                raise ValueError("the submit failed")
+            await failing_submit()
 
     subscribed = [message["id"] for message in seen["config_entries/subscribe"]]
     assert len(subscribed) == 2

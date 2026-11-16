@@ -47,7 +47,7 @@ def test_consent_form_names_the_site_the_token_is_shared_with() -> None:
 
     assert "warning-box" in html
     assert "shared with" in html
-    assert "chatgpt.com" in html
+    assert "Authorization request from <strong>chatgpt.com</strong>" in html
     assert "Long-Lived Access Tokens" in html
 
 
