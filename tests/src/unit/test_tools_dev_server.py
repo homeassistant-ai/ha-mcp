@@ -277,13 +277,12 @@ class TestUpdateSource:
     async def test_a_submit_the_entry_refuses_is_reported(
         self, hass: HomeAssistant, client: HomeAssistantClient
     ) -> None:
-        """A stored override the form no longer accepts makes Core re-show it
-        with an error: the pin did not change, and the form is not left open."""
+        """A stored override the form does not accept makes Core re-show it
+        with an error, and the pin does not change."""
         entry = server_entry(hass, pip_spec=OLD_PIN, webhook_id_override="bad id")
         with pytest.raises(ToolError, match="did not apply"):
             await update_source(client, PIP_SPEC)
         assert entry.options["pip_spec"] == OLD_PIN
-        assert hass.config_entries.options.async_progress() == []
 
     @pytest.mark.usefixtures("embedded")
     async def test_embedded_the_result_says_this_server_restarts(

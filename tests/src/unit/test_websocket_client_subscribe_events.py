@@ -107,9 +107,13 @@ async def test_an_unanswered_subscribe_gives_up_and_leaves_no_pending_future(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Without the deadline a stuck subscribe would hang its caller, and a
     leftover entry would stay in the client for the life of the socket."""
+    # A captured DEBUG record of the cleanup's own timeout keeps that error,
+    # and through its traceback the subscribe's frames and future.
+    caplog.set_level(logging.INFO, logger=WS_LOGGER)
     short_cleanup(monkeypatch)
     async with connected_ws(core_client) as client:
         with registered() as seen, ExitStack() as unread:

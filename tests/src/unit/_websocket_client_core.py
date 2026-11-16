@@ -55,11 +55,25 @@ async def released(ref: weakref.ref[Any]) -> None:
         if ref() is None:
             return
         await asyncio.sleep(0.01)
-    holders = [
-        f"{type(holder).__name__}: {holder!r:.200}"
-        for holder in gc.get_referrers(ref())
-    ]
-    raise AssertionError(f"still held by {holders}")
+    raise AssertionError("still held by:\n" + "\n".join(_held_by(ref())))
+
+
+def _held_by(item: Any, steps: int = 16) -> list[str]:
+    """What holds ``item``, and what holds that, ``steps`` deep."""
+    lines: list[str] = []
+    seen = {id(item)}
+    level = [item]
+    for step in range(steps):
+        holders: list[Any] = []
+        for thing in level:
+            for holder in gc.get_referrers(thing):
+                if id(holder) in seen or holder is level or holder is holders:
+                    continue
+                seen.add(id(holder))
+                holders.append(holder)
+                lines.append(f"{'  ' * step}{type(holder).__name__}: {holder!r:.160}")
+        level = holders[:12]
+    return lines[:80]
 
 
 class Registered:
