@@ -194,7 +194,6 @@ module = [
     "tests.src.unit.test_build_skill_content",
     "tests.src.unit.test_bulk_device_control",
     "tests.src.unit.test_bulk_selector",
-    "tests.src.unit.test_component_api",
     "tests.src.unit.test_dashboard_edit_routing",
     "tests.src.unit.test_dashboard_screenshot_theme_guard",
     "tests.src.unit.test_e2e_failure_diagnostics",
