@@ -233,7 +233,6 @@ module = [
     "tests.src.unit.test_template_deleted_recovery",
     "tests.src.unit.test_template_helper_backup",
     "tests.src.unit.test_tools_areas",
-    "tests.src.unit.test_tools_config_scripts",
     "tests.src.unit.test_tools_system",
     "tests.src.unit.test_tools_todo",
     "tests.src.unit.test_tools_todo_bridge",
