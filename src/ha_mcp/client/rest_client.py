@@ -1835,7 +1835,9 @@ class HomeAssistantClient:
             # decides the policy. ``send_command`` re-raises the original
             # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
             # at-most-once, so those arrive untranslated.
-            logger.error(f"WebSocket transport failed ({message.get('type')}): {e}")
+            # A caller that waits zero seconds sent a command Core never answers.
+            log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
+            log(f"WebSocket transport failed ({message.get('type')}): {e}")
             if isinstance(e, HomeAssistantConnectionError):
                 # Re-raised unchanged so subtypes and the traceback survive.
                 raise

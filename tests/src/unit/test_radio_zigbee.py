@@ -8,6 +8,7 @@ on what went out on the air, and on Core's own registries.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -96,12 +97,15 @@ async def test_network_status_returns_the_settings_and_refreshes_the_topology(
 ) -> None:
     """The ZHA network's settings come back, and a topology scan is started so
     the next read shows current routes. Core starts the scan without answering
-    ``zha/topology/update``; the client's wait is cut short so the test does not
-    sit through it."""
+    ``zha/topology/update``, so the tool must not wait for a reply: the
+    shortened wait makes a tool that does fail at once."""
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", HELD_WAIT_S)
 
     with received(hass, "zha/topology/update") as core:
         out = await radio.ha_manage_radio(radio="zigbee", action="network_status")
+        async with asyncio.timeout(5):
+            while not core["zha/topology/update"]:
+                await asyncio.sleep(0)
 
     assert out["config_entry_id"] == zha_entry.entry_id
     assert out["network"]["settings"]["network_info"]["channel"] == 15
