@@ -106,7 +106,6 @@ ignores:
   - "tests/src/unit/test_tools_areas.py"
   - "tests/src/unit/test_tools_calendar_update.py"
   - "tests/src/unit/test_tools_camera.py"
-  - "tests/src/unit/test_tools_config_automations.py"
   - "tests/src/unit/test_tools_dev.py"
   - "tests/src/unit/test_tools_entities_p2.py"
   - "tests/src/unit/test_tools_system.py"
