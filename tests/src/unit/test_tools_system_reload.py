@@ -117,7 +117,7 @@ async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invali
 
 
 @pytest.mark.usefixtures("core_reloads")
-async def test_a_reload_that_fails_inside_reload_all_says_the_rest_still_reloaded(
+async def test_a_reload_that_fails_inside_reload_all_says_the_others_were_started(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Core reports the first failure only, and nothing in it names the
@@ -136,7 +136,7 @@ async def test_a_reload_that_fails_inside_reload_all_says_the_rest_still_reloade
     error = _error(excinfo)
     assert "the template file is unreadable" in error["message"]
     assert RELOAD_ALL_FAILED_HINT in error["suggestions"]
-    # The hint says the rest reloaded; this keeps it true of the Core in use.
+    # The hint says the others were started; this keeps it true of the Core in use.
     assert len(reloaded) == 1
 
 

@@ -120,8 +120,9 @@ NAMED_RELOADS = {
 RELOAD_WAIT_SECONDS = 120.0
 RELOAD_ALL_FAILED_HINT = (
     "A failed configuration check stops reload-all before anything reloads. "
-    "Any other failure is one integration's: the rest still reloaded, and "
-    "Home Assistant's log names the one that failed"
+    "Any other failure is one integration's: the other reloads were started "
+    "too and may have finished, still be running or have failed, so check "
+    "Home Assistant's log before reloading again"
 )
 
 
@@ -220,8 +221,8 @@ class SystemTools:
     ) -> dict[str, Any]:
         """Execute a Home Assistant configuration reload without a full restart.
 
-        WHEN NOT TO USE: the first YAML block of an integration, which is not
-        loaded and so has nothing to reload; that needs ha_restart.
+        WHEN NOT TO USE: an integration that is not loaded yet has nothing to
+        reload; a YAML block added for one needs ha_restart.
 
         Use it after editing automation/script YAML, adding YAML helpers, or
         changing customize.yaml or themes.
