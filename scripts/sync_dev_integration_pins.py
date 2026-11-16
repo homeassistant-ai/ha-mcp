@@ -24,7 +24,7 @@ from packaging.utils import canonicalize_name
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import check_ha_constraint_alignment as checker
+import check_ha_constraint_alignment as checker  # type: ignore[import-not-found]
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _START = "# core-integration-pins:start"
