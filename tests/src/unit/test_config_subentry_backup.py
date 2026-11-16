@@ -39,7 +39,11 @@ from pytest_homeassistant.typing import MockHAClientWebSocket
 from custom_components.ha_mcp_tools.websocket_api.constants import WS_CONFIG_ENTRIES
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.config_entry_backup import helper_backup_id, removal_backup_id
+from ha_mcp.tools.config_entry_backup import (
+    helper_backup_id,
+    removal_backup_domain,
+    removal_backup_id,
+)
 
 from ._component_core import ws_result
 from ._component_frames import older_component
@@ -227,8 +231,14 @@ def test_subentry_edits_are_keyed_by_entry_and_subentry(
     assert helper_backup_id({"helper_type": "config_subentry", **kwargs}) == expected
 
 
-def test_subentry_deletion_is_keyed_by_entry_and_subentry() -> None:
-    kwargs = {"helper_type": "config_subentry", "target": "e1", "subentry_id": "s1"}
+@pytest.mark.parametrize("named", [{"helper_type": "config_subentry"}, {}])
+def test_subentry_deletion_is_keyed_by_entry_and_subentry(
+    named: dict[str, str],
+) -> None:
+    """Also when the caller names only the subentry: the tool removes that
+    subentry, so the backup must be the subentry's, not its parent entry's."""
+    kwargs = {**named, "target": "e1", "subentry_id": "s1"}
+    assert removal_backup_domain(kwargs) == DOMAIN_KEY
     assert removal_backup_id(kwargs) == "e1/s1"
 
 

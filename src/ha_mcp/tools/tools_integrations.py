@@ -35,7 +35,9 @@ from .component_helper_collections import removal_reply, stored_helper_target
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
     flow_helper_backup_domain,
+    removal_backup_domain,
     removal_backup_id,
+    removal_helper_type,
     resolve_config_entry_backup_domain,
     skip_unless_flow_helper,
 )
@@ -90,20 +92,12 @@ logger = logging.getLogger(__name__)
 _REGISTRY_RETRY_BASE_DELAY = 0.5
 
 
-def _removal_backup_domain(kwargs: dict[str, Any]) -> str:
-    """Snapshot under ``helper_<type>``, the handler ha_config_set_helper uses,
-    when helper_type is set; an untyped target here is a config entry
-    (_skip_removal_capture already skipped an untyped entity_id)."""
-    helper_type = kwargs.get("helper_type")
-    return f"helper_{helper_type}" if helper_type else "integration"
-
-
 def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
     """True when a later layer owns the snapshot: a FLOW type is captured by
     _delete_resolved_flow_helper once Core resolves its entry, a type-less
     entity_id by the resolved call (_remove_resolved_helper, which again
     defers a FLOW type to _delete_resolved_flow_helper)."""
-    helper_type = kwargs.get("helper_type")
+    helper_type = removal_helper_type(kwargs)
     if helper_type is None:
         return "." in str(kwargs.get("target", ""))
     return _is_flow_helper_domain(f"helper_{helper_type}")
@@ -1854,7 +1848,7 @@ class IntegrationTools:
         ),
     )
     @with_auto_backup(
-        domain_fn=_removal_backup_domain,
+        domain_fn=removal_backup_domain,
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         skip_fn=_skip_removal_capture,
@@ -2030,9 +2024,9 @@ class IntegrationTools:
             )
             return resolved
 
-        if helper_type is None and subentry_id is not None:
-            # A subentry_id names one subentry, never its whole parent entry.
-            helper_type = "config_subentry"
+        helper_type = removal_helper_type(
+            {"helper_type": helper_type, "subentry_id": subentry_id}
+        )
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
@@ -2066,7 +2060,7 @@ class IntegrationTools:
     # intentional and prevents future renames pulled by either side.
 
     @with_auto_backup(
-        domain_fn=_removal_backup_domain,
+        domain_fn=removal_backup_domain,
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         skip_fn=_skip_removal_capture,

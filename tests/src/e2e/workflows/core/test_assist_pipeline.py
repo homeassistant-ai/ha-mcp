@@ -14,6 +14,7 @@ from ...utilities.assertions import (
     assert_mcp_success,
     safe_call_tool,
 )
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
@@ -95,20 +96,30 @@ async def scratch_pipelines(ha_client: Any) -> AsyncIterator[Create]:
     try:
         yield create
     finally:
-        await ha_client.send_websocket_message(
-            {"type": "assist_pipeline/pipeline/set_preferred", "pipeline_id": preferred}
-        )
-        listed = await ha_client.send_websocket_message(
-            {"type": "assist_pipeline/pipeline/list"}
-        )
-        for pipeline in listed.get("result", {}).get("pipelines", []):
-            if pipeline["id"] not in before:
-                await ha_client.send_websocket_message(
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                restored = await ha_client.send_websocket_message(
                     {
-                        "type": "assist_pipeline/pipeline/delete",
-                        "pipeline_id": pipeline["id"],
+                        "type": "assist_pipeline/pipeline/set_preferred",
+                        "pipeline_id": preferred,
                     }
                 )
+                assert restored.get("success"), restored
+            with cleanup.step():
+                listed = await ha_client.send_websocket_message(
+                    {"type": "assist_pipeline/pipeline/list"}
+                )
+                assert listed.get("success"), listed
+                for pipeline in listed["result"]["pipelines"]:
+                    if pipeline["id"] in before:
+                        continue
+                    removed = await ha_client.send_websocket_message(
+                        {
+                            "type": "assist_pipeline/pipeline/delete",
+                            "pipeline_id": pipeline["id"],
+                        }
+                    )
+                    assert removed.get("success"), removed
 
 
 @pytest.mark.core
@@ -472,15 +483,13 @@ class TestAssistPipeline:
     ):
         missing = f"e2e_missing_{uuid.uuid4().hex[:8]}"
 
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_manage_pipeline",
             {"action": action, "pipeline_id": missing},
+            expected_error=core_says,
         )
 
-        assert data["success"] is False
         assert data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert core_says in data["error"]["message"]
         assert data["pipeline_id"] == missing
 
     async def test_create_reports_core_rejecting_the_pipeline(
@@ -490,8 +499,7 @@ class TestAssistPipeline:
         Core refuses."""
         base = await scratch_pipelines()
 
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_manage_pipeline",
             {
                 "action": "create",
@@ -501,11 +509,10 @@ class TestAssistPipeline:
                 "stt_engine": "stt.e2e",
                 "stt_language": "",
             },
+            expected_error="stt_language",
         )
 
-        assert data["success"] is False
         assert data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "stt_language" in data["error"]["message"]
         assert data["operation"] == "create"
 
     @pytest.mark.parametrize(
