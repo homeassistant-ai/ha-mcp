@@ -29,7 +29,7 @@ from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_areas import AreaTools
 
 from ._client_spies import sent_commands
-from ._command_faults import unanswered
+from ._command_faults import before_handling, unanswered
 from ._routing_core import pooled_socket, sent_types
 from ._tool_errors import rejected_call_body
 
@@ -232,18 +232,21 @@ async def test_labels_core_dropped_are_read_back_through_the_component(
     hass: HomeAssistant,
     component_tools: AreaTools,
     component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core drops a label that was removed after the tool checked it and still
     answers success; the read that confirms the loss asks the component."""
-    label = lr.async_get(hass).async_create("Guests")
+    labels = lr.async_get(hass)
+    label = labels.async_create("Guests")
     area = ar.async_get(hass).async_create("Hall")
-    # Core's answer once the label is gone: every label asked for is missing.
-    monkeypatch.setattr(
-        lr, "async_get_missing_label_ids", lambda hass, label_ids: set(label_ids)
-    )
 
-    with sent_commands(await pooled_socket(component_core_client)) as sent:
+    with (
+        before_handling(
+            hass,
+            "config/area_registry/update",
+            lambda msg: labels.async_delete(label.label_id),
+        ),
+        sent_commands(await pooled_socket(component_core_client)) as sent,
+    ):
         error = await rejected_call_body(
             component_tools.ha_set_area_or_floor(
                 kind="area", id=area.id, labels=[label.label_id]
@@ -252,6 +255,42 @@ async def test_labels_core_dropped_are_read_back_through_the_component(
 
     assert error["write_committed"] is True
     assert "config/area_registry/list" not in sent_types(sent)
+
+
+async def test_a_refused_label_reread_reports_the_refusal_not_dropped_labels(
+    hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label is removed after the tool checked it, so Core drops it and
+    answers success; the area list read that should confirm the loss is refused.
+    That refusal decides nothing about the labels: the error says the check
+    failed and carries Core's reason."""
+    labels = lr.async_get(hass)
+    label = labels.async_create("Guests")
+
+    def refuse(self: ar.AreaRegistry) -> Any:
+        raise HomeAssistantError("area registry is not readable")
+
+    monkeypatch.setattr(ar.AreaRegistry, "async_list_areas", refuse)
+
+    with before_handling(
+        hass,
+        "config/area_registry/create",
+        lambda msg: labels.async_delete(label.label_id),
+    ):
+        error = await rejected_call_body(
+            tools.ha_set_area_or_floor(
+                kind="area", name="Hall", labels=[label.label_id]
+            )
+        )
+
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error["error"]["message"] == (
+        "Area write succeeded, but label verification failed"
+    )
+    assert "area registry is not readable" in error["error"]["details"]
+    assert error["write_committed"] is True
+    assert error["expected_labels"] == [label.label_id]
+    assert ar.async_get(hass).async_get_area(error["area_id"]) is not None
 
 
 async def test_an_update_core_refuses_with_a_code_of_its_own_reads_no_registry(
