@@ -12,20 +12,59 @@ rule:
   any:
     - all:
         - kind: call
-          regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr)\('
-          has:
-            any:
-              # patch("pkg.mod.get_component_caps", ...), patch.object(mod,
-              # "get_update_info", ...), monkeypatch.setattr(mod, "_fetch_x", ...)
-              - kind: string
-                regex: '^\w*["'']([\w.]*\.)?(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-              # patch.multiple(mod, get_update_info=...)
-              - kind: keyword_argument
-                regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
-            stopBy: end
+        # The function is named where the call names what it replaces, and
+        # nowhere else: a listed name inside a replacement's value is no match.
+        - any:
+            # patch("pkg.mod.get_component_caps", ...),
+            # monkeypatch.setattr("pkg.mod._fetch_x", ...)
+            - all:
+                - has:
+                    field: function
+                    regex: '^(\w+\.)*(patch|setattr)$'
+                - has:
+                    field: arguments
+                    has:
+                      nthChild: 1
+                      kind: string
+                      regex: '^\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+            # patch.object(mod, "get_update_info", ...),
+            # monkeypatch.setattr(mod, "_fetch_x", ...)
+            - all:
+                - has:
+                    field: function
+                    regex: '^(\w+\.)*(patch\.object|setattr)$'
+                - has:
+                    field: arguments
+                    has:
+                      nthChild: 2
+                      kind: string
+                      regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+            # patch.multiple(mod, get_update_info=...)
+            - all:
+                - has:
+                    field: function
+                    regex: '^(\w+\.)*patch\.multiple$'
+                - has:
+                    field: arguments
+                    has:
+                      kind: keyword_argument
+                      regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
         # ... given an answer written in the test. A spy (wraps=) or a failure
-        # (side_effect=) carries no answer and stays.
-        - regex: '\breturn_value\s*=|\blambda\b'
+        # (side_effect=) carries no answer and stays; so does a wraps= lambda
+        # that only calls through.
+        - any:
+            - regex: '\breturn_value\s*='
+            - has:
+                kind: lambda
+                stopBy: end
+                not:
+                  all:
+                    - inside:
+                        kind: keyword_argument
+                        regex: '^wraps\s*='
+                    - has:
+                        field: body
+                        kind: call
     # A patch with nothing but its target: the mock it puts in place answers
     # for the function, and the test sets that answer through the alias
     # (`with patch(...) as caps: caps.return_value = ...`).

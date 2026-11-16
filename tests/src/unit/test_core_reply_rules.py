@@ -952,6 +952,36 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             False,
             id="another-function",
         ),
+        pytest.param(
+            'patch.object(renderer, "label", return_value="get_update_info")\n',
+            False,
+            id="another-function-returning-a-listed-name",
+        ),
+        pytest.param(
+            'patch.object(renderer, "label", new=Mock(get_update_info=lambda: 1))\n',
+            False,
+            id="another-function-with-a-listed-keyword-inside",
+        ),
+        pytest.param(
+            'monkeypatch.setattr("ha_mcp.update_check.get_update_info", lambda: None)\n',
+            True,
+            id="setattr-dotted-target",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: real_info())\n',
+            False,
+            id="spy-lambda-that-calls-through",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: {"latest": "1"})\n',
+            True,
+            id="spy-lambda-with-a-typed-in-answer",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", side_effect=lambda: {"latest": "1"})\n',
+            True,
+            id="side-effect-lambda",
+        ),
     ],
 )
 def test_only_a_typed_in_server_answer_is_refused(
