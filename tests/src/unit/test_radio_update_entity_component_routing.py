@@ -33,7 +33,6 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.tools import component_devices
-from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
 from ha_mcp.tools.radio.base import resolve_update_entity
 
 
@@ -144,32 +143,28 @@ async def test_update_entity_capsless_uses_legacy_list(
 
 @pytest.mark.asyncio
 async def test_update_entity_unknown_command_invalidates_and_falls_back(
-    core_client: HomeAssistantClient,
+    component_core_client: HomeAssistantClient,
     device_id: str,
     invalidated: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The cached capabilities say device_get; Core, without the component,
-    # answers that command unknown_command.
-    served = ComponentCaps(
-        1,
-        "1.1.0",
-        frozenset({"device_get", "device_list", DEVICE_REGISTRY_CHILD_SEMANTICS}),
-        {},
-    )
+    # The component advertises device_get, but the server sends a command Core
+    # never registered, so Core answers it unknown_command.
     monkeypatch.setattr(
-        component_devices, "get_component_caps", AsyncMock(return_value=served)
+        component_devices, "WS_DEVICE_GET", "ha_mcp_tools/device_get_retired"
     )
     with patch.object(
-        core_client,
+        component_core_client,
         "send_websocket_message",
-        wraps=core_client.send_websocket_message,
+        wraps=component_core_client.send_websocket_message,
     ) as legacy:
-        eid = await resolve_update_entity(core_client, device_id, platform="zha")
+        eid = await resolve_update_entity(
+            component_core_client, device_id, platform="zha"
+        )
 
     assert eid == "update.dev_firmware"
     assert len(_entity_list_calls(legacy)) == 1
-    invalidated.assert_called_once_with(core_client)
+    invalidated.assert_called_once_with(component_core_client)
 
 
 @pytest.mark.asyncio

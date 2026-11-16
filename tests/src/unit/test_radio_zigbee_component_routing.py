@@ -23,7 +23,6 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.tools import component_devices
-from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
 from ha_mcp.tools.tools_radio import RadioTools
 
 from ._client_spies import routing_spies
@@ -106,30 +105,22 @@ async def test_ieee_without_component_uses_device_list(
 
 
 async def test_ieee_unknown_command_invalidates_and_falls_back(
-    core_client: HomeAssistantClient,
+    component_core_client: HomeAssistantClient,
     device_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The cached capabilities say device_get, but Core, without the component,
-    answers it unknown_command: the caps are dropped and the lookup falls back."""
+    """The component advertises device_get, but Core answers the command the
+    server sends unknown_command: the caps are dropped and the lookup falls back."""
     invalidated = MagicMock(wraps=component_devices.invalidate_caps)
     monkeypatch.setattr(component_devices, "invalidate_caps", invalidated)
-    served = ComponentCaps(
-        1,
-        "1.1.0",
-        frozenset({"device_get", "device_list", DEVICE_REGISTRY_CHILD_SEMANTICS}),
-        {},
-    )
     monkeypatch.setattr(
-        component_devices, "get_component_caps", AsyncMock(return_value=served)
+        component_devices, "WS_DEVICE_GET", "ha_mcp_tools/device_get_retired"
     )
-    with routing_spies(core_client, await _component_socket(core_client)) as (
-        legacy,
-        _component,
-    ):
-        result = await _diagnostics(core_client, device_id)
+    socket = await _component_socket(component_core_client)
+    with routing_spies(component_core_client, socket) as (legacy, _component):
+        result = await _diagnostics(component_core_client, device_id)
 
     assert len(_sent(legacy, "config/device_registry/list")) == 1
     assert _sent(legacy, "zha/device")[0]["ieee"] == IEEE
     assert result["diagnostics"]["ieee"] == IEEE
-    invalidated.assert_called_once_with(core_client)
+    invalidated.assert_called_once_with(component_core_client)
