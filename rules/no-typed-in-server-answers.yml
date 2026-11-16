@@ -9,22 +9,30 @@
 id: no-typed-in-server-answers
 language: python
 rule:
-  all:
+  any:
+    - all:
+        - kind: call
+          regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr)\('
+          has:
+            any:
+              # patch("pkg.mod.get_component_caps", ...), patch.object(mod,
+              # "get_update_info", ...), monkeypatch.setattr(mod, "_fetch_x", ...)
+              - kind: string
+                regex: '^\w*["'']([\w.]*\.)?(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+              # patch.multiple(mod, get_update_info=...)
+              - kind: keyword_argument
+                regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
+            stopBy: end
+        # ... given an answer written in the test. A spy (wraps=) or a failure
+        # (side_effect=) carries no answer and stays.
+        - regex: '\breturn_value\s*=|\blambda\b'
+    # A patch with nothing but its target: the mock it puts in place answers
+    # for the function, and the test sets that answer through the alias
+    # (`with patch(...) as caps: caps.return_value = ...`).
     - kind: call
-      regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr)\('
-      has:
-        any:
-          # patch("pkg.mod.get_component_caps", ...), patch.object(mod,
-          # "get_update_info", ...), monkeypatch.setattr(mod, "_fetch_x", ...)
-          - kind: string
-            regex: '^\w*["'']([\w.]*\.)?(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-          # patch.multiple(mod, get_update_info=...)
-          - kind: keyword_argument
-            regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
-        stopBy: end
-    # ... given an answer written in the test. A spy (wraps=) or a failure
-    # (side_effect=) carries no answer and stays.
-    - regex: '\breturn_value\s*=|\blambda\b'
+      regex: '^(\w+\.)*patch\(\s*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
+    - kind: call
+      regex: '^(\w+\.)*patch\.object\(\s*[\w.]+\s*,\s*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"

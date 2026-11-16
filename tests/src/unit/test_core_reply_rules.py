@@ -926,6 +926,18 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="patch-multiple-no-answer",
         ),
         pytest.param(
+            'with patch("ha_mcp.tools.component_api.get_component_caps") as caps:\n'
+            '    caps.return_value = {"available": True}\n',
+            True,
+            id="bare-patch-answered-through-its-alias",
+        ),
+        pytest.param(
+            'with patch.object(update_check, "get_update_info") as info:\n'
+            "    info.return_value = None\n",
+            True,
+            id="bare-patch-object",
+        ),
+        pytest.param(
             'patch.object(tools_addons, "get_addon_info", wraps=tools_addons.get_addon_info)\n',
             False,
             id="spy",

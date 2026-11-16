@@ -6,7 +6,8 @@ The entities subclass that integration's entity class and are added through
 and their validation. ``calls`` keeps
 what each device received. A device follows the call by default; ``behaviour``
 makes one ``stay`` as it is, settle ``on`` or ``off`` whatever was asked, be
-``remove``d, or ``fail_once`` before it follows. Core hands no call to an
+``remove``d, ``fail_once`` before it follows, or follow and then fail the call
+(``fail_after``). Core hands no call to an
 unavailable entity, so an unavailable device does its ``on``, ``off`` or
 ``remove`` when Core fires a call naming it: it comes back, or goes away,
 while the call is out.
@@ -143,6 +144,8 @@ class _Device(Entity):
         else:
             follow()
         self.async_write_ha_state()
+        if how == "fail_after":
+            raise HomeAssistantError(f"{self.entity_id} answered too late")
 
 
 class Light(_Device, LightEntity):
