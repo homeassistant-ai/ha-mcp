@@ -225,7 +225,6 @@ module = [
     "tests.src.unit.test_renamed_tools",
     "tests.src.unit.test_resource_codec",
     "tests.src.unit.test_rest_client_admin_gate",
-    "tests.src.unit.test_search_related_graph",
     "tests.src.unit.test_settings_ui",
     "tests.src.unit.test_settings_ui_i18n",
     "tests.src.unit.test_standard_mode_logging",
