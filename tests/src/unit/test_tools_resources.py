@@ -1,26 +1,37 @@
-"""Unit tests for dashboard resource tools."""
+"""Dashboard resource tools on Core's lovelace resource collection.
 
+Each test sets up Core's ``lovelace`` in storage resource mode and runs the
+tools on the server's own client connected to it, so every stored row and
+every reply is Core's.
+"""
+
+import base64
 import json
 import re
+from collections.abc import Awaitable
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp.client.exceptions import HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_resources
-from ha_mcp.tools.resource_codec import (
-    MAX_CONTENT_SIZE,
-    _data_uri_for,
-    _decode_data_uri,
-)
+from ha_mcp.tools.resource_codec import MAX_CONTENT_SIZE, summarize_resources
 from ha_mcp.tools.tools_resources import (
+    HA_CONFIG_YAML_MARKERS,
     ResourceTools,
-    _detect_ha_config_yaml,
     register_resources_tools,
 )
 
-from .test_resource_codec import _legacy_url
+from ._component_core import ws_result
+from ._legacy_resource_urls import legacy_url
+from ._tool_errors import rejected_call_body
 
 _REGISTERED_TOOLS = {
     name
@@ -28,1048 +39,675 @@ _REGISTERED_TOOLS = {
     for name in re.findall(r'@tool\(\s*name="(ha_[a-z_]+)"', path.read_text())
 }
 
+# The list tool documents a 150-character preview of each inline resource.
+PREVIEW_LENGTH = 150
 
-class TestDetectHaConfigYaml:
-    """Cover the misroute-detection heuristic from #1072.
 
-    LLMs sometimes emit HA-config YAML (`scene:`, `automation:`, ...) when
-    they pick `ha_config_set_dashboard_resource` to "create a scene". The
-    misroute lands as a Lovelace module containing YAML, creating orphaned
-    HA entities. `_detect_ha_config_yaml` flags this shape early so the
-    tool can reject with a pointer to the right config tool.
-    """
+def _stored_content(url: str) -> str:
+    return base64.b64decode(url.split(",", 1)[1], validate=True).decode("utf-8")
+
+
+@pytest.fixture
+async def ws(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> MockHAClientWebSocket:
+    """A WebSocket client of a ``hass`` with lovelace in storage resource mode."""
+    assert await async_setup_component(hass, "lovelace", {})
+    return await hass_ws_client(hass)
+
+
+@pytest.fixture
+def tools(core_client: HomeAssistantClient) -> ResourceTools:
+    return ResourceTools(core_client)
+
+
+async def _rows(ws: MockHAClientWebSocket) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = await ws_result(ws, "lovelace/resources")
+    return rows
+
+
+async def _seed(ws: MockHAClientWebSocket, url: str, res_type: str = "module") -> str:
+    """Register ``url`` with Core directly, as another client would."""
+    row = await ws_result(ws, "lovelace/resources/create", res_type=res_type, url=url)
+    return str(row["id"])
+
+
+async def _seed_inline(tools: ResourceTools, content: str) -> str:
+    result = await tools.ha_config_set_dashboard_resource(content=content)
+    return str(result["resource_id"])
+
+
+async def _refused(ws: MockHAClientWebSocket, call: Awaitable[Any]) -> dict[str, Any]:
+    """The tool's rejection body; Core's resources must be left as they were."""
+    before = await _rows(ws)
+    body = await rejected_call_body(call)
+    assert await _rows(ws) == before, "a refused call must not write"
+    return body
+
+
+class TestConfigYamlMisroute:
+    """Small models send HA-config YAML as resource content to "create a scene"
+    (#1072); stored, it would be a Lovelace module holding orphaned config."""
+
+    @pytest.mark.parametrize("marker", sorted(HA_CONFIG_YAML_MARKERS))
+    async def test_config_yaml_is_refused_with_a_pointer_to_a_tool_that_exists(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, marker: str
+    ) -> None:
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(content=f"{marker}:\n  - id: x\n"),
+        )
+
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["detected_marker"] == f"{marker}:"
+        named = set(re.findall(r"\bha_[a-z_]+", body["error"]["suggestions"][0]))
+        assert named and named <= _REGISTERED_TOOLS
+        assert not re.search(r"#\d", json.dumps(body["error"]))
 
     @pytest.mark.parametrize(
-        "domain",
+        ("content", "marker"),
         [
-            "automation",
-            "script",
-            "scene",
-            "group",
-            "input_boolean",
-            "input_number",
-            "input_select",
-            "input_text",
-            "input_datetime",
-            "input_button",
-            "template",
-            "homeassistant",
-            "sensor",
-            "binary_sensor",
-            "light",
-            "switch",
-        ],
-    )
-    def test_block_form_top_level_key_detected(self, domain):
-        """Block-form `<domain>:` (newline after, no inline value) matches."""
-        content = f"{domain}:\n  - id: foo\n    name: Foo\n"
-        assert _detect_ha_config_yaml(content) == domain
-
-    @pytest.mark.parametrize(
-        ("content", "expected"),
-        [
-            # The exact theclue reproduction shape from #1072
-            (
-                "scene:\n  - id: 'luce_notturna_led_tavolo'\n    name: Luce Notturna",
-                "scene",
-            ),
-            # Inline value form
             ("automation: !include automations.yaml\n", "automation"),
-            # Block-string form
-            ("template: |\n  {{ states('sensor.x') }}\n", "template"),
-            # Flow-style sequence
-            ("group: [foo, bar]\n", "group"),
-            # Comment marker after key
-            ("script:  # my scripts\n  greet:\n", "script"),
-            # Whitespace-prefixed block (still detected after strip)
             ("\n\n  scene:\n  - id: x\n", "scene"),
-            # BOM-prefixed YAML (e.g. emitted by tools that always BOM-mark UTF-8)
-            ("\ufeffscene:\n  - id: foo\n    name: Foo\n", "scene"),
-            # File-leading comment line precedes the real first key
+            ("﻿scene:\n  - id: foo\n", "scene"),
             ("# Generated by my tool\nautomation:\n  - id: morning\n", "automation"),
-            # YAML document-start marker precedes the real first key
             ("---\nautomation:\n  - id: morning\n", "automation"),
-            # Combined decoration: BOM + comment + doc-start before the key
-            ("\ufeff# header\n---\nscene:\n  - id: x\n", "scene"),
         ],
+        ids=["inline-value", "indented", "bom", "leading-comment", "doc-start"],
     )
-    def test_real_world_yaml_shapes(self, content, expected):
-        """Realistic YAML shapes that smaller models emit get caught."""
-        assert _detect_ha_config_yaml(content) == expected
+    async def test_decorated_config_yaml_is_still_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, content: str, marker: str
+    ) -> None:
+        body = await _refused(
+            ws, tools.ha_config_set_dashboard_resource(content=content)
+        )
+
+        assert body["detected_marker"] == f"{marker}:"
 
     @pytest.mark.parametrize(
-        "content",
+        ("content", "res_type"),
         [
-            # Legitimate ES6 module
-            "export const config = { automation: 'foo' };",
-            # CSS with selector that contains a marker substring
-            ".automation { color: red; }",
-            # JS with `automation` mentioned only in a comment
-            "// automation: this is just a comment\nexport const x = 1;",
-            # Word that starts with a marker but isn't a marker (`scenester:` ≠ `scene:`)
-            "scenester: { foo: 'bar' };",
-            # CSS @media rule
-            "@media (max-width: 600px) { .x { display: none; } }",
-            # JSON-style object literal
-            '{ "automation": [], "scene": [] }',
-            # Empty content (validated separately by the empty-content guard)
-            "",
-            "   \n\n  ",
-            # Single-character starting line
-            "x",
+            (
+                "// Card for displaying automation status\n"
+                "export const automation_card = {\n"
+                "  type: 'custom:automation-status',\n"
+                "  scene: 'morning',\n"
+                "};\n",
+                "module",
+            ),
+            (".automation, .scene { color: red; padding: 0; }\n", "css"),
+            ("scenester: { foo: 'bar' };", "module"),
+            ("automation:hover { color: red; }", "css"),
         ],
+        ids=["module", "css-selector", "word-prefix", "no-space-after-colon"],
     )
-    def test_legit_jscss_not_flagged(self, content):
-        """JS/CSS that happens to mention marker words doesn't false-positive."""
-        assert _detect_ha_config_yaml(content) is None
+    async def test_js_or_css_mentioning_config_words_is_stored(
+        self,
+        tools: ResourceTools,
+        ws: MockHAClientWebSocket,
+        content: str,
+        res_type: str,
+    ) -> None:
+        result = await tools.ha_config_set_dashboard_resource(
+            content=content, resource_type=res_type
+        )
+
+        assert result["action"] == "created"
+        (row,) = await _rows(ws)
+        assert _stored_content(row["url"]) == content
+
+    async def test_update_with_config_yaml_leaves_the_stored_resource_alone(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        resource_id = await _seed_inline(tools, "export const x = 1;")
+        scene_yaml = (
+            "scene:\n  - id: 'luce_notturna_led_tavolo'\n    name: Luce Notturna\n"
+        )
+
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content=scene_yaml, resource_id=resource_id
+            ),
+        )
+
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "scene:" in body["error"]["message"]
+
+    async def test_automation_yaml_points_at_the_automation_tool(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content="automation:\n  - id: morning\n    trigger: ...\n"
+            ),
+        )
+
+        assert "automation:" in body["error"]["message"]
+        assert any(
+            "ha_config_set_automation" in s for s in body["error"]["suggestions"]
+        )
+
+    async def test_input_boolean_yaml_points_at_the_helper_tool(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content="input_boolean:\n  guest_mode:\n    name: Guest\n"
+            ),
+        )
+
+        assert any(
+            "ha_config_set_helper" in s and "input_boolean" in s
+            for s in body["error"]["suggestions"]
+        )
 
 
-class TestHaConfigListDashboardResources:
-    """Test ha_config_list_dashboard_resources tool."""
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def list_tool(self, mock_client):
-        """Create ResourceTools instance and return the list method."""
-        tools = ResourceTools(mock_client)
-        return tools.ha_config_list_dashboard_resources
-
-    @pytest.mark.asyncio
-    async def test_list_empty(self, list_tool, mock_client):
-        """Test listing when no resources exist."""
-        mock_client.send_websocket_message.return_value = {"result": []}
-
-        result = await list_tool()
+class TestListDashboardResources:
+    async def test_no_resources_lists_empty(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        result = await tools.ha_config_list_dashboard_resources()
 
         assert result["success"] is True
         assert result["count"] == 0
         assert result["resources"] == []
 
-    @pytest.mark.asyncio
-    async def test_list_external_resources(self, list_tool, mock_client):
-        """Test listing external resources."""
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": "1", "type": "module", "url": "/local/card.js"},
-                {"id": "2", "type": "css", "url": "/local/theme.css"},
-            ]
-        }
+    async def test_external_resources_are_counted_by_type(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        await _seed(ws, "/local/card.js")
+        await _seed(ws, "/local/theme.css", "css")
 
-        result = await list_tool()
+        result = await tools.ha_config_list_dashboard_resources()
 
-        assert result["success"] is True
         assert result["count"] == 2
         assert result["by_type"] == {"module": 1, "css": 1}
 
-    @pytest.mark.asyncio
-    async def test_list_inline_resources_decoded(self, list_tool, mock_client):
-        """Test that data: URI inline resources are decoded with preview."""
+    async def test_inline_resource_is_shown_decoded_instead_of_its_url(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         content = "export const myFunction = () => 'hello world';"
-        inline_url = _data_uri_for(content, "module")
+        await _seed_inline(tools, content)
 
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "1", "type": "module", "url": inline_url}]
-        }
+        result = await tools.ha_config_list_dashboard_resources()
 
-        result = await list_tool()
-
-        assert result["success"] is True
         assert result["inline_count"] == 1
-        resource = result["resources"][0]
+        (resource,) = result["resources"]
         assert resource["_inline"] is True
         assert resource["_size"] == len(content)
         assert resource["_preview"] == content
-        assert resource["url"] == "[inline]"  # URL replaced
+        assert resource["url"] == "[inline]"
         assert "_legacy_worker" not in resource
 
-    @pytest.mark.asyncio
-    async def test_list_legacy_worker_resources_flagged(self, list_tool, mock_client):
-        """Legacy worker resources decode locally and carry a migration hint."""
+    async def test_legacy_worker_resource_carries_one_safe_migration_hint(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         content = "export const legacy = true;"
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "1", "type": "module", "url": _legacy_url(content)}]
-        }
+        await _seed(ws, legacy_url(content))
 
-        result = await list_tool()
+        result = await tools.ha_config_list_dashboard_resources()
 
         assert result["inline_count"] == 1
-        resource = result["resources"][0]
+        (resource,) = result["resources"]
         assert resource["_inline"] is True
         assert resource["_preview"] == content
         assert resource["_legacy_worker"] is True
         assert resource["url"] == "[inline]"
-        # The hint is emitted ONCE per response, not repeated per resource,
-        # and MUST route agents through include_content=True — the default
-        # response only carries the truncated _preview, and re-saving that
-        # would destroy the resource.
+        # Once per response, and routed through include_content=True: re-saving
+        # the truncated _preview would destroy the resource.
         assert "_migration" not in resource
         assert "include_content=True" in result["migration_hint"]
         assert "_preview" in result["migration_hint"]
 
-    @pytest.mark.asyncio
-    async def test_list_inline_preview_truncated(self, list_tool, mock_client):
-        """Test that long inline content preview is truncated."""
+    async def test_long_inline_preview_is_truncated(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        await _seed_inline(tools, "x" * 200)
+
+        result = await tools.ha_config_list_dashboard_resources()
+
+        preview = result["resources"][0]["_preview"]
+        assert preview.endswith("...")
+        assert len(preview) == PREVIEW_LENGTH + len("...")
+
+    async def test_include_content_returns_the_full_content_instead_of_a_preview(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         content = "x" * 200
-        inline_url = _data_uri_for(content, "module")
+        await _seed_inline(tools, content)
 
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "1", "type": "module", "url": inline_url}]
-        }
+        result = await tools.ha_config_list_dashboard_resources(include_content=True)
 
-        result = await list_tool()
-
-        resource = result["resources"][0]
-        assert resource["_preview"].endswith("...")
-        assert len(resource["_preview"]) == 153  # 150 + "..."
-
-    @pytest.mark.asyncio
-    async def test_list_include_content_flag(self, list_tool, mock_client):
-        """Test that include_content=True returns full content."""
-        content = "x" * 200
-        inline_url = _data_uri_for(content, "module")
-
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "1", "type": "module", "url": inline_url}]
-        }
-
-        result = await list_tool(include_content=True)
-
-        resource = result["resources"][0]
-        assert "_content" in resource
+        (resource,) = result["resources"]
         assert resource["_content"] == content
-        assert "_preview" not in resource  # Preview not included when content is
+        assert "_preview" not in resource
 
-    @pytest.mark.asyncio
-    async def test_list_size_is_bytes(self, list_tool, mock_client):
-        """_size reports UTF-8 bytes, matching the set response's size field."""
+    async def test_size_is_utf8_bytes_as_in_the_set_response(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         content = "const s = 'ünïcode';"
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": "1", "type": "module", "url": _data_uri_for(content, "module")}
-            ]
-        }
+        await _seed_inline(tools, content)
 
-        result = await list_tool()
+        result = await tools.ha_config_list_dashboard_resources()
 
         assert result["resources"][0]["_size"] == len(content.encode("utf-8"))
 
-    @pytest.mark.asyncio
-    async def test_list_foreign_data_uri_passes_through(self, list_tool, mock_client):
-        """Foreign data: resources keep their real URL and are not claimed."""
+    async def test_foreign_data_uri_keeps_its_url_and_is_not_claimed(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         url = "data:image/png;base64,aGVsbG8="
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "1", "type": "module", "url": url}]
-        }
+        await _seed(ws, url)
 
-        result = await list_tool()
+        result = await tools.ha_config_list_dashboard_resources()
 
-        resource = result["resources"][0]
+        (resource,) = result["resources"]
         assert resource["url"] == url
         assert "_inline" not in resource
         assert result["inline_count"] == 0
 
-    @pytest.mark.asyncio
-    async def test_list_undecodable_inline_passes_through(self, list_tool, mock_client):
-        """Empty or corrupt payloads keep their real URL visible.
-
-        Masking them as "[inline]" would hide exactly what a user debugging
-        a broken resource needs to see.
-        """
+    async def test_undecodable_inline_resource_keeps_its_url_and_says_so(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        """Masking an empty or corrupt payload as "[inline]" would hide what a
+        user debugging a dead card needs to see."""
         empty = "data:text/css;charset=utf-8;base64,"
         corrupt = "data:text/javascript;base64,!!not-base64!!"
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": "1", "type": "css", "url": empty},
-                {"id": "2", "type": "module", "url": corrupt},
-            ]
-        }
+        await _seed(ws, empty, "css")
+        await _seed(ws, corrupt)
 
-        result = await list_tool()
+        result = await tools.ha_config_list_dashboard_resources()
 
-        assert result["resources"][0]["url"] == empty
-        assert "_inline" not in result["resources"][0]
-        assert result["resources"][1]["url"] == corrupt
-        assert "_inline" not in result["resources"][1]
-        # The summary must agree with the markers — this is the ONLY input
-        # shape where a decode-based count and a URL-shape count differ, so
-        # it is what pins the "cannot disagree" invariant.
+        assert [r["url"] for r in result["resources"]] == [empty, corrupt]
+        for resource in result["resources"]:
+            assert "_inline" not in resource
+            assert resource["_decode_error"] is True
+        # The only shape where a decode-based count and a URL-shape count
+        # differ: the summary must agree with the markers.
         assert result["inline_count"] == 0
-        # Recognized as ours but undecodable: say so, or a user debugging a
-        # dead card reads it as someone else's resource.
-        assert result["resources"][0]["_decode_error"] is True
-        assert result["resources"][1]["_decode_error"] is True
 
-    @pytest.mark.asyncio
-    async def test_list_retains_content_for_the_returned_page_only(
-        self, list_tool, mock_client, monkeypatch
-    ):
-        """Decoded content is RETAINED only for the requested page.
-
-        Decoding itself is whole-set on purpose (inline_count reports the
-        full registry and must agree with the per-resource markers), but
-        holding every payload would mean a limit=1 call sat on the entire
-        registry's content. This pins retention scope directly, via the
-        decode map the renderer is handed — asserting on the response
-        alone cannot distinguish the two designs.
-        """
+    async def test_page_returns_its_rows_while_counts_cover_every_resource(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         contents = [f"export const page_test_{i} = {i};" for i in range(3)]
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": str(i), "type": "module", "url": _data_uri_for(c, "module")}
-                for i, c in enumerate(contents)
-            ]
-        }
+        for content in contents:
+            await _seed_inline(tools, content)
 
-        seen_page_sizes = []
-        retained_counts = []
-        real_process = tools_resources._process_resource_list
-
-        def _spy(page, decoded_page, include, **kwargs):
-            seen_page_sizes.append(len(page))
-            retained_counts.append(sum(1 for d in decoded_page if d is not None))
-            return real_process(page, decoded_page, include, **kwargs)
-
-        monkeypatch.setattr(tools_resources, "_process_resource_list", _spy)
-
-        result = await list_tool(include_content=True, limit=1, offset=1)
+        result = await tools.ha_config_list_dashboard_resources(
+            include_content=True, limit=1, offset=1
+        )
 
         assert result["total_count"] == 3
         assert result["inline_count"] == 3
-        assert len(result["resources"]) == 1
-        assert result["resources"][0]["_content"] == contents[1]
-        assert seen_page_sizes == [1]
-        # The load-bearing assertion: exactly ONE decoded payload was
-        # retained, not all three. Retaining the whole registry would still
-        # satisfy every assertion above.
-        assert retained_counts == [1]
+        (resource,) = result["resources"]
+        assert resource["_content"] == contents[1]
 
-    @pytest.mark.asyncio
-    async def test_summarize_retains_only_the_page_window(self):
-        """Unit-level proof of the same property, independent of the tool."""
-        rows = [
-            {
-                "id": str(i),
-                "type": "module",
-                "url": _data_uri_for(f"const x={i};", "module"),
-            }
-            for i in range(5)
-        ]
+    async def test_summary_keeps_decoded_content_only_for_the_page(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        """Holding every payload would make a limit=1 call sit on the whole
+        registry's content."""
+        for i in range(5):
+            await _seed_inline(tools, f"const x={i};")
 
-        by_type, inline_count, decoded = tools_resources._summarize_resources(
-            rows, 1, 3
-        )
+        by_type, inline_count, decoded = summarize_resources(await _rows(ws), 1, 3)
 
-        # Counting spans the whole registry...
         assert by_type["module"] == 5
         assert inline_count == 5
-        # ...while retention is confined to [1, 3).
         assert sorted(decoded) == [1, 2]
 
-    @pytest.mark.asyncio
-    async def test_list_content_budget_flags_rather_than_shortens(
-        self, list_tool, mock_client
-    ):
-        """Past the per-response content budget, rows are FLAGGED not cut.
+    async def test_content_past_the_budget_is_flagged_never_shortened(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        """A shortened payload written back destroys the resource."""
+        # Five full-size resources are past the per-response content budget.
+        big = "q" * (MAX_CONTENT_SIZE - 1)
+        for i in range(5):
+            await _seed_inline(tools, big + str(i))
 
-        Handing back a silently-shortened payload is exactly how a resource
-        gets destroyed when an agent writes it back, so the budget must
-        never produce a partial _content value.
-        """
-        big = "q" * 200_000
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {
-                    "id": str(i),
-                    "type": "module",
-                    "url": _data_uri_for(big + str(i), "module"),
-                }
-                for i in range(4)
-            ]
-        }
-
-        result = await list_tool(include_content=True)
+        result = await tools.ha_config_list_dashboard_resources(include_content=True)
 
         emitted = [r for r in result["resources"] if "_content" in r]
         flagged = [r for r in result["resources"] if r.get("_content_truncated")]
-        assert emitted and flagged, "expected some emitted and some flagged"
-        assert len(emitted) + len(flagged) == 4
-        # Nothing partial: every emitted value is the whole resource.
+        assert emitted and flagged
+        assert len(emitted) + len(flagged) == 5
         for row in emitted:
             assert row["_content"].startswith(big)
-        for row in flagged:
-            assert "_content" not in row
         assert result["content_truncated"] == len(flagged)
         assert "limit=1" in result["content_truncation_note"]
 
 
-class TestHaConfigSetDashboardResource:
-    """Test ha_config_set_dashboard_resource tool (inline and URL modes)."""
+class TestSetInlineResource:
+    async def test_call_without_content_or_url_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        body = await _refused(ws, tools.ha_config_set_dashboard_resource())
 
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
+        assert "required" in body["error"]["message"].lower()
 
-    @pytest.fixture
-    def set_tool(self, mock_client):
-        """Create ResourceTools instance and return the set method."""
-        tools = ResourceTools(mock_client)
-        return tools.ha_config_set_dashboard_resource
+    async def test_call_with_both_content_and_url_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content="const x = 1;", url="/local/card.js"
+            ),
+        )
 
-    # ---- Input validation ----
+        assert "not both" in body["error"]["message"].lower()
 
-    @pytest.mark.asyncio
-    async def test_neither_content_nor_url_error(self, set_tool, mock_client):
-        """Test that providing neither content nor url returns error."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool()
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "required" in error_data["error"]["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_both_content_and_url_error(self, set_tool, mock_client):
-        """Test that providing both content and url returns error."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content="const x = 1;", url="/local/card.js")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "not both" in error_data["error"]["message"].lower()
-
-    # ---- Inline content mode ----
-
-    @pytest.mark.asyncio
-    async def test_create_inline_module(self, set_tool, mock_client):
-        """Test creating an inline module resource."""
-        mock_client.send_websocket_message.return_value = {
-            "result": {"id": "new-id-123"}
-        }
-
+    async def test_inline_content_is_stored_as_a_self_contained_module(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         content = "export const x = 1;"
-        result = await set_tool(content=content, resource_type="module")
 
-        assert result["success"] is True
+        result = await tools.ha_config_set_dashboard_resource(content=content)
+
+        (row,) = await _rows(ws)
         assert result["action"] == "created"
-        assert result["resource_id"] == "new-id-123"
-        assert result["resource_type"] == "module"
+        assert result["resource_id"] == row["id"]
+        assert result["resource_type"] == row["type"] == "module"
         assert result["size"] == len(content.encode("utf-8"))
+        assert row["url"].startswith("data:text/javascript;base64,")
+        assert _stored_content(row["url"]) == content
 
-        # Registered URL is a self-contained data: URI holding exactly the
-        # submitted content — nothing external involved.
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "lovelace/resources/create"
-        assert call_args["res_type"] == "module"
-        assert call_args["url"].startswith("data:text/javascript;base64,")
-        assert _decode_data_uri(call_args["url"]) == content
+    async def test_inline_css_is_stored_as_a_css_data_uri(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        content = ".card { color: red; }"
 
-    @pytest.mark.asyncio
-    async def test_create_without_resource_id_fails(self, set_tool, mock_client):
-        """A create that returns no id is an error, not a success.
-
-        Reporting success would leave the caller with no handle to update
-        or delete the resource it just created.
-        """
-        mock_client.send_websocket_message.return_value = {"result": None}
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content="const x = 1;", resource_type="module")
-
-        error_data = json.loads(str(exc_info.value))
-        assert "no resource_id" in error_data["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_update_tolerates_missing_id_in_response(self, set_tool, mock_client):
-        """The guard is create-only — an update echoes back its known id."""
-        mock_client.send_websocket_message.return_value = {"result": None}
-
-        result = await set_tool(
-            content="const x = 1;", resource_type="module", resource_id="known"
+        result = await tools.ha_config_set_dashboard_resource(
+            content=content, resource_type="css"
         )
 
-        assert result["success"] is True
-        assert result["resource_id"] == "known"
+        (row,) = await _rows(ws)
+        assert result["resource_type"] == row["type"] == "css"
+        assert row["url"].startswith("data:text/css;charset=utf-8;base64,")
+        assert _stored_content(row["url"]) == content
 
-    @pytest.mark.asyncio
-    async def test_create_inline_css(self, set_tool, mock_client):
-        """Test creating an inline CSS resource."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "css-123"}}
+    async def test_updating_a_legacy_resource_moves_it_to_a_data_uri(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        resource_id = await _seed(ws, legacy_url("export const x = 1;"))
 
-        result = await set_tool(content=".card { color: red; }", resource_type="css")
-
-        assert result["success"] is True
-        assert result["resource_type"] == "css"
-
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["url"].startswith("data:text/css;charset=utf-8;base64,")
-        assert _decode_data_uri(call_args["url"]) == ".card { color: red; }"
-
-    @pytest.mark.asyncio
-    async def test_default_type_is_module(self, set_tool, mock_client):
-        """Test that default resource_type is 'module'."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "123"}}
-
-        await set_tool(content="const x = 1;")
-
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["res_type"] == "module"
-
-    @pytest.mark.asyncio
-    async def test_update_inline_resource(self, set_tool, mock_client):
-        """Test updating an existing inline resource."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
-
-        result = await set_tool(
-            content="export const x = 2;",
-            resource_type="module",
-            resource_id="existing",
+        result = await tools.ha_config_set_dashboard_resource(
+            content="export const x = 2;", resource_id=resource_id
         )
 
-        assert result["success"] is True
         assert result["action"] == "updated"
-        assert result["resource_id"] == "existing"
+        assert result["resource_id"] == resource_id
+        (row,) = await _rows(ws)
+        assert row["url"].startswith("data:text/javascript;base64,")
+        assert _stored_content(row["url"]) == "export const x = 2;"
 
-        # Updates always write the current data: URI form — updating a
-        # legacy worker-hosted resource with new content migrates it off
-        # the legacy worker as a side effect.
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "lovelace/resources/update"
-        assert call_args["resource_id"] == "existing"
-        assert call_args["url"].startswith("data:text/javascript;base64,")
-
-    @pytest.mark.asyncio
-    async def test_update_rejects_truncated_preview_resave(self, set_tool, mock_client):
-        """Re-saving the list tool's truncated _preview as content is refused.
-
-        The default list response carries only the 150-char preview + "...";
-        an agent that writes that back would destroy the user's card.
-        """
+    async def test_resaving_the_truncated_preview_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        """An agent writing the list's preview back would destroy the card."""
         full = "x" * 200
-        preview = full[:150] + "..."
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": "res1", "type": "module", "url": _data_uri_for(full, "module")}
-            ]
-        }
+        resource_id = await _seed_inline(tools, full)
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=preview, resource_type="module", resource_id="res1")
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content=full[:PREVIEW_LENGTH] + "...", resource_id=resource_id
+            ),
+        )
 
-        error_data = json.loads(str(exc_info.value))
-        assert "truncated" in error_data["error"]["message"]
-        suggestions = error_data["error"]["suggestions"]
-        assert any("include_content=True" in s for s in suggestions)
-        # Only the guard's listing call ran — no update was sent.
-        assert mock_client.send_websocket_message.call_count == 1
-        sent = mock_client.send_websocket_message.call_args[0][0]
-        assert sent["type"] == "lovelace/resources"
+        assert "truncated" in body["error"]["message"]
+        assert any("include_content=True" in s for s in body["error"]["suggestions"])
 
-    @pytest.mark.asyncio
-    async def test_update_rejects_truncated_preview_of_legacy_resource(
-        self, set_tool, mock_client
-    ):
-        """The preview guard also protects legacy worker-hosted resources."""
+    async def test_resaving_the_preview_of_a_legacy_resource_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         full = "y" * 300
-        preview = full[:150] + "..."
-        mock_client.send_websocket_message.return_value = {
-            "result": [{"id": "res1", "type": "module", "url": _legacy_url(full)}]
-        }
+        resource_id = await _seed(ws, legacy_url(full))
 
-        with pytest.raises(ToolError):
-            await set_tool(content=preview, resource_type="module", resource_id="res1")
-
-        assert mock_client.send_websocket_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_short_legit_update_skips_the_preview_check(
-        self, set_tool, mock_client
-    ):
-        """Ordinary short content must not trigger the guard at all.
-
-        The guard fails closed, so matching routine short updates would
-        make them fail whenever a listing hiccups — for content that
-        cannot be a preview of anything.
-        """
-        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
-
-        result = await set_tool(
-            content="/* tweak */", resource_type="css", resource_id="existing"
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content=full[:PREVIEW_LENGTH] + "...", resource_id=resource_id
+            ),
         )
 
-        assert result["success"] is True
-        # One call only: the update. No verification listing was needed.
-        assert mock_client.send_websocket_message.call_count == 1
-        assert (
-            mock_client.send_websocket_message.call_args[0][0]["type"]
-            == "lovelace/resources/update"
-        )
+        assert "truncated" in body["error"]["message"]
 
-    @pytest.mark.asyncio
-    async def test_preview_guard_fails_closed_when_listing_raises(
-        self, set_tool, mock_client
-    ):
-        """An unverifiable preview-shaped write is REFUSED, not allowed.
-
-        A timeout on the (now large) listing does not imply the connection
-        is dead, so the small upsert frame right after would succeed and
-        destroy the card while reporting success.
-        """
-        mock_client.send_websocket_message.side_effect = TimeoutError("no answer")
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content="x" * 150 + "...", resource_type="module", resource_id="res1"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert "could not be read back" in error_data["error"]["message"]
-        # Exactly one call — the listing. No update was attempted.
-        assert mock_client.send_websocket_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_preview_guard_fails_closed_on_ws_error_envelope(
-        self, set_tool, mock_client
-    ):
-        """An HA-side rejection of the listing also fails closed."""
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "unauthorized"},
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content="x" * 150 + "...", resource_type="module", resource_id="res1"
-            )
-
-        assert "unauthorized" in str(exc_info.value)
-        assert mock_client.send_websocket_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_preview_guard_survives_malformed_listing_entries(
-        self, set_tool, mock_client
-    ):
-        """A non-dict entry must not escape as a bare AttributeError."""
-        full = "y" * 400
-        mock_client.send_websocket_message.side_effect = [
-            {
-                "result": [
-                    "not-a-dict",
-                    None,
-                    {
-                        "id": "res1",
-                        "type": "module",
-                        "url": _data_uri_for(full, "module"),
-                    },
-                ]
-            },
-            {"result": {"id": "res1"}},
-        ]
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content=full[:150] + "...", resource_type="module", resource_id="res1"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    @pytest.mark.asyncio
-    async def test_preview_guard_catches_ellipsis_stripped_preview(
-        self, set_tool, mock_client
-    ):
-        """The guard tolerates an agent trimming the ellipsis or whitespace."""
+    async def test_preview_with_the_ellipsis_trimmed_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
         full = "z" * 500
-        mock_client.send_websocket_message.return_value = {
-            "result": [
-                {"id": "res1", "type": "module", "url": _data_uri_for(full, "module")}
-            ]
-        }
+        resource_id = await _seed_inline(tools, full)
 
-        with pytest.raises(ToolError):
-            await set_tool(
-                content=full[:150], resource_type="module", resource_id="res1"
-            )
-
-    @pytest.mark.asyncio
-    async def test_update_allows_legit_content_shaped_like_preview(
-        self, set_tool, mock_client
-    ):
-        """153-char content ending in '...' that is NOT the stored preview saves."""
-        legit = "a" * 150 + "..."
-        stored = "completely different stored content " * 10
-        mock_client.send_websocket_message.side_effect = [
-            {
-                "result": [
-                    {
-                        "id": "res1",
-                        "type": "module",
-                        "url": _data_uri_for(stored, "module"),
-                    }
-                ]
-            },
-            {"result": {"id": "res1"}},
-        ]
-
-        result = await set_tool(
-            content=legit, resource_type="module", resource_id="res1"
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content=full[:PREVIEW_LENGTH], resource_id=resource_id
+            ),
         )
 
-        assert result["success"] is True
+        assert "truncated" in body["error"]["message"]
+
+    async def test_short_update_is_written_without_reading_the_resource_first(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, sent: AsyncMock
+    ) -> None:
+        """The guard fails closed, so routine short updates must not depend on
+        a listing that could fail."""
+        resource_id = await _seed(ws, "/local/theme.css", "css")
+
+        result = await tools.ha_config_set_dashboard_resource(
+            content="/* tweak */", resource_type="css", resource_id=resource_id
+        )
+
         assert result["action"] == "updated"
+        commands = [c.args[0]["type"] for c in sent.call_args_list]
+        assert commands == ["lovelace/resources/update"]
 
-    @pytest.mark.asyncio
-    async def test_inline_empty_content_error(self, set_tool, mock_client):
-        """Test that empty content returns error."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content="")
+    async def test_preview_shaped_content_that_is_not_the_preview_is_saved(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, sent: AsyncMock
+    ) -> None:
+        legit = "a" * PREVIEW_LENGTH + "..."
+        resource_id = await _seed_inline(
+            tools, "completely different stored content " * 10
+        )
+        sent.reset_mock()
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "empty" in error_data["error"]["message"].lower()
+        result = await tools.ha_config_set_dashboard_resource(
+            content=legit, resource_id=resource_id
+        )
 
-    @pytest.mark.asyncio
-    async def test_inline_whitespace_only_error(self, set_tool, mock_client):
-        """Test that whitespace-only content returns error."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content="   \n\t  ")
+        assert result["action"] == "updated"
+        (row,) = await _rows(ws)
+        assert _stored_content(row["url"]) == legit
+        commands = [c.args[0]["type"] for c in sent.call_args_list]
+        assert commands == ["lovelace/resources", "lovelace/resources/update"]
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "empty" in error_data["error"]["message"].lower()
+    async def test_preview_shaped_update_is_refused_when_core_does_not_answer(
+        self, tools: ResourceTools, core_client: HomeAssistantClient
+    ) -> None:
+        """A lost listing does not mean the small write after it would fail:
+        allowing it could destroy the card while reporting success."""
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(side_effect=HomeAssistantConnectionError("no answer")),
+        ) as dropped:
+            body = await rejected_call_body(
+                tools.ha_config_set_dashboard_resource(
+                    content="x" * PREVIEW_LENGTH + "...", resource_id="res1"
+                )
+            )
 
-    @pytest.mark.asyncio
-    async def test_inline_content_too_large_error(self, set_tool, mock_client):
-        """Test that oversized content returns error."""
-        large_content = "x" * (MAX_CONTENT_SIZE + 1000)
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=large_content)
+        assert "could not be read back" in body["error"]["message"]
+        assert dropped.await_count == 1
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "too large" in error_data["error"]["message"].lower()
-        assert "suggestions" in error_data["error"]
+    async def test_preview_shaped_update_is_refused_when_core_rejects_the_listing(
+        self, tools: ResourceTools
+    ) -> None:
+        """Without lovelace, Core answers the listing with an error."""
+        body = await rejected_call_body(
+            tools.ha_config_set_dashboard_resource(
+                content="x" * PREVIEW_LENGTH + "...", resource_id="res1"
+            )
+        )
 
-    @pytest.mark.asyncio
-    async def test_inline_size_is_utf8_bytes_not_characters(
-        self, set_tool, mock_client
-    ):
-        """size (and the cap) are measured in UTF-8 bytes, not characters.
+        assert "could not be read back" in body["error"]["message"]
+        assert "rejected the listing" in body["error"]["message"]
 
-        Every other size test uses ASCII, where the two are identical — so
-        a refactor to len(content) would pass them all while letting a
-        multibyte payload up to 4x over the cap through.
-        """
-        mock_client.send_websocket_message.return_value = {"result": {"id": "1"}}
-        content = chr(233) * 100  # 100 chars, 200 UTF-8 bytes
+    @pytest.mark.parametrize("content", ["", "   \n\t  "], ids=["empty", "whitespace"])
+    async def test_empty_content_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, content: str
+    ) -> None:
+        body = await _refused(
+            ws, tools.ha_config_set_dashboard_resource(content=content)
+        )
 
-        result = await set_tool(content=content, resource_type="module")
+        assert "empty" in body["error"]["message"].lower()
 
-        assert result["size"] == len(content.encode("utf-8")) == 200
-        assert result["size"] != len(content)
+    async def test_size_is_utf8_bytes_not_characters(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        """A refactor to len(content) would let a multibyte payload up to 4x
+        over the cap through."""
+        content = chr(233) * 100
 
-    @pytest.mark.asyncio
-    async def test_inline_cap_counts_bytes_not_characters(self, set_tool, mock_client):
-        """Content under the cap in characters but over it in bytes is rejected."""
-        content = chr(233) * (MAX_CONTENT_SIZE // 2 + 1)  # 2 bytes each -> over
+        result = await tools.ha_config_set_dashboard_resource(content=content)
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=content, resource_type="module")
+        assert result["size"] == 200
 
-        assert len(content) < MAX_CONTENT_SIZE  # would pass a character check
-        error_data = json.loads(str(exc_info.value))
-        assert "too large" in error_data["error"]["message"].lower()
-        mock_client.send_websocket_message.assert_not_called()
+    async def test_cap_counts_bytes_not_characters(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        content = chr(233) * (MAX_CONTENT_SIZE // 2 + 1)
+        assert len(content) < MAX_CONTENT_SIZE
 
-    @pytest.mark.asyncio
-    async def test_inline_cap_boundary(self, set_tool, mock_client):
-        """Exactly MAX_CONTENT_SIZE is accepted; one byte over is rejected."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "1"}}
+        body = await _refused(
+            ws, tools.ha_config_set_dashboard_resource(content=content)
+        )
 
-        at_cap = "x" * MAX_CONTENT_SIZE
-        result = await set_tool(content=at_cap, resource_type="module")
-        assert result["success"] is True
+        assert "too large" in body["error"]["message"].lower()
+
+    async def test_cap_accepts_the_limit_and_refuses_one_byte_more(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        result = await tools.ha_config_set_dashboard_resource(
+            content="x" * MAX_CONTENT_SIZE
+        )
         assert result["size"] == MAX_CONTENT_SIZE
 
-        with pytest.raises(ToolError):
-            await set_tool(content="x" * (MAX_CONTENT_SIZE + 1), resource_type="module")
-
-    @pytest.mark.asyncio
-    async def test_inline_js_type_not_supported(self, set_tool, mock_client):
-        """Test that resource_type='js' is rejected for inline content."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content="var x = 1;", resource_type="js")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "js" in error_data["error"]["message"].lower()
-
-    # ---- HA-config YAML misroute rejection (#1072) ----
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("marker", sorted(tools_resources._HA_CONFIG_YAML_MARKERS))
-    async def test_inline_rejects_config_yaml_pointing_at_a_tool_that_exists(
-        self, set_tool, mock_client, marker
-    ):
-        """A model sending config YAML as resource content (the small-model
-        misroute) is pointed at an ha-mcp tool that exists, not an issue number."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(content=f"{marker}:\n  - id: x\n", resource_type="module")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["detected_marker"] == f"{marker}:"
-        named = set(re.findall(r"\bha_[a-z_]+", error_data["error"]["suggestions"][0]))
-        assert named and named <= _REGISTERED_TOOLS
-        assert not re.search(r"#\d", json.dumps(error_data["error"]))
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_inline_update_rejects_scene_yaml(self, set_tool, mock_client):
-        """Update path (resource_id provided) also rejects scene-YAML.
-
-        Locks the YAML check above ``_upsert_resource`` — a future refactor
-        moving the reject below the WebSocket call would silently overwrite
-        an existing resource with malformed YAML and the suite would stay
-        green without this test.
-        """
-        scene_yaml = (
-            "scene:\n  - id: 'luce_notturna_led_tavolo'\n    name: Luce Notturna\n"
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content="x" * (MAX_CONTENT_SIZE + 1)
+            ),
         )
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content=scene_yaml,
-                resource_type="module",
-                resource_id="existing-resource-id",
-            )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "scene:" in error_data["error"]["message"]
-        # Critical: no upsert call with the malformed payload.
-        mock_client.send_websocket_message.assert_not_called()
+        assert "too large" in body["error"]["message"].lower()
+        assert body["error"]["suggestions"]
 
-    @pytest.mark.asyncio
-    async def test_inline_rejects_automation_yaml_with_tool_pointer(
-        self, set_tool, mock_client
-    ):
-        """`automation:` content is rejected with `ha_config_set_automation` suggestion."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content="automation:\n  - id: morning\n    trigger: ...\n",
-                resource_type="module",
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "automation:" in error_data["error"]["message"]
-        suggestions = error_data["error"]["suggestions"]
-        assert any("ha_config_set_automation" in s for s in suggestions)
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_inline_rejects_input_boolean_yaml_with_helper_pointer(
-        self, set_tool, mock_client
-    ):
-        """`input_boolean:` content is rejected with `ha_config_set_helper` suggestion."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                content="input_boolean:\n  guest_mode:\n    name: Guest\n",
-                resource_type="module",
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        suggestions = error_data["error"]["suggestions"]
-        assert any(
-            "ha_config_set_helper" in s and "input_boolean" in s for s in suggestions
+    async def test_inline_js_type_is_refused(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        body = await _refused(
+            ws,
+            tools.ha_config_set_dashboard_resource(
+                content="var x = 1;", resource_type="js"
+            ),
         )
-        mock_client.send_websocket_message.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_inline_accepts_legit_module_mentioning_marker_words(
-        self, set_tool, mock_client
-    ):
-        """Real ES6 module with marker words inside strings/comments is accepted."""
-        mock_client.send_websocket_message.return_value = {
-            "result": {"id": "legit-module-1"}
-        }
-        legit_content = (
-            "// Card for displaying automation status\n"
-            "export const automation_card = {\n"
-            "  type: 'custom:automation-status',\n"
-            "  scene: 'morning',\n"
-            "};\n"
-        )
-        result = await set_tool(content=legit_content, resource_type="module")
+        assert "js" in body["error"]["message"].lower()
 
-        assert result["success"] is True
+
+class TestSetUrlResource:
+    async def test_local_url_resource_is_registered(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        result = await tools.ha_config_set_dashboard_resource(url="/local/my-card.js")
+
+        (row,) = await _rows(ws)
         assert result["action"] == "created"
-        mock_client.send_websocket_message.assert_called()
+        assert result["resource_id"] == row["id"]
+        assert result["url"] == row["url"] == "/local/my-card.js"
+        assert row["type"] == "module"
 
-    @pytest.mark.asyncio
-    async def test_inline_accepts_css_with_selector_resembling_marker(
-        self, set_tool, mock_client
-    ):
-        """CSS that uses `.automation { ... }` selectors is accepted."""
-        mock_client.send_websocket_message.return_value = {
-            "result": {"id": "legit-css-1"}
-        }
-        legit_css = ".automation, .scene { color: red; padding: 0; }\n"
-        result = await set_tool(content=legit_css, resource_type="css")
+    async def test_url_update_changes_the_stored_url(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        resource_id = await _seed(ws, "/local/card.js")
 
-        assert result["success"] is True
-        assert result["action"] == "created"
-        mock_client.send_websocket_message.assert_called()
-
-    # ---- URL mode ----
-
-    @pytest.mark.asyncio
-    async def test_create_local_resource(self, set_tool, mock_client):
-        """Test creating a local resource."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "local-1"}}
-
-        result = await set_tool(url="/local/my-card.js", resource_type="module")
-
-        assert result["success"] is True
-        assert result["action"] == "created"
-        assert result["url"] == "/local/my-card.js"
-
-    @pytest.mark.asyncio
-    async def test_create_hacs_resource(self, set_tool, mock_client):
-        """Test creating a HACS resource."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "hacs-1"}}
-
-        result = await set_tool(
-            url="/hacsfiles/lovelace-mushroom/mushroom.js", resource_type="module"
+        result = await tools.ha_config_set_dashboard_resource(
+            url="/local/card-v2.js", resource_id=resource_id
         )
 
-        assert result["success"] is True
-        assert result["action"] == "created"
-
-    @pytest.mark.asyncio
-    async def test_update_url_resource(self, set_tool, mock_client):
-        """Test updating an existing URL resource."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "existing"}}
-
-        result = await set_tool(
-            url="/local/card-v2.js", resource_type="module", resource_id="existing"
-        )
-
-        assert result["success"] is True
         assert result["action"] == "updated"
+        assert await _rows(ws) == [
+            {"id": resource_id, "type": "module", "url": "/local/card-v2.js"}
+        ]
 
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "lovelace/resources/update"
+    async def test_legacy_js_type_is_accepted_for_url_resources(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket
+    ) -> None:
+        result = await tools.ha_config_set_dashboard_resource(
+            url="/local/legacy.js", resource_type="js"
+        )
 
-    @pytest.mark.asyncio
-    async def test_url_supports_js_type(self, set_tool, mock_client):
-        """Test that legacy js type is supported for URL resources."""
-        mock_client.send_websocket_message.return_value = {"result": {"id": "123"}}
+        (row,) = await _rows(ws)
+        assert result["resource_type"] == row["type"] == "js"
 
-        result = await set_tool(url="/local/legacy.js", resource_type="js")
+    @pytest.mark.parametrize(
+        ("url", "res_type"),
+        [
+            ("data:text/javascript;base64,eA==", "module"),
+            ("DATA:text/javascript;base64,eA==", "module"),
+            ("data:image/png;base64,eA==", "js"),
+        ],
+        ids=["data-url", "upper-case-scheme", "other-mime"],
+    )
+    async def test_data_url_cannot_bypass_the_inline_guards(
+        self, tools: ResourceTools, ws: MockHAClientWebSocket, url: str, res_type: str
+    ) -> None:
+        """url= runs none of the inline checks (empty, size, type, #1072 YAML)."""
+        body = await _refused(
+            ws, tools.ha_config_set_dashboard_resource(url=url, resource_type=res_type)
+        )
 
-        assert result["success"] is True
-        assert result["resource_type"] == "js"
-
-    @pytest.mark.asyncio
-    async def test_url_mode_rejects_data_urls(self, set_tool, mock_client):
-        """Hand-built data: URLs can't bypass the inline-mode guards via url=.
-
-        url= runs none of the inline validations (empty/size/type checks and
-        the #1072 YAML-misroute rejection), so a documented data: format
-        registered through it would be a guard bypass.
-        """
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url="data:text/javascript;base64,eA==")
-
-        error_data = json.loads(str(exc_info.value))
-        assert "content=" in error_data["error"]["message"]
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_url_mode_rejects_data_urls_any_case_and_type(
-        self, set_tool, mock_client
-    ):
-        """The data: rejection is scheme-case-insensitive and mime-agnostic."""
-        with pytest.raises(ToolError):
-            await set_tool(url="DATA:text/javascript;base64,eA==")
-        with pytest.raises(ToolError):
-            await set_tool(url="data:image/png;base64,eA==", resource_type="js")
-        mock_client.send_websocket_message.assert_not_called()
+        assert "content=" in body["error"]["message"]
 
 
-class TestHaConfigDeleteDashboardResource:
-    """Test ha_config_delete_dashboard_resource tool."""
+async def test_deleted_resource_is_gone_from_core(
+    tools: ResourceTools, ws: MockHAClientWebSocket
+) -> None:
+    resource_id = await _seed(ws, "/local/card.js")
 
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
+    result = await tools.ha_config_delete_dashboard_resource(resource_id=resource_id)
 
-    @pytest.fixture
-    def delete_tool(self, mock_client):
-        """Create ResourceTools instance and return the delete method."""
-        tools = ResourceTools(mock_client)
-        return tools.ha_config_delete_dashboard_resource
-
-    @pytest.mark.asyncio
-    async def test_delete_success(self, delete_tool, mock_client):
-        """Test successful deletion."""
-        mock_client.send_websocket_message.return_value = {"success": True}
-
-        result = await delete_tool(resource_id="abc123")
-
-        assert result["success"] is True
-        assert result["action"] == "delete"
-        assert result["resource_id"] == "abc123"
-
-    @pytest.mark.asyncio
-    async def test_delete_not_found_raises_tool_error(self, delete_tool, mock_client):
-        """Core's not_found code (not its message text) maps to RESOURCE_NOT_FOUND."""
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Command failed: some future wording",
-            "error_code": "not_found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await delete_tool(resource_id="nonexistent")
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert result["action"] == "delete"
+    assert result["resource_id"] == resource_id
+    assert await _rows(ws) == []
 
 
-class TestToolRegistration:
-    """Test tool registration."""
+@pytest.fixture
+def mcp(core_client: HomeAssistantClient) -> FastMCP:
+    server = FastMCP("test")
+    register_resources_tools(server, core_client)
+    return server
 
-    def test_registers_three_tools(self):
-        """Test that exactly three tools are registered (list, set, delete)."""
-        mcp = MagicMock()
-        registered = []
-        mcp.add_tool = lambda method: registered.append(method.__name__)
 
-        register_resources_tools(mcp, MagicMock())
+async def test_only_list_set_and_delete_are_registered(mcp: FastMCP) -> None:
+    """The retired ha_config_set_inline_dashboard_resource stays gone."""
+    names = {tool.name for tool in await mcp.list_tools()}
 
-        assert "ha_config_list_dashboard_resources" in registered
-        assert "ha_config_set_dashboard_resource" in registered
-        assert "ha_config_delete_dashboard_resource" in registered
-        assert "ha_config_set_inline_dashboard_resource" not in registered
-        assert len(registered) == 3
+    assert names == {
+        "ha_config_list_dashboard_resources",
+        "ha_config_set_dashboard_resource",
+        "ha_config_delete_dashboard_resource",
+    }
 
-    def test_set_tool_has_destructive_hint(self):
-        """Test set tool has destructiveHint."""
-        tools = ResourceTools(MagicMock())
-        # Access the __fastmcp__ metadata set by @tool decorator
-        metadata = tools.ha_config_set_dashboard_resource.__fastmcp__
-        assert metadata.annotations.destructive_hint is True
+
+async def test_set_tool_is_marked_destructive(mcp: FastMCP) -> None:
+    tool = await mcp.get_tool("ha_config_set_dashboard_resource")
+
+    assert tool.annotations is not None
+    assert tool.annotations.destructiveHint is True
