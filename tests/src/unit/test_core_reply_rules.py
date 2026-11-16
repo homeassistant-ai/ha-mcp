@@ -916,6 +916,16 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="setattr-lambda",
         ),
         pytest.param(
+            "patch.multiple(update_check, get_update_info=AsyncMock(return_value=None))\n",
+            True,
+            id="patch-multiple-keyword",
+        ),
+        pytest.param(
+            "patch.multiple(update_check, get_update_info=DEFAULT)\n",
+            False,
+            id="patch-multiple-no-answer",
+        ),
+        pytest.param(
             'patch.object(tools_addons, "get_addon_info", wraps=tools_addons.get_addon_info)\n',
             False,
             id="spy",

@@ -198,12 +198,14 @@ async def test_a_transform_that_leaves_no_object_is_a_validation_error(
 
 
 @BACKENDS
+@pytest.mark.parametrize("value", ["set()", "float('nan')"], ids=["set", "nan"])
 async def test_a_value_json_cannot_encode_is_a_validation_error(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     backend: str,
+    value: str,
 ) -> None:
     """Nothing can be sent, so the agent is told its transform is wrong; the
     edit is not of unknown outcome."""
@@ -213,7 +215,7 @@ async def test_a_value_json_cannot_encode_is_a_validation_error(
         hass,
         core_client,
         caplog,
-        python_transform="config['views'][0]['cards'][0]['tags'] = set()",
+        python_transform=f"config['views'][0]['cards'][0]['tags'] = {value}",
     )
 
     assert (sent["save"], sent["edit"]) == (0, 0)

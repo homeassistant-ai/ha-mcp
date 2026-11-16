@@ -181,7 +181,8 @@ def yaml_dumps(ry: YAML, data: Any) -> str:
 
 
 def _comment_block_ending(data: Any, key: str, column: int) -> list[CommentToken]:
-    """The comment lines at ``column`` that close the value of ``key``."""
+    """The comment lines at ``column`` that close the value of ``key``, with
+    the blank lines between and after them."""
     token: Any = None
     node: Any = data
     last: Any = key
@@ -197,14 +198,18 @@ def _comment_block_ending(data: Any, key: str, column: int) -> list[CommentToken
             last = len(node) - 1
         else:
             break
-    block: list[CommentToken] = []
     # The token starts with the rest of the value's own line.
-    for line in reversed(token.value.split("\n")[1:-1] if token else []):
-        text = line.lstrip()
-        if not text.startswith("#") or len(line) - len(text) != column:
-            break
-        block.insert(0, CommentToken(text + "\n", CommentMark(column)))
-    return block
+    lines = token.value.split("\n")[1:-1] if token else []
+    # A comment indented deeper than the next key belongs to the removed value.
+    own = [
+        i
+        for i, line in enumerate(lines)
+        if line.strip() and len(line) - len(line.lstrip()) != column
+    ]
+    kept = lines[own[-1] + 1 :] if own else lines
+    while kept and not kept[0].strip():
+        kept = kept[1:]
+    return [CommentToken(line.strip() + "\n", CommentMark(column)) for line in kept]
 
 
 def drop_key(data: Any, key: str) -> None:

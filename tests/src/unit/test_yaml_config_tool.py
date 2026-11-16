@@ -575,8 +575,11 @@ async def test_key_off_the_allowlist_is_refused(
     assert await _read(hass, "configuration.yaml") == CONFIGURATION
 
 
+@pytest.mark.parametrize(
+    "gap", ["", "\n"], ids=["directly-above", "blank-line-between"]
+)
 async def test_remove_keeps_the_comment_block_above_the_next_key(
-    hass: HomeAssistant, tool: YamlConfigTools
+    hass: HomeAssistant, tool: YamlConfigTools, gap: str
 ) -> None:
     """The tool promises to keep comments; a remove must take only the removed
     key's own lines, not the notes the user wrote above the key after it."""
@@ -586,8 +589,7 @@ async def test_remove_keeps_the_comment_block_above_the_next_key(
     )
     kept_tail = (
         "# Phone notifications\n"
-        "# (set up by hand)\n"
-        "notify:\n"
+        "# (set up by hand)\n" + gap + "notify:\n"
         "  - name: phone\n"
         "    platform: group\n"
         "    services: []\n"

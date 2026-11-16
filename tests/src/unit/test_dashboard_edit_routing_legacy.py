@@ -259,7 +259,7 @@ async def test_only_a_save_core_refused_outright_is_reported_unwritten(
         if rejection == "deleted":
             async with held_command(hass, SAVE) as held:
                 task = asyncio.create_task(set_dashboard(client, **edit))
-                await held.arrived.wait()
+                await held.reached_by(task)
                 deleted = await client.send_websocket_message(
                     {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id}
                 )

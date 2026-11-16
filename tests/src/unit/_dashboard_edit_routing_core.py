@@ -20,6 +20,7 @@ from homeassistant.components.lovelace.const import LOVELACE_DATA
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools import card_definitions
 from custom_components.ha_mcp_tools import websocket_api as component_commands
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -54,6 +55,11 @@ def use_backend(
     but Core no longer has the command, as after a downgrade mid-session."""
     if backend == "absent":
         return
+    # The component keeps its card index, and the task that builds it, for the
+    # whole process: one left unfinished by an earlier test belongs to that
+    # test's event loop, and a save here would wait on it until it timed out.
+    for name in ("_definitions", "_build_task", "_build_failed_at"):
+        monkeypatch.setattr(card_definitions, name, None)
     component_commands.async_register_commands(hass)
     if backend == "unknown_command":
         monkeypatch.delitem(hass.data[websocket_api.DOMAIN], EDIT)
@@ -201,7 +207,7 @@ async def refused_on_save(
             return body, len(seen[SAVE])
         async with held_command(hass, SAVE) as held:
             task = asyncio.create_task(set_dashboard(client, url_path, **kwargs))
-            await held.arrived.wait()
+            await held.reached_by(task)
             task.cancel()
             with pytest.raises(ToolError) as caught:
                 await asyncio.gather(task)

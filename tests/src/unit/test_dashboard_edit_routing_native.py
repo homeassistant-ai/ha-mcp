@@ -199,7 +199,7 @@ async def test_an_edit_cancelled_after_core_received_it_is_an_unknown_outcome(
             task = asyncio.create_task(
                 set_dashboard(client, patch=EDITS["patch"], config_hash=DOCUMENT_HASH)
             )
-            await held.arrived.wait()
+            await held.reached_by(task)
             task.cancel()
             with pytest.raises(ToolError) as caught:
                 await asyncio.gather(task)
@@ -224,7 +224,7 @@ async def test_an_edit_cancelled_before_it_was_sent_stays_cancelled(
             task = asyncio.create_task(
                 set_dashboard(client, patch=EDITS["patch"], config_hash=DOCUMENT_HASH)
             )
-            await probe.arrived.wait()
+            await probe.reached_by(task)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.gather(task)

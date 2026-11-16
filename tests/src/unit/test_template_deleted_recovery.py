@@ -168,12 +168,15 @@ async def test_entry_back_before_recreation_is_neither_duplicated_nor_edited(
     assert hass.config_entries.async_entries("template") == [back]
 
 
-async def test_lost_creation_reply_is_reported_unknown_and_not_retried(
+async def test_a_flow_submission_with_no_reply_is_reported_unknown_and_not_retried(
     hass: HomeAssistant,
     deleted_template: DeletedTemplate,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The first submission of the creation flow (its menu choice) gets no
+    reply: the tool cannot tell how far Core got, so it reports the creation
+    as unknown and sends nothing again."""
     monkeypatch.setattr(
         component_core_client,
         "submit_config_flow_step",

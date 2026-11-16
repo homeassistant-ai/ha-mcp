@@ -450,7 +450,7 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
             "it must stay a dict"
         )
     try:
-        json.dumps(result)
+        json.dumps(result, allow_nan=False)
     except (TypeError, ValueError) as err:
         raise PythonSandboxExecutionError(
             f"the expression left a value that cannot be sent as JSON: {err}"
