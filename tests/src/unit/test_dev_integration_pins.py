@@ -1,8 +1,8 @@
 """The dev group installs the integration libraries Core's manifests pin.
 
-Unit tests run Core's own Thread, OTBR, Z-Wave JS, Matter, ZHA, KNX, Local Calendar
-and Remote Calendar handlers, so the dev group installs their requirements. A
-Core update that moves a manifest pin must move the dev pin with it, or the
+Unit tests run Core's own Thread, OTBR, Z-Wave JS, Matter, ZHA, KNX, Local Calendar,
+Remote Calendar and conversation handlers, so the dev group installs their
+requirements. A Core update that moves a manifest pin must move the dev pin with it, or the
 tests run a library that Core version never ships with.
 """
 
@@ -31,6 +31,7 @@ _INTEGRATIONS = (
     "knx",
     "local_calendar",
     "remote_calendar",
+    "conversation",
 )
 
 

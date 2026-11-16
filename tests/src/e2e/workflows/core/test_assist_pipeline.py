@@ -3,6 +3,9 @@
 import asyncio
 import logging
 import time
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 import pytest
 
@@ -18,6 +21,94 @@ logger = logging.getLogger(__name__)
 # Budget for a freshly exposed entity to become matchable by the conversation
 # agent.
 _INTENT_MATCH_TIMEOUT = 20
+
+# Unmatchable, so running it through Assist cannot change any state.
+_UNMATCHED = "zzqx wibble frobnicate the quux"
+
+# Every field of Core's pipeline schema, none at the default pipeline's value,
+# so a clone or a merge shows where each value came from. Core checks only that
+# an STT/TTS engine comes with its language, not that the engine exists.
+_BASE: dict[str, Any] = {
+    "conversation_engine": "conversation.home_assistant",
+    "conversation_language": "*",
+    "language": "en",
+    "stt_engine": None,
+    "stt_language": "en-US",
+    "tts_engine": None,
+    "tts_language": "en-GB",
+    "tts_voice": "e2e-voice",
+    "wake_word_entity": None,
+    "wake_word_id": "e2e_wake",
+    "prefer_local_intents": True,
+}
+
+Create = Callable[..., Awaitable[dict[str, Any]]]
+
+
+async def _core_pipeline(ha_client: Any, pipeline_id: str) -> dict[str, Any]:
+    reply = await ha_client.send_websocket_message(
+        {"type": "assist_pipeline/pipeline/get", "pipeline_id": pipeline_id}
+    )
+    assert reply.get("success"), reply
+    pipeline: dict[str, Any] = reply["result"]
+    return pipeline
+
+
+async def _core_preferred(ha_client: Any) -> str:
+    reply = await ha_client.send_websocket_message(
+        {"type": "assist_pipeline/pipeline/list"}
+    )
+    assert reply.get("success"), reply
+    preferred: str = reply["result"]["preferred_pipeline"]
+    return preferred
+
+
+def _settings(pipeline: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in pipeline.items() if k not in {"id", "name"}}
+
+
+@pytest.fixture
+async def scratch_pipelines(ha_client: Any) -> AsyncIterator[Create]:
+    """Creates ``_BASE`` pipelines in Core; afterwards deletes every pipeline
+    the test left and gives the preferred one back."""
+    listed = await ha_client.send_websocket_message(
+        {"type": "assist_pipeline/pipeline/list"}
+    )
+    if not listed.get("success"):
+        pytest.skip(f"Assist pipeline websocket API unavailable: {listed}")
+    preferred = listed["result"]["preferred_pipeline"]
+    before = {p["id"] for p in listed["result"]["pipelines"]}
+
+    async def create(**fields: Any) -> dict[str, Any]:
+        reply = await ha_client.send_websocket_message(
+            {
+                "type": "assist_pipeline/pipeline/create",
+                **_BASE,
+                "name": f"E2E Pipeline {uuid.uuid4().hex[:8]}",
+                **fields,
+            }
+        )
+        assert reply.get("success"), reply
+        pipeline: dict[str, Any] = reply["result"]
+        return pipeline
+
+    try:
+        yield create
+    finally:
+        await ha_client.send_websocket_message(
+            {"type": "assist_pipeline/pipeline/set_preferred", "pipeline_id": preferred}
+        )
+        listed = await ha_client.send_websocket_message(
+            {"type": "assist_pipeline/pipeline/list"}
+        )
+        for pipeline in listed.get("result", {}).get("pipelines", []):
+            if pipeline["id"] not in before:
+                await ha_client.send_websocket_message(
+                    {
+                        "type": "assist_pipeline/pipeline/delete",
+                        "pipeline_id": pipeline["id"],
+                    }
+                )
 
 
 @pytest.mark.core
@@ -37,6 +128,7 @@ class TestAssistPipeline:
         assert "count" in data
         assert isinstance(data["pipelines"], list)
         assert data["count"] == len(data["pipelines"])
+        assert data["preferred_pipeline"] in {p["id"] for p in data["pipelines"]}
 
     async def test_set_preferred_assist_pipeline_idempotent_roundtrip(self, mcp_client):
         """Setting the current preferred pipeline again is an idempotent write."""
@@ -252,3 +344,275 @@ class TestAssistPipeline:
 
         assert data["success"] is False
         assert data["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+
+    async def test_create_clones_the_base_pipeline_it_is_given(
+        self, mcp_client, ha_client, scratch_pipelines: Create
+    ):
+        """The new pipeline keeps every setting of the base but the ones passed,
+        and get reads back what Core stored."""
+        base = await scratch_pipelines()
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "create",
+                    "base_pipeline_id": base["id"],
+                    "name": "E2E Clone",
+                    "conversation_engine": "conversation.e2e_agent",
+                },
+            )
+            read = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {"action": "get", "pipeline_id": data["pipeline_id"]},
+            )
+
+        stored = await _core_pipeline(ha_client, data["pipeline_id"])
+        assert data["pipeline"] == stored
+        assert read["pipeline"] == stored
+        assert stored["id"] != base["id"]
+        assert stored["name"] == "E2E Clone"
+        assert _settings(stored) == {
+            **_settings(base),
+            "conversation_engine": "conversation.e2e_agent",
+        }
+
+    async def test_create_without_a_base_clones_the_preferred_pipeline(
+        self, mcp_client, ha_client, scratch_pipelines: Create
+    ):
+        preferred = await scratch_pipelines()
+        reply = await ha_client.send_websocket_message(
+            {
+                "type": "assist_pipeline/pipeline/set_preferred",
+                "pipeline_id": preferred["id"],
+            }
+        )
+        assert reply.get("success"), reply
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "create",
+                    "name": "E2E Clone",
+                    "conversation_engine": "conversation.e2e_agent",
+                },
+            )
+
+        assert data["preferred_changed"] is False
+        assert _settings(await _core_pipeline(ha_client, data["pipeline_id"])) == {
+            **_settings(preferred),
+            "conversation_engine": "conversation.e2e_agent",
+        }
+
+    async def test_update_keeps_unnamed_fields_and_clears_an_emptied_nullable_one(
+        self, mcp_client, ha_client, scratch_pipelines: Create
+    ):
+        """Core replaces the whole pipeline on update, so a field the caller
+        did not name must be sent as stored; an empty string clears a
+        nullable field instead of storing ""."""
+        voice = await scratch_pipelines()
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "update",
+                    "pipeline_id": voice["id"],
+                    "conversation_engine": "conversation.e2e_agent",
+                    "tts_voice": "",
+                },
+            )
+
+        stored = await _core_pipeline(ha_client, voice["id"])
+        assert data["pipeline"] == stored
+        assert stored == {
+            **voice,
+            "conversation_engine": "conversation.e2e_agent",
+            "tts_voice": None,
+        }
+
+    @pytest.mark.parametrize("action", ["create", "update", "set_preferred"])
+    async def test_a_pipeline_made_preferred_is_what_core_prefers(
+        self, mcp_client, ha_client, scratch_pipelines: Create, action: str
+    ):
+        """create/update with make_preferred, and set_preferred, each move
+        Core's preference to the pipeline they name or write."""
+        voice = await scratch_pipelines()
+        arguments: dict[str, Any] = {
+            "create": {
+                "action": "create",
+                "name": "E2E Preferred",
+                "conversation_engine": "conversation.home_assistant",
+                "base_pipeline_id": voice["id"],
+                "make_preferred": True,
+            },
+            "update": {
+                "action": "update",
+                "pipeline_id": voice["id"],
+                "name": "E2E Preferred",
+                "make_preferred": True,
+            },
+            "set_preferred": {"action": "set_preferred", "pipeline_id": voice["id"]},
+        }[action]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success("ha_manage_pipeline", arguments)
+
+        assert await _core_preferred(ha_client) == data["pipeline_id"]
+        if action != "set_preferred":
+            assert data["preferred_changed"] is True
+
+    @pytest.mark.parametrize(
+        ("action", "core_says"),
+        [("get", "Unable to find"), ("set_preferred", "unknown item")],
+    )
+    async def test_a_pipeline_core_does_not_have_is_reported(
+        self, mcp_client, action: str, core_says: str
+    ):
+        missing = f"e2e_missing_{uuid.uuid4().hex[:8]}"
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_pipeline",
+            {"action": action, "pipeline_id": missing},
+        )
+
+        assert data["success"] is False
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert core_says in data["error"]["message"]
+        assert data["pipeline_id"] == missing
+
+    async def test_create_reports_core_rejecting_the_pipeline(
+        self, mcp_client, scratch_pipelines: Create
+    ):
+        """Clearing the STT language while naming an STT engine is a pipeline
+        Core refuses."""
+        base = await scratch_pipelines()
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_pipeline",
+            {
+                "action": "create",
+                "base_pipeline_id": base["id"],
+                "name": "E2E Rejected",
+                "conversation_engine": "conversation.home_assistant",
+                "stt_engine": "stt.e2e",
+                "stt_language": "",
+            },
+        )
+
+        assert data["success"] is False
+        assert data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "stt_language" in data["error"]["message"]
+        assert data["operation"] == "create"
+
+    @pytest.mark.parametrize(
+        ("languages", "explicit", "expected"),
+        [
+            pytest.param(
+                {"stt_language": "de-DE", "tts_language": "de-AT", "language": "de"},
+                None,
+                "de-DE",
+                id="stt-beats-tts-and-language",
+            ),
+            pytest.param(
+                {"stt_language": None, "tts_language": "de-AT", "language": "de"},
+                None,
+                "de-AT",
+                id="tts-when-no-stt",
+            ),
+            pytest.param(
+                {"stt_language": None, "tts_language": None, "language": "de"},
+                None,
+                "de",
+                id="pipeline-language-last",
+            ),
+            pytest.param(
+                {"conversation_language": "nl", "stt_language": "de-DE"},
+                None,
+                "nl",
+                id="specific-conversation-language-wins",
+            ),
+            pytest.param(
+                {"conversation_language": "", "stt_language": "de-DE"},
+                None,
+                "de-DE",
+                id="empty-conversation-language-falls-through",
+            ),
+            pytest.param(
+                {"stt_language": "de-DE"},
+                "fr",
+                "fr",
+                id="explicit-language-beats-the-pipeline",
+            ),
+        ],
+    )
+    async def test_process_runs_in_the_language_the_pipeline_resolves(
+        self,
+        mcp_client,
+        scratch_pipelines: Create,
+        languages: dict[str, Any],
+        explicit: str | None,
+        expected: str,
+    ):
+        """Core resolves a "*" pipeline the same way and prefers the more
+        specific STT value; an empty conversation_language is not a language
+        and Core would pass it on verbatim. The built-in agent answers in the
+        language it was asked in."""
+        voice = await scratch_pipelines(**languages)
+        arguments: dict[str, Any] = {
+            "action": "process",
+            "sentence": _UNMATCHED,
+            "pipeline_id": voice["id"],
+        }
+        if explicit is not None:
+            arguments["language"] = explicit
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success("ha_manage_pipeline", arguments)
+
+        assert data["language"] == expected
+
+    async def test_process_leaves_an_unresolvable_language_to_home_assistant(
+        self, mcp_client, ha_client, scratch_pipelines: Create
+    ):
+        """Sending "*" or "" would make the agent recognise in no language;
+        left out, Core uses its configured one."""
+        voice = await scratch_pipelines(
+            language="", stt_language=None, tts_language=None
+        )
+        config = await ha_client.get_config()
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "process",
+                    "sentence": _UNMATCHED,
+                    "pipeline_id": voice["id"],
+                },
+            )
+
+        assert data["language"] == config["language"]
+
+    async def test_process_explicit_agent_beats_the_pipeline_agent(
+        self, mcp_client, scratch_pipelines: Create
+    ):
+        """The pipeline names an agent Home Assistant does not have, so the
+        call succeeds only if the explicit agent_id is the one sent."""
+        voice = await scratch_pipelines(conversation_engine="conversation.e2e_missing")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "process",
+                    "sentence": _UNMATCHED,
+                    "pipeline_id": voice["id"],
+                    "agent_id": "conversation.home_assistant",
+                },
+            )
+
+        assert data["agent_id"] == "conversation.home_assistant"

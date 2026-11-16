@@ -559,7 +559,7 @@ dev = [
     "hamcp-test-env",
     # The requirements of the Core integrations whose own handlers the unit
     # tests run, as Core's test suite does: Thread and OTBR, Z-Wave JS, Matter, ZHA,
-    # KNX, Local Calendar and Remote Calendar, plus usb, hassio,
+    # KNX, Local Calendar, Remote Calendar and conversation, plus usb, hassio,
     # homeassistant_hardware, infrared and stream, which those load. Only the device,
     # bus or server below each library is replaced. Each pin
     # equals the integration's manifest in the Core above;
@@ -586,6 +586,9 @@ dev = [
     "knx-frontend==2026.11.8.11926",
     "knx-telegram-store[sqlite,postgres]==0.15.2",
     "ical==14.3.1",
+    "gazetteer-matcher==1.1.0",
+    "hassil==3.12.1",
+    "home-assistant-intents==2026.10.27",
 ]
 
 [tool.uv]
