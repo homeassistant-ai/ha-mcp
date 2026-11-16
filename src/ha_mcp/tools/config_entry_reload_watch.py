@@ -227,10 +227,7 @@ async def watch_entry_reload(
         if subscription is None:
             return None
         try:
-            # Named here, not left to the default, so it is read at each wait.
-            return await _observe_reload_settled(
-                subscription[1][1], entry_id, timeout=_RELOAD_SETTLE_TIMEOUT
-            )
+            return await _observe_reload_settled(subscription[1][1], entry_id)
         except Exception as err:  # noqa: BLE001
             logger.warning("Entry-change stream failed after commit (%r)", err)
             return None
