@@ -26,6 +26,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
+    async_capture_events,
     async_fire_time_changed,
     async_mock_service,
     mock_config_flow,
@@ -48,8 +49,10 @@ PROBE = "reload_probe"
 
 
 def _service_calls(hass: HomeAssistant) -> list[Event[Any]]:
-    calls: list[Event[Any]] = []
-    hass.bus.async_listen(EVENT_CALL_SERVICE, calls.append)
+    """Every service call from now on. Core's own capture runs on the event
+    loop as the event fires; a plain ``list.append`` listener would be handed
+    to a worker thread and could record the call after the test looked."""
+    calls: list[Event[Any]] = async_capture_events(hass, EVENT_CALL_SERVICE)
     return calls
 
 
