@@ -142,6 +142,8 @@ async def test_a_call_that_confirms_nothing_returns_cores_changed_states(
     assert await async_setup_component(
         hass, "scene", {"scene": [{"name": "Movie", "entities": {"light.a": "on"}}]}
     )
+    # Core adds the platform's entities after the setup call returns.
+    await hass.async_block_till_done()
 
     with (
         received(hass, CALL_SERVICE) as seen,

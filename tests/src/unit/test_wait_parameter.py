@@ -338,6 +338,8 @@ async def test_call_service_does_not_wait_for_a_change_it_cannot_see(
         "scene",
         {"scene": [{"name": "Movie", "entities": {"input_boolean.lamp": "on"}}]},
     )
+    # Core adds the platform's entities after the setup call returns.
+    await hass.async_block_till_done()
 
     with spy(tools_service, "wait_for_state_change") as waiter:
         result = await service_tools.ha_call_service(
