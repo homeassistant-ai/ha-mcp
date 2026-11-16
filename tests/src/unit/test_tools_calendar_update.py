@@ -28,6 +28,7 @@ from ha_mcp.tools.tools_calendar import CalendarTools
 from ._backup_core import backup_settings as backup_settings
 from ._backup_core import snapshot_manager as snapshot_manager
 from ._calendars import (
+    NO_EVENTS,
     calendar_config_dir,
     calendar_entity,
     listed_events,
@@ -40,11 +41,6 @@ from ._module_clock import set_module_clock
 from ._tool_errors import error_of, rejected_call_body
 
 START = dt.datetime(2026, 6, 15, 10)
-_NO_EVENTS = """BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ha-mcp tests//EN
-END:VCALENDAR
-"""
 
 # Core's config directory is this test's ``tmp_path``.
 hass_config_dir = calendar_config_dir
@@ -69,7 +65,7 @@ async def ws(
     """A WebSocket client on ``hass``, with ``calendar.test`` and
     ``calendar.read_only``."""
     await local_calendar(hass, "Test")
-    await remote_calendar(hass, "Read only", _NO_EVENTS)
+    await remote_calendar(hass, "Read only", NO_EVENTS)
     return await hass_ws_client(hass)
 
 
