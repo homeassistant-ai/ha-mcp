@@ -2,8 +2,8 @@
 
 Every area, floor, label and sensor lives in Core's registries and state
 machine; every reply and refusal the tools act on is Core's. The listing runs
-without the ``ha_mcp_tools`` component, so it takes the two-call path that
-``test_ha_floors_areas_component_routing.py`` compares with the component's.
+without the ``ha_mcp_tools`` component, so it takes the two-call path;
+``test_ha_floors_areas_component_routing.py`` covers the component's single read.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
@@ -80,10 +81,11 @@ def sensors(hass: HomeAssistant) -> None:
 def furnished_kitchen(
     sensors: None, area_registry: ar.AreaRegistry, floor_registry: fr.FloorRegistry
 ) -> str:
-    """A Kitchen with every clearable field set; returns its area_id."""
+    """A Kitchen with every clearable field and an alias set; returns its area_id."""
     ground = floor_registry.async_create("Ground")
     kitchen = area_registry.async_create(
         "Kitchen",
+        aliases={"Cookhouse"},
         floor_id=ground.floor_id,
         icon="mdi:silverware",
         picture="/local/kitchen.png",
@@ -109,8 +111,8 @@ def _clearables(entry: ar.AreaEntry) -> dict[str, Any]:
 async def test_areas_are_nested_unassigned_or_orphaned(
     tools: AreaTools, home: None
 ) -> None:
-    """An area on a floor Core no longer has must not vanish from the listing
-    or pass as unassigned: it is reported apart, as orphaned."""
+    """An area whose floor_id names no floor Core has must not vanish from the
+    listing or pass as unassigned: it is reported apart, as orphaned."""
     result = await tools.ha_list_floors_areas()
 
     counts = (
@@ -137,8 +139,51 @@ async def test_listing_fails_when_core_refuses_the_registry_reads(
     assert body["areas_success"] is False
 
 
+@pytest.mark.parametrize(
+    ("registry", "method", "refused", "answered"),
+    [
+        pytest.param(
+            ar.AreaRegistry,
+            "async_list_areas",
+            "areas_success",
+            "floors_success",
+            id="areas",
+        ),
+        pytest.param(
+            fr.FloorRegistry,
+            "async_list_floors",
+            "floors_success",
+            "areas_success",
+            id="floors",
+        ),
+    ],
+)
+async def test_listing_fails_when_core_refuses_one_registry_read(
+    tools: AreaTools,
+    home: None,
+    monkeypatch: pytest.MonkeyPatch,
+    registry: type,
+    method: str,
+    refused: str,
+    answered: str,
+) -> None:
+    """Half a home in reply would pass the half Core refused off as empty."""
+
+    def refuse(self: Any) -> Any:
+        raise HomeAssistantError("registry is not readable")
+
+    monkeypatch.setattr(registry, method, refuse)
+
+    body = await rejected_call_body(tools.ha_list_floors_areas())
+
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body[refused] is False
+    assert body[answered] is True
+
+
 class TestListFieldsProjection:
-    """``fields`` keeps only the named top-level keys, plus ``success``."""
+    """``fields`` keeps only the named top-level keys, plus ``success`` and
+    ``warnings``."""
 
     async def test_no_fields_returns_the_full_response(
         self, tools: AreaTools, home: None
@@ -277,17 +322,6 @@ async def test_removing_a_floor_deletes_it_from_core(
 # --- set: area and floor writes -------------------------------------------------
 
 
-async def test_updating_an_area_renames_it_in_core(
-    tools: AreaTools, area_registry: ar.AreaRegistry
-) -> None:
-    kitchen = area_registry.async_create("Kitchen")
-
-    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="K2")
-
-    assert result["success"] is True
-    assert _stored(area_registry, kitchen.id).name == "K2"
-
-
 async def test_creating_a_floor_stores_its_level(
     tools: AreaTools, floor_registry: fr.FloorRegistry
 ) -> None:
@@ -315,6 +349,8 @@ async def test_updating_a_floor_changes_its_level(
     ("kind", "params", "refused"),
     [
         pytest.param("area", {"level": 1}, ["level"], id="level-on-area"),
+        # A null level clears a floor's level; on an area it is still refused.
+        pytest.param("area", {"level": None}, ["level"], id="null-level-on-area"),
         pytest.param("floor", {"floor_id": "ground"}, ["floor_id"], id="floor_id"),
         pytest.param("floor", {"picture": "/local/x.png"}, ["picture"], id="picture"),
         pytest.param("floor", {"labels": ["site_home"]}, ["labels"], id="labels"),
@@ -436,29 +472,23 @@ async def test_unknown_label_is_refused_before_the_area_is_created(
     assert not list(area_registry.async_list_areas())
 
 
-async def test_creating_an_area_stores_its_labels(
-    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+async def test_creating_an_area_stores_its_labels_without_a_reread(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
 ) -> None:
+    """Core echoes the labels it stored, so no area list read follows."""
     site_home = label_registry.async_create("Site Home")
 
-    result = await tools.ha_set_area_or_floor(
-        kind="area", name="Kitchen", labels=[site_home.label_id]
-    )
-
-    assert result["area"]["labels"] == [site_home.label_id]
-    assert _stored(area_registry, result["area_id"]).labels == {site_home.label_id}
-
-
-async def test_labels_core_echoes_need_no_reread(
-    hass: HomeAssistant, tools: AreaTools, label_registry: lr.LabelRegistry
-) -> None:
-    site_home = label_registry.async_create("Site Home")
-
-    with received(hass, AREA_LIST) as seen:
-        await tools.ha_set_area_or_floor(
+    with received(hass, AREA_CREATE, AREA_LIST) as seen:
+        result = await tools.ha_set_area_or_floor(
             kind="area", name="Kitchen", labels=[site_home.label_id]
         )
 
+    assert result["area"]["labels"] == [site_home.label_id]
+    assert _stored(area_registry, result["area_id"]).labels == {site_home.label_id}
+    assert len(seen[AREA_CREATE]) == 1
     assert seen[AREA_LIST] == []
 
 
@@ -492,8 +522,9 @@ async def test_omitted_labels_are_left_as_they_are(
     site_home = label_registry.async_create("Site Home")
     kitchen = area_registry.async_create("Kitchen", labels={site_home.label_id})
 
-    await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="K2")
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="K2")
 
+    assert result["success"] is True
     stored = _stored(area_registry, kitchen.id)
     assert (stored.name, stored.labels) == ("K2", {site_home.label_id})
 
@@ -511,8 +542,8 @@ async def test_label_deleted_during_the_create_fails_the_call_as_committed(
     label_registry: lr.LabelRegistry,
 ) -> None:
     """Core drops the label it no longer has and still answers success. The
-    area exists by then, so the caller must fix the labels, not retry the
-    create and get a second Kitchen."""
+    area exists by then, so the caller must fix the labels; a retried create
+    would only be refused, by the unknown-label check or as a name in use."""
     label_registry.async_create("Site Home")
 
     async with held_command(hass, AREA_CREATE) as create:
@@ -567,8 +598,8 @@ async def test_reread_that_gets_no_answer_still_reports_the_write_committed(
     area_registry: ar.AreaRegistry,
     label_registry: lr.LabelRegistry,
 ) -> None:
-    """Reported as a failed create, the dropped re-read would invite a retry
-    that duplicates the area."""
+    """Reported as a failed create, the dropped re-read would send the caller
+    to retry a create Core already applied."""
     label_registry.async_create("Site Home")
     socket = await pooled_socket(client)
 
@@ -585,6 +616,7 @@ async def test_reread_that_gets_no_answer_still_reports_the_write_committed(
         body["error"]["message"]
         == "Area write succeeded, but label verification failed"
     )
+    assert "closed while waiting for a response" in body["error"]["details"]
     assert body["write_committed"] is True
     assert body["area_id"] == "kitchen"
     assert body["expected_labels"] == ["site_home"]
@@ -646,8 +678,9 @@ async def test_empty_string_clears_the_sensors(
 
 @pytest.fixture
 async def set_tool(client: HomeAssistantClient) -> Tool:
-    """``ha_set_area_or_floor`` as registered: null and omission differ only
-    at the FastMCP boundary."""
+    """``ha_set_area_or_floor`` as registered: only through FastMCP is the JSON
+    schema built and does an omitted parameter arrive as the ``UNSET`` default
+    (a direct call passes the ``Field`` itself)."""
     mcp = FastMCP("test")
     register_area_tools(mcp, client)
     tool = await mcp.get_tool("ha_set_area_or_floor")
@@ -678,6 +711,7 @@ class TestClearableParamsThroughMcp:
         stored = _stored(area_registry, furnished_kitchen)
         assert stored.name == "K2"
         assert _clearables(stored) == before
+        assert stored.aliases == {"Cookhouse"}
 
     async def test_explicit_null_clears_every_clearable_param(
         self,
@@ -694,11 +728,25 @@ class TestClearableParamsThroughMcp:
         stored = _clearables(_stored(area_registry, furnished_kitchen))
         assert stored == dict.fromkeys(_CLEARABLE)
 
+    async def test_null_level_clears_a_floors_level(
+        self, set_tool: Tool, floor_registry: fr.FloorRegistry
+    ) -> None:
+        """An MCP client's null must clear the level, not be refused by the
+        schema."""
+        ground = floor_registry.async_create("Ground", level=2)
+
+        await set_tool.run({"kind": "floor", "id": ground.floor_id, "level": None})
+
+        stored = floor_registry.async_get_floor(ground.floor_id)
+        assert stored is not None
+        assert stored.level is None
+
     async def test_omitted_params_do_not_leak_the_sentinel_into_usage_logs(
         self, set_tool: Tool, area_registry: ar.AreaRegistry
     ) -> None:
         """log_tool_usage records the call's kwargs, and ha_report_issue returns
-        those entries as structured content, so the UNSET default must serialize."""
+        those entries as structured content, so an omitted parameter's UNSET default
+        must not land in the entry."""
         kitchen = area_registry.async_create("Kitchen")
 
         await set_tool.run({"kind": "area", "id": kitchen.id, "name": "K2"})
@@ -706,4 +754,5 @@ class TestClearableParamsThroughMcp:
         entry = get_recent_logs(max_entries=1)[-1]
         assert entry["tool_name"] == "ha_set_area_or_floor"
         json.dumps(entry)
+        assert entry["parameters"]["name"] == "K2"
         assert "floor_id" not in entry["parameters"]

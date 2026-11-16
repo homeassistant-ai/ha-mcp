@@ -485,8 +485,9 @@ class AreaTools:
 
         Both failure paths report ``write_committed: True``: the area write
         itself has already landed by the time this runs, so a caller that
-        retries a create would end up with a duplicate area. Only the labels
-        are still open, and those are fixed with ha_set_area_or_floor.
+        retries a create is only refused (by the unknown-label check or by
+        Core's "name already in use"). Only the labels are still open, and
+        those are fixed with ha_set_area_or_floor.
         """
         if kind != "area" or parsed_labels is None:
             return
@@ -500,8 +501,8 @@ class AreaTools:
             unread = str(exc)
         if unread is not None:
             # Write already succeeded; a re-read that fails must not look like
-            # a failed create (retry would duplicate the area), nor like
-            # labels Core dropped.
+            # a failed create (a retry would only be refused), nor like labels
+            # Core dropped.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

@@ -142,30 +142,17 @@ async def test_a_field_core_adds_to_a_row_reaches_the_listing(
     assert listed["floors"][0]["areas"][0]["future_field"] == 1
 
 
-async def test_a_floor_level_is_cleared_by_null_and_kept_when_omitted(
+async def test_an_omitted_floor_level_is_kept(
     hass: HomeAssistant, tools: AreaTools
 ) -> None:
-    """Core's floor update takes ``level=None`` to clear the level; omitting it
-    leaves the level alone."""
+    """Core's floor update clears the level on ``level=None``, so an omitted
+    level must not reach it as None."""
     floors = fr.async_get(hass)
     floor = floors.async_create("Ground", level=2)
 
     await tools.ha_set_area_or_floor(kind="floor", id=floor.floor_id, name="Main")
+
     assert _stored_floor(floors, floor.floor_id).level == 2
-
-    await tools.ha_set_area_or_floor(kind="floor", id=floor.floor_id, level=None)
-    assert _stored_floor(floors, floor.floor_id).level is None
-
-
-@pytest.mark.parametrize("level", [1, None])
-async def test_level_is_still_refused_for_an_area(
-    tools: AreaTools, level: int | None
-) -> None:
-    """A level, even a null one, belongs to a floor."""
-    error = await rejected_call_body(
-        tools.ha_set_area_or_floor(kind="area", name="Kitchen", level=level)
-    )
-    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
 async def test_a_refused_write_keeps_cores_code_and_text(
@@ -181,6 +168,26 @@ async def test_a_refused_write_keeps_cores_code_and_text(
 
     assert "already in use" in error["error"]["message"]
     assert error["ha_error_code"] == "invalid_info"
+
+
+async def test_a_refused_remove_keeps_cores_code_and_text(
+    hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal other than an unknown id is Core's own, not a missing area."""
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+
+    def refuse(self: ar.AreaRegistry, area_id: str) -> None:
+        raise HomeAssistantError("area is locked")
+
+    monkeypatch.setattr(ar.AreaRegistry, "async_delete", refuse)
+
+    error = await rejected_call_body(
+        tools.ha_remove_area_or_floor(kind="area", id=kitchen.id)
+    )
+
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "area is locked" in error["error"]["message"]
+    assert error["ha_error_code"] == "home_assistant_error"
 
 
 @pytest.mark.parametrize("kind", ["area", "floor"])
@@ -253,8 +260,10 @@ async def test_labels_core_dropped_are_read_back_through_the_component(
             )
         )
 
+    assert "requested labels" in error["error"]["message"]
     assert error["write_committed"] is True
-    assert "config/area_registry/list" not in sent_types(sent)
+    types = sent_types(sent)
+    assert types[types.index("config/area_registry/update") + 1 :] == [WS_REGISTRIES]
 
 
 async def test_a_refused_label_reread_reports_the_refusal_not_dropped_labels(
