@@ -107,7 +107,6 @@ ignores:
   - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_areas.py"
   - "tests/src/unit/test_tools_assist_pipeline.py"
-  - "tests/src/unit/test_tools_bug_report.py"
   - "tests/src/unit/test_tools_calendar_update.py"
   - "tests/src/unit/test_tools_camera.py"
   - "tests/src/unit/test_tools_config_automations.py"
