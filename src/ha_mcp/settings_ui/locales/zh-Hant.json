@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "已儲存工具路徑",
     "advanced.code_mode_saved_tools_path.help": "用於在重新啟動之間保存自訂工具的 JSON 檔案。",
     "advanced.extra_yaml_write_keys.label": "額外的 YAML 寫入金鑰",
-    "advanced.extra_yaml_write_keys.help": "除了內建的頂層鍵之外，ha_config_set_yaml 還可以為此安裝中的 YAML 優先整合（例如 alert2）寫入額外的頂層鍵。每行輸入一個鍵，或用逗號分隔鍵。重新定義 Home Assistant 自身信任邊界的鍵永遠無法被新增且將被忽略。需要自訂元件 1.2.4 或更新版本。",
+    "advanced.extra_yaml_write_keys.help": "此安裝中適用於 YAML 優先整合（例如 alert2）的額外頂層鍵，ha_config_set_yaml 除了內建鍵之外亦可寫入這些鍵。每行輸入一個鍵，或以逗號分隔多個鍵。重新定義 Home Assistant 自身信任邊界的鍵永遠無法新增，並會遭到忽略。",
     "advanced.redact_app_option_keys.label": "要修訂的額外應用程式選項金鑰",
     "advanced.redact_app_option_keys.help": "針對其結構描述將機密儲存為純文字（例如 backup_password）的應用程式，指定要像密碼欄位一樣進行修訂的應用程式（附加元件）選項名稱。多個名稱請用逗號或新行分隔。名稱適用於所有應用程式；若要限制為單一應用程式，請寫成 app_slug:name。命名選項群組會涵蓋其中的所有選項。僅在啟用「修訂機密」時使用。預設為空白。",
     "advanced.sidecar_pin_port.label": "設定 UI sidecar 連接埠",
