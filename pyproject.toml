@@ -203,7 +203,6 @@ module = [
     "tests.src.unit.test_e2e_lane_env_shape",
     "tests.src.unit.test_e2e_session_fixture_cleanup",
     "tests.src.unit.test_embedded_worker_teardown_2127",
-    "tests.src.unit.test_entity_expose_changed",
     "tests.src.unit.test_extract_tools_field_info",
     "tests.src.unit.test_ha_call_event",
     "tests.src.unit.test_ha_search_merge",
