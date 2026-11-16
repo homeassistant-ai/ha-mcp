@@ -119,8 +119,9 @@ NAMED_RELOADS = {
 # one call, so it gets longer than the client's default wait for one command.
 RELOAD_WAIT_SECONDS = 120.0
 _RELOAD_ALL_FAILED = (
-    ". Home Assistant still ran the other reloads; its log names the "
-    "integration that failed"
+    "A failed configuration check stops reload-all before anything reloads. "
+    "Any other failure is one integration's: the rest still reloaded, and "
+    "Home Assistant's log names the one that failed"
 )
 
 
@@ -345,15 +346,14 @@ class SystemTools:
             )
         if reply.get("success"):
             return
+        suggestions = [
+            "Fix what Home Assistant reported, then reload again",
+            "Check Home Assistant logs for details",
+        ]
+        if target == "all":
+            suggestions.append(_RELOAD_ALL_FAILED)
         raise_core_refusal(
-            f"{domain}.{service} failed",
-            reply,
-            {"target": target},
-            [
-                "Fix what Home Assistant reported, then reload again",
-                "Check Home Assistant logs for details",
-            ],
-            suffix=_RELOAD_ALL_FAILED if target == "all" else "",
+            f"{domain}.{service} failed", reply, {"target": target}, suggestions
         )
 
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:

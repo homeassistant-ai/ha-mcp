@@ -108,6 +108,7 @@ async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invali
     assert response["ha_error_code"] == "home_assistant_error"
     assert "configuration is not valid" in error["message"]
     assert "latitude" in error["message"]
+    assert "other reloads" not in error["message"]
     assert error["suggestions"][0] == (
         "Fix what Home Assistant reported, then reload again"
     )
@@ -115,7 +116,7 @@ async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invali
 
 
 @pytest.mark.usefixtures("core_reloads")
-async def test_a_reload_that_fails_inside_reload_all_says_the_others_ran(
+async def test_a_reload_that_fails_inside_reload_all_says_the_rest_still_reloaded(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Core reports the first failure only, and nothing in it names the
@@ -131,9 +132,9 @@ async def test_a_reload_that_fails_inside_reload_all_says_the_others_ran(
     with pytest.raises(ToolError) as excinfo:
         await SystemTools(core_client).ha_reload_core(target="all")
 
-    message = _error(excinfo)["message"]
-    assert "the template file is unreadable" in message
-    assert "still ran the other reloads" in message
+    error = _error(excinfo)
+    assert "the template file is unreadable" in error["message"]
+    assert any("the rest still reloaded" in hint for hint in error["suggestions"])
     assert len(reloaded) == 1
 
 
@@ -215,7 +216,7 @@ async def test_a_reload_core_fails_is_reported_with_cores_text(
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "template.reload failed" in error["message"]
     assert "the template file is unreadable" in error["message"]
-    assert "other reloads" not in error["message"]
+    assert not any("still reloaded" in hint for hint in error["suggestions"])
 
 
 @pytest.mark.usefixtures("core_reloads")
