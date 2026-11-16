@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "저장된 도구 경로",
     "advanced.code_mode_saved_tools_path.help": "재시작 후에도 사용자 지정 도구를 유지하는 데 사용되는 JSON 파일.",
     "advanced.extra_yaml_write_keys.label": "추가 YAML 쓰기 허용 키",
-    "advanced.extra_yaml_write_keys.help": "이 설치에서 기본 키 외에 ha_config_set_yaml이 작성할 수 있는 추가 최상위 키입니다(예: alert2). 줄당 하나의 키를 입력하거나 쉼표로 구분하세요. Home Assistant 자체의 신뢰 경계를 재정의하는 키는 추가할 수 없으며 무시됩니다. 커스텀 구성 요소 1.2.4 버전 이상이 필요합니다.",
+    "advanced.extra_yaml_write_keys.help": "이 설치에서 YAML 중심 통합(예: alert2)을 위해 기본 키 외에 ha_config_set_yaml이 추가로 작성할 수 있는 최상위 키입니다. 줄당 하나의 키를 입력하거나 쉼표로 구분하세요. Home Assistant 자체의 신뢰 경계를 다시 정의하는 키는 추가할 수 없으며 무시됩니다.",
     "advanced.redact_app_option_keys.label": "숨길 추가 앱 옵션 키",
     "advanced.redact_app_option_keys.help": "스키마에 비밀 정보가 일반 텍스트로 저장되는 앱(예: backup_password)을 위해, 비밀번호 필드처럼 숨길 앱(추가 기능) 옵션 이름입니다. 쉼표나 새 줄로 이름을 구분하세요. 이름은 모든 앱에 적용되며, 특정 앱으로 제한하려면 app_slug:name 형식으로 작성하세요. 옵션 그룹 이름을 지정하면 그 안의 모든 옵션이 포함됩니다. '민감한 정보 숨기기'가 켜져 있는 동안에만 사용됩니다. 기본값은 비어 있음입니다.",
     "advanced.sidecar_pin_port.label": "설정 UI 사이드카 포트",

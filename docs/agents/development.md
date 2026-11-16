@@ -67,12 +67,12 @@ uv run hamcp-test-env --no-interactive
 
 Locally, `-n2` limits the number of simultaneous Home Assistant containers;
 more workers usually add memory pressure without proportional speed. CI uses
-`-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit
+`-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The unit
 tests take more than 25 minutes serial, so run them in parallel as shown.
 CI runs them on two runners: each
 takes its share by test id from `UNIT_TEST_SHARD` (`1/2`, `2/2`;
 `tests/src/unit/_shards.py`), and the required `Unit Tests` check passes when
-both did.
+both did. The beta Core unit job is split the same way.
 The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.

@@ -2,7 +2,7 @@
 
 ``ha_manage_security_policy`` edits the same ``tool_policy.json`` the
 developer-mode settings tool does, so these mirror the assertions in
-``test_tools_dev.py::TestManagePolicy`` — the two surfaces share
+``test_tools_dev_policy.py`` — the two surfaces share
 ``policy.editing`` and must not drift.
 """
 

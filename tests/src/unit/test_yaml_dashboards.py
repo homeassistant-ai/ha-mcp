@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from custom_components.ha_mcp_tools.const import (
     DASHBOARD_URL_PATH_PATTERN,
@@ -373,24 +374,8 @@ class TestYamlKeyDenylistContract:
         assert _allowed_keys(err) == set(ALLOWED_YAML_KEYS)
 
 
-class TestPostActionTableContract:
-    """PACKAGES_ONLY_YAML_KEYS and YAML_KEY_POST_ACTIONS must stay in sync.
-
-    If a future PR adds a key to PACKAGES_ONLY_YAML_KEYS without a matching
-    reload_service entry, callers would see the default restart_required
-    response — a regression we should catch at unit-test time.
-    """
-
-    def test_packages_only_keys_have_post_actions(self):
-        from custom_components.ha_mcp_tools.const import (
-            PACKAGES_ONLY_YAML_KEYS,
-            YAML_KEY_POST_ACTIONS,
-        )
-
-        missing = PACKAGES_ONLY_YAML_KEYS - set(YAML_KEY_POST_ACTIONS)
-        assert not missing, (
-            f"PACKAGES_ONLY_YAML_KEYS missing YAML_KEY_POST_ACTIONS entries: {missing}"
-        )
+class TestYamlKeySets:
+    """The key sets the edit gate reads must not contradict each other."""
 
     def test_packages_only_disjoint_from_allowed(self):
         """ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS must not overlap.
@@ -409,21 +394,6 @@ class TestPostActionTableContract:
 
         overlap = ALLOWED_YAML_KEYS & PACKAGES_ONLY_YAML_KEYS
         assert not overlap, f"sets must be disjoint; overlap: {overlap}"
-
-    @pytest.mark.parametrize(
-        ("key", "expected_service"),
-        [
-            ("automation", "automation.reload"),
-            ("script", "script.reload"),
-            ("scene", "scene.reload"),
-        ],
-    )
-    def test_packages_only_reload_services(self, key, expected_service):
-        from custom_components.ha_mcp_tools.const import YAML_KEY_POST_ACTIONS
-
-        entry = YAML_KEY_POST_ACTIONS[key]
-        assert entry["post_action"] == "reload_available"
-        assert entry["reload_service"] == expected_service
 
 
 class TestHandleEditYamlConfigDashboards:
@@ -645,30 +615,62 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["success"] is False
         assert "command_line" in result["error"]
 
-    async def test_single_key_post_action_for_template(
-        self, tmp_path: Path, edit_yaml: EditYaml
+    async def test_the_reload_advertised_for_template_loads_the_new_entity(
+        self, hass: HomeAssistant, tmp_path: Path, edit_yaml: EditYaml
     ) -> None:
-        """template -> reload_available; covers post-action lookup for single-key kind."""
-        cfg = tmp_path / "configuration.yaml"
-        cfg.write_text("")
+        """The edit is on disk only; the service the reply names is what makes
+        Core read it, so calling it must create the entity."""
+        (tmp_path / "configuration.yaml").write_text("")
+        for domain in ("homeassistant", "template"):
+            assert await async_setup_component(hass, domain, {})
 
         result = await edit_yaml(
             {
                 "file": "configuration.yaml",
                 "action": "add",
                 "yaml_path": "template",
-                "content": ("- sensor:\n    - name: t\n      state: 'ok'\n"),
+                "content": "- sensor:\n    - name: t\n      state: 'ok'\n",
                 "backup": False,
             }
         )
         assert result["success"] is True, result
         assert result["post_action"] == "reload_available"
-        assert result["reload_service"] == "homeassistant.reload_custom_templates"
+        assert hass.states.get("sensor.t") is None
+
+        domain, service = result["reload_service"].split(".")
+        await hass.services.async_call(domain, service, blocking=True)
+        await hass.async_block_till_done()
+
+        state = hass.states.get("sensor.t")
+        assert state is not None
+        assert state.state == "ok"
+
+    async def test_a_key_whose_integration_is_not_loaded_needs_a_restart(
+        self, hass: HomeAssistant, tmp_path: Path, edit_yaml: EditYaml
+    ) -> None:
+        """Core has no ``template.reload`` until the template integration is
+        loaded, so the first ``template:`` block cannot be reloaded in."""
+        (tmp_path / "configuration.yaml").write_text("")
+        assert not hass.services.has_service("template", "reload")
+
+        result = await edit_yaml(
+            {
+                "file": "configuration.yaml",
+                "action": "add",
+                "yaml_path": "template",
+                "content": "- sensor:\n    - name: t\n      state: 'ok'\n",
+                "backup": False,
+            }
+        )
+
+        assert result["success"] is True, result
+        assert result["post_action"] == "restart_required"
+        assert "reload_service" not in result
 
     async def test_single_key_post_action_for_shell_command(
         self, tmp_path: Path, edit_yaml: EditYaml
     ) -> None:
-        """shell_command falls through to default 'restart_required'."""
+        """shell_command is not loaded, so Core has no shell_command.reload."""
         cfg = tmp_path / "configuration.yaml"
         cfg.write_text("")
 

@@ -59,6 +59,14 @@ async def local_calendar(hass: HomeAssistant, name: str) -> CalendarEntity:
     return await _set_up_calendar(hass, "local_calendar", name)
 
 
+#: A calendar file with no event in it.
+NO_EVENTS = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ha-mcp tests//EN
+END:VCALENDAR
+"""
+
+
 async def remote_calendar(hass: HomeAssistant, name: str, ics: str) -> CalendarEntity:
     """Core's Remote Calendar ``name``, read once from a URL serving ``ics``."""
     url = f"https://calendar.example/{slugify(name)}.ics"

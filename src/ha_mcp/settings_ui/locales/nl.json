@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Pad voor opgeslagen tools",
     "advanced.code_mode_saved_tools_path.help": "JSON-bestand dat wordt gebruikt om aangepaste tools te behouden na herstarts.",
     "advanced.extra_yaml_write_keys.label": "Extra YAML-schrijfsleutels",
-    "advanced.extra_yaml_write_keys.help": "Extra sleutels op topniveau die ha_config_set_yaml kan schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Voer één sleutel per regel in of scheid sleutels met komma's. Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren kunnen nooit worden toegevoegd en worden genegeerd. Vereist custom component 1.2.4 of nieuwere.",
+    "advanced.extra_yaml_write_keys.help": "Extra sleutels op het topniveau die ha_config_set_yaml kan wegschrijven naast de ingebouwde, voor YAML-gerichte integraties op deze installatie (bijv. alert2). Voer één sleutel per regel in of scheid sleutels met komma's. Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren, kunnen nooit worden toegevoegd en worden genegeerd.",
     "advanced.redact_app_option_keys.label": "Extra app-optiesleutels om te verbergen",
     "advanced.redact_app_option_keys.help": "Namen van app-opties (add-on) om te verbergen zoals wachtwoordvelden, voor apps waarvan het schema een geheim opslaat als platte tekst (bijvoorbeeld backup_password). Scheid namen met komma's of nieuwe regels. Een naam is van toepassing op elke app; schrijf app_slug:name om het te beperken tot één app. Het benoemen van een optiegroep dekt elke optie daarin. Alleen gebruikt wanneer Verberg geheimen aan staat. Standaard leeg.",
     "advanced.sidecar_pin_port.label": "Instellingen UI sidecar-poort",

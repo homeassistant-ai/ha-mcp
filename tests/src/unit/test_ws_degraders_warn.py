@@ -2,543 +2,364 @@
 
 Since #1947 ``send_websocket_message`` raises on a dead transport instead of
 returning a failure envelope. The enrichment call sites deliberately keep
-serving a partial answer rather than failing the whole call — but a thin
+serving a partial answer rather than failing the whole call, but a thin
 result must say what was skipped and why, otherwise "the area registry never
-arrived" is indistinguishable from "there are no areas", which is the same
-answers-while-blind shape the detector fix exists to prevent.
+arrived" is indistinguishable from "there are no areas".
+
+Every read is answered by Core. A read that gets no answer is one Core drops
+or holds (``_command_faults``), or a client whose WebSocket send raises.
 """
 
-import json
-from collections.abc import Awaitable, Callable
+from __future__ import annotations
+
+from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import persistent_notification
+from homeassistant.components.frontend import websocket_get_translations
+from homeassistant.components.websocket_api import async_register_command
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from homeassistant.util.yaml import dump
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools import tools_config_scripts
 from ha_mcp.tools.config_write_helpers import fetch_entity_category
-from ha_mcp.tools.device_enrichment import (
-    enrich_matter_diagnostics,
-    enrich_zha_metrics,
-    enrich_zwave_status,
-)
+from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.smart_search._base import _SearchBase
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.tools_search import SearchTools
-from ha_mcp.tools.tools_services import _get_service_translations
+from ha_mcp.tools.tools_service import ServiceTools
+from ha_mcp.tools.tools_services import ServiceDiscoveryTools
 from ha_mcp.tools.util_helpers import get_logger_levels
 
-_AREA_LIST = "config/area_registry/list"
-_FLOOR_LIST = "config/floor_registry/list"
+from ._command_faults import dropped_on, pooled_socket, unanswered
+from ._config_dir_yaml import setup_from_configuration, write_config_files
+from ._tool_errors import error_of
+
+AREA_LIST = "config/area_registry/list"
+FLOOR_LIST = "config/floor_registry/list"
 
 
-def _make_client(*, failing: set[str], exc: Exception | None = None) -> MagicMock:
-    """Client whose WS registry reads in ``failing`` raise (or return a failed
-    envelope when ``exc`` is None), and succeed otherwise."""
-    client = MagicMock()
-    client.base_url = "http://ha.local:8123"
-    client.token = "t"
-    client.get_states = AsyncMock(return_value=[])
-    client.get_services = AsyncMock(return_value={})
-
-    async def _ws(message: dict[str, Any]) -> dict[str, Any]:
-        msg_type = message.get("type")
-        if msg_type in failing:
-            if exc is not None:
-                raise exc
-            return {"success": False, "error": "unknown command"}
-        return {"success": True, "result": []}
-
-    client.send_websocket_message = AsyncMock(side_effect=_ws)
-    return client
+@pytest.fixture
+async def registries(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Core's ``config`` commands, which answer the registry reads."""
+    assert await async_setup_component(hass, "config", {})
 
 
-class TestExtractRegistryList:
-    """The shared unwrap helper is where the silence used to live."""
-
-    def test_exception_names_itself_in_warnings(self) -> None:
-        warnings: list[str] = []
-        result = _SearchBase._extract_registry_list(
-            HomeAssistantConnectionError("ws gone"), "area registry", warnings
-        )
-
-        assert result == []
-        assert warnings == ["area registry unavailable: ws gone"]
-
-    def test_failed_envelope_names_itself_in_warnings(self) -> None:
-        warnings: list[str] = []
-        _SearchBase._extract_registry_list(
-            {"success": False, "error": "unknown command"}, "entity registry", warnings
-        )
-
-        assert warnings == ["entity registry unavailable: unknown command"]
-
-    def test_success_adds_no_warning(self) -> None:
-        warnings: list[str] = []
-        result = _SearchBase._extract_registry_list(
-            {"success": True, "result": [{"area_id": "kitchen"}]},
-            "area registry",
-            warnings,
-        )
-
-        assert result == [{"area_id": "kitchen"}]
-        assert warnings == []
-
-    def test_caller_without_a_warnings_channel_still_degrades(self) -> None:
-        """The parameter is optional: a caller that has nowhere to put the line
-        must keep working rather than raise."""
-        assert _SearchBase._extract_registry_list(ValueError("boom"), "x") == []
+@pytest.fixture
+def smart(core_client: HomeAssistantClient) -> SmartSearchTools:
+    return SmartSearchTools(client=core_client)
 
 
-class TestOverviewReportsSkippedEnrichment:
-    @pytest.mark.asyncio
-    async def test_dead_area_registry_warns_and_marks_partial(self) -> None:
-        tools = SmartSearchTools(
-            client=_make_client(
-                failing={_AREA_LIST}, exc=HomeAssistantConnectionError("ws gone")
-            )
-        )
+@pytest.fixture
+def dead_socket(core_client: HomeAssistantClient) -> Iterator[None]:
+    """Every WebSocket read of ``core_client`` gets no answer; REST still works."""
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("ws gone")),
+    ):
+        yield
 
-        response = await tools.get_system_overview()
+
+@pytest.fixture
+def basement_area(registries: None, area_registry: ar.AreaRegistry) -> None:
+    """An area whose name only close-spelling matching finds for 'sous-sol'."""
+    area_registry.async_create("Couloir Sous-Sol")
+
+
+class TestOverviewNamesSkippedRegistries:
+    async def test_dropped_area_registry_warns_and_marks_partial(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, registries: None
+    ) -> None:
+        """An overview whose area stats are thin because the registry never
+        arrived is incomplete, not merely annotated."""
+        socket = await pooled_socket(core_client)
+
+        with dropped_on(hass, AREA_LIST, socket):
+            response = await SmartSearchTools(client=core_client).get_system_overview()
 
         assert response["success"] is True
-        assert any("area registry unavailable" in w for w in response["warnings"]), (
-            response.get("warnings")
+        assert any(
+            w.startswith("area registry unavailable: ") for w in response["warnings"]
         )
-        # An overview whose area stats are thin because a registry never
-        # arrived is genuinely incomplete, not merely annotated.
         assert response["partial"] is True
 
-    @pytest.mark.asyncio
-    async def test_healthy_registries_produce_no_registry_warning(self) -> None:
-        tools = SmartSearchTools(client=_make_client(failing=set()))
+    async def test_registry_core_refuses_is_named_with_cores_reason(
+        self, smart: SmartSearchTools
+    ) -> None:
+        """Without the ``config`` integration Core refuses the registry reads."""
+        response = await smart.get_system_overview()
 
-        response = await tools.get_system_overview()
+        [area_warning] = [
+            w for w in response["warnings"] if w.startswith("area registry unavailable")
+        ]
+        assert "Unknown command" in area_warning
+        assert response["partial"] is True
 
+    async def test_answered_registries_add_no_warning(
+        self, smart: SmartSearchTools, registries: None, area_registry: ar.AreaRegistry
+    ) -> None:
+        area_registry.async_create("Kitchen")
+
+        response = await smart.get_system_overview()
+
+        assert response["system_summary"]["total_areas"] == 1
         assert "partial" not in response
-        assert not any("unavailable" in w for w in response.get("warnings", [])), (
-            response.get("warnings")
-        )
+        assert not any("unavailable" in w for w in response.get("warnings", []))
 
 
-class TestAreaSearchReportsSkippedEnrichment:
-    @pytest.mark.asyncio
-    async def test_dead_area_registry_warns_instead_of_bare_no_match(self) -> None:
-        """ "No areas found" while the area registry is unreachable is the
-        answers-while-blind shape: the caller would read it as "this area does
-        not exist"."""
-        tools = SmartSearchTools(
-            client=_make_client(
-                failing={_AREA_LIST}, exc=HomeAssistantConnectionError("ws gone")
+class TestAreaSearchNamesSkippedRegistries:
+    async def test_dropped_area_registry_warns_instead_of_bare_no_match(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, basement_area: None
+    ) -> None:
+        """'No areas found' while the area registry is unreachable reads as
+        "this area does not exist"."""
+        socket = await pooled_socket(core_client)
+
+        with dropped_on(hass, AREA_LIST, socket):
+            response = await SmartSearchTools(client=core_client).get_entities_by_area(
+                "Couloir Sous-Sol"
             )
-        )
-
-        response = await tools.get_entities_by_area("kitchen")
 
         assert response["total_areas_found"] == 0
-        assert any("area registry unavailable" in w for w in response["warnings"]), (
-            response.get("warnings")
+        assert any(
+            w.startswith("area registry unavailable: ") for w in response["warnings"]
         )
 
-    @pytest.mark.asyncio
-    async def test_dead_floor_registry_does_not_fuzzy_match_partial_area(self) -> None:
-        """A floor-registry outage must not restore floor-to-area misresolution."""
-        client = _make_client(
-            failing={_FLOOR_LIST}, exc=HomeAssistantConnectionError("ws gone")
-        )
-
-        async def _ws(message: dict[str, Any]) -> dict[str, Any]:
-            if message.get("type") == _FLOOR_LIST:
-                raise HomeAssistantConnectionError("ws gone")
-            if message.get("type") == _AREA_LIST:
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
-                    ],
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = SmartSearchTools(client=client)
-
-        response = await tools.get_entities_by_area("sous-sol")
+    async def test_unanswered_floor_registry_does_not_fuzzy_match_an_area(
+        self,
+        hass: HomeAssistant,
+        smart: SmartSearchTools,
+        basement_area: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A floor-registry outage must not restore floor-to-area
+        misresolution, and the answer says what the outage cost the query."""
+        async with unanswered(hass, FLOOR_LIST, monkeypatch):
+            response = await smart.get_entities_by_area("sous-sol")
 
         assert response["total_areas_found"] == 0
-        assert any("floor registry unavailable" in w for w in response["warnings"])
-        # The fetch warning says what broke; the resolution warning must say
-        # what that cost this query, or "no match" reads as "no such area".
+        assert [a["area_id"] for a in response["available_areas"]] == [
+            "couloir_sous_sol"
+        ]
+        assert any(
+            w.startswith("floor registry unavailable: ") for w in response["warnings"]
+        )
         assert any(
             "close-spelling matching was skipped" in w and "'sous-sol'" in w
             for w in response["warnings"]
         ), response["warnings"]
 
-    @pytest.mark.asyncio
-    async def test_malformed_floor_registry_does_not_fuzzy_match_partial_area(
-        self,
+    async def test_answered_floor_registry_lets_close_spelling_find_the_area(
+        self, smart: SmartSearchTools, basement_area: None
     ) -> None:
-        """A successful malformed floor payload must disable fuzzy area fallback."""
-        client = _make_client(failing=set())
+        response = await smart.get_entities_by_area("sous-sol")
 
-        async def _ws(message: dict[str, Any]) -> dict[str, Any]:
-            if message.get("type") == _FLOOR_LIST:
-                return {"success": True, "result": None}
-            if message.get("type") == _AREA_LIST:
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
-                    ],
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = SmartSearchTools(client=client)
-
-        response = await tools.get_entities_by_area("sous-sol")
-
-        assert response["total_areas_found"] == 0
-        assert any("floor registry unavailable" in w for w in response["warnings"])
-        assert any(
-            "close-spelling matching was skipped" in w for w in response["warnings"]
-        ), response["warnings"]
-
-    @pytest.mark.asyncio
-    async def test_missing_result_key_floor_registry_is_unavailable(self) -> None:
-        """A success envelope with no result key is an outage, not an empty registry.
-
-        A legitimate zero-floor instance sends ``"result": []``; an absent key
-        must not mark the floor registry available-and-empty, which would
-        re-enable the fuzzy floor-to-partial-area misresolution.
-        """
-        client = _make_client(failing=set())
-
-        async def _ws(message: dict[str, Any]) -> dict[str, Any]:
-            if message.get("type") == _FLOOR_LIST:
-                return {"success": True}
-            if message.get("type") == _AREA_LIST:
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
-                    ],
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = SmartSearchTools(client=client)
-
-        response = await tools.get_entities_by_area("sous-sol")
-
-        assert response["total_areas_found"] == 0
-        assert any("result key missing" in w for w in response["warnings"])
-        assert any(
-            "close-spelling matching was skipped" in w for w in response["warnings"]
-        ), response["warnings"]
-
-    @pytest.mark.asyncio
-    async def test_bare_list_floor_registry_is_unavailable(self) -> None:
-        """A bare list must not enable fuzzy area fallback after parser rejection."""
-        client = _make_client(failing=set())
-
-        async def _ws(message: dict[str, Any]) -> Any:
-            if message.get("type") == _FLOOR_LIST:
-                return []
-            if message.get("type") == _AREA_LIST:
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
-                    ],
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        tools = SmartSearchTools(client=client)
-
-        response = await tools.get_entities_by_area("sous-sol")
-
-        assert response["total_areas_found"] == 0
-        assert any("floor registry unavailable" in w for w in response["warnings"])
-        assert any(
-            "close-spelling matching was skipped" in w for w in response["warnings"]
-        ), response["warnings"]
-
-    @pytest.mark.asyncio
-    async def test_healthy_registries_produce_no_registry_warning(self) -> None:
-        tools = SmartSearchTools(client=_make_client(failing=set()))
-
-        response = await tools.get_entities_by_area("kitchen")
-
-        assert not any("unavailable" in w for w in response.get("warnings", [])), (
-            response.get("warnings")
-        )
+        assert list(response["areas"]) == ["couloir_sous_sol"]
+        assert not any("unavailable" in w for w in response.get("warnings", []))
 
 
 class TestIdentifierResolversFailLoud:
-    """``_resolve_script_id`` / ``resolve_scene_id`` map an entity_id to its
-    storage key, which a UI rename makes differ from the bare id. Their
-    fallback to the bare id is right when the registry answers "no such
-    entry", and wrong when nothing answered at all: on a write path it would
-    create a new object under the guessed key instead of updating the renamed
-    one. A dead transport therefore propagates (#1947).
+    """A script or scene entity_id maps to its storage key through the entity
+    registry, and a UI rename makes the two differ. Falling back to the bare id
+    is right when Core answers "no such entry", and wrong when nothing answered:
+    on a write path it would create a new object under the guessed key instead
+    of updating the renamed one. A dead transport therefore propagates (#1947).
     """
 
-    @pytest.fixture
-    def client(self) -> HomeAssistantClient:
-        with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-            c = HomeAssistantClient()
-        c.base_url = "http://ha.local:8123"
-        c.token = "tok"
-        c.verify_ssl = True
-        return c
-
     @pytest.mark.parametrize(
-        "method, identifier",
-        [("_resolve_script_id", "script.morning"), ("resolve_scene_id", "scene.movie")],
+        ("method", "identifier"),
+        [("get_script_config", "script.morning"), ("resolve_scene_id", "scene.movie")],
     )
-    @pytest.mark.asyncio
     async def test_dead_transport_propagates(
-        self, client: HomeAssistantClient, method: str, identifier: str
-    ) -> None:
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-
-        with pytest.raises(HomeAssistantConnectionError):
-            await getattr(client, method)(identifier)
-
-    @pytest.mark.parametrize(
-        "method, identifier, expected",
-        [
-            ("_resolve_script_id", "script.morning", "morning"),
-            ("resolve_scene_id", "scene.movie", "movie"),
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_answered_lookup_failure_still_falls_back(
-        self, client: HomeAssistantClient, method: str, identifier: str, expected: str
-    ) -> None:
-        """An entry HA genuinely does not have is the case the fallback exists
-        for, and it keeps working."""
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "not found"}
-        )
-
-        assert await getattr(client, method)(identifier) == expected
-
-
-class TestDeviceEnrichmentReportsSkips:
-    """Radio enrichment is best-effort, but a device answered without
-    ``radio_metrics`` because the transport died must not look like a device
-    whose radio reports none. Where ``ha_get_device`` puts the warning is
-    pinned on real Core in ``test_device_tools_on_core.py``.
-    """
-
-    @pytest.mark.parametrize(
-        "enrich, args, field, key",
-        [
-            (enrich_zha_metrics, (), "ZHA radio metrics", "radio_metrics"),
-            (enrich_zwave_status, ("dev-1",), "Z-Wave node status", "node_status"),
-            (
-                enrich_matter_diagnostics,
-                ("dev-1",),
-                "Matter node diagnostics",
-                "node_diagnostics",
-            ),
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_dead_transport_names_the_skipped_enrichment(
         self,
-        enrich: Callable[..., Awaitable[None]],
-        args: tuple[str, ...],
-        field: str,
-        key: str,
+        core_client: HomeAssistantClient,
+        dead_socket: None,
+        method: str,
+        identifier: str,
     ) -> None:
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        device_info: dict[str, Any] = {"id": "dev-1"}
-        warnings: list[str] = []
+        with pytest.raises(HomeAssistantConnectionError):
+            await getattr(core_client, method)(identifier)
 
-        await enrich(client, *args, device_info, warnings)
+    async def test_scene_core_does_not_know_resolves_to_its_bare_id(
+        self, core_client: HomeAssistantClient, registries: None
+    ) -> None:
+        assert await core_client.resolve_scene_id("scene.movie") == "movie"
 
-        assert warnings == [f"{field} unavailable: ws gone"]
-        assert key not in device_info
+    async def test_script_core_does_not_know_is_read_under_its_bare_id(
+        self, core_client: HomeAssistantClient, registries: None
+    ) -> None:
+        with pytest.raises(HomeAssistantAPIError) as exc:
+            await core_client.get_script_config("script.morning")
+
+        assert exc.value.status_code == 404
+        assert "resolved storage key: morning" in str(exc.value)
 
 
 class TestEmptyResultVersusUnaskedQuestion:
     """Helpers whose "nothing found" value is indistinguishable from "could not
-    ask" now record the difference, so a caller can stop reporting a value it
+    ask" record the difference, so a caller can stop reporting a value it
     never retrieved."""
 
-    @pytest.mark.asyncio
-    async def test_logger_levels_records_the_failed_fetch(self) -> None:
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
+    async def test_logger_levels_records_the_failed_fetch(
+        self, core_client: HomeAssistantClient, dead_socket: None
+    ) -> None:
         warnings: list[str] = []
 
-        levels = await get_logger_levels(client, warnings)
-
-        assert levels == {}
+        assert await get_logger_levels(core_client, warnings) == {}
         assert warnings == ["log levels unavailable: ws gone"]
 
-    @pytest.mark.asyncio
-    async def test_logger_levels_stays_quiet_when_ha_reports_none(self) -> None:
-        """An instance with no custom levels is a real answer, not a failure."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"integrations": {}}}
-        )
+    async def test_logger_levels_stays_quiet_when_core_answers(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        assert await async_setup_component(hass, "logger", {})
         warnings: list[str] = []
 
-        await get_logger_levels(client, warnings)
+        await get_logger_levels(core_client, warnings)
 
         assert warnings == []
 
-    @pytest.mark.asyncio
-    async def test_notifications_failure_is_named_in_the_overview(self) -> None:
-        """The count is pre-seeded to 0, so a failed fetch leaves the overview
-        asserting "0 notifications" — a positive claim about something nobody
-        could read."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        tools = SearchTools(client, MagicMock())
-        result: dict[str, Any] = {}
+    async def test_dropped_notifications_read_is_named_in_the_overview(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        smart: SmartSearchTools,
+    ) -> None:
+        """The count is pre-seeded to 0, so a failed read would otherwise
+        assert "0 notifications" about something nobody could read."""
+        assert await async_setup_component(hass, persistent_notification.DOMAIN, {})
+        persistent_notification.async_create(hass, "Disk almost full")
+        socket = await pooled_socket(core_client)
 
-        await tools._fetch_notifications(result)
+        with dropped_on(hass, "persistent_notification/get", socket):
+            result = await SearchTools(core_client, smart).ha_get_overview(
+                fields=["notification_count"]
+            )
 
-        # The pre-seeded 0 stays (callers index it unconditionally), but it no
-        # longer stands unqualified.
         assert result["notification_count"] == 0
-        assert any("notifications unavailable" in w for w in result["warnings"])
+        assert [w.split(":")[0] for w in result["warnings"]] == [
+            "notifications unavailable"
+        ]
 
 
 class TestEnrichmentAbsenceIsNotAnAnswer:
-    """The last two audit sites. Both enrich a payload whose primary data comes
-    over REST, so a live REST plus a dead socket returns a complete-looking
-    response that is quietly missing a field."""
+    """Both enrich a payload whose primary data comes over REST, so a live
+    REST plus a dead socket returns a complete-looking response that is
+    quietly missing a field."""
 
-    @pytest.mark.asyncio
-    async def test_category_fetch_failure_is_recorded(self) -> None:
-        """`None` is also what "no category assigned" looks like."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        warnings: list[str] = []
-
-        cat = await fetch_entity_category(client, "script.morning", "script", warnings)
-
-        assert cat is None
-        assert warnings == ["category unavailable for script.morning: ws gone"]
-
-    @pytest.mark.asyncio
-    async def test_category_absent_without_failure_stays_quiet(self) -> None:
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"categories": {}}}
-        )
+    async def test_category_fetch_failure_is_recorded(
+        self, core_client: HomeAssistantClient, dead_socket: None
+    ) -> None:
+        """``None`` is also what "no category assigned" looks like."""
         warnings: list[str] = []
 
         assert (
-            await fetch_entity_category(client, "script.morning", "script", warnings)
+            await fetch_entity_category(
+                core_client, "script.morning", "script", warnings
+            )
+            is None
+        )
+        assert warnings == ["category unavailable for script.morning: ws gone"]
+
+    async def test_category_absent_without_failure_stays_quiet(
+        self,
+        core_client: HomeAssistantClient,
+        registries: None,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        entry = entity_registry.async_get_or_create("script", "script", "morning")
+        warnings: list[str] = []
+
+        assert (
+            await fetch_entity_category(
+                core_client, entry.entity_id, "script", warnings
+            )
             is None
         )
         assert warnings == []
 
-    @pytest.mark.asyncio
-    async def test_service_translation_failure_is_recorded(self) -> None:
-        """An empty map is also what an instance with no translations returns."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        warnings: list[str] = []
+    async def test_dropped_translations_read_is_named_in_the_service_list(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """An empty translation map is also what an instance with no
+        translations returns; the catalog itself still arrives over REST."""
+        assert await async_setup_component(hass, "counter", {})
+        # The frontend's web assets are not installed; its command is Core's.
+        async_register_command(hass, websocket_get_translations)
+        socket = await pooled_socket(core_client)
 
-        assert await _get_service_translations(client, "en", warnings) == {}
-        assert any("service descriptions unavailable" in w for w in warnings)
-
-    @pytest.mark.asyncio
-    async def test_script_get_surfaces_the_category_warning(self) -> None:
-        """At the seam: the tool response, not the helper. The script config
-        itself is REST-backed and still arrives."""
-        client = MagicMock()
-        client.get_script_config = AsyncMock(
-            return_value={"script_id": "morning", "config": {"alias": "Morning"}}
-        )
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-        tools = ConfigScriptTools(client)
-
-        result = await tools._legacy_get_script("morning")
-
-        assert result["script_id"] == "morning"
-        assert any("category unavailable" in w for w in result["warnings"])
-
-
-class TestReviewRoundTwoGaps:
-    """Branches added in round one that nothing asserted, plus the round-two
-    fixes. Each pins one production condition."""
-
-    @pytest.mark.asyncio
-    async def test_ws_command_transport_death_is_structured(self) -> None:
-        """`ha_call_service(ws_command=...)` returns before the method's own
-        try block, so without a handler of its own the raise escapes the tool
-        unstructured."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-        from ha_mcp.tools.tools_service import ServiceTools
-
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("ws gone")
-        )
-
-        with pytest.raises(ToolError) as excinfo:
-            await ServiceTools(client, MagicMock())._call_ws_command(
-                "repairs/list_issues", None, domain=None, service=None
+        with dropped_on(hass, "frontend/get_translations", socket):
+            out = await ServiceDiscoveryTools(core_client).ha_list_services(
+                domain="counter"
             )
 
-        payload = json.loads(str(excinfo.value))
-        assert payload["error"]["code"] == "CONNECTION_FAILED"
-
-    @pytest.mark.asyncio
-    async def test_logger_levels_records_an_answered_rejection(self) -> None:
-        """The envelope-failure branch, distinct from the transport one."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "unknown command"}
-        )
-        warnings: list[str] = []
-
-        assert await get_logger_levels(client, warnings) == {}
-        assert warnings == ["log levels unavailable: logger/log_info failed"]
-
-    @pytest.mark.asyncio
-    async def test_notifications_records_an_answered_rejection(self) -> None:
-        """`success: false` skipped the section silently; only the transport
-        path was covered."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "unavailable during reload"}
-        )
-        result: dict[str, Any] = {}
-
-        await SearchTools(client, MagicMock())._fetch_notifications(result)
-
-        assert result["notification_count"] == 0
+        assert "counter.set_value" in out["services"]
         assert any(
-            "notifications unavailable: unavailable during reload" in w
-            for w in result["warnings"]
+            w.startswith("service descriptions unavailable: ") for w in out["warnings"]
+        ), out.get("warnings")
+
+    async def test_script_get_surfaces_a_dropped_category_read(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """At the seam: the tool response, not the helper. The connection
+        drops as the category is read, after the config arrived."""
+        body = {"alias": "Morning", "sequence": [{"delay": {"seconds": 1}}]}
+        await write_config_files(
+            hass,
+            {
+                "configuration.yaml": "script: !include scripts.yaml\n",
+                "scripts.yaml": dump({"morning": body}),
+            },
         )
+        await setup_from_configuration(hass, "script")
+        socket = await pooled_socket(core_client)
+
+        async def category_read_dropped(*args: Any) -> str | None:
+            with dropped_on(hass, "config/entity_registry/get", socket):
+                return await fetch_entity_category(*args)
+
+        monkeypatch.setattr(
+            tools_config_scripts, "fetch_entity_category", category_read_dropped
+        )
+
+        result = await ConfigScriptTools(core_client).ha_config_get_script(
+            script_id="morning"
+        )
+
+        assert result["config"] == body
+        assert [w.split(":")[0] for w in result["warnings"]] == [
+            "category unavailable for script.morning"
+        ]
+
+
+async def test_ws_command_without_an_answer_is_a_structured_connection_error(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """``ha_call_service(ws_command=...)`` returns before the service path's
+    own error handling, so the dropped connection needs a handler of its own
+    or it escapes the tool unstructured."""
+    assert await async_setup_component(hass, "repairs", {})
+    socket = await pooled_socket(core_client)
+    tools = ServiceTools(core_client, DeviceControlTools(core_client))
+
+    with (
+        dropped_on(hass, "repairs/list_issues", socket),
+        pytest.raises(ToolError) as exc,
+    ):
+        await tools.ha_call_service(ws_command="repairs/list_issues")
+
+    assert error_of(exc)["code"] == "CONNECTION_FAILED"

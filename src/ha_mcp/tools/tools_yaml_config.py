@@ -403,13 +403,13 @@ class YamlConfigTools:
         off by default); writes of those keys to ``configuration.yaml`` are
         rejected; use the storage-mode tools.
 
-        Check ``post_action`` in the response: most keys need a full HA
-        restart. For ``themes/*.yaml`` this tool *performs* the reload itself
-        (``frontend.reload_themes``), so ``post_action`` is ``reload_performed``
-        (or ``reload_available`` plus ``reload_error`` if that reload failed).
-        For template, mqtt, group, automation, script, and scene it only
-        *advertises* the reload service (``post_action: reload_available`` with
-        a ``reload_service`` to call yourself); the edit is on disk but not yet
+        Check ``post_action`` in the response. For ``themes/*.yaml`` this tool
+        *performs* the reload itself (``frontend.reload_themes``), so
+        ``post_action`` is ``reload_performed`` (or ``reload_available`` plus
+        ``reload_error`` if that reload failed). For any other key it is
+        ``reload_available`` with the ``reload_service`` to call yourself when
+        Home Assistant has ``<key>.reload`` (the key's integration is loaded),
+        and ``restart_required`` otherwise; the edit is on disk but not yet
         live. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 

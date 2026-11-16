@@ -49,13 +49,6 @@
     "tests/src/e2e/tools/test_dev_mode_tools.py::_dev_mode_server",
     "tests/src/e2e/tools/test_security_policy_tool.py::_security_policy_server"
   ],
-  "1cd1cff9bd21": [
-    "tests/src/unit/test_websocket_client.py::TestSendCommandErrorContract._prepare_client",
-    "tests/src/unit/test_websocket_client.py::TestSendCommandSendBoundary._prepare_client",
-    "tests/src/unit/test_websocket_client.py::TestSendCommandWaitTimeout._prepare_client",
-    "tests/src/unit/test_websocket_client.py::TestSubscribeCommand._prepare_client",
-    "tests/src/unit/test_websocket_client.py::TestSubscribeEventsContract._prepare_client"
-  ],
   "21f68459c51e": [
     "tests/src/unit/test_tool_docstring_no_parameter_section.py::all_tools",
     "tests/src/unit/test_tool_schema_exclusive_bounds.py::all_tools"
@@ -72,10 +65,6 @@
   "2fdf9391edca": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::normalized_origin",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::normalized_origin"
-  ],
-  "31cdf396a137": [
-    "tests/src/unit/policy/test_decisions.py::test_a_correct_pin_approves_the_request",
-    "tests/src/unit/policy/test_decisions.py::test_deciding_works_without_anywhere_to_report_to"
   ],
   "33bd31bdbeb7": [
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_redirect_with",
@@ -120,17 +109,9 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::client_redirect_uris",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::client_redirect_uris"
   ],
-  "4e98cb5626b2": [
-    "tests/src/unit/test_oauth.py::TestRunOAuthServerSettingsUI._reset_settings_globals",
-    "tests/src/unit/test_oidc_entrypoint.py::TestRunOidcServerSettingsUI._reset_settings_globals"
-  ],
   "51526fb3c70b": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::bind_dcr_view",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::bind_dcr_view"
-  ],
-  "53d660951f36": [
-    "tests/src/unit/test_settings_ui.py::_reset_data_dir_cache",
-    "tests/src/unit/test_settings_ui_handler_selection.py::_reset_data_dir_cache"
   ],
   "5490cf17c114": [
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::bind_autoapprove_views",
@@ -160,10 +141,6 @@
     "custom_components/ha_mcp_tools/mcp_webhook.py::_active_webhook_cfg",
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_webhook_cfg",
     "custom_components/ha_mcp_tools/ui_panel.py::_webhook_cfg"
-  ],
-  "6462dd2ee68e": [
-    "tests/src/unit/test_registry_name_clearing.py::client",
-    "tests/src/unit/test_tools_entities_p2.py::_make_client"
   ],
   "66f85ab13708": [
     "tests/src/e2e/workflows/embedded/test_embedded_server.py::_wait_http_ok",
@@ -237,10 +214,6 @@
     "tests/src/unit/_js_harness.py::_render_consent_html",
     "tests/src/unit/test_consent_form_js_behavior.py::consent_form_html"
   ],
-  "91ae67bbcb30": [
-    "tests/src/unit/test_tools_dev.py::TestSecurityPolicyAccessGuard.test_policy_tool_flag_refused_even_with_access",
-    "tests/src/unit/test_tools_dev.py::TestSecurityPolicyAccessGuard.test_policy_tool_flag_refused_without_access"
-  ],
   "93ec9cb4abd0": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::mint_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::mint_client_id"
@@ -281,14 +254,6 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::_redirect_uris_error",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::_redirect_uris_error"
   ],
-  "b2adf60d960b": [
-    "tests/src/unit/test_settings_ui.py::TestSaveBackupConfigAddonMode._make_request",
-    "tests/src/unit/test_settings_ui.py::TestSaveBackupConfigEndpoint._make_request",
-    "tests/src/unit/test_settings_ui.py::TestSaveFeatureFlagsAddonMode._make_request",
-    "tests/src/unit/test_settings_ui.py::TestSaveFeatureFlagsStandaloneMode._make_request",
-    "tests/src/unit/test_settings_ui.py::TestSaveToolsResponseShape._make_request",
-    "tests/src/unit/test_settings_ui.py::TestSaveToolsValidation._make_request"
-  ],
   "b7bf3fbc8949": [
     "custom_components/ha_mcp_tools/oauth_dcr.py::_refresh_identity_is_reproducible",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::_refresh_identity_is_reproducible"
@@ -312,17 +277,9 @@
     "custom_components/ha_mcp_tools/repairs.py::LegacyOAuthRestartRepairFlow.async_step_confirm",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/repairs.py::OAuthRestartRepairFlow.async_step_confirm"
   ],
-  "c4eac30f49b7": [
-    "tests/src/unit/test_oauth.py::TestDCRPersistence.tmp_data_dir",
-    "tests/src/unit/test_oauth.py::TestStatelessTokenResilience.isolate_data_dir"
-  ],
   "c552212d71b5": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_valid_cimd_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_valid_cimd_client_id"
-  ],
-  "c5da4ccba388": [
-    "tests/src/unit/test_deep_search_helper_dashboard_partial.py::_make_tools",
-    "tests/src/unit/test_smart_search_flow_helpers.py::_make_tools"
   ],
   "c67dcb7443c2": [
     "tests/src/e2e/workflows/config/test_helper_crud.py::get_entity_id_from_response",
@@ -383,11 +340,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_pinned_url",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_pinned_url"
   ],
-  "e301a2511bf1": [
-    "tests/src/unit/test_tools_dev.py::TestManageToolsGate._rules",
-    "tests/src/unit/test_tools_dev.py::TestManageToolsGateUnderAllowList._rules",
-    "tests/src/unit/test_tools_dev.py::TestSecurityPolicyAccessGuard._rules"
-  ],
   "e34422a43d9c": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::resolve_forward_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::resolve_forward_client_id"
@@ -395,10 +347,6 @@
   "e41af98d69df": [
     "tests/src/e2e/workflows/embedded/test_embedded_dependency_conflict.py::_dump_logs",
     "tests/src/e2e/workflows/embedded/test_embedded_update_path.py::_dump_logs"
-  ],
-  "e4882e2163bc": [
-    "tests/src/unit/test_oauth.py::TestWebSocketManagerPool.reset_manager",
-    "tests/src/unit/test_oauth.py::TestWebSocketManagerVerifySslKey.reset_manager"
   ],
   "ea80f53a904b": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_lookup_cimd",
@@ -411,11 +359,6 @@
   "f001bc10d799": [
     "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_loopback_host",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_loopback_host"
-  ],
-  "f9cc73e55927": [
-    "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagAddonMode._reset_settings",
-    "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagOverrideReadErrors._reset_settings",
-    "tests/src/unit/test_stdio_settings_sidecar.py::TestFeatureFlagsEndpoint._reset_settings"
   ],
   "fb4c92e7dc7f": [
     "tests/src/unit/test_ws_connect_auth_classification.py::manager",

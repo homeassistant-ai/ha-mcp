@@ -29,6 +29,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import (
+    NO_EVENTS,
     calendar_config_dir,
     listed_events,
     local_calendar,
@@ -38,11 +39,6 @@ from ._tool_errors import error_of
 
 _RRULE_HINT = "Check RRULE syntax"
 _EXCLUSIVE_END_HINT = "For an all-day event the end date is exclusive"
-_NO_EVENTS = """BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ha-mcp tests//EN
-END:VCALENDAR
-"""
 
 
 # Core's config directory is this test's ``tmp_path``.
@@ -55,7 +51,7 @@ async def writable(
 ) -> AsyncIterator[MagicMock | AsyncMock]:
     """A spy on ``calendar.writable``'s create; ``calendar.read_only`` beside it."""
     entity = await local_calendar(hass, "Writable")
-    await remote_calendar(hass, "Read only", _NO_EVENTS)
+    await remote_calendar(hass, "Read only", NO_EVENTS)
     with patch.object(
         entity, "async_create_event", wraps=entity.async_create_event
     ) as create:

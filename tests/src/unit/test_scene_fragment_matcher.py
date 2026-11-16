@@ -106,6 +106,9 @@ async def test_matcher_accepts_the_yaml_scene_fragment_ha_search_reports(
         "scene",
         {"scene": [{"id": "sc0", "name": "Sc0", "entities": {"light.x": "on"}}]},
     )
+    # Core adds the platform's entities after the setup call returns.
+    await hass.async_block_till_done()
+    assert hass.states.get("scene.sc0") is not None
 
     response = await SmartSearchTools(client=core_client).deep_search(
         "movie", ["scene"]

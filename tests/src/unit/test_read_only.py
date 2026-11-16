@@ -1,6 +1,6 @@
 """Test Read Only Mode enforcement (read_only.py) without a FastMCP boot.
 
-Mirrors ``tests/src/unit/policy/test_middleware.py``: drive
+Mirrors ``tests/src/unit/policy/test_middleware_gating.py``: drive
 ``ReadOnlyMiddleware.on_call_tool`` directly with a fake call_next, and
 ``ReadOnlyToolsTransform.list_tools``/``get_tool`` with fake Tool objects.
 The live-settings read is patched at the ``ha_mcp.read_only`` import site.

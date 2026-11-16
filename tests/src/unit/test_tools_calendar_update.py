@@ -1,455 +1,398 @@
-"""Unit tests for update mode in ``ha_config_set_calendar_event`` (#2482).
+"""Update mode in ``ha_config_set_calendar_event`` (#2482), and its auto-backup.
 
 Home Assistant registers only ``create_event`` and ``get_events`` as REST
-calendar services — updating an event lives exclusively on the WebSocket
-command ``calendar/event/update``, routed here through the shared pooled client
-(``client.send_websocket_message``) like the create-with-rrule and delete
-paths. A failed WS command comes back as ``{"success": False, ...}`` and is
-re-raised so the failure reaches the tool's error handler, which serialises the
-structured error as JSON into the ``ToolError`` message.
+calendar services: updating an event lives on the WebSocket command
+``calendar/event/update``, which the tool sends through the shared pooled
+client like the create-with-rrule and delete paths.
 
-The tests pin the transport split (``uid`` present → WS update; ``uid`` absent
-→ unchanged create routing), the exact message shape, the validation guards
-that fire before any WS round-trip, and the update-specific suggestions.
+The tool runs on the server's own client against a real ``hass`` with two
+calendars: ``calendar.test`` is Core's Local Calendar, which supports updates;
+``calendar.read_only`` is Core's Remote Calendar, which does not. What a write
+changed is read back from Core's calendar view.
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock
+import datetime as dt
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
+from ha_mcp import backup_calendar
+from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_calendar import (
-    CalendarTools,
-    _calendar_event_backup_id,
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_calendar import CalendarTools
+
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._calendars import (
+    NO_EVENTS,
+    calendar_config_dir,
+    calendar_entity,
+    listed_events,
+    local_calendar,
+    remote_calendar,
+    write_event,
 )
+from ._command_faults import dropped_on, pooled_socket
+from ._module_clock import set_module_clock
+from ._tool_errors import error_of, rejected_call_body
+
+START = dt.datetime(2026, 6, 15, 10)
+
+# Core's config directory is this test's ``tmp_path``.
+hass_config_dir = calendar_config_dir
 
 
-def _make_mock_client(ws_return: dict | None = None) -> MagicMock:
-    client = MagicMock()
-    client.base_url = "http://ha.local:8123"
-    client.token = "test-token"
-    client.verify_ssl = True
-    client.call_service = AsyncMock(return_value={"success": True})
-    client.send_websocket_message = AsyncMock(
-        return_value=ws_return or {"success": True, "result": None}
-    )
-    return client
+@pytest.fixture
+def backups(
+    snapshot_manager: bm.BackupManager, monkeypatch: pytest.MonkeyPatch
+) -> bm.BackupManager:
+    """Auto-backup on, its calendar search run from days before ``START``."""
+    now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
+    set_module_clock(monkeypatch, backup_calendar, now)
+    return snapshot_manager
 
 
-def _suggestions(exc: ToolError) -> list[str]:
-    """Parse the JSON structured-error payload carried by a ToolError."""
-    err = json.loads(str(exc))["error"]
-    return err.get("suggestions") or [err.get("suggestion", "")]
+@pytest.fixture
+async def ws(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    hass_ws_client: WebSocketGenerator,
+) -> MockHAClientWebSocket:
+    """A WebSocket client on ``hass``, with ``calendar.test`` and
+    ``calendar.read_only``."""
+    await local_calendar(hass, "Test")
+    await remote_calendar(hass, "Read only", NO_EVENTS)
+    return await hass_ws_client(hass)
 
 
-@pytest.mark.asyncio
-async def test_update_routes_via_pooled_websocket():
-    """uid present → calendar/event/update pooled WS command, REST untouched."""
-    client = _make_mock_client(ws_return={"success": True, "result": {"ok": True}})
+async def _one_off(
+    ws: MockHAClientWebSocket, client: HomeAssistantClient, **fields: Any
+) -> dict[str, Any]:
+    """A single event ``Meeting`` at ``START``, as Core lists it."""
+    await write_event(ws, "calendar.test", "Meeting", START, **fields)
+    [event] = await listed_events(client, "calendar.test")
+    return event
 
-    tools = CalendarTools(client)
-    result = await tools.ha_config_set_calendar_event(
-        entity_id="calendar.test",
-        summary="Renamed meeting",
-        start="2026-06-15T10:00:00",
-        end="2026-06-15T11:00:00",
-        uid="evt-123",
-    )
 
-    client.send_websocket_message.assert_awaited_once()
-    message = client.send_websocket_message.await_args.args[0]
-    assert message["type"] == "calendar/event/update"
-    assert message["entity_id"] == "calendar.test"
-    assert message["uid"] == "evt-123"
-    # Text fields go out empty rather than omitted: HA merges the update into
-    # the stored event, so an omitted key would keep its old value and the
-    # update would not be the replacement it claims to be.
-    assert message["event"] == {
-        "summary": "Renamed meeting",
-        "dtstart": "2026-06-15T10:00:00",
-        "dtend": "2026-06-15T11:00:00",
-        "description": "",
-        "location": "",
+async def _daily(
+    ws: MockHAClientWebSocket, client: HomeAssistantClient
+) -> list[dict[str, Any]]:
+    """A three-day series ``Standup`` from ``START``, as Core lists it."""
+    await write_event(ws, "calendar.test", "Standup", START, rrule="FREQ=DAILY;COUNT=3")
+    return await listed_events(client, "calendar.test")
+
+
+async def _update(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
+    """``Renamed`` from 11:00 to 11:30 on ``START``'s day: an update of event
+    ``uid`` when one is given, else a new event."""
+    fields: dict[str, Any] = {
+        "entity_id": "calendar.test",
+        "summary": "Renamed",
+        "start": "2026-06-15T11:00:00",
+        "end": "2026-06-15T11:30:00",
+        **kwargs,
     }
-    # A rule has no empty form HA accepts, so it stays out when unset.
-    assert "rrule" not in message["event"]
-    # Recurrence params omitted when unset.
-    assert "recurrence_id" not in message
-    assert "recurrence_range" not in message
+    result: dict[str, Any] = await CalendarTools(client).ha_config_set_calendar_event(
+        **fields
+    )
+    return result
 
-    client.call_service.assert_not_awaited()
+
+async def _refused(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]:
+    """The error object of an update the tool refuses."""
+    with pytest.raises(ToolError) as exc_info:
+        await _update(client, **kwargs)
+    return error_of(exc_info)
+
+
+async def test_an_update_rewrites_the_event_in_place(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """A uid makes the call an update of that event, not a second event, and a
+    description or location left out is cleared: the update is a replacement."""
+    event = await _one_off(ws, core_client, description="Agenda", location="Room 1")
+
+    result = await _update(core_client, uid=event["uid"])
+
+    [updated] = await listed_events(core_client, "calendar.test")
+    assert updated["uid"] == event["uid"]
+    assert updated["summary"] == "Renamed"
+    assert updated["start"]["dateTime"].startswith("2026-06-15T11:00:00")
+    assert updated["end"]["dateTime"].startswith("2026-06-15T11:30:00")
+    assert (updated["description"], updated["location"]) == ("", "")
     assert result["success"] is True
-    assert result["uid"] == "evt-123"
+    assert result["uid"] == event["uid"]
     assert "updated" in result["message"]
 
 
-@pytest.mark.asyncio
-async def test_update_forwards_recurrence_and_optional_event_fields():
-    """Recurrence targeting rides the envelope; optional fields ride the event."""
-    client = _make_mock_client()
+async def test_an_update_from_one_occurrence_onwards_leaves_earlier_ones(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """The occurrence id and the range reach the calendar with the event's
+    description and location."""
+    first, second, _ = await _daily(ws, core_client)
 
-    tools = CalendarTools(client)
-    result = await tools.ha_config_set_calendar_event(
-        entity_id="calendar.test",
-        summary="Team sync",
-        start="2026-06-15T10:00:00",
-        end="2026-06-15T10:30:00",
+    result = await _update(
+        core_client,
+        start="2026-06-16T10:00:00",
+        end="2026-06-16T10:15:00",
         description="desc",
         location="loc",
-        rrule="FREQ=WEEKLY;BYDAY=MO",
-        uid="series-1",
-        recurrence_id="20260615T100000",
+        uid=second["uid"],
+        recurrence_id=second["recurrence_id"],
         recurrence_range="THISANDFUTURE",
     )
 
-    message = client.send_websocket_message.await_args.args[0]
-    assert message["recurrence_id"] == "20260615T100000"
-    assert message["recurrence_range"] == "THISANDFUTURE"
-    assert message["event"] == {
-        "summary": "Team sync",
-        "dtstart": "2026-06-15T10:00:00",
-        "dtend": "2026-06-15T10:30:00",
-        "description": "desc",
-        "location": "loc",
-        "rrule": "FREQ=WEEKLY;BYDAY=MO",
-    }
-    assert result["recurrence_id"] == "20260615T100000"
+    events = await listed_events(core_client, "calendar.test")
+    assert [e["summary"] for e in events] == ["Standup", "Renamed", "Renamed"]
+    assert events[0]["recurrence_id"] == first["recurrence_id"]
+    assert [(e["description"], e["location"]) for e in events[1:]] == [
+        ("desc", "loc")
+    ] * 2
+    assert result["recurrence_id"] == second["recurrence_id"]
     assert result["recurrence_range"] == "THISANDFUTURE"
 
 
-@pytest.mark.asyncio
-async def test_update_unsupported_calendar_surfaces_update_suggestion():
-    """HA's not_supported message reaches the client on the WS path."""
-    client = _make_mock_client(
-        ws_return={
-            "success": False,
-            "error": "Calendar does not support event update",
-        }
-    )
+async def test_an_update_with_a_rule_turns_the_event_into_a_series(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    event = await _one_off(ws, core_client)
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="evt-123",
-        )
+    await _update(core_client, uid=event["uid"], rrule="FREQ=DAILY;COUNT=3")
 
-    suggestions = _suggestions(exc_info.value)
-    assert any("does not support event update" in s for s in suggestions)
-    assert all("event creation" not in s for s in suggestions)
+    events = await listed_events(core_client, "calendar.test")
+    assert [e["summary"] for e in events] == ["Renamed"] * 3
 
 
-@pytest.mark.asyncio
-async def test_update_not_found_suggestion_names_the_uid():
-    client = _make_mock_client(
-        ws_return={"success": False, "error": "Command failed: event not found"}
-    )
+async def test_a_calendar_without_updates_gets_the_update_hint(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """Core refuses an update on Remote Calendar; the hint names the update."""
+    error = await _refused(core_client, entity_id="calendar.read_only", uid="evt-123")
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="missing-uid",
-        )
+    assert error["suggestions"][0] == "This calendar does not support event update"
+    assert all("event creation" not in s for s in error["suggestions"])
 
-    suggestions = _suggestions(exc_info.value)
+
+async def test_an_update_core_cannot_find_gets_a_not_found_hint_naming_the_uid(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """Core answers "Entity not found" for an unknown calendar."""
+    error = await _refused(core_client, entity_id="calendar.missing", uid="missing-uid")
+
+    suggestions = error["suggestions"]
     assert any("missing-uid" in s and "not found" in s.lower() for s in suggestions)
     assert any("ha_config_get_calendar_events" in s and "UID" in s for s in suggestions)
 
 
-@pytest.mark.asyncio
-async def test_update_transport_failure_maps_to_connection_error():
-    """A connection-shaped WS failure yields connectivity guidance only."""
-    client = _make_mock_client(
-        ws_return={
-            "success": False,
-            "error": "Failed to connect to Home Assistant WebSocket",
-        }
-    )
+async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
+    hass: HomeAssistant, ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """A dropped connection is not a calendar problem: no UID hints."""
+    event = await _one_off(ws, core_client)
+    socket = await pooled_socket(core_client)
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="evt-123",
-        )
+    with dropped_on(hass, "calendar/event/update", socket):
+        error = await _refused(core_client, uid=event["uid"])
 
-    err = json.loads(str(exc_info.value))["error"]
-    assert err["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    suggestions = err.get("suggestions") or [err.get("suggestion", "")]
-    assert all("UID" not in s for s in suggestions)
+    assert error["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
+    assert all("UID" not in s for s in error["suggestions"])
 
 
-@pytest.mark.parametrize(
-    "recurrence_kwargs",
-    [
-        pytest.param({"recurrence_id": "20260615T100000"}, id="recurrence_id"),
-        pytest.param({"recurrence_range": "THISANDFUTURE"}, id="recurrence_range"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_recurrence_params_without_uid_are_rejected(recurrence_kwargs):
+@pytest.mark.parametrize("recurrence", ["recurrence_id", "recurrence_range"])
+async def test_recurrence_targeting_without_uid_creates_nothing(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient, recurrence: str
+) -> None:
     """Recurrence targeting is meaningless when creating a new event."""
-    client = _make_mock_client()
+    value = {"recurrence_id": "20260615T100000", "recurrence_range": "THISANDFUTURE"}
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="New event",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            **recurrence_kwargs,
-        )
+    error = await _refused(core_client, **{recurrence: value[recurrence]})
 
-    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
-    client.send_websocket_message.assert_not_awaited()
-    client.call_service.assert_not_awaited()
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert await listed_events(core_client, "calendar.test") == []
 
 
-@pytest.mark.parametrize("bad", ["", "   "])
-@pytest.mark.asyncio
-async def test_empty_uid_is_rejected_before_any_round_trip(bad):
-    """An empty uid would reach HA as a misleading "event not found"."""
-    client = _make_mock_client()
+async def test_a_blank_uid_is_refused_by_name(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A blank uid would reach HA as a misleading "event not found"."""
+    body = await rejected_call_body(_update(core_client, uid="   "))
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid=bad,
-        )
-
-    message = str(exc_info.value)
-    assert "VALIDATION_INVALID_PARAMETER" in message
-    assert '"parameter": "uid"' in message, message
-    client.send_websocket_message.assert_not_awaited()
-    client.call_service.assert_not_awaited()
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["parameter"] == "uid"
 
 
-@pytest.mark.parametrize("bad", ["", "   "])
-@pytest.mark.asyncio
-async def test_blank_recurrence_id_is_rejected(bad):
-    """A blank recurrence_id is truthy to HA and forks against nothing."""
-    client = _make_mock_client()
+async def test_a_blank_recurrence_id_does_not_rewrite_the_series(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """Core reads a blank occurrence id as none and would edit every date."""
+    series = await _daily(ws, core_client)
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="series-1",
-            recurrence_id=bad,
-        )
-
-    message = str(exc_info.value)
-    assert "VALIDATION_INVALID_PARAMETER" in message
-    assert '"parameter": "recurrence_id"' in message, message
-    client.send_websocket_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_recurrence_range_without_recurrence_id_is_rejected():
-    """The range starts AT the occurrence, so HA ignores it without the id.
-
-    ical gates the entire fork on a truthy recurrence_id, so a range with no
-    id silently edits the master event instead of this occurrence onwards.
-    """
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="series-1",
-            recurrence_range="THISANDFUTURE",
-        )
-
-    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
-    assert "recurrence_id" in str(exc_info.value)
-    client.send_websocket_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_rejects_mixed_date_and_datetime_values():
-    """The date/datetime guard runs on the update path too."""
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.test",
-            summary="Mixed event",
-            start="2026-07-04",
-            end="2026-07-04T12:00:00",
-            uid="evt-123",
-        )
-
-    assert (
-        json.loads(str(exc_info.value))["error"]["code"]
-        == "VALIDATION_INVALID_PARAMETER"
-    )
-    client.send_websocket_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_no_uid_keeps_rest_create_path():
-    """Regression: omitting uid must not divert the plain create path."""
-    client = _make_mock_client()
-
-    tools = CalendarTools(client)
-    result = await tools.ha_config_set_calendar_event(
-        entity_id="calendar.test",
-        summary="One-off",
-        start="2026-06-15T10:00:00",
-        end="2026-06-15T11:00:00",
+    body = await rejected_call_body(
+        _update(core_client, uid=series[0]["uid"], recurrence_id="")
     )
 
-    client.call_service.assert_awaited_once_with(
-        "calendar",
-        "create_event",
-        {
-            "entity_id": "calendar.test",
-            "summary": "One-off",
-            "start_date_time": "2026-06-15T10:00:00",
-            "end_date_time": "2026-06-15T11:00:00",
-        },
-    )
-    client.send_websocket_message.assert_not_awaited()
-    assert "created" in result["message"]
-    assert "uid" not in result
+    assert body["parameter"] == "recurrence_id"
+    assert await listed_events(core_client, "calendar.test") == series
 
 
-@pytest.mark.asyncio
-async def test_no_uid_with_rrule_keeps_websocket_create_path():
-    """Regression: rrule without uid still creates a series, not an update."""
-    client = _make_mock_client()
+async def test_a_range_without_an_occurrence_does_not_rewrite_the_series(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """The range starts AT the occurrence; without one Core edits the master."""
+    series = await _daily(ws, core_client)
 
-    tools = CalendarTools(client)
-    await tools.ha_config_set_calendar_event(
-        entity_id="calendar.test",
-        summary="Weekly sync",
-        start="2026-06-15T10:00:00",
-        end="2026-06-15T10:30:00",
-        rrule="FREQ=WEEKLY;BYDAY=MO",
+    error = await _refused(
+        core_client, uid=series[0]["uid"], recurrence_range="THISANDFUTURE"
     )
 
-    message = client.send_websocket_message.await_args.args[0]
-    assert message["type"] == "calendar/event/create"
-    assert "uid" not in message
-    client.call_service.assert_not_awaited()
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "recurrence_id" in error["message"]
+    assert await listed_events(core_client, "calendar.test") == series
 
 
-@pytest.mark.parametrize(
-    "kwargs, expected",
-    [
-        pytest.param(
-            {"entity_id": "calendar.fam", "uid": "evt-1"},
-            "calendar.fam::evt-1",
-            id="whole_event",
-        ),
-        pytest.param(
-            {
-                "entity_id": "calendar.fam",
-                "uid": "evt-1",
-                "recurrence_id": "20260615T090000",
-            },
-            "calendar.fam::evt-1::20260615T090000",
-            id="one_occurrence",
-        ),
-        pytest.param({"entity_id": "calendar.fam"}, "", id="create_has_no_uid"),
-        pytest.param({"uid": "evt-1"}, "", id="no_entity"),
-        pytest.param(
-            {
-                "entity_id": "calendar.fam",
-                "uid": "evt-1",
-                "recurrence_id": "20260615T090000",
-                "recurrence_range": "THISANDFUTURE",
-            },
-            "",
-            id="ranged_write_is_not_snapshotted",
-        ),
-        pytest.param(
-            {
-                "entity_id": "calendar.fam",
-                "uid": "evt-1",
-                "rrule": "FREQ=WEEKLY;BYDAY=MO",
-            },
-            "",
-            id="rule_write_is_not_snapshotted",
-        ),
-    ],
-)
-def test_backup_key_identifies_the_targeted_occurrence(kwargs, expected):
-    """The uid alone cannot name one occurrence of a series.
+async def test_a_mixed_date_and_time_update_leaves_the_event(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    event = await _one_off(ws, core_client)
 
-    Every expanded occurrence shares the uid, so the recurrence_id has to be
-    part of the key for the capture to snapshot the right one. A falsy key
-    means no snapshot: a create has nothing to capture, and neither a ranged
-    write nor one that adds a recurrence rule can be undone from a snapshot
-    of a single occurrence.
-    """
-    assert _calendar_event_backup_id(kwargs) == expected
+    error = await _refused(
+        core_client, uid=event["uid"], start="2026-07-04", end="2026-07-04T12:00:00"
+    )
+
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert await listed_events(core_client, "calendar.test") == [event]
 
 
-@pytest.mark.asyncio
-async def test_direct_call_rejects_a_misspelled_range():
-    """The Literal binds MCP calls only; a direct Python call needs the check.
+async def test_a_misspelled_range_does_not_shrink_to_one_occurrence(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """The Literal binds MCP calls only; Core compares the range verbatim, so a
+    direct call's "THIS_AND_FUTURE" would edit only the named date."""
+    series = await _daily(ws, core_client)
 
-    Home Assistant compares the range verbatim against ical's
-    Range.THIS_AND_FUTURE ("THISANDFUTURE"), so the underscored spelling would
-    reach HA and silently degrade to a single-occurrence write. Verified: before
-    this guard, a direct call put "THIS_AND_FUTURE" on the wire.
-    """
-    client = _make_mock_client()
+    error = await _refused(
+        core_client,
+        uid=series[1]["uid"],
+        recurrence_id=series[1]["recurrence_id"],
+        recurrence_range="THIS_AND_FUTURE",
+    )
 
-    tools = CalendarTools(client)
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "THISANDFUTURE" in error["message"]
+    assert await listed_events(core_client, "calendar.test") == series
+
+
+async def test_a_misspelled_range_does_not_delete_one_occurrence(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    series = await _daily(ws, core_client)
+
     with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_set_calendar_event(
+        await CalendarTools(core_client).ha_config_remove_calendar_event(
             entity_id="calendar.test",
-            summary="Renamed meeting",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-            uid="series-1",
-            recurrence_id="20260615T100000",
+            uid=series[1]["uid"],
+            recurrence_id=series[1]["recurrence_id"],
             recurrence_range="THIS_AND_FUTURE",
         )
 
-    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
-    assert "THISANDFUTURE" in str(exc_info.value)
-    client.send_websocket_message.assert_not_awaited()
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert await listed_events(core_client, "calendar.test") == series
 
 
-@pytest.mark.asyncio
-async def test_direct_delete_call_rejects_a_misspelled_range():
-    client = _make_mock_client()
+def _captured(manager: bm.BackupManager) -> dict[str, Any]:
+    """Each calendar snapshot's id and the summary it holds."""
+    return {
+        row["entity_id"]: manager.read_snapshot(row["name"])["config"]["summary"]
+        for row in manager.list_snapshots(domain="calendar_event")
+    }
 
-    tools = CalendarTools(client)
-    with pytest.raises(ToolError) as exc_info:
-        await tools.ha_config_remove_calendar_event(
-            entity_id="calendar.test",
-            uid="series-1",
-            recurrence_id="20260615T100000",
-            recurrence_range="THIS_AND_FUTURE",
-        )
 
-    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
-    client.send_websocket_message.assert_not_awaited()
+async def test_an_updated_event_is_snapshotted_first(
+    backups: bm.BackupManager,
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+) -> None:
+    event = await _one_off(ws, core_client)
+
+    await _update(core_client, uid=event["uid"])
+
+    assert _captured(backups) == {f"calendar.test::{event['uid']}": "Meeting"}
+
+
+async def test_a_create_does_not_search_the_calendar_for_a_snapshot(
+    hass: HomeAssistant,
+    backups: bm.BackupManager,
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+) -> None:
+    """A new event has no uid to look up; the search would cost two sweeps."""
+    entity = calendar_entity(hass, "calendar.test")
+
+    with patch.object(
+        entity, "async_get_events", wraps=entity.async_get_events
+    ) as reads:
+        await _update(core_client)
+
+    reads.assert_not_called()
+    assert [
+        e["summary"] for e in await listed_events(core_client, "calendar.test")
+    ] == ["Renamed"]
+
+
+async def test_an_updated_occurrence_is_snapshotted_by_its_recurrence_id(
+    backups: bm.BackupManager,
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+) -> None:
+    """Every occurrence of a series shares the uid, so the key names the one
+    the write targets."""
+    _, second, _ = await _daily(ws, core_client)
+
+    await _update(
+        core_client,
+        start="2026-06-16T10:00:00",
+        end="2026-06-16T10:15:00",
+        uid=second["uid"],
+        recurrence_id=second["recurrence_id"],
+    )
+
+    key = f"calendar.test::{second['uid']}::{second['recurrence_id']}"
+    assert _captured(backups) == {key: "Standup"}
+
+
+async def test_a_ranged_update_is_not_snapshotted(
+    backups: bm.BackupManager,
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+) -> None:
+    """A range splits the series; a snapshot of one occurrence cannot undo it."""
+    _, second, _ = await _daily(ws, core_client)
+
+    await _update(
+        core_client,
+        start="2026-06-16T10:00:00",
+        end="2026-06-16T10:15:00",
+        uid=second["uid"],
+        recurrence_id=second["recurrence_id"],
+        recurrence_range="THISANDFUTURE",
+    )
+
+    assert _captured(backups) == {}
+
+
+async def test_an_update_adding_a_rule_is_not_snapshotted(
+    backups: bm.BackupManager,
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+) -> None:
+    """Core has no way to clear a rule again, so no snapshot could undo it."""
+    event = await _one_off(ws, core_client)
+
+    await _update(core_client, uid=event["uid"], rrule="FREQ=DAILY;COUNT=3")
+
+    assert _captured(backups) == {}

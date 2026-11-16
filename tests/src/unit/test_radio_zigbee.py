@@ -9,6 +9,7 @@ on what went out on the air, and on Core's own registries.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -94,11 +95,12 @@ async def test_network_status_returns_the_settings_and_refreshes_the_topology(
     radio: RadioTools,
     zha_entry: MockConfigEntry,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The ZHA network's settings come back, and a topology scan is started so
     the next read shows current routes. Core starts the scan without answering
-    ``zha/topology/update``, so the tool must not wait for a reply: the
-    shortened wait makes a tool that does fail at once."""
+    ``zha/topology/update``, so the tool must not wait for a reply. A tool that
+    waits gets no answer, and that is logged as an error."""
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", HELD_WAIT_S)
 
     with arrival(hass, "zha/topology/update") as scan_requested:
@@ -108,6 +110,7 @@ async def test_network_status_returns_the_settings_and_refreshes_the_topology(
 
     assert out["config_entry_id"] == zha_entry.entry_id
     assert out["network"]["settings"]["network_info"]["channel"] == 15
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
 
 
 async def test_network_status_survives_a_refused_topology_refresh(

@@ -57,7 +57,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **`action: remove` removes the entire top-level key.** Asking an LLM to remove a single sensor can result in the entire `template:` key being deleted, not just the intended entry.
 
-**Most keys require a full HA restart.** Only `template`, `mqtt`, and `group` support reload. All other keys require restarting Home Assistant for changes to take effect. The tool response includes `post_action` indicating which is needed.
+**Many keys require a full HA restart.** A key can be reloaded only when Home Assistant has a `<key>.reload` service, which needs the key's integration to be loaded already (by an earlier YAML block or by anything else that set it up); a key whose integration is not loaded yet, and a key with no reload service, need a restart. The tool response includes `post_action` indicating which is needed.
 
 **`command_line:` entries execute shell commands.** The allowlist includes `command_line:` for legitimate use cases, but an LLM could inadvertently create a sensor with a command that reads sensitive files or modifies the system.
 
