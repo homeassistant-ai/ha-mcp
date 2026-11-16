@@ -88,7 +88,6 @@ ignores:
   - "tests/src/unit/test_template_helper_backup.py"
   - "tests/src/unit/test_tool_error_signaling.py"
   - "tests/src/unit/test_tools_areas.py"
-  - "tests/src/unit/test_tools_dev.py"
   - "tests/src/unit/test_tools_todo.py"
   - "tests/src/unit/test_tools_updates.py"
   - "tests/src/unit/test_yaml_config_tool.py"
