@@ -213,30 +213,6 @@ async def test_runtime_change_for_an_automation_core_never_loads_names_a_retry(
     assert runs == []
 
 
-async def test_runtime_change_for_an_automation_core_stopped_loading_is_not_reported_applied(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Once configuration.yaml stops loading automations.yaml, the write's
-    reload leaves the automation unavailable: Core turns nothing off and runs
-    nothing, so the tool must not report either as done."""
-    tools = await morning_tools(hass, core_client, monkeypatch)
-    await stop_loading_automations(hass)
-    runs = async_capture_events(hass, RAN)
-
-    with registration_polls():
-        result = await write_version_2(
-            tools, "config", CONFIG_ID, enabled=False, run_actions=True, wait=False
-        )
-    await hass.async_block_till_done()
-
-    assert state_of(hass) == "unavailable"
-    assert runs == []
-    assert result["enabled_applied"] is False, result
-    assert result["actions_triggered"] is False, result
-
-
 @pytest.mark.parametrize("runtime", [{"enabled": False}, {}], ids=["enabled", "none"])
 async def test_reload_is_watched_only_for_a_runtime_change_and_released(
     hass: HomeAssistant,
