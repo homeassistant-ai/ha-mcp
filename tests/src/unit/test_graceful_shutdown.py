@@ -14,6 +14,7 @@ import io
 import logging
 import os
 import signal
+from collections.abc import Iterator
 from typing import IO
 from unittest.mock import AsyncMock
 
@@ -258,12 +259,15 @@ def test_server_ending_abnormally_exits_with_a_failure_code(
     assert entry_points.exits == [code]
 
 
-def _stdin(kind: str, stack: contextlib.ExitStack) -> IO[str] | None:
+@contextlib.contextmanager
+def _stdin(kind: str) -> Iterator[IO[str] | None]:
     if kind == "dev-null":
-        return stack.enter_context(open(os.devnull))
-    if kind == "in-memory":
-        return io.StringIO()
-    return None
+        with open(os.devnull) as closed_input:
+            yield closed_input
+    elif kind == "in-memory":
+        yield io.StringIO()
+    else:
+        yield None
 
 
 @pytest.mark.parametrize("kind", ["dev-null", "in-memory", "none"])
@@ -274,8 +278,8 @@ def test_stdio_refuses_to_start_without_a_readable_stdin(
     descriptor, or none at all: exit 1 with the fix, instead of serving EOF."""
     server = InProcessServer()
 
-    with contextlib.ExitStack() as stack, pytest.raises(SystemExit) as exited:
-        entry_points.stdin = _stdin(kind, stack)
+    with _stdin(kind) as stdin, pytest.raises(SystemExit) as exited:
+        entry_points.stdin = stdin
         entry_points.stdio(server)
 
     assert exited.value.code == 1

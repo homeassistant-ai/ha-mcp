@@ -568,7 +568,7 @@ def _probe_entry(hass: HomeAssistant, **options: Any) -> str:
 
 
 @pytest.fixture
-def secret_entry(hass: HomeAssistant) -> str:
+def guarded_entry(hass: HomeAssistant) -> str:
     return _probe_entry(
         hass, opens_with="form", api_key="hunter2", password="swordfish", name="Hall"
     )
@@ -576,9 +576,9 @@ def secret_entry(hass: HomeAssistant) -> str:
 
 @pytest.mark.usefixtures("redact_on")
 async def test_current_values_of_a_password_field_are_redacted(
-    probe: HomeAssistantClient, secret_entry: str
+    probe: HomeAssistantClient, guarded_entry: str
 ) -> None:
-    result = await describe_helper(probe, _DOMAIN, helper_id=secret_entry)
+    result = await describe_helper(probe, _DOMAIN, helper_id=guarded_entry)
     fields = _fields(result)
 
     assert "hunter2" not in str(fields)
@@ -590,11 +590,11 @@ async def test_current_values_of_a_password_field_are_redacted(
     "name", ["password", "api_key"], ids=["serialized", "selector"]
 )
 async def test_core_secret_fields_stay_recognisable_as_secrets(
-    probe: HomeAssistantClient, secret_entry: str, name: str
+    probe: HomeAssistantClient, guarded_entry: str, name: str
 ) -> None:
     """A field Core marks secret (#3002) is shown as one, so the model knows a
     redacted value is withheld rather than empty."""
-    result = await describe_helper(probe, _DOMAIN, helper_id=secret_entry)
+    result = await describe_helper(probe, _DOMAIN, helper_id=guarded_entry)
 
     assert _fields(result)[name]["secret"] is True
 

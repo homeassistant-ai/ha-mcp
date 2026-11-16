@@ -198,7 +198,8 @@ class Mount(Protocol):
         options: type[OptionsFlow] | None = None,
         subentries: dict[str, type[ConfigSubentryFlow]] | None = None,
         stored: dict[str, Any] | None = None,
-    ) -> MockConfigEntry: ...
+    ) -> MockConfigEntry:
+        """Set the integration up and return its entry."""
 
 
 @pytest.fixture
