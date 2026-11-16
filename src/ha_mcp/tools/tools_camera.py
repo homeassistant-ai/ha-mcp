@@ -102,9 +102,9 @@ class CameraTools:
     def _check_response(response: Any, entity_id: str) -> None:
         """Validate a camera-proxy HTTP response, raising a structured ToolError.
 
-        401 maps to an authentication error, 404 to a missing-entity error,
-        any other 4xx/5xx to a service-call failure, and an empty 2xx body
-        is a service failure too (HA answered but had no image to serve).
+        401 maps to an authentication error, 404 to a missing-entity error and
+        any other 4xx/5xx to a service-call failure. Home Assistant answers 500
+        when the camera has no image to serve, so a 5xx says so.
         """
         if response.status_code == 401:
             raise_tool_error(
@@ -121,19 +121,16 @@ class CameraTools:
                 )
             )
         if response.status_code >= 400:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to retrieve camera image: HTTP {response.status_code}",
-                    context={"entity_id": entity_id},
-                )
+            offline = (
+                ". The camera may be offline or temporarily unavailable"
+                if response.status_code >= 500
+                else ""
             )
-        if not response.content:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Camera {entity_id} returned empty image data. The camera "
-                    "may be offline or temporarily unavailable.",
+                    "Failed to retrieve camera image: "
+                    f"HTTP {response.status_code}{offline}",
                     context={"entity_id": entity_id},
                 )
             )

@@ -308,7 +308,8 @@ async def test_unknown_camera_is_reported_not_found_with_a_search_hint(
 async def test_camera_without_an_image_is_reported_as_a_failed_call(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """Core answers HTTP 500 when the camera hands it no image."""
+    """Core answers HTTP 500 when the camera hands it no image; the caller is
+    told the camera may be offline, not only the status code."""
     await serve(hass, None)
 
     with pytest.raises(ToolError) as exc_info:
@@ -316,6 +317,7 @@ async def test_camera_without_an_image_is_reported_as_a_failed_call(
     error = error_of(exc_info)
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "HTTP 500" in error["message"]
+    assert "may be offline" in error["message"]
 
 
 async def test_unreachable_home_assistant_is_reported_as_a_connection_failure(
