@@ -2110,10 +2110,11 @@ def _maybe_build_confirm_preview(
 async def _resolve_post_action(
     hass: HomeAssistant, kind: str, path_parts: tuple[str, ...]
 ) -> dict[str, Any]:
-    """Return the post-edit activation info (restart/reload) for the edit kind."""
+    """What makes the edit live: a reload Core has for the key, or a restart."""
     if kind == "theme":
         return await reload_after_edit(hass, "frontend", "reload_themes")
     # Core registers ``<domain>.reload`` while the key's integration is loaded.
+    # It registers a YAML dashboard at start-up only, whatever lovelace reloads.
     if kind != "lovelace_dashboard" and hass.services.has_service(
         path_parts[0], SERVICE_RELOAD
     ):

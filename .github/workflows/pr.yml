@@ -628,7 +628,8 @@ jobs:
           echo "unit-tests result: $RESULT"
           [ "$RESULT" = "success" ]
 
-  # The unit and app (add-on) suites against the current beta Core, the same
+  # The unit suite, on two runners, and the app (add-on) suite, on the first
+  # of them, against the current beta Core, the same
   # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
   # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
   # so a beta Core change reports here without blocking a merge. While beta

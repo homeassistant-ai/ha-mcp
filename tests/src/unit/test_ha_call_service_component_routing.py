@@ -144,6 +144,7 @@ async def test_a_call_that_confirms_nothing_returns_cores_changed_states(
     )
     # Core adds the platform's entities after the setup call returns.
     await hass.async_block_till_done()
+    assert hass.states.get("scene.movie") is not None
 
     with (
         received(hass, CALL_SERVICE) as seen,

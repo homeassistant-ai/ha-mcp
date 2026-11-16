@@ -21,7 +21,9 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -32,14 +34,13 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import (
-    core_error_message,
     exception_to_structured_error,
     get_connected_ws_client,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-    ws_failure_code,
 )
 from .system_health_sections import (
     add_health_labels,
@@ -106,14 +107,21 @@ def _build_system_snapshot_slices(
 
 
 # Core's reloads that are not named ``<domain>.reload``. ``all`` is Core's own
-# sweep: every ``<domain>.reload``, the core config, themes and custom
-# templates, refused while the configuration does not check out.
+# sweep: every ``<domain>.reload`` but notify's, the core config, themes and
+# custom templates, refused while the configuration does not check out.
 NAMED_RELOADS = {
     "all": ("homeassistant", "reload_all"),
     "core": ("homeassistant", "reload_core_config"),
     "themes": ("frontend", "reload_themes"),
     "custom_templates": ("homeassistant", "reload_custom_templates"),
 }
+# Core's reload-all runs the configuration check and then every reload inside
+# one call, so it gets longer than the client's default wait for one command.
+RELOAD_WAIT_SECONDS = 120.0
+_RELOAD_ALL_FAILED = (
+    ". Home Assistant still ran the other reloads; its log names the "
+    "integration that failed"
+)
 
 
 class SystemTools:
@@ -185,12 +193,13 @@ class SystemTools:
             Field(
                 description=(
                     "What to reload: 'all' (Home Assistant's own reload-all: "
-                    "every integration that can reload its YAML, the core "
-                    "config, themes and custom templates), 'core' (customize, "
+                    "every integration that can reload its YAML but notify, the "
+                    "core config, themes and custom templates), 'core' (customize, "
                     "packages), 'themes', 'custom_templates', or the domain of "
                     "an integration that has a reload service, such as "
                     "'automation', 'script', 'scene', 'template', 'group', "
-                    "'input_boolean' or 'mqtt'. An unknown target is refused "
+                    "'input_boolean' or 'mqtt'. Any other target, an "
+                    "integration that is not loaded yet included, is refused "
                     "with the domains this Home Assistant can reload."
                 )
             ),
@@ -214,7 +223,9 @@ class SystemTools:
         Assistant. Use it after editing automation/script YAML, adding YAML
         helpers, or changing customize.yaml or themes. target="all" is Home
         Assistant's own reload-all; it checks the configuration first and
-        refuses, with the reason, when the check fails.
+        refuses, with the reason, when the check fails. A single integration's
+        reload does not check first: some (template is one) log a
+        configuration they reject and keep running, so read the result back.
 
         EXAMPLES:
         - ha_reload_core(target="automation")
@@ -268,13 +279,13 @@ class SystemTools:
             )
         return {
             "success": True,
-            "message": f"Successfully reloaded {target}",
+            "message": f"Home Assistant ran {domain}.{service}",
             "target": target,
             "service": f"{domain}.{service}",
         }
 
     async def _reloadable_domain(self, target: str) -> str:
-        """``target`` when Core has a ``<target>.reload`` service.
+        """``target`` when Core has a ``<target>.reload`` service; refused otherwise.
 
         Core registers it while the integration is loaded, so what can be
         reloaded is read from Core, not listed here.
@@ -287,33 +298,62 @@ class SystemTools:
         if target in reloadable:
             return target
         valid_targets = [*NAMED_RELOADS, *reloadable]
+        domain = target.removesuffix("s")
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Invalid reload target: Home Assistant has no '{target}.reload' "
-                "service (an integration that is not loaded has none)",
+                "service"
+                + (f". Did you mean '{domain}'?" if domain in reloadable else ""),
                 context={"target": target, "valid_targets": valid_targets},
-                suggestions=[f"Use one of: {', '.join(valid_targets)}"],
+                suggestions=[
+                    f"Use one of: {', '.join(valid_targets)}",
+                    "An integration that is not loaded has no reload service: "
+                    "restart Home Assistant (ha_restart) to load its first "
+                    "YAML block",
+                ],
             )
         )
 
     async def _call_reload(self, target: str, domain: str, service: str) -> None:
-        """Call the reload over WebSocket, where Core's refusal keeps its text
-        and code; the REST endpoint answers one with a bare 400 or 500."""
-        reply = await self._client.send_websocket_message(
-            {"type": "call_service", "domain": domain, "service": service}
-        )
+        """Call the reload over WebSocket, where Core's refusal keeps its error
+        code as well as its text; REST drops the code."""
+        wait = max(float(self._client.timeout), RELOAD_WAIT_SECONDS)
+        try:
+            reply = await self._client.send_websocket_message(
+                {
+                    "type": "call_service",
+                    "domain": domain,
+                    "service": service,
+                    "_wait_timeout": wait,
+                }
+            )
+        except HomeAssistantCommandNotSent:
+            raise
+        except HomeAssistantConnectionError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"{domain}.{service} got no answer, so whether Home Assistant "
+                    f"reloaded is unknown: {e}",
+                    context={"target": target, "write_outcome_unknown": True},
+                    suggestions=[
+                        "Home Assistant may still be reloading: check its log "
+                        "before reloading again"
+                    ],
+                )
+            )
         if reply.get("success"):
             return
-        error_code = reply.get("error_code")
-        raise_tool_error(
-            create_error_response(
-                ws_failure_code(reply),
-                f"{domain}.{service} failed: "
-                f"{core_error_message(reply.get('error', 'Unknown error'))}",
-                context={"target": target, "ha_error_code": error_code},
-                suggestions=["Fix what Home Assistant reported, then reload again"],
-            )
+        raise_core_refusal(
+            f"{domain}.{service} failed",
+            reply,
+            {"target": target},
+            [
+                "Fix what Home Assistant reported, then reload again",
+                "Check Home Assistant logs for details",
+            ],
+            suffix=_RELOAD_ALL_FAILED if target == "all" else "",
         )
 
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:

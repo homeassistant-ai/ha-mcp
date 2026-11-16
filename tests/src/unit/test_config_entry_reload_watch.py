@@ -42,7 +42,7 @@ from ._ws_transport import abort_transport
 
 DOMAIN = "reload_watch"
 
-# Far below the 20 s settle budget a broken early exit would sit through.
+# Far below the settle budget a broken early exit would sit through.
 PROMPT_S = 5.0
 
 
@@ -229,10 +229,16 @@ async def test_a_commit_with_no_reload_after_it_reads_as_unobserved_once_the_bud
 ) -> None:
     monkeypatch.setattr(config_entry_reload_watch, "_RELOAD_SETTLE_TIMEOUT", 0.3)
     entry = await set_up_entry(hass)
+    loop = asyncio.get_running_loop()
 
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "new", reload=False)
-        assert await settled() is None
+        started = loop.time()
+        reloaded = await settled()
+        elapsed = loop.time() - started
+
+    assert reloaded is None
+    assert elapsed < PROMPT_S
 
 
 @pytest.mark.usefixtures("entry_stream")

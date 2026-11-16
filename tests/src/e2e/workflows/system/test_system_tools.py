@@ -287,7 +287,7 @@ class TestSystemTools:
         valid_targets = data["valid_targets"]
         assert "all" in valid_targets, "Valid targets should include 'all'"
         assert "automation" in valid_targets, (
-            "Valid targets should include every domain Core can reload"
+            "Valid targets should include 'automation'"
         )
         assert "script" in valid_targets, "Valid targets should include 'script'"
 

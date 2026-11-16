@@ -670,7 +670,7 @@ class TestHandleEditYamlConfigSingleKey:
     async def test_single_key_post_action_for_shell_command(
         self, tmp_path: Path, edit_yaml: EditYaml
     ) -> None:
-        """shell_command falls through to default 'restart_required'."""
+        """shell_command is not loaded, so Core has no shell_command.reload."""
         cfg = tmp_path / "configuration.yaml"
         cfg.write_text("")
 

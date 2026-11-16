@@ -133,7 +133,7 @@ class TestSettingsUiRestart:
     Tested via a raw httpx call rather than constructing a starlette Request,
     because the request shape is irrelevant to the Supervisor wire contract;
     the handler's success, token-missing, and connection-drop branches remain
-    covered by unit tests in tests/src/unit/test_settings_ui_app_options.py.
+    covered by unit tests in tests/src/unit/test_settings_ui_app_restart.py.
     """
 
     async def test_restart_request_succeeds(self, supervisor_mock):

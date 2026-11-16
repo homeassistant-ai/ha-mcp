@@ -73,7 +73,7 @@ def test_the_app_tests_run_on_one_runner_only(job: str) -> None:
         for step in _jobs()[job]["steps"]
         if "pytest tests/addon/" in step.get("run", "")
     ]
-    assert "matrix.shard == '1/2'" in run["if"]
+    assert f"matrix.shard == '{_shards()[0]}'" in run["if"]
 
 
 def test_the_required_check_passes_only_when_every_runner_did() -> None:

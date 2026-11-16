@@ -420,7 +420,7 @@ class TestYamlConfigOperations:
             assert inner.get("action") == "add"
             # knx is not loaded, so Core has no knx.reload and the edit needs a restart.
             assert inner.get("post_action") == "restart_required", (
-                f"knx should default to post_action=restart_required: {data}"
+                f"knx is not loaded, so it should need a restart: {data}"
             )
             logger.info("Successfully added knx to package file")
 

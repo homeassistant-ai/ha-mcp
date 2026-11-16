@@ -1938,13 +1938,13 @@ class IntegrationTools:
           sub-entities (e.g. utility_meter tariffs) are removed together. An
           entity registered by another integration is refused with
           VALIDATION_INVALID_PARAMETER and nothing is deleted.
+        - subentry_id (helper_type omitted or "config_subentry") + parent
+          entry_id → delete that one config subentry, whatever the target looks
+          like. A subentry_id with any other helper_type is refused.
         - helper_type=None + entity_id → the entity's registry entry names its
           helper (storage type or helper flow); an entity of any other
           integration is refused with VALIDATION_INVALID_PARAMETER.
-        - helper_type=None + entry_id → direct config entry delete (any
-          integration).
-        - helper_type="config_subentry" + parent entry_id + subentry_id →
-          delete one config subentry.
+        - helper_type=None + entry_id → direct config entry delete.
 
         A target that cannot be removed raises a structured error rather than
         returning silent success: ENTITY_NOT_FOUND when the entity_id is absent
@@ -2014,7 +2014,7 @@ class IntegrationTools:
         wait_bool = wait
         warnings: list[str] = []
 
-        # === Routing dispatch: a subentry_id names its subentry, entity target or not ===
+        # === Routing dispatch: a subentry_id names a config subentry, nothing else ===
         helper_type = removal_helper_type(
             {"helper_type": helper_type, "subentry_id": subentry_id}
         )

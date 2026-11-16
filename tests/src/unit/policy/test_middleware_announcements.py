@@ -181,11 +181,14 @@ async def test_each_replacement_row_in_a_burst_is_announced(
     args = {"domain": "lock", "service": "unlock"}
     call_next = AsyncMock(return_value="ok")
 
+    refusals: list[str] = []
+
     async def call() -> None:
         try:
             await mw.on_call_tool(tool_call("ha_call_service", args), call_next)
-        except ToolError:
-            pass  # the caller that loses the claim is told to get a new approval
+        except ToolError as refused:
+            # The caller that loses the claim is told to get a new approval.
+            refusals.append(error_body(refused)["error"]["code"])
 
     async def approve_the_shared_row() -> None:
         (entry, _) = await watch.until(2)
@@ -197,6 +200,7 @@ async def test_each_replacement_row_in_a_burst_is_announced(
         tg.start_soon(approve_the_shared_row)
     await hass.async_block_till_done()
 
+    assert refusals == ["USER_APPROVAL_REQUIRED"]
     announced = [event.data["token"] for event in fired]
     assert len(set(announced)) == 2, "the replacement row was never announced"
     (leftover,) = queue.list_pending()

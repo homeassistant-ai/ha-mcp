@@ -9,8 +9,10 @@ Core's own config-entries endpoint, on an integration the test mocks with
 Core's ``mock_integration``.
 """
 
+import asyncio
 import json
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +22,11 @@ from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
+    async_fire_time_changed,
     async_mock_service,
     mock_config_flow,
     mock_integration,
@@ -31,7 +35,10 @@ from pytest_homeassistant.common import (
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.tools_system import SystemTools
+from ha_mcp.client.websocket_client import DEFAULT_COMMAND_WAIT_TIMEOUT
+from ha_mcp.tools.tools_system import RELOAD_WAIT_SECONDS, SystemTools
+
+from ._held_command import held_command
 
 PROBE = "reload_probe"
 
@@ -69,8 +76,8 @@ async def core_reloads(hass: HomeAssistant) -> None:
 async def test_all_is_cores_own_reload_all(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """Core reloads every integration that has a reload service, whichever
-    they are, plus the core config, themes and custom templates."""
+    """One call: Core reloads every integration that has a reload service,
+    whichever they are."""
     async_mock_service(hass, "automation", "reload")
     async_mock_service(hass, "an_integration_of_tomorrow", "reload")
     calls = _service_calls(hass)
@@ -79,15 +86,10 @@ async def test_all_is_cores_own_reload_all(
 
     assert result["success"] is True
     assert result["service"] == "homeassistant.reload_all"
+    assert result["message"] == "Home Assistant ran homeassistant.reload_all"
     called = _called(calls)
     assert called[0] == "homeassistant.reload_all"
-    assert sorted(called[1:]) == [
-        "an_integration_of_tomorrow.reload",
-        "automation.reload",
-        "frontend.reload_themes",
-        "homeassistant.reload_core_config",
-        "homeassistant.reload_custom_templates",
-    ]
+    assert {"an_integration_of_tomorrow.reload", "automation.reload"} <= set(called)
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -100,11 +102,39 @@ async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invali
     with pytest.raises(ToolError) as excinfo:
         await SystemTools(core_client).ha_reload_core(target="all")
 
-    error = _error(excinfo)
+    response = json.loads(str(excinfo.value))
+    error = response["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert response["ha_error_code"] == "home_assistant_error"
     assert "configuration is not valid" in error["message"]
     assert "latitude" in error["message"]
-    assert error["suggestion"] == "Fix what Home Assistant reported, then reload again"
+    assert error["suggestions"][0] == (
+        "Fix what Home Assistant reported, then reload again"
+    )
     assert reloads == []
+
+
+@pytest.mark.usefixtures("core_reloads")
+async def test_a_reload_that_fails_inside_reload_all_says_the_others_ran(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core reports the first failure only, and nothing in it names the
+    integration; the caller must not read it as "nothing reloaded"."""
+    reloaded = async_mock_service(hass, "automation", "reload")
+    async_mock_service(
+        hass,
+        "template",
+        "reload",
+        raise_exception=HomeAssistantError("the template file is unreadable"),
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await SystemTools(core_client).ha_reload_core(target="all")
+
+    message = _error(excinfo)["message"]
+    assert "the template file is unreadable" in message
+    assert "still ran the other reloads" in message
+    assert len(reloaded) == 1
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -129,6 +159,7 @@ async def test_one_target_calls_only_its_service(
     assert _called(calls) == [service]
     assert result["success"] is True
     assert result["service"] == service
+    assert result["message"] == f"Home Assistant ran {service}"
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -145,14 +176,25 @@ async def test_a_domain_core_cannot_reload_is_refused_with_the_ones_it_can(
 
     response = json.loads(str(excinfo.value))
     assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert response["valid_targets"] == [
-        "all",
-        "core",
-        "themes",
-        "custom_templates",
-        "automation",
-    ]
+    assert {"all", "core", "themes", "custom_templates", "automation"} <= set(
+        response["valid_targets"]
+    )
+    assert "group" not in response["valid_targets"]
+    assert any("ha_restart" in hint for hint in response["error"]["suggestions"])
     assert calls == []
+
+
+@pytest.mark.usefixtures("core_reloads")
+async def test_the_plural_of_a_reloadable_domain_is_answered_with_the_domain(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """``automations`` was this tool's name for it until Core's domains took over."""
+    async_mock_service(hass, "automation", "reload")
+
+    with pytest.raises(ToolError) as excinfo:
+        await SystemTools(core_client).ha_reload_core(target="automations")
+
+    assert "Did you mean 'automation'?" in _error(excinfo)["message"]
 
 
 @pytest.mark.usefixtures("core_reloads")
@@ -173,6 +215,42 @@ async def test_a_reload_core_fails_is_reported_with_cores_text(
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "template.reload failed" in error["message"]
     assert "the template file is unreadable" in error["message"]
+    assert "other reloads" not in error["message"]
+
+
+@pytest.mark.usefixtures("core_reloads")
+async def test_a_reload_core_has_not_answered_in_time_is_not_reported_as_failed(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core has the call and is still reloading: a caller told "failed" would
+    reload again on top of it."""
+    async_mock_service(hass, "automation", "reload")
+
+    async with held_command(hass, "call_service") as held:
+        call = asyncio.create_task(
+            SystemTools(core_client).ha_reload_core(target="automation")
+        )
+        try:
+            await held.reached_by(call)
+            now = dt_util.utcnow()
+            # Past the client's wait for an ordinary command: a reload gets longer.
+            async_fire_time_changed(
+                hass, now + timedelta(seconds=DEFAULT_COMMAND_WAIT_TIMEOUT + 1)
+            )
+            await hass.async_block_till_done()
+            assert not call.done()
+            async_fire_time_changed(
+                hass, now + timedelta(seconds=RELOAD_WAIT_SECONDS + 1)
+            )
+            with pytest.raises(ToolError) as excinfo:
+                await asyncio.gather(call)
+        finally:
+            call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+
+    response = json.loads(str(excinfo.value))
+    assert response["write_outcome_unknown"] is True
+    assert "whether Home Assistant reloaded is unknown" in response["error"]["message"]
 
 
 @pytest.fixture

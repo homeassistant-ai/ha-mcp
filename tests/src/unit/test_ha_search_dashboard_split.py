@@ -368,6 +368,7 @@ class TestDashboardSplitPagination:
         )
         # Core adds the platform's entities after the setup call returns.
         await hass.async_block_till_done()
+        assert hass.states.get("scene.kitchen") is not None
         await _lovelace(hass)
         types = ["script", "scene", "dashboard"]
 

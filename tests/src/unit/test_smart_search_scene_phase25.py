@@ -349,6 +349,7 @@ async def test_registry_list_refused_by_core_is_reported_like_an_outage(
     )
     # Core adds the platform's entities after the setup call returns.
     await hass.async_block_till_done()
+    assert hass.states.get("scene.bedroom") is not None
 
     result = await search.deep_search("bedroom", ["scene"])
 

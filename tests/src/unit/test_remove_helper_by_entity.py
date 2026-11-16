@@ -170,6 +170,23 @@ async def test_a_subentry_id_with_an_entity_target_never_removes_that_entitys_he
     assert hass.config_entries.async_get_entry(entry.entry_id) is not None
 
 
+async def test_a_subentry_id_with_another_helper_type_is_refused_and_removes_nothing(
+    hass: HomeAssistant,
+    tools: IntegrationTools,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """``helper_type`` names the entity's own helper and ``subentry_id`` a
+    subentry: the caller cannot mean both, and guessing would delete one."""
+    entity_id, entry = _flow_entity(hass, entity_registry, "otp")
+
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(tools, entity_id, helper_type="otp", subentry_id="s1")
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert hass.config_entries.async_get_entry(entry.entry_id) is not None
+
+
 async def test_a_storage_helper_is_removed_by_its_entity_without_naming_its_type(
     hass: HomeAssistant, tools: IntegrationTools, core_client: HomeAssistantClient
 ) -> None:

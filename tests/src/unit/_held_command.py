@@ -27,7 +27,7 @@ class HeldCommand:
     async def reached_by(self, call: asyncio.Task[Any]) -> None:
         """Wait until ``call``'s request is held at Core.
 
-        A call that ends first never sent it: its own error is raised, and a
+        A call that ends first never reached Core: its own error is raised, and a
         call that returned fails the test, instead of the wait hanging.
         """
         arrived = asyncio.ensure_future(self.arrived.wait())

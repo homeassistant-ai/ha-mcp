@@ -85,9 +85,9 @@ def pytest_configure(config: pytest.Config) -> None:
     _PREVIOUS_ENV.update({name: os.environ.get(name) for name in _ISOLATION_VARS})
     os.environ["HA_MCP_CONFIG_DIR"] = _SESSION_DATA_DIR
     os.environ["HA_MCP_DISABLE_SETTINGS_UI"] = "1"
-    # Core's test plugin turns DEBUG on for a verbose run only, so ``-q`` and
-    # ``-v`` ran different code: each ``logger.debug`` call, and what a
-    # captured record keeps alive.
+    # Core's test plugin turns DEBUG on for a verbose run only; a quiet run
+    # would then skip each ``logger.debug`` call and what a captured record
+    # keeps alive.
     logging.getLogger().setLevel(logging.DEBUG)
 
 

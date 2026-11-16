@@ -342,8 +342,8 @@ of one would only fail that check or the unit tests.
 Renovate moves those pins only to stable releases. `pr.yml`'s
 `Unit Tests (beta Core, ...)` job covers the beta: it reads the current beta
 Core from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
-over the locked environment, and runs the unit and app suites, on two runners
-split the way the stable unit job is. Unlike the E2E
+over the locked environment, and runs the unit suite on two runners, split
+the way the stable unit job is, and the app suite on the first. Unlike the E2E
 beta lanes it runs on every pull request, because these suites take minutes.
 It is not a required check, so a beta Core change reports without blocking
 a merge, and it skips while beta equals the dev group's pin.

@@ -435,6 +435,7 @@ async def test_scene_reason_is_kept_when_automations_add_theirs(
     )
     # Core adds the platform's entities after the setup call returns.
     await hass.async_block_till_done()
+    assert hass.states.get("scene.sc0") is not None
     await _yaml_automations(hass, 1)
 
     reason = await _reason(search, "scene", "automation")
