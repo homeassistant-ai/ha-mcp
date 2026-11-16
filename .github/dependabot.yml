@@ -82,6 +82,37 @@ updates:
       - dependency-name: "pyjwt"
       - dependency-name: "pyyaml"
       - dependency-name: "truststore"
+      # Dev pins that equal the dev group Core's integration manifests.
+      # scripts/sync_dev_integration_pins.py rewrites everything between the
+      # markers, and the matching pins in pyproject.toml, when Renovate bumps
+      # Core; a Dependabot bump of one alone would only fail the unit tests.
+      # core-integration-pins:start
+      - dependency-name: "aiohasupervisor"
+      - dependency-name: "aiousbwatcher"
+      - dependency-name: "av"
+      - dependency-name: "gazetteer-matcher"
+      - dependency-name: "ha-silabs-firmware-client"
+      - dependency-name: "hassil"
+      - dependency-name: "home-assistant-intents"
+      - dependency-name: "ical"
+      - dependency-name: "infrared-protocols"
+      - dependency-name: "knx-frontend"
+      - dependency-name: "knx-telegram-store"
+      - dependency-name: "matter-ble-proxy"
+      - dependency-name: "matter-python-client"
+      - dependency-name: "numpy"
+      - dependency-name: "pygbl"
+      - dependency-name: "pyroute2"
+      - dependency-name: "python-otbr-api"
+      - dependency-name: "pyturbojpeg"
+      - dependency-name: "serialx"
+      - dependency-name: "universal-silabs-flasher"
+      - dependency-name: "xknx"
+      - dependency-name: "xknxproject"
+      - dependency-name: "zha"
+      - dependency-name: "zha-quirks"
+      - dependency-name: "zwave-js-server-python"
+      # core-integration-pins:end
     groups:
       # Group dev dependencies together
       dev-dependencies:

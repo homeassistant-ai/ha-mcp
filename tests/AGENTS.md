@@ -167,10 +167,13 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   (`AsyncMock(wraps=client.get_states)`): it calls through, so the reply is
   still Core's.
 - An integration a test runs gets its requirements in the dev group at the
-  pins of Core's manifest (`src/unit/test_dev_integration_pins.py` keeps them
-  equal). One whose requirements are not installed with Core (`cloud`,
-  `camera`, `conversation`) cannot be imported here; the component reaches it
-  through a small function of its own that the test replaces.
+  pins of Core's manifest (`src/unit/test_sync_dev_integration_pins.py` keeps
+  them equal). Add its domain to `INTEGRATIONS` in
+  `scripts/sync_dev_integration_pins.py`, run that script, then `uv lock`. The
+  script writes the pins and their Dependabot ignore entries, and Renovate
+  reruns it on every Core bump. One whose requirements are not installed with
+  Core (`cloud`) cannot be imported here; the component reaches it through a
+  small function of its own that the test replaces.
 
 Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
