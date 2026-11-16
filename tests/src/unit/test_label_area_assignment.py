@@ -1,539 +1,334 @@
-"""Unit tests for applying a label onto areas via ``ha_config_set_label``.
+"""``ha_config_set_label(areas=...)`` on real Core (issue #2455).
 
-Issue #2455: agents can create a label and stick it on rooms in one call.
-Assignment is additive (existing area labels are kept) — replace-the-set
-lives on ``ha_set_area_or_floor(kind="area", labels=...)``.
+Agents create a label and stick it on rooms in one call. Assignment is
+additive (an area keeps its other labels); replacing the set is
+``ha_set_area_or_floor(kind="area", labels=...)``. Every registry row, reply
+and refusal here is Core's.
 """
 
+from __future__ import annotations
+
 import asyncio
-import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.components.config import label_registry as label_commands
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.backup_manager import get_backup_manager
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.tools.tools_labels import LabelTools
+
+from ._command_faults import pooled_socket, received, unanswered
+from ._held_command import held_command
+from ._tool_errors import rejected_call_body
+from ._ws_transport import abort_transport
+
+AREA_UPDATE = "config/area_registry/update"
+AREA_LIST = "config/area_registry/list"
 
 
 @pytest.fixture
-def mock_client():
-    return MagicMock()
+async def config_commands(hass: HomeAssistant) -> None:
+    """Core's ``config`` commands, which hold the registries' WebSocket API."""
+    assert await async_setup_component(hass, "config", {})
 
 
 @pytest.fixture
-def register_tools(mock_client):
-    from ha_mcp.tools.tools_labels import register_label_tools
+def labels(config_commands: None, core_client: HomeAssistantClient) -> LabelTools:
+    return LabelTools(core_client)
 
-    registered: dict[str, Any] = {}
 
-    def capture_add_tool(method: Any) -> None:
-        name = (
-            method.__fastmcp__.name
-            if hasattr(method, "__fastmcp__")
-            else method.__name__
+@asynccontextmanager
+async def update_held_for(
+    hass: HomeAssistant, area_id: str
+) -> AsyncIterator[asyncio.Event]:
+    """Core holds the area update of ``area_id`` until the block ends, then
+    answers it; the yielded event is set once that update has arrived."""
+    core_handler, schema = hass.data[websocket_api.DOMAIN][AREA_UPDATE]
+    arrived, release = asyncio.Event(), asyncio.Event()
+
+    async def hold(core: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+        if msg["area_id"] == area_id:
+            arrived.set()
+            await release.wait()
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(
+        hass, AREA_UPDATE, websocket_api.async_response(hold), schema
+    )
+    try:
+        yield arrived
+    finally:
+        release.set()
+        await hass.async_block_till_done()
+        websocket_api.async_register_command(hass, AREA_UPDATE, core_handler, schema)
+
+
+async def test_create_with_areas_adds_the_label_and_keeps_existing_ones(
+    labels: LabelTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    existing = label_registry.async_create("Existing")
+    kitchen = area_registry.async_create("Kitchen", labels={existing.label_id})
+
+    result = await labels.ha_config_set_label(name="Site Home", areas=[kitchen.id])
+
+    assert result["label_id"] == "site_home"
+    assert label_registry.async_get_label("site_home") is not None
+    assert result["assigned_areas"] == [kitchen.id]
+    stored = area_registry.async_get_area(kitchen.id)
+    assert stored is not None
+    assert stored.labels == {existing.label_id, "site_home"}
+
+
+async def test_unknown_area_is_refused_before_the_label_is_created(
+    labels: LabelTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """A typo in one area id leaves no half-done label behind, and the advice
+    does not mention an ``area_id`` parameter this tool does not have."""
+    area_registry.async_create("Kitchen")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(name="Site Home", areas=["ghost_room"])
+    )
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["unknown_area_ids"] == ["ghost_room"]
+    assert error["areas"] == ["ghost_room"]
+    assert all("area_id=" not in s for s in error["error"]["suggestions"])
+    assert not label_registry.labels
+
+
+async def test_every_unknown_area_is_reported_in_one_refusal(
+    labels: LabelTools, area_registry: ar.AreaRegistry
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+
+    error = await rejected_call_body(
+        labels.ha_config_set_label(
+            name="Site Home", areas=["ghost_room", kitchen.id, "phantom"]
         )
-        registered[name] = method
+    )
 
-    mock_mcp = MagicMock()
-    mock_mcp.add_tool = capture_add_tool
-    register_label_tools(mock_mcp, mock_client)
-    return registered
+    assert error["unknown_area_ids"] == ["ghost_room", "phantom"]
 
 
-def _ws_handler(
-    *,
-    labels: list[dict[str, Any]] | None = None,
-    areas: list[dict[str, Any]] | None = None,
-):
-    """Answer label + area registry list/create/update."""
-    label_rows = labels if labels is not None else []
-    area_rows = areas if areas is not None else []
+async def test_area_registry_refusal_keeps_cores_reason(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """Without Core's own message a refused area read is indistinguishable
+    from a protocol error, and the caller retries the wrong thing."""
+    label_commands.async_setup(hass)
 
-    async def ws_handler(msg: dict) -> dict:
-        msg_type = msg.get("type", "")
-        if msg_type == "config/label_registry/list":
-            return {"success": True, "result": label_rows}
-        if msg_type == "config/label_registry/create":
-            derived = msg.get("name", "").lower().replace(":", "_").replace(" ", "_")
-            return {
-                "success": True,
-                "result": {
-                    "label_id": derived,
-                    **{k: v for k, v in msg.items() if k != "type"},
-                },
-            }
-        if msg_type == "config/label_registry/update":
-            return {
-                "success": True,
-                "result": {k: v for k, v in msg.items() if k != "type"},
-            }
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": area_rows}
-        if msg_type == "config/area_registry/update":
-            return {
-                "success": True,
-                "result": {k: v for k, v in msg.items() if k != "type"},
-            }
-        return {"success": True, "result": {}}
+    error = await rejected_call_body(
+        LabelTools(core_client).ha_config_set_label(name="Site Home", areas=["hall"])
+    )
 
-    return ws_handler
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "Unknown command." in error["error"]["details"]
+    assert not label_registry.labels
 
 
-def _sent_types(mock_client) -> list[str]:
-    return [
-        call.args[0].get("type")
-        for call in mock_client.send_websocket_message.call_args_list
-    ]
+async def test_empty_area_id_is_refused_before_anything_is_sent(
+    labels: LabelTools, sent: Any
+) -> None:
+    error = await rejected_call_body(labels.ha_config_set_label(name="X", areas=[""]))
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    sent.assert_not_called()
 
 
-def _area_updates(mock_client) -> list[dict]:
-    return [
-        call.args[0]
-        for call in mock_client.send_websocket_message.call_args_list
-        if call.args[0].get("type") == "config/area_registry/update"
-    ]
+async def test_area_that_already_has_the_label_is_not_rewritten(
+    hass: HomeAssistant,
+    labels: LabelTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    label = label_registry.async_create("Site Home")
+    kitchen = area_registry.async_create("Kitchen", labels={label.label_id})
 
-
-class TestSetLabelAssignsAreas:
-    async def test_create_with_areas_adds_label_and_keeps_existing(
-        self, register_tools, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(
-                areas=[
-                    {
-                        "area_id": "kitchen",
-                        "name": "Kitchen",
-                        "labels": ["existing"],
-                    }
-                ]
-            )
-        )
-
-        result = await register_tools["ha_config_set_label"](
-            name="Site Home", areas=["kitchen"]
-        )
-
-        assert result["success"] is True
-        assert result["label_id"] == "site_home"
-        assert result["assigned_areas"] == ["kitchen"]
-        updates = _area_updates(mock_client)
-        assert len(updates) == 1
-        assert updates[0]["area_id"] == "kitchen"
-        assert updates[0]["labels"] == ["existing", "site_home"]
-        assert "config/label_registry/create" in _sent_types(mock_client)
-
-    async def test_unknown_area_rejected_before_label_create(
-        self, register_tools, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(areas=[{"area_id": "kitchen"}])
-        )
-
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["ghost_room"]
-            )
-
-        err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert err["unknown_area_ids"] == ["ghost_room"]
-        assert err["areas"] == ["ghost_room"]
-        # The shared single-area helper suggests area_id="" to clear; this tool
-        # has no area_id parameter, so that advice must not leak in here.
-        assert all("area_id=" not in s for s in err["error"].get("suggestions", [])), (
-            err["error"].get("suggestions")
-        )
-        assert "config/label_registry/create" not in _sent_types(mock_client)
-
-    async def test_all_unknown_areas_reported_at_once(
-        self, register_tools, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(areas=[{"area_id": "kitchen"}])
+    with received(hass, AREA_UPDATE) as seen:
+        result = await labels.ha_config_set_label(
+            name="Site Home", label_id=label.label_id, areas=[kitchen.id]
         )
 
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["ghost_room", "kitchen", "phantom"]
-            )
+    assert result["assigned_areas"] == [kitchen.id]
+    assert seen[AREA_UPDATE] == []
 
-        err = json.loads(str(excinfo.value))
-        assert err["unknown_area_ids"] == ["ghost_room", "phantom"]
 
-    async def test_area_registry_failure_keeps_ha_error_detail(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            if msg.get("type") == "config/area_registry/list":
-                return {
-                    "success": False,
-                    "error": {"code": "unauthorized", "message": "not authorized"},
-                }
-            return {"success": True, "result": []}
+async def test_omitted_areas_leave_the_area_registry_alone(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    with received(hass, AREA_LIST, AREA_UPDATE) as seen:
+        result = await labels.ha_config_set_label(name="Site Home")
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+    assert "assigned_areas" not in result
+    assert seen == {AREA_LIST: [], AREA_UPDATE: []}
 
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen"]
-            )
 
-        err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
-        # Without HA's own message an auth rejection reads exactly like a
-        # protocol error, and the caller retries the wrong thing.
-        assert err["error"]["details"] == "not authorized"
-        assert "config/label_registry/create" not in _sent_types(mock_client)
+async def test_empty_areas_list_assigns_nothing(
+    hass: HomeAssistant, labels: LabelTools
+) -> None:
+    with received(hass, AREA_LIST, AREA_UPDATE) as seen:
+        result = await labels.ha_config_set_label(name="Site Home", areas=[])
 
-    async def test_empty_area_id_rejected(self, register_tools, mock_client):
-        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler())
+    assert result["assigned_areas"] == []
+    assert seen == {AREA_LIST: [], AREA_UPDATE: []}
 
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](name="X", areas=[""])
 
-        assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
-        mock_client.send_websocket_message.assert_not_called()
+async def test_several_areas_are_validated_with_one_registry_read(
+    labels: LabelTools, area_registry: ar.AreaRegistry, sent: Any
+) -> None:
+    """Validation does not cost one round trip per area."""
+    kitchen = area_registry.async_create("Kitchen")
+    living = area_registry.async_create("Living")
 
-    async def test_already_labeled_area_skips_update(self, register_tools, mock_client):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(
-                labels=[{"label_id": "site_home", "name": "Site Home"}],
-                areas=[
-                    {
-                        "area_id": "kitchen",
-                        "name": "Kitchen",
-                        "labels": ["site_home"],
-                    }
-                ],
-            )
+    result = await labels.ha_config_set_label(
+        name="Site Home", areas=[kitchen.id, living.id]
+    )
+
+    assert result["assigned_areas"] == [kitchen.id, living.id]
+    types = [call.args[0]["type"] for call in sent.call_args_list]
+    create = types.index("config/label_registry/create")
+    assert types[:create].count(AREA_LIST) == 1
+
+
+async def test_refused_area_update_reports_the_areas_already_done(
+    hass: HomeAssistant, labels: LabelTools, area_registry: ar.AreaRegistry
+) -> None:
+    """The label and the first area are written when Core refuses the second
+    update; the error says so, so the caller does not redo them."""
+    kitchen = area_registry.async_create("Kitchen")
+    living = area_registry.async_create("Living")
+
+    async with update_held_for(hass, living.id) as arrived:
+        call = asyncio.create_task(
+            labels.ha_config_set_label(name="Site Home", areas=[kitchen.id, living.id])
+        )
+        await arrived.wait()
+        area_registry.async_delete(living.id)
+    error = await rejected_call_body(call)
+
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error["partial"] is True
+    assert error["assigned_areas"] == [kitchen.id]
+    assert error["label_id"] == "site_home"
+    assert error["area_id"] == living.id
+
+
+async def test_dropped_connection_during_assign_stays_a_connection_error(
+    hass: HomeAssistant,
+    labels: LabelTools,
+    core_client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+) -> None:
+    """Reported as a refusal, a dropped connection would hide the one recovery
+    that helps; the label is written, so retrying must not recreate it."""
+    kitchen = area_registry.async_create("Kitchen")
+    living = area_registry.async_create("Living")
+
+    async with update_held_for(hass, living.id) as arrived:
+        call = asyncio.create_task(
+            labels.ha_config_set_label(name="Site Home", areas=[kitchen.id, living.id])
+        )
+        await arrived.wait()
+        abort_transport(await pooled_socket(core_client))
+        error = await rejected_call_body(call)
+
+    assert error["error"]["code"] == "CONNECTION_FAILED"
+    assert error["partial"] is True
+    assert error["assigned_areas"] == [kitchen.id]
+    assert error["label_id"] == "site_home"
+    assert error["area_id"] == living.id
+    assert any("do not recreate the label" in s for s in error["error"]["suggestions"])
+
+
+async def test_unanswered_area_update_stays_a_timeout(
+    hass: HomeAssistant,
+    labels: LabelTools,
+    area_registry: ar.AreaRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+
+    async with unanswered(hass, AREA_UPDATE, monkeypatch):
+        error = await rejected_call_body(
+            labels.ha_config_set_label(name="Site Home", areas=[kitchen.id])
         )
 
-        result = await register_tools["ha_config_set_label"](
-            name="Site Home", label_id="site_home", areas=["kitchen"]
+    assert error["error"]["code"] == "CONNECTION_TIMEOUT"
+    assert error["partial"] is True
+    assert error["assigned_areas"] == []
+
+
+async def test_cancelled_call_during_assign_is_not_swallowed(
+    hass: HomeAssistant, labels: LabelTools, area_registry: ar.AreaRegistry
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+
+    async with held_command(hass, AREA_UPDATE) as held:
+        call = asyncio.create_task(
+            labels.ha_config_set_label(name="Site Home", areas=[kitchen.id])
         )
-
-        assert result["success"] is True
-        assert result["assigned_areas"] == ["kitchen"]
-        assert _area_updates(mock_client) == []
-
-    async def test_omitted_areas_does_not_touch_area_registry(
-        self, register_tools, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler())
-
-        result = await register_tools["ha_config_set_label"](name="Site Home")
-
-        assert result["success"] is True
-        assert "assigned_areas" not in result
-        assert all(
-            t not in ("config/area_registry/list", "config/area_registry/update")
-            for t in _sent_types(mock_client)
-        )
-
-    async def test_empty_areas_list_is_noop(self, register_tools, mock_client):
-        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler())
-
-        result = await register_tools["ha_config_set_label"](name="Site Home", areas=[])
-
-        assert result["success"] is True
-        assert result["assigned_areas"] == []
-        assert "config/area_registry/list" not in _sent_types(mock_client)
-        assert "config/area_registry/update" not in _sent_types(mock_client)
-
-    async def test_two_areas_validated_from_one_list(self, register_tools, mock_client):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(
-                areas=[
-                    {"area_id": "kitchen", "name": "Kitchen", "labels": []},
-                    {"area_id": "living_room", "name": "Living", "labels": []},
-                ]
-            )
-        )
-
-        result = await register_tools["ha_config_set_label"](
-            name="Site Home", areas=["kitchen", "living_room"]
-        )
-
-        assert result["success"] is True
-        assert result["assigned_areas"] == ["kitchen", "living_room"]
-        lists_before_create = []
-        for call in mock_client.send_websocket_message.call_args_list:
-            msg_type = call.args[0].get("type")
-            if msg_type == "config/label_registry/create":
-                break
-            if msg_type == "config/area_registry/list":
-                lists_before_create.append(msg_type)
-        assert lists_before_create == ["config/area_registry/list"]
-
-    async def test_partial_area_assign_reports_completed(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "config/label_registry/create":
-                return {
-                    "success": True,
-                    "result": {"label_id": "site_home", "name": "Site Home"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
-                        {"area_id": "living_room", "name": "Living", "labels": []},
-                    ],
-                }
-            if msg_type == "config/area_registry/update":
-                if msg.get("area_id") == "living_room":
-                    return {"success": False, "error": "boom"}
-                return {
-                    "success": True,
-                    "result": {k: v for k, v in msg.items() if k != "type"},
-                }
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen", "living_room"]
-            )
-
-        err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert err["partial"] is True
-        assert err["assigned_areas"] == ["kitchen"]
-        assert err["label_id"] == "site_home"
-        assert err["area_id"] == "living_room"
-        updates = _area_updates(mock_client)
-        assert [u["area_id"] for u in updates] == ["kitchen", "living_room"]
-
-    async def test_transport_failure_after_first_area_is_partial(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "config/label_registry/create":
-                return {
-                    "success": True,
-                    "result": {"label_id": "site_home", "name": "Site Home"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
-                        {"area_id": "living_room", "name": "Living", "labels": []},
-                    ],
-                }
-            if msg_type == "config/area_registry/update":
-                if msg.get("area_id") == "living_room":
-                    raise HomeAssistantConnectionError("ws dropped")
-                return {
-                    "success": True,
-                    "result": {k: v for k, v in msg.items() if k != "type"},
-                }
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen", "living_room"]
-            )
-
-        err = json.loads(str(excinfo.value))
-        # A dropped connection stays a connection error — collapsing it into
-        # SERVICE_CALL_FAILED would hide the one recovery that helps.
-        assert err["error"]["code"] == "CONNECTION_FAILED"
-        assert err["partial"] is True
-        assert err["assigned_areas"] == ["kitchen"]
-        assert err["label_id"] == "site_home"
-        assert err["area_id"] == "living_room"
-        assert "ws dropped" in err["error"]["message"]
-        assert any(
-            "do not recreate the label" in s
-            for s in err["error"].get("suggestions", [])
-        ), err["error"].get("suggestions")
-
-    async def test_timeout_during_assign_keeps_timeout_classification(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "config/label_registry/create":
-                return {
-                    "success": True,
-                    "result": {"label_id": "site_home", "name": "Site Home"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "kitchen", "name": "Kitchen", "labels": []}],
-                }
-            if msg_type == "config/area_registry/update":
-                raise TimeoutError("area update timed out")
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen"]
-            )
-
-        err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "TIMEOUT_OPERATION"
-        assert err["partial"] is True
-        assert err["assigned_areas"] == []
-
-    async def test_reread_confirms_label_when_update_omits_labels(
-        self, register_tools, mock_client
-    ):
-        """HA may ack the update without echoing labels — re-read decides."""
-        stored: list[str] = []
-
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "config/label_registry/create":
-                return {
-                    "success": True,
-                    "result": {"label_id": "site_home", "name": "Site Home"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "area_id": "kitchen",
-                            "name": "Kitchen",
-                            "labels": list(stored),
-                        }
-                    ],
-                }
-            if msg_type == "config/area_registry/update":
-                stored.extend(msg.get("labels", []))
-                # Success envelope with no labels echoed back.
-                return {"success": True, "result": {"area_id": "kitchen"}}
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
-        result = await register_tools["ha_config_set_label"](
-            name="Site Home", areas=["kitchen"]
-        )
-
-        assert result["success"] is True
-        assert result["assigned_areas"] == ["kitchen"]
-        types = _sent_types(mock_client)
-        last_update = len(types) - 1 - types[::-1].index("config/area_registry/update")
-        assert "config/area_registry/list" in types[last_update + 1 :]
-
-    async def test_cancellation_during_assign_is_not_swallowed(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": []}
-            if msg_type == "config/label_registry/create":
-                return {
-                    "success": True,
-                    "result": {"label_id": "site_home", "name": "Site Home"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
-                    ],
-                }
-            if msg_type == "config/area_registry/update":
-                raise asyncio.CancelledError
-            return {"success": True, "result": {}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
-
+        await held.arrived.wait()
+        call.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen"]
-            )
+            await call
 
-    async def test_create_without_label_id_rejects_area_assign(
-        self, register_tools, mock_client
-    ):
-        async def ws_handler(msg: dict) -> dict:
-            msg_type = msg.get("type", "")
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "kitchen", "name": "Kitchen"}],
-                }
-            if msg_type == "config/label_registry/create":
-                return {"success": True, "result": {"name": "Site Home"}}
-            return {"success": True, "result": {}}
 
-        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+async def test_label_added_to_a_later_area_meanwhile_is_kept(
+    hass: HomeAssistant,
+    labels: LabelTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """Each area is read again right before its update, so a label another
+    client adds while the call runs is not overwritten."""
+    kitchen = area_registry.async_create("Kitchen")
+    living = area_registry.async_create("Living")
+    late = label_registry.async_create("Late")
 
-        with pytest.raises(ToolError) as excinfo:
-            await register_tools["ha_config_set_label"](
-                name="Site Home", areas=["kitchen"]
-            )
-
-        err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "label_id" in err["error"]["message"]
-        assert _area_updates(mock_client) == []
-
-    async def test_each_area_is_listed_before_update(self, register_tools, mock_client):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(
-                areas=[
-                    {"area_id": "kitchen", "name": "Kitchen", "labels": []},
-                    {"area_id": "living_room", "name": "Living", "labels": []},
-                ]
-            )
+    async with update_held_for(hass, kitchen.id) as arrived:
+        call = asyncio.create_task(
+            labels.ha_config_set_label(name="Site Home", areas=[kitchen.id, living.id])
         )
+        await arrived.wait()
+        area_registry.async_update(living.id, labels={late.label_id})
+    await call
 
-        await register_tools["ha_config_set_label"](
-            name="Site Home", areas=["kitchen", "living_room"]
-        )
+    stored = area_registry.async_get_area(living.id)
+    assert stored is not None
+    assert stored.labels == {late.label_id, "site_home"}
 
-        types = _sent_types(mock_client)
-        first_update = types.index("config/area_registry/update")
-        second_update = types.index("config/area_registry/update", first_update + 1)
-        assert types[first_update - 1] == "config/area_registry/list"
-        assert types[second_update - 1] == "config/area_registry/list"
 
-    async def test_snapshots_target_areas_before_assign(
-        self, register_tools, mock_client, monkeypatch
-    ):
-        snaps: list[tuple[str, str]] = []
+async def test_target_areas_are_snapshotted_before_the_assign(
+    labels: LabelTools,
+    core_client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A label restore cannot undo area assignments, so each area is backed
+    up before the label lands on it."""
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    reset_global_settings()
+    kitchen = area_registry.async_create("Kitchen")
 
-        class FakeMgr:
-            async def maybe_snapshot(self, domain, entity_id, **kwargs):
-                snaps.append((domain, entity_id))
+    await labels.ha_config_set_label(name="Site Home", areas=[kitchen.id])
 
-        monkeypatch.setattr(
-            "ha_mcp.tools.tools_labels.get_backup_manager",
-            lambda *_a, **_k: FakeMgr(),
-        )
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=_ws_handler(
-                areas=[{"area_id": "kitchen", "name": "Kitchen", "labels": []}]
-            )
-        )
-
-        await register_tools["ha_config_set_label"](name="Site Home", areas=["kitchen"])
-
-        assert ("area_or_floor", "area:kitchen") in snaps
+    manager = get_backup_manager(core_client, get_global_settings())
+    (snapshot,) = manager.list_snapshots(domain="area_or_floor")
+    assert snapshot["entity_id"] == f"area:{kitchen.id}"
+    assert manager.read_snapshot(snapshot["name"])["config"]["labels"] == []
