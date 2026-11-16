@@ -2,8 +2,8 @@
 
 With the component's ``states`` command, single and bulk reads resolve every id
 from one ``ha_mcp_tools/states`` frame and never GET ``/api/states/<id>``.
-Without it, or when the frame fails, each id is read over REST, silently: the
-REST answer is the same state. States are Core's, set with
+Without it, or when the frame fails, each id is read over REST, with a warning
+that REST's ``last_reported`` can be stale. States are Core's, set with
 ``hass.states.async_set``.
 """
 
@@ -13,6 +13,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,7 +21,11 @@ from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
+from ha_mcp.tools.component_api import (
+    COMPONENT_INSTALL_HINT,
+    get_component_caps,
+    invalidate_caps,
+)
 from ha_mcp.tools.search import state as search_state
 from ha_mcp.tools.tools_search import SearchTools
 
@@ -133,6 +138,15 @@ async def test_more_than_100_ids_are_refused_before_any_read(
     rest.assert_not_awaited()
 
 
+def _warns_only_of_last_reported(resp: dict[str, Any]) -> None:
+    """REST serves Core's cached ``last_reported``; the reply says so and
+    names the component, and warns of nothing else."""
+    assert "warnings" not in resp["data"]
+    (warning,) = resp["warnings"]
+    assert "last_reported" in warning
+    assert COMPONENT_INSTALL_HINT in warning
+
+
 async def test_without_the_component_each_id_is_read_over_rest(
     core_client: HomeAssistantClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -143,11 +157,10 @@ async def test_without_the_component_each_id_is_read_over_rest(
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert rest.await_count == 2
-    assert "warnings" not in resp["data"]
-    assert "warnings" not in resp
+    _warns_only_of_last_reported(resp)
 
 
-async def test_a_downgraded_component_falls_back_silently_and_is_dropped(
+async def test_a_downgraded_component_falls_back_to_rest_and_is_dropped(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     tmp_path: Path,
@@ -166,8 +179,7 @@ async def test_a_downgraded_component_falls_back_silently_and_is_dropped(
 
     assert resp["data"]["states"]["light.a"]["state"] == "on"
     assert rest.await_count == 1
-    assert "warnings" not in resp["data"]
-    assert "warnings" not in resp
+    _warns_only_of_last_reported(resp)
     drop.assert_called_once_with(component_core_client)
     assert not any("states failed" in r.getMessage() for r in caplog.records)
 
@@ -192,7 +204,7 @@ async def test_a_frame_core_never_answers_falls_back_and_keeps_the_component(
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert rest.await_count == 2
-    assert "warnings" not in resp
+    _warns_only_of_last_reported(resp)
     drop.assert_not_called()
     assert any(
         r.levelno == logging.WARNING and "states failed" in r.getMessage()
@@ -221,7 +233,7 @@ async def test_a_dropped_socket_falls_back_to_rest(
 
     assert set(resp["data"]["states"]) == {"light.a", "sensor.b"}
     assert rest.await_count == 2
-    assert "warnings" not in resp
+    _warns_only_of_last_reported(resp)
     assert any(
         r.levelno == logging.WARNING and "connection error" in r.getMessage()
         for r in caplog.records

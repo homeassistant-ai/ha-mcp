@@ -1528,7 +1528,7 @@ class TestCalendarCaptureRestore:
                 pytest.skip(
                     "calendar_event snapshot not observed within timeout on "
                     "this HA rig (calendar capture/indexing timing); the unit "
-                    "test test_backup_manager covers the payload shape"
+                    "test test_backup_manager_calendar covers the payload shape"
                 )
             view = await mcp.call_tool_success(
                 "ha_manage_backup",

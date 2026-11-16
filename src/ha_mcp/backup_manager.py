@@ -53,7 +53,7 @@ import threading
 import time
 import weakref
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -363,8 +363,8 @@ _RESTORE_ERRORS: tuple[type[BaseException], ...] = (
 # in once exceeded; protects long-running servers from unbounded growth
 # while staying well above any realistic HA install (typical: dozens to
 # hundreds of entities edited per session).
-_TRACKER_SOFT_CAP = 10_000
-_TRACKER_PRUNE_BATCH = 1_000
+TRACKER_SOFT_CAP = 10_000
+TRACKER_PRUNE_BATCH = 1_000
 
 # Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
@@ -569,7 +569,7 @@ class BackupManager:
         self._client = client
         self._handlers: dict[str, DomainHandler] = {}
         # Throttle tracker: maps "domain:entity_id" -> monotonic-time of
-        # the last successful capture. Auto-pruned past _TRACKER_SOFT_CAP
+        # the last successful capture. Auto-pruned past TRACKER_SOFT_CAP
         # so a long-running server editing many distinct entities cannot
         # leak memory through this dict.
         self._last_snapshot: dict[str, float] = {}
@@ -1019,24 +1019,24 @@ class BackupManager:
     def _maybe_prune_trackers(self) -> None:
         """Cap per-entity tracker growth.
 
-        Once ``_last_snapshot`` exceeds ``_TRACKER_SOFT_CAP``, drop the
-        oldest ``_TRACKER_PRUNE_BATCH`` entries. The lock map is left
+        Once ``_last_snapshot`` exceeds ``TRACKER_SOFT_CAP``, drop the
+        oldest ``TRACKER_PRUNE_BATCH`` entries. The lock map is left
         alone — removing a lock that another task is awaiting would race;
         each lock is small (~64 bytes) and HA installs never reach the
         cap in practice.
         """
-        if len(self._last_snapshot) <= _TRACKER_SOFT_CAP:
+        if len(self._last_snapshot) <= TRACKER_SOFT_CAP:
             return
         # Drop the oldest entries by monotonic timestamp.
         oldest = sorted(self._last_snapshot.items(), key=lambda kv: kv[1])[
-            :_TRACKER_PRUNE_BATCH
+            :TRACKER_PRUNE_BATCH
         ]
         for key, _ in oldest:
             self._last_snapshot.pop(key, None)
         logger.info(
             "Auto-backup: pruned %d oldest tracker entries (cap=%d, now=%d entries)",
             len(oldest),
-            _TRACKER_SOFT_CAP,
+            TRACKER_SOFT_CAP,
             len(self._last_snapshot),
         )
 
@@ -2003,7 +2003,7 @@ async def _rest_post(client: Any, path: str, payload: Any) -> Any:
     return await client._request("POST", path, json=payload)
 
 
-async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
+async def _ws_send(client: Any, message: Mapping[str, Any]) -> Any:
     """Send a WS command using the same lazy-connect pattern as other tools.
 
     Builds a one-shot WS client each call. Latency is acceptable because
@@ -2032,8 +2032,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
         auth = str(get_error_code(error or {})).startswith("AUTH_")
         raise (HomeAssistantAuthError if auth else HomeAssistantConnectionError)(msg)
     try:
-        cmd_type = message.pop("type")
-        envelope = await ws_client.send_command(cmd_type, **message)
+        fields = {key: value for key, value in message.items() if key != "type"}
+        envelope = await ws_client.send_command(message["type"], **fields)
     finally:
         # Best-effort close: narrow to transport/network errors; let
         # other exceptions propagate so they show up in logs rather
@@ -2379,12 +2379,6 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.
-    # ``yaml_path`` is a backward-compatible read_file enhancement, so it is
-    # NOT gated by MIN_COMPONENT_VERSION: a component too old to support it
-    # returns no ``subtree`` (or rejects the key), and capture degrades to a
-    # logged skip — the yaml edit still works, it just isn't snapshotted. The
-    # add-on always ships the matching component, so this only affects a
-    # mismatched standalone install.
     return result.get("subtree")
 
 
@@ -2404,10 +2398,7 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     from .config import get_global_settings
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
-    from .tools.yaml_extra_keys import (
-        assert_extra_yaml_keys_supported,
-        effective_extra_yaml_write_keys,
-    )
+    from .tools.yaml_extra_keys import effective_extra_yaml_write_keys
 
     # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
     # containing "::" still restores to the right file and key.
@@ -2422,10 +2413,6 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     }
     extra_keys = await effective_extra_yaml_write_keys(client, get_global_settings())
     if extra_keys:
-        # Same version gate as the write path: without it a component that
-        # predates the field rejects the whole restore call over an option
-        # the snapshot being restored may not even use.
-        await assert_extra_yaml_keys_supported(client, extra_keys)
         service_data["extra_allowed_keys"] = extra_keys
     result = await call_mcp_tools_service(
         client,

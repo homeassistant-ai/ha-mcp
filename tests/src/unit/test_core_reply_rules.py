@@ -613,9 +613,10 @@ def test_no_test_writes_into_a_registry_store() -> None:
 def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
     rule: str, tmp_path: Path
 ) -> None:
-    """A converted file leaves the list, and no clean file can be parked on it."""
+    """A converted file leaves the list, and no clean file can be parked on it;
+    a rule whose list is gone is one no file may violate."""
     config = yaml.safe_load((_RULES / f"{rule}.yml").read_text(encoding="utf-8"))
-    listed = set(config.pop("ignores"))
+    listed = set(config.pop("ignores", None) or [])
     config["ignores"] = []
     unlisted_rule = tmp_path / f"{rule}.yml"
     unlisted_rule.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -635,7 +636,7 @@ def test_no_unlisted_test_suppresses_ast_grep() -> None:
     config = yaml.safe_load(
         (_RULES / f"{_SUPPRESSIONS}.yml").read_text(encoding="utf-8")
     )
-    listed = set(config["ignores"])
+    listed = set(config.get("ignores") or [])
 
     def suppresses(path: Path) -> bool:
         with tokenize.open(path) as source:

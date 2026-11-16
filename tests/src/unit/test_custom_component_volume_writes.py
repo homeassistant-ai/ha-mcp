@@ -6,8 +6,7 @@ bind-mounts. An unmounted root may still exist as a plain directory (the
 image's own /media, or one an earlier build created); writing there would put
 the file in the container layer and report success for a file the user never
 sees. A write or delete on a read-only mount (/ssl on HAOS and Supervised)
-names the mount instead of a raw errno. Kept out of ``test_custom_component_filesystem.py``, which is at its
-module-size baseline.
+names the mount instead of a raw errno.
 
 Home Assistant sets the File & YAML Tools entry up, and the tests call its
 ``write_file`` / ``delete_file`` services the way ha-mcp does, with the volume

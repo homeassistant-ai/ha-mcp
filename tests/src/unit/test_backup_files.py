@@ -3,8 +3,7 @@
 Home Assistant's config directory is this test's ``tmp_path``, and Core sets
 the File & YAML Tools entry up, which registers its ``read_file`` service and
 the ``ha_mcp_tools/*`` commands the server reads the component's capabilities
-from. Kept out of ``test_backup_manager.py``, which is at its module-size
-baseline.
+from.
 """
 
 from __future__ import annotations

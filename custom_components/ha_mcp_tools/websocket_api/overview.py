@@ -537,17 +537,13 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
 # ha_mcp_tools/states
 # =============================================================================
 def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return ``State.as_dict()`` for each requested entity_id + a ``missing`` list.
+    """Return each requested entity's state body + a ``missing`` list.
 
-    ``hass.states.get(id)`` is a pure O(1) in-memory dict read, and core's
-    ``State.as_dict()`` is exactly the serialization the REST ``/api/states/<id>``
-    endpoint emits — so a component-served record is byte-identical to the legacy
-    per-id REST fetch by construction (the WS transport JSON-encodes the same
-    datetimes to the same ISO strings the REST layer does). The body is returned
-    UNMODIFIED — never ``_plainify``'d — precisely so that byte-parity holds:
-    ``_plainify``'s ``str()`` would render a datetime with a space separator where
-    both REST and WS use ``isoformat``'s ``T``. No freshness or secrets concern:
-    state bodies are always live and carry no ``!secret`` plaintext. The server
+    ``hass.states.get(id)`` is a pure O(1) in-memory dict read. The body is
+    Core's ``State.as_dict()``, the REST ``/api/states/<id>`` serialization, with
+    the live ``last_reported`` (see ``_state_as_dict``). It is never
+    ``_plainify``'d: ``_plainify``'s ``str()`` would render a datetime with a
+    space separator where both REST and WS use ``isoformat``'s ``T``. State bodies carry no ``!secret`` plaintext. The server
     enforces its own ``MAX_ENTITIES`` cap before calling, so no per-frame guard is
     needed here (100 full states is well within one frame — ``overview`` already
     returns every state in one call).

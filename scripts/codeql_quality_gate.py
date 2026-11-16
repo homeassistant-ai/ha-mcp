@@ -73,15 +73,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Cross-invocation use: a failed download records its time; the next "
         "_async_dom call reads it to enforce the retry cooldown.",
     ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_embedded_stubs.py",
-        "_INSTALLED",
-        "",
-        "Cross-invocation use: install() sets the module-level flag under a "
-        "'global' declaration so a second call returns early. CodeQL's "
-        "single-pass dead-store analysis misses the next-call read at the top "
-        "of install(), so the assignment looks dead.",
+    *(
+        (
+            "py/unused-global-variable",
+            "tests/src/unit/_config_flow_core.py",
+            name,
+            "",
+            "Cross-module use: helper module of the config flow tests; the "
+            "test_config_flow_*.py modules import and read it.",
+        )
+        for name in ("MANIFEST_VERSION", "STRINGS_COMMON", "GERMAN_COMMON")
     ),
     # NOTE: CodeQL emits the same generic message for every instance of
     # py/ineffectual-statement, so the entries below carry a code substring:
@@ -273,35 +274,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "split, so this regex is imported and read by log_sources.py's "
         "_build_raw_error_log level filter. CodeQL's single-file analysis misses "
         "the cross-module import, so the declaration looks dead.",
-    ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_SAMPLE_LOG",
-        "",
-        "Cross-module use: this module is the fixture leaf of the structured "
-        "error-log test split, so the literal is imported and read by "
-        "test_tools_utility_error_log_structured.py. CodeQL's single-file "
-        "analysis misses the cross-module import.",
-    ),
-    *(
-        (
-            "py/unused-global-variable",
-            "tests/src/unit/_error_log_structured_fixtures.py",
-            name,
-            "",
-            "Cross-module use: fixture leaf module; read by "
-            "test_tools_utility_error_log_structured.py.",
-        )
-        for name in (
-            "_EMPTY_LOG",
-            "_UNPARSEABLE_LOG",
-            "_UNSORTED_LOG",
-            "_OUT_OF_ORDER_LOG",
-            "_NESTED_PAREN_THREAD_LOG",
-            "_ANSI_LOG",
-            "_TRACEBACK_LOG",
-        )
     ),
     (
         "py/unused-import",
@@ -657,7 +629,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/incomplete-url-substring-sanitization",
-        "tests/src/unit/test_oauth_legacy_component.py",
+        "tests/src/unit/test_oauth_legacy_views.py",
         "may be at an arbitrary position",
         "",
         "Test assertion, not URL validation: the XSS-escape test checks the "

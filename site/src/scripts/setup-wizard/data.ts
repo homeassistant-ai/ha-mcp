@@ -99,7 +99,7 @@ export const clientsData = [
     "configLocation": "~/.copilot/mcp-config.json",
     "accuracy": 5,
     "order": 8,
-    "httpNote": "Remote setup requires the HA-MCP Server integration's built-in webhook — ha_auth works as of component 2.0.0 (legacy mode for older versions). See the FAQ.",
+    "httpNote": "Remote setup requires the HA-MCP Server integration's built-in webhook — ha_auth works, with legacy mode as a fallback. See the FAQ.",
   },
   {"id": "chatgpt", "name": "ChatGPT", "company": "OpenAI", "logo": "/logos/openai.svg", "transports": ["sse", "streamable-http"], "configFormat": "ui", "accuracy": 4, "order": 9, "beta": true},
   {
@@ -230,7 +230,7 @@ export const clientsData = [
     "order": 20,
     "beta": true,
     "httpNote": "Requires HTTPS - Remote deployment required",
-    "clientNote": "Custom connected apps are OAuth-only. As of component 2.0.0, Spark can register automatically in Home Assistant sign-in or secret-URL mode (live verification in progress); legacy OAuth with pasted credentials remains the verified path — see the steps below.",
+    "clientNote": "Custom connected apps are OAuth-only. Spark can register automatically in Home Assistant sign-in or secret-URL mode (live verification in progress); legacy OAuth with pasted credentials remains the verified path — see the steps below.",
   },
   {
     "id": "hermes",

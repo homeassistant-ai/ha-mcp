@@ -8,11 +8,13 @@ server feature that depends on the component. The HACS component and the
 ## Version cycle
 
 The component shares the server's version and pins the server build it runs
-(#2427). `manifest.json`'s `version`, its `ha-mcp==` requirement and
-`COMPONENT_VERSION` in `const.py` always equal `pyproject.toml`'s version.
-Never edit them by hand: semantic-release stamps all four in each release
-commit (`version_variables` in `pyproject.toml`), and the PR **Component
-Version Gate** fails a pull request that moves any of them.
+(#2427). `manifest.json`'s `version`, its `ha-mcp==` requirement,
+`COMPONENT_VERSION` in `const.py` and `MIN_COMPONENT_VERSION` in
+`src/ha_mcp/tools/tools_filesystem.py` always equal `pyproject.toml`'s version.
+Never edit them by hand: semantic-release stamps all five in each release
+commit (`version_variables` in `pyproject.toml`). The PR **Component Version
+Gate** fails a pull request that moves one of the component's three, and a
+unit test holds the floor to the component's version.
 
 HACS installs the component from this repository; the
 `homeassistant-ai/ha-mcp-integration` mirror stays for installs made from it and
@@ -42,29 +44,22 @@ The component never reports a dev suffix: released servers parse the version
 segment by segment as integers, so the suffix lives only in the pre-release tag
 and the pin.
 
-When a change adds a component service or argument that the server depends
-on, raise `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py`,
-in the same PR, to the release that will carry it: the number
-`scripts/dev_version.sh` prints without its `.devN` suffix (it computes the
-next release from `master` on any branch, so count the PR's own commit type:
-a `feat:` on a `master` that only has fixes pending raises the minor).
+`MIN_COMPONENT_VERSION` is the component version every call to the File & YAML
+Tools entry's services needs: the release's own. That covers the file and YAML
+tools, their backups, the fault log read (`ha_get_logs`) and the settings UI's
+file handlers. An external server (app (add-on), Docker, pip) refuses them on a
+component older than itself and says to update it, so every stable release
+asks its users for the matching component.
 
-The floor applies to every filesystem tool, so an optional feature must not
-raise it: users who don't need the feature would be forced to update. Such a
-feature gates on its own signal and prompts for the update only when it is used,
-as `ha_write_file(edits=...)` does by finding `edit_file` in the service registry
-(`_assert_file_edits_supported`). Prefer the registry over a version here,
-because a version is wrong in both directions: an unreleased build (master, E2E,
-the dev environment) reports the previous release's number while already
-carrying the service, and a dev pre-release reports the next release's number
-(see above), including one cut before the service existed.
-
-Every development pre-release cut while that release is pending reports the
-same plain number, so the floor cannot tell a pre-release that has the new
-service from an earlier one that lacks it. Only an external server (app,
-Docker, pip) is affected; the in-process server runs the build its component
-release pins. This gap is accepted: pre-release users update the component
-from HACS.
+Between releases the number cannot tell builds apart: an unreleased build
+(master, E2E, the dev environment) reports the last release's number while
+already carrying new code, and every development pre-release cut while a
+release is pending reports the same plain number. A change that needs a
+service or argument added since the last release therefore gates on its own
+signal, as `ha_write_file(edits=...)` does by finding `edit_file` in the
+service registry (`_assert_file_edits_supported`). Only an external server is
+affected; the in-process server runs the build its component release pins.
+This gap is accepted: pre-release users update the component from HACS.
 
 ## Compatibility
 
@@ -174,8 +169,8 @@ entry's `hass.data` caches so the next setup reads storage again.
 
 Privileged filesystem and YAML services remain tools-entry-only. The
 `ha_mcp_tools/info` command answers for either entry, so the server gates
-those services on the additive `tools_services` handshake field—not the
-general capability list.
+those services on Home Assistant's live service registry—not the capability
+list.
 
 When changing component-backed behavior:
 

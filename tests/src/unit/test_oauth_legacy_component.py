@@ -1,202 +1,439 @@
-"""Unit tests for the component-side legacy OAuth 2.1 authorization server
-(``custom_components/ha_mcp_tools/oauth_legacy.py``).
+"""The legacy OAuth component: provider, view binding and credential lifecycle.
 
-Covers the self-issued, HMAC-signed token codec, PKCE (S256) authorization
-codes, static client_id/client_secret authentication, the root ``/authorize``
-+ ``/token`` views, ``bind_legacy_views`` route-ownership/rebind semantics,
-and the credential-minting helper in ``embedded_entry.py`` that provisions
-the legacy client_id/client_secret/signing_key on first use.
+``custom_components/ha_mcp_tools/oauth_legacy.py``. The provider (signed tokens,
+PKCE codes, client credentials) holds no Home Assistant object, so those tests
+drive it directly with Core's ``freezer`` clock. ``bind_legacy_views`` runs
+against Core's real HTTP component, and the credential lifecycle runs through
+Core's own setup of a server entry (the server itself is replaced, see
+``_server_entry``).
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import secrets
-from unittest.mock import AsyncMock, MagicMock, patch
-from urllib.parse import parse_qs, urlparse
+from collections.abc import AsyncIterator
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
+from freezegun.api import FrozenDateTimeFactory
+from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.setup import async_setup_component
 
-import custom_components.ha_mcp_tools.embedded_entry as eentry
-from custom_components.ha_mcp_tools import oauth_legacy
-from custom_components.ha_mcp_tools.const import (
-    DATA_OAUTH_CLIENT_ID,
-    DATA_OAUTH_CLIENT_SECRET,
-    DATA_OAUTH_SIGNING_KEY,
-    OAUTH_BASE,
-    OPT_OAUTH_CLIENT_ID,
-    OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REGENERATE,
-    WEBHOOK_AUTH_LEGACY,
+from custom_components.ha_mcp_tools import const, oauth_legacy
+from custom_components.ha_mcp_tools.const import DOMAIN, WEBHOOK_AUTH_LEGACY
+
+from ._oauth_legacy_core import (
+    CLIENT_ID,
+    CLIENT_SECRET,
+    REDIRECT_URI,
+    challenge_for,
+    make_provider,
+    pkce_pair,
 )
+from ._server_entry import add_server_entry, replace_server, set_up
 
-from ._embedded_helpers import response_json
-
-CLIENT_ID = "test-client-id"
-CLIENT_SECRET = "test-client-secret"
-REDIRECT_URI = "https://client.example.com/cb"
-HOST = "ha.example.com"
-EXPECTED_ISSUER = f"https://{HOST}{OAUTH_BASE}"
+# -- view binding and credential lifecycle ------------------------------
 
 
-def _make_provider(
-    *,
-    client_id: str = CLIENT_ID,
-    client_secret: str = CLIENT_SECRET,
-    active: bool = True,
-    signing_key: bytes | None = None,
-) -> oauth_legacy.LegacyOAuthProvider:
-    key = signing_key if signing_key is not None else secrets.token_bytes(32)
-    mode = WEBHOOK_AUTH_LEGACY if active else "ha_auth"
-    return oauth_legacy.LegacyOAuthProvider(client_id, client_secret, key, lambda: mode)
+@pytest.fixture
+async def register_view(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[MagicMock]:
+    """Home Assistant's own view registration on its real HTTP component."""
+    assert await async_setup_component(hass, "http", {})
+    spy = MagicMock(wraps=hass.http.register_view)
+    monkeypatch.setattr(hass.http, "register_view", spy)
+    yield spy
 
 
-def _pkce_pair() -> tuple[str, str]:
-    """A valid (code_verifier, code_challenge) pair per RFC 7636 S256."""
-    verifier = secrets.token_urlsafe(64)
-    return verifier, _challenge_for(verifier)
+def _bind(
+    hass: HomeAssistant, secret: str = CLIENT_SECRET, key: bytes | str = b""
+) -> tuple[oauth_legacy.LegacyOAuthProvider, bool]:
+    return oauth_legacy.bind_legacy_views(
+        hass, CLIENT_ID, secret, key or secrets.token_bytes(32)
+    )
 
 
-def _challenge_for(verifier: str) -> str:
-    """The S256 challenge for ``verifier`` — including shape-invalid ones,
-    so the verifier-shape tests can pin the shape guard as the only thing
-    standing between a malformed verifier and a successful consume."""
-    digest = hashlib.sha256(verifier.encode()).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+@pytest.mark.usefixtures("register_view")
+class TestBindLegacyViews:
+    def test_first_bind_registers_the_authorize_and_token_views(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
+        provider, _ = _bind(hass)
+
+        assert provider.client_id == CLIENT_ID
+        assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == DOMAIN
+        assert register_view.call_count == 2
+
+    def test_first_bind_at_boot_needs_no_restart(self, hass: HomeAssistant) -> None:
+        hass.set_state(CoreState.not_running)
+        assert _bind(hass)[1] is False
+
+    def test_first_bind_while_running_needs_a_restart(
+        self, hass: HomeAssistant
+    ) -> None:
+        # A route registered after Core froze its router is not live until a
+        # restart.
+        assert _bind(hass)[1] is True
+
+    def test_credential_change_alone_needs_a_restart(self, hass: HomeAssistant) -> None:
+        # After a boot bind nothing else is pending, so the restart can only
+        # come from the changed credentials.
+        hass.set_state(CoreState.not_running)
+        key = secrets.token_bytes(32)
+        _bind(hass, key=key)
+
+        assert _bind(hass, "rotated-secret", key)[1] is True
+
+    def test_reload_after_a_boot_bind_reuses_the_provider_and_stays_live(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
+        # The pending state is remembered from the first bind, not recomputed
+        # from the now-running Core.
+        hass.set_state(CoreState.not_running)
+        key = secrets.token_bytes(32)
+        first, first_restart = _bind(hass, key=key)
+        assert first_restart is False
+        register_view.reset_mock()
+        hass.set_state(CoreState.running)
+
+        second, restart_needed = _bind(hass, key=key)
+
+        assert second is first
+        assert restart_needed is False
+        register_view.assert_not_called()
+
+    def test_reload_after_a_mid_session_bind_stays_restart_pending(
+        self, hass: HomeAssistant, register_view: MagicMock
+    ) -> None:
+        # An unrelated reload before the restart must not clear the repair:
+        # the views are still not live.
+        key = secrets.token_bytes(32)
+        first, first_restart = _bind(hass, key=key)
+        assert first_restart is True
+        register_view.reset_mock()
+
+        second, restart_needed = _bind(hass, key=key)
+
+        assert second is first
+        assert restart_needed is True
+        register_view.assert_not_called()
+
+    def test_changed_credentials_keep_the_old_provider_until_a_restart(
+        self, hass: HomeAssistant
+    ) -> None:
+        # aiohttp cannot rebind a registered view, so the old provider stays
+        # authoritative.
+        first, _ = _bind(hass)
+
+        second, restart_needed = _bind(hass, "a-new-secret")
+
+        assert second is first
+        assert restart_needed is True
+
+    def test_another_owner_of_the_routes_is_a_conflict(
+        self, hass: HomeAssistant
+    ) -> None:
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy"
+        with pytest.raises(oauth_legacy.LegacyOAuthRouteConflict):
+            _bind(hass)
+
+    def test_signing_key_may_be_the_hex_string_the_entry_stores(
+        self, hass: HomeAssistant
+    ) -> None:
+        provider, _ = _bind(hass, key=secrets.token_hex(32))
+        assert provider.issue_access_token()
 
 
-def _authorize_query(**overrides: str) -> dict[str, str]:
-    _, challenge = _pkce_pair()
-    params = {
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "state": "s1",
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "response_type": "code",
+class TestLegacyCredentialsActive:
+    """The check the startup log and Configure screen use to withhold rotated
+    credentials while the rotation is pending a restart."""
+
+    def test_false_when_never_bound(self, hass: HomeAssistant) -> None:
+        active = oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
+        )
+        assert active is False
+
+    def test_false_when_another_integration_owns_the_routes(
+        self, hass: HomeAssistant
+    ) -> None:
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
+        hass.data[oauth_legacy.OAUTH_ROUTE_KEY_FINGERPRINT] = "anything"
+        active = oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
+        )
+        assert active is False
+
+    @pytest.mark.usefixtures("register_view")
+    def test_true_for_the_bound_credentials(self, hass: HomeAssistant) -> None:
+        key = secrets.token_bytes(32)
+        _bind(hass, key=key)
+
+        assert oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, key
+        )
+
+    @pytest.mark.usefixtures("register_view")
+    def test_false_for_rotated_credentials_until_the_rebind(
+        self, hass: HomeAssistant
+    ) -> None:
+        # The reuse branch keeps the OLD provider bound after a change.
+        key = secrets.token_bytes(32)
+        _bind(hass, key=key)
+
+        assert not oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, "rotated-secret", key
+        )
+
+    @pytest.mark.usefixtures("register_view")
+    def test_hex_string_signing_key_matches_the_bound_bytes(
+        self, hass: HomeAssistant
+    ) -> None:
+        key = secrets.token_bytes(32)
+        _bind(hass, key=key)
+
+        assert oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, key.hex()
+        )
+
+    def test_scoped_provider_credentials_are_active_when_a_foreign_owner_holds_root(
+        self, hass: HomeAssistant
+    ) -> None:
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(hass, CLIENT_ID, CLIENT_SECRET, key)
+
+        assert oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, key
+        )
+        assert not oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, "different-secret", key
+        )
+
+    def test_unloaded_scoped_provider_no_longer_exposes_its_credentials(
+        self, hass: HomeAssistant
+    ) -> None:
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(hass, CLIENT_ID, CLIENT_SECRET, key)
+
+        oauth_legacy.clear_scoped_legacy_credentials(hass)
+
+        assert not oauth_legacy.legacy_credentials_active(
+            hass, CLIENT_ID, CLIENT_SECRET, key
+        )
+
+
+OLD_KEY = "aa" * 32
+
+
+@pytest.fixture
+async def server(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> SimpleNamespace:
+    """Core's HTTP component up, so entry setup can bind the OAuth routes."""
+    assert await async_setup_component(hass, "http", {})
+    return replace_server(monkeypatch)
+
+
+def _legacy_options(**options: object) -> dict[str, object]:
+    return {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY, **options}
+
+
+def _stored_credentials() -> dict[str, str]:
+    return {
+        const.DATA_OAUTH_CLIENT_ID: "hamcp-old",
+        const.DATA_OAUTH_CLIENT_SECRET: "old-secret",
+        const.DATA_OAUTH_SIGNING_KEY: OLD_KEY,
     }
-    params.update(overrides)
-    return params
 
 
-def _make_get_request(query: dict[str, str]) -> MagicMock:
-    request = MagicMock(name="Request")
-    request.query = query
-    request.path = oauth_legacy.AUTHORIZE_PATH
-    return request
+@pytest.mark.usefixtures("server")
+class TestLegacyCredentialLifecycle:
+    """Setup of a legacy-mode server entry mints, keeps and rotates the client
+    credentials; every change rotates the signing key to revoke old tokens."""
+
+    async def test_first_setup_mints_the_client_id_secret_and_signing_key(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(hass, options=_legacy_options())
+
+        assert await set_up(hass, entry)
+
+        assert entry.data[const.DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
+        assert entry.data[const.DATA_OAUTH_CLIENT_SECRET]
+        # The entry data must stay JSON serializable: the key is a hex string.
+        assert len(bytes.fromhex(entry.data[const.DATA_OAUTH_SIGNING_KEY])) == 32
+
+    async def test_reload_keeps_the_minted_credentials(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(hass, options=_legacy_options())
+        assert await set_up(hass, entry)
+        minted = dict(entry.data)
+
+        assert await hass.config_entries.async_reload(entry.entry_id)
+
+        assert dict(entry.data) == minted
+
+    async def test_regenerate_mints_new_credentials_and_rotates_the_key(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(
+            hass,
+            data=_stored_credentials(),
+            options=_legacy_options(**{const.OPT_OAUTH_REGENERATE: True}),
+        )
+
+        assert await set_up(hass, entry)
+
+        assert entry.data[const.DATA_OAUTH_CLIENT_ID] != "hamcp-old"
+        assert entry.data[const.DATA_OAUTH_CLIENT_SECRET] != "old-secret"
+        assert entry.data[const.DATA_OAUTH_SIGNING_KEY] != OLD_KEY
+        assert entry.options[const.OPT_OAUTH_REGENERATE] is False
+
+    async def test_client_id_override_is_adopted_and_rotates_the_key(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Rotating the key stops a re-used former client_id (A, B, A) from
+        # resurrecting its old tokens.
+        entry = add_server_entry(
+            hass,
+            data=_stored_credentials(),
+            options=_legacy_options(**{const.OPT_OAUTH_CLIENT_ID: "my-custom-client"}),
+        )
+
+        assert await set_up(hass, entry)
+
+        assert entry.data[const.DATA_OAUTH_CLIENT_ID] == "my-custom-client"
+        assert entry.data[const.DATA_OAUTH_SIGNING_KEY] != OLD_KEY
+        # The cleartext override must not stay readable in the entry options.
+        assert entry.options[const.OPT_OAUTH_CLIENT_ID] == ""
+
+    async def test_client_secret_override_is_adopted_and_rotates_the_key(
+        self, hass: HomeAssistant
+    ) -> None:
+        # Token validation never involves the secret, so only a new key evicts
+        # a holder of the old one.
+        entry = add_server_entry(
+            hass,
+            data=_stored_credentials(),
+            options=_legacy_options(**{const.OPT_OAUTH_CLIENT_SECRET: "my-secret"}),
+        )
+
+        assert await set_up(hass, entry)
+
+        assert entry.data[const.DATA_OAUTH_CLIENT_SECRET] == "my-secret"
+        assert entry.data[const.DATA_OAUTH_SIGNING_KEY] != OLD_KEY
+        assert entry.options[const.OPT_OAUTH_CLIENT_SECRET] == ""
+
+    async def test_override_equal_to_the_current_value_is_still_cleared(
+        self, hass: HomeAssistant
+    ) -> None:
+        entry = add_server_entry(
+            hass,
+            data=_stored_credentials(),
+            options=_legacy_options(**{const.OPT_OAUTH_CLIENT_ID: "hamcp-old"}),
+        )
+
+        assert await set_up(hass, entry)
+
+        assert entry.options[const.OPT_OAUTH_CLIENT_ID] == ""
+        assert entry.data[const.DATA_OAUTH_CLIENT_ID] == "hamcp-old"
+        assert entry.data[const.DATA_OAUTH_SIGNING_KEY] == OLD_KEY
 
 
-def _make_post_request(form: dict[str, str]) -> MagicMock:
-    """A POST /authorize request carrying the Host header that
-    ``mcp_webhook._build_base_url`` reads to derive the RFC 9207 ``iss``."""
-    request = MagicMock(name="Request")
-    request.headers = {"Host": HOST}
-    request.scheme = "https"
-    request.post = AsyncMock(return_value=form)
-    return request
-
-
-def _approve_form(challenge: str, **overrides: str) -> dict[str, str]:
-    form = {
-        "action": "approve",
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "state": "xyz",
-        "code_challenge": challenge,
-    }
-    form.update(overrides)
-    return form
-
-
-def _extract_query_param(url: str, key: str) -> str:
-    return parse_qs(urlparse(url).query)[key][0]
-
-
-# ---------------------------------------------------------------------------
-# Token codec (issue/validate)
-# ---------------------------------------------------------------------------
+# -- provider ------------------------------------------------------------
 
 
 class TestTokenCodec:
-    def test_issue_and_validate_access_token(self):
-        provider = _make_provider()
-        token = provider.issue_access_token()
-        assert provider.validate_access_token(token) is True
+    def test_issued_access_token_is_accepted(self) -> None:
+        provider = make_provider()
+        assert provider.validate_access_token(provider.issue_access_token()) is True
 
-    def test_issue_and_validate_refresh_token(self):
-        provider = _make_provider()
-        token = provider.issue_refresh_token()
-        assert provider.validate_refresh_token(token) is True
+    def test_issued_refresh_token_is_accepted(self) -> None:
+        provider = make_provider()
+        assert provider.validate_refresh_token(provider.issue_refresh_token()) is True
 
-    def test_access_token_rejected_as_refresh_token(self):
-        provider = _make_provider()
-        token = provider.issue_access_token()
-        assert provider.validate_refresh_token(token) is False
+    def test_access_token_cannot_be_used_to_refresh(self) -> None:
+        provider = make_provider()
+        assert provider.validate_refresh_token(provider.issue_access_token()) is False
 
-    def test_refresh_token_rejected_as_access_token(self):
-        provider = _make_provider()
-        token = provider.issue_refresh_token()
-        assert provider.validate_access_token(token) is False
+    def test_refresh_token_cannot_be_used_as_access_token(self) -> None:
+        provider = make_provider()
+        assert provider.validate_access_token(provider.issue_refresh_token()) is False
 
-    def test_tampered_signature_rejected(self):
-        provider = _make_provider()
-        token = provider.issue_access_token()
-        body, sig = token.rsplit(".", 1)
-        tampered_char = "A" if sig[0] != "A" else "B"
-        tampered = f"{tampered_char}{sig[1:]}"
-        assert provider.validate_access_token(f"{body}.{tampered}") is False
+    def test_forged_signature_is_rejected(self) -> None:
+        provider = make_provider()
+        body, sig = provider.issue_access_token().rsplit(".", 1)
+        forged_char = "A" if sig[0] != "A" else "B"
+        assert provider.validate_access_token(f"{body}.{forged_char}{sig[1:]}") is False
 
-    def test_tampered_body_rejected(self):
-        provider = _make_provider()
-        token = provider.issue_access_token()
-        body, sig = token.rsplit(".", 1)
+    def test_edited_body_is_rejected(self) -> None:
+        provider = make_provider()
+        body, sig = provider.issue_access_token().rsplit(".", 1)
         assert provider.validate_access_token(f"{body}extra.{sig}") is False
 
-    def test_malformed_token_without_separator_rejected(self):
-        provider = _make_provider()
-        assert provider.validate_access_token("not-a-real-token") is False
+    def test_token_without_a_signature_is_rejected(self) -> None:
+        assert make_provider().validate_access_token("not-a-real-token") is False
 
-    def test_expired_token_rejected(self):
-        provider = _make_provider()
-        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
-            token = provider.issue_access_token()
-        # Real time.time() (module not patched here) is far past the 1-hour
-        # TTL computed from the patched issuance time.
+    def test_token_is_valid_until_its_lifetime_ends(
+        self, freezer: FrozenDateTimeFactory
+    ) -> None:
+        provider = make_provider()
+        token = provider.issue_access_token()
+
+        freezer.tick(timedelta(seconds=oauth_legacy.ACCESS_TOKEN_TTL - 1))
+        assert provider.validate_access_token(token) is True
+
+        freezer.tick(timedelta(seconds=1))
         assert provider.validate_access_token(token) is False
 
-    def test_token_from_rotated_client_id_rejected(self):
-        # Same signing key, different provider instance bound to a NEW
-        # client_id (simulates a credential rotation): the old token must
-        # not validate against the new identity.
-        key = secrets.token_bytes(32)
-        old_provider = _make_provider(client_id="old-client", signing_key=key)
-        token = old_provider.issue_access_token()
-        new_provider = _make_provider(client_id="new-client", signing_key=key)
-        assert new_provider.validate_access_token(token) is False
+    def test_refresh_token_is_valid_until_its_lifetime_ends(
+        self, freezer: FrozenDateTimeFactory
+    ) -> None:
+        provider = make_provider()
+        token = provider.issue_refresh_token()
 
-    def test_non_ascii_pre_signature_segment_rejected(self):
-        # A bearer whose body segment carries a non-ASCII char makes
-        # body.encode("ascii") raise UnicodeEncodeError inside _validate_token;
-        # that must be caught (return False), not escape the webhook gate.
-        provider = _make_provider()
-        assert provider.validate_access_token("é.c2ln") is False
+        freezer.tick(timedelta(seconds=oauth_legacy.REFRESH_TOKEN_TTL - 1))
+        assert provider.validate_refresh_token(token) is True
+
+        freezer.tick(timedelta(seconds=1))
+        assert provider.validate_refresh_token(token) is False
+
+    def test_token_of_a_rotated_client_id_is_revoked(self) -> None:
+        key = secrets.token_bytes(32)
+        token = make_provider(
+            client_id="old-client", signing_key=key
+        ).issue_access_token()
+        rotated = make_provider(client_id="new-client", signing_key=key)
+        assert rotated.validate_access_token(token) is False
+
+    def test_non_ascii_bearer_is_rejected_not_raised(self) -> None:
+        # A bearer with a non-ASCII char before the dot must not escape the
+        # webhook gate as an exception.
+        assert make_provider().validate_access_token("é.c2ln") is False
 
 
 class TestProviderConstruction:
-    def test_rejects_empty_client_id(self):
+    def test_empty_client_id_is_refused(self) -> None:
         with pytest.raises(ValueError, match="client_id"):
             oauth_legacy.LegacyOAuthProvider(
                 "", CLIENT_SECRET, secrets.token_bytes(32), lambda: WEBHOOK_AUTH_LEGACY
             )
 
-    def test_rejects_empty_client_secret(self):
+    def test_empty_client_secret_is_refused(self) -> None:
         with pytest.raises(ValueError, match="client_secret"):
             oauth_legacy.LegacyOAuthProvider(
                 CLIENT_ID, "", secrets.token_bytes(32), lambda: WEBHOOK_AUTH_LEGACY
             )
 
-    def test_rejects_short_signing_key(self):
+    def test_short_signing_key_is_refused(self) -> None:
         with pytest.raises(ValueError, match="at least 32 bytes"):
             oauth_legacy.LegacyOAuthProvider(
                 CLIENT_ID, CLIENT_SECRET, b"too-short", lambda: WEBHOOK_AUTH_LEGACY
@@ -204,1062 +441,155 @@ class TestProviderConstruction:
 
 
 class TestValidateBearer:
-    def test_accepts_valid_bearer_access_token(self):
-        provider = _make_provider()
-        token = provider.issue_access_token()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Bearer {token}"}
+    @staticmethod
+    def _with_header(value: str | None) -> web.Request:
+        headers = {} if value is None else {"Authorization": value}
+        return make_mocked_request("POST", "/api/webhook/x", headers=headers)
+
+    def test_access_token_in_a_bearer_header_is_accepted(self) -> None:
+        provider = make_provider()
+        request = self._with_header(f"Bearer {provider.issue_access_token()}")
         assert provider.validate_bearer(request) is True
 
-    def test_rejects_missing_authorization_header(self):
-        provider = _make_provider()
-        request = MagicMock()
-        request.headers = {}
+    def test_request_without_an_authorization_header_is_refused(self) -> None:
+        assert make_provider().validate_bearer(self._with_header(None)) is False
+
+    def test_basic_scheme_is_refused(self) -> None:
+        assert (
+            make_provider().validate_bearer(self._with_header("Basic abc123")) is False
+        )
+
+    def test_refresh_token_cannot_authorize_a_request(self) -> None:
+        provider = make_provider()
+        request = self._with_header(f"Bearer {provider.issue_refresh_token()}")
         assert provider.validate_bearer(request) is False
-
-    def test_rejects_non_bearer_scheme(self):
-        provider = _make_provider()
-        request = MagicMock()
-        request.headers = {"Authorization": "Basic abc123"}
-        assert provider.validate_bearer(request) is False
-
-    def test_rejects_refresh_token_presented_as_bearer(self):
-        provider = _make_provider()
-        token = provider.issue_refresh_token()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Bearer {token}"}
-        assert provider.validate_bearer(request) is False
-
-
-# ---------------------------------------------------------------------------
-# PKCE (S256) authorization codes
-# ---------------------------------------------------------------------------
 
 
 class TestPKCECodes:
-    def test_consume_with_correct_verifier_succeeds(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
+    def test_code_is_redeemed_with_its_verifier(self) -> None:
+        provider = make_provider()
+        verifier, challenge = pkce_pair()
         code = provider.issue_code(REDIRECT_URI, challenge)
+        assert code is not None
         assert provider.consume_code(code, REDIRECT_URI, verifier) is True
 
-    def test_consume_with_wrong_verifier_fails(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
+    def test_code_is_refused_for_another_verifier(self) -> None:
+        provider = make_provider()
+        _, challenge = pkce_pair()
         code = provider.issue_code(REDIRECT_URI, challenge)
-        other_verifier, _ = _pkce_pair()
-        assert provider.consume_code(code, REDIRECT_URI, other_verifier) is False
+        assert code is not None
+        assert provider.consume_code(code, REDIRECT_URI, pkce_pair()[0]) is False
 
-    def test_code_is_one_shot(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
+    def test_code_works_only_once(self) -> None:
+        provider = make_provider()
+        verifier, challenge = pkce_pair()
         code = provider.issue_code(REDIRECT_URI, challenge)
+        assert code is not None
         assert provider.consume_code(code, REDIRECT_URI, verifier) is True
         assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
-    def test_expired_code_rejected(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
-        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
-            code = provider.issue_code(REDIRECT_URI, challenge)
+    def test_code_expires(self, freezer: FrozenDateTimeFactory) -> None:
+        provider = make_provider()
+        verifier, challenge = pkce_pair()
+        code = provider.issue_code(REDIRECT_URI, challenge)
+        assert code is not None
+
+        freezer.tick(timedelta(seconds=oauth_legacy.AUTH_CODE_TTL + 1))
+
         assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
-    def test_mismatched_redirect_uri_rejected(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
+    def test_code_is_refused_for_another_redirect_uri(self) -> None:
+        provider = make_provider()
+        verifier, challenge = pkce_pair()
         code = provider.issue_code(REDIRECT_URI, challenge)
-        assert (
-            provider.consume_code(code, "https://other.example.com/cb", verifier)
-            is False
-        )
+        assert code is not None
+        other = "https://other.example.com/cb"
+        assert provider.consume_code(code, other, verifier) is False
 
-    def test_unknown_code_rejected(self):
-        provider = _make_provider()
-        verifier, _ = _pkce_pair()
+    def test_unknown_code_is_refused(self) -> None:
+        verifier, _ = pkce_pair()
+        provider = make_provider()
         assert provider.consume_code("never-issued", REDIRECT_URI, verifier) is False
 
-    # The three verifier-shape tests issue a REAL code whose challenge is
-    # derived from the malformed verifier itself. With a never-issued code the
-    # unknown-code lookup rejects regardless of the verifier, and the test
-    # cannot discriminate the shape guard (review finding on #1880): here the
-    # S256 check would pass, so only the shape guard can produce False.
-
-    def test_verifier_too_short_rejected(self):
-        provider = _make_provider()
-        verifier = "short"
-        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+    @pytest.mark.parametrize(
+        "verifier",
+        [
+            "short",
+            "a" * 42 + "!",
+            "a" * 43 + "\n",
+            "a" * (oauth_legacy.PKCE_VERIFIER_MAX + 1),
+        ],
+        ids=["too-short", "bad-character", "trailing-newline", "over-max-length"],
+    )
+    def test_malformed_verifier_is_refused_though_it_matches_the_challenge(
+        self, verifier: str
+    ) -> None:
+        # The challenge is derived from the malformed verifier itself, so the
+        # S256 check would pass and only the RFC 7636 shape check refuses it.
+        provider = make_provider()
+        code = provider.issue_code(REDIRECT_URI, challenge_for(verifier))
+        assert code is not None
         assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
-    def test_verifier_with_invalid_characters_rejected(self):
-        provider = _make_provider()
-        verifier = "a" * 42 + "!"  # right length, disallowed char
-        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
-        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
+    def test_malformed_verifier_does_not_burn_the_code(self) -> None:
+        provider = make_provider()
+        verifier, challenge = pkce_pair()
+        code = provider.issue_code(REDIRECT_URI, challenge)
+        assert code is not None
+        assert provider.consume_code(code, REDIRECT_URI, "short") is False
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is True
 
-    def test_verifier_with_trailing_newline_rejected(self):
-        provider = _make_provider()
-        verifier = "a" * 43 + "\n"
-        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
-        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
-
-    def test_verifier_over_max_length_rejected(self):
-        # RFC 7636 §4.1 caps the verifier at 128 chars; one over must be
-        # rejected on length before any hashing.
-        provider = _make_provider()
-        verifier = "a" * (oauth_legacy.PKCE_VERIFIER_MAX + 1)
-        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
-        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
-
-    def test_issue_code_refuses_new_codes_at_capacity(self):
-        # Abuse guard: once the pending-code store is full, issue_code returns
-        # None (the /authorize POST maps that to temporarily_unavailable)
-        # instead of growing unbounded.
-        provider = _make_provider()
-        _, challenge = _pkce_pair()
+    def test_new_codes_are_refused_when_the_pending_store_is_full(self) -> None:
+        provider = make_provider()
+        _, challenge = pkce_pair()
         for _ in range(oauth_legacy.MAX_PENDING_CODES):
             assert provider.issue_code(REDIRECT_URI, challenge) is not None
         assert provider.issue_code(REDIRECT_URI, challenge) is None
 
-    def test_expired_codes_are_pruned_making_room_at_capacity(self):
-        # The prune inside issue_code must free expired entries -- without it
-        # a full store of dead codes would refuse issuance forever (the cap
-        # test above passes with or without the prune line).
-        provider = _make_provider()
-        _, challenge = _pkce_pair()
-        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
-            for _ in range(oauth_legacy.MAX_PENDING_CODES):
-                assert provider.issue_code(REDIRECT_URI, challenge) is not None
-        # Real time is far past those codes' expiry: issuance must succeed.
+    def test_expired_codes_make_room_in_a_full_store(
+        self, freezer: FrozenDateTimeFactory
+    ) -> None:
+        # Without the prune, a store full of dead codes refuses issuance forever.
+        provider = make_provider()
+        _, challenge = pkce_pair()
+        for _ in range(oauth_legacy.MAX_PENDING_CODES):
+            assert provider.issue_code(REDIRECT_URI, challenge) is not None
+        assert provider.issue_code(REDIRECT_URI, challenge) is None
+
+        freezer.tick(timedelta(seconds=oauth_legacy.AUTH_CODE_TTL + 1))
+
         assert provider.issue_code(REDIRECT_URI, challenge) is not None
 
 
-# ---------------------------------------------------------------------------
-# Client authentication
-# ---------------------------------------------------------------------------
-
-
 class TestAuthenticateClient:
-    def test_correct_credentials_accepted(self):
-        provider = _make_provider()
-        assert provider.authenticate_client(CLIENT_ID, CLIENT_SECRET) is True
+    def test_correct_credentials_are_accepted(self) -> None:
+        assert make_provider().authenticate_client(CLIENT_ID, CLIENT_SECRET) is True
 
-    def test_wrong_secret_rejected(self):
-        provider = _make_provider()
-        assert provider.authenticate_client(CLIENT_ID, "wrong-secret") is False
+    def test_wrong_secret_is_refused(self) -> None:
+        assert make_provider().authenticate_client(CLIENT_ID, "wrong-secret") is False
 
-    def test_wrong_client_id_rejected(self):
-        provider = _make_provider()
-        assert provider.authenticate_client("wrong-client", CLIENT_SECRET) is False
+    def test_wrong_client_id_is_refused(self) -> None:
+        assert make_provider().authenticate_client("wrong", CLIENT_SECRET) is False
 
-    def test_missing_client_id_rejected(self):
-        provider = _make_provider()
-        assert provider.authenticate_client(None, CLIENT_SECRET) is False
+    def test_missing_client_id_is_refused(self) -> None:
+        assert make_provider().authenticate_client(None, CLIENT_SECRET) is False
 
-    def test_missing_client_secret_rejected(self):
-        provider = _make_provider()
-        assert provider.authenticate_client(CLIENT_ID, None) is False
-
-
-class TestExtractClientCreds:
-    """``_extract_client_creds`` -- Basic-auth header vs form body."""
-
-    def test_extracts_from_basic_auth_header(self):
-        encoded = base64.b64encode(b"cid:secret").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        assert oauth_legacy._extract_client_creds(request, {}) == [("cid", "secret")]
-
-    def test_extracts_from_form_body_when_no_basic_header(self):
-        request = MagicMock()
-        request.headers = {}
-        assert oauth_legacy._extract_client_creds(
-            request,
-            {"client_id": "cid", "client_secret": "secret"},
-        ) == [("cid", "secret")]
-
-    def test_malformed_basic_header_returns_no_candidates(self):
-        request = MagicMock()
-        request.headers = {"Authorization": "Basic not-valid-base64!!!"}
-        assert oauth_legacy._extract_client_creds(request, {}) == []
-
-    def test_basic_header_without_colon_returns_no_candidates(self):
-        encoded = base64.b64encode(b"no-colon-here").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        assert oauth_legacy._extract_client_creds(request, {}) == []
-
-    def test_percent_encoded_basic_creds_are_decoded(self):
-        # RFC 6749 §2.3.1: client_secret_basic values are form-urlencoded
-        # before base64, so a custom credential with reserved characters decodes
-        # back (a no-op for the URL-safe generated credentials).
-        encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        candidates = oauth_legacy._extract_client_creds(request, {})
-        assert candidates[0] == ("c@id", "p@ss/word")
-
-    def test_basic_creds_form_decode_plus_as_space_not_literal(self):
-        # RFC 6749 §2.3.1 form-urlencodes Basic creds, so "+" is a SPACE and a
-        # literal "+" arrives as "%2B" -- unquote_plus must distinguish them
-        # (plain unquote would leave "+" literal, corrupting a secret with a
-        # space). #1880 review finding.
-        encoded = base64.b64encode(b"c+id:p%2Bss word").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        candidates = oauth_legacy._extract_client_creds(request, {})
-        assert candidates[0] == ("c id", "p+ss word")
-
-    def test_raw_split_is_offered_for_non_encoding_clients(self):
-        # #2218 review (mirrored from the proxy): a custom credential override
-        # may contain a literal "+" or "%XX", and a client that skips RFC 6749
-        # form-encoding sends it raw — the decoded candidate alone would
-        # mangle it, so the raw split must be offered too.
-        encoded = base64.b64encode(b"client+id:se%41cret+x").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        assert oauth_legacy._extract_client_creds(request, {}) == [
-            ("client id", "seAcret x"),
-            ("client+id", "se%41cret+x"),
-        ]
-
-    def test_url_safe_creds_yield_a_single_candidate(self):
-        # Decoding is a no-op for the generated URL-safe credentials, so no
-        # duplicate candidate is offered.
-        encoded = base64.b64encode(b"cid-123:secret-456").decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {encoded}"}
-        assert oauth_legacy._extract_client_creds(request, {}) == [
-            ("cid-123", "secret-456")
-        ]
-
-
-# ---------------------------------------------------------------------------
-# Redirect URI validation
-# ---------------------------------------------------------------------------
-
-
-class TestIsValidRedirectUri:
-    def test_https_url_with_host_is_valid(self):
-        assert oauth_legacy._is_valid_redirect_uri(REDIRECT_URI) is True
-
-    def test_non_loopback_http_is_rejected(self):
-        url = "http://client.example.com/cb"
-        assert oauth_legacy._is_valid_redirect_uri(url) is False
-
-    def test_http_loopback_is_valid(self):
-        # RFC 8252 §7.3: native/CLI clients receive the code on an http loopback
-        # callback. Cover the hostname form and the whole 127.0.0.0/8 + ::1 set.
-        assert oauth_legacy._is_valid_redirect_uri("http://localhost:8765/cb") is True
-        assert oauth_legacy._is_valid_redirect_uri("http://127.0.0.1:8765/cb") is True
-        assert oauth_legacy._is_valid_redirect_uri("http://127.9.9.9/cb") is True
-        assert oauth_legacy._is_valid_redirect_uri("http://[::1]:8765/cb") is True
-
-    def test_fragment_is_rejected(self):
-        assert oauth_legacy._is_valid_redirect_uri(f"{REDIRECT_URI}#frag") is False
-
-    def test_missing_host_is_rejected(self):
-        assert oauth_legacy._is_valid_redirect_uri("https:///cb") is False
-
-    def test_empty_string_is_rejected(self):
-        assert oauth_legacy._is_valid_redirect_uri("") is False
-
-    def test_out_of_range_port_is_rejected_not_raised(self):
-        # urlparse defers port validation to attribute access, so a crafted
-        # ':999999' must be caught in the validator (→ False) rather than escape
-        # later as an uncaught ValueError → 500 in _redirect_with.
-        assert (
-            oauth_legacy._is_valid_redirect_uri("https://x.example.com:999999/cb")
-            is False
-        )
-
-    def test_non_numeric_port_is_rejected_not_raised(self):
-        assert (
-            oauth_legacy._is_valid_redirect_uri("https://x.example.com:abc/cb") is False
-        )
-
-
-# ---------------------------------------------------------------------------
-# is_active / active_mode_getter
-# ---------------------------------------------------------------------------
+    def test_missing_client_secret_is_refused(self) -> None:
+        assert make_provider().authenticate_client(CLIENT_ID, None) is False
 
 
 class TestIsActive:
-    def test_true_when_legacy_is_the_live_mode(self):
-        provider = _make_provider(active=True)
-        assert provider.is_active() is True
+    def test_active_while_legacy_is_the_live_mode(self) -> None:
+        assert make_provider().is_active() is True
 
-    def test_false_when_another_mode_is_live(self):
-        provider = _make_provider(active=False)
+    def test_inactive_while_another_mode_is_live(self) -> None:
+        provider = oauth_legacy.LegacyOAuthProvider(
+            CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32), lambda: "ha_auth"
+        )
         assert provider.is_active() is False
 
-    def test_false_when_getter_returns_none(self):
+    def test_inactive_while_no_mode_is_live(self) -> None:
         provider = oauth_legacy.LegacyOAuthProvider(
             CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32), lambda: None
         )
         assert provider.is_active() is False
-
-
-# ---------------------------------------------------------------------------
-# AuthorizeView (GET consent page, POST approve/deny)
-# ---------------------------------------------------------------------------
-
-
-class TestAuthorizeViewGet:
-    async def test_returns_404_when_provider_inactive(self):
-        provider = _make_provider(active=False)
-        view = oauth_legacy.AuthorizeView(provider)
-        response = await view.get(_make_get_request(_authorize_query()))
-        assert response.status == 404
-
-    async def test_rejects_wrong_client_id(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(_authorize_query(client_id="someone-else"))
-        response = await view.get(request)
-        assert response.status == 400
-
-    async def test_rejects_insecure_redirect_uri(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(
-            _authorize_query(redirect_uri="http://insecure.example.com/cb")
-        )
-        response = await view.get(request)
-        assert response.status == 400
-
-    async def test_rejects_non_s256_challenge_method(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(_authorize_query(code_challenge_method="plain"))
-        response = await view.get(request)
-        assert response.status == 400
-
-    async def test_rejects_non_code_response_type(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(_authorize_query(response_type="token"))
-        response = await view.get(request)
-        assert response.status == 400
-        assert "unsupported_response_type" in response.text
-
-    async def test_rejects_malformed_code_challenge(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(_authorize_query(code_challenge="short"))
-        response = await view.get(request)
-        assert response.status == 400
-        assert "code_challenge" in response.text
-
-    async def test_rejects_code_challenge_with_trailing_newline(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_get_request(_authorize_query(code_challenge="a" * 43 + "\n"))
-        response = await view.get(request)
-        assert response.status == 400
-
-    async def test_consent_page_shows_redirect_domain_and_escapes_it(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        xss_redirect = 'https://evil.example.com/cb?x="><script>alert(1)</script>'
-        request = _make_get_request(_authorize_query(redirect_uri=xss_redirect))
-        response = await view.get(request)
-        assert response.status == 200
-        assert "evil.example.com" in response.text
-        assert "<script>alert(1)</script>" not in response.text
-        assert "&lt;script&gt;" in response.text
-
-
-class TestAuthorizeViewPost:
-    async def test_approve_issues_a_consumable_code_and_redirects(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        verifier, challenge = _pkce_pair()
-        request = _make_post_request(_approve_form(challenge))
-        response = await view.post(request)
-        assert response.status == 302
-        location = response.headers["Location"]
-        assert location.startswith(f"{REDIRECT_URI}?")
-        assert _extract_query_param(location, "state") == "xyz"
-        # RFC 9207 §2: the success response names the issuer that minted it.
-        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
-        code = _extract_query_param(location, "code")
-        assert provider.consume_code(code, REDIRECT_URI, verifier) is True
-
-    async def test_deny_redirects_with_access_denied_error(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        _, challenge = _pkce_pair()
-        request = _make_post_request(_approve_form(challenge, action="deny"))
-        response = await view.post(request)
-        assert response.status == 302
-        location = response.headers["Location"]
-        assert _extract_query_param(location, "error") == "access_denied"
-        # RFC 9207 §2 covers error responses too, not just the success redirect.
-        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
-
-    async def test_iss_equals_the_advertised_legacy_issuer(self):
-        """The redirect's ``iss`` is byte-identical to the ``issuer`` the legacy
-        discovery document advertises for the same request — RFC 9207 §2 rejects
-        anything else, and the two are built in different modules."""
-        from custom_components.ha_mcp_tools import mcp_webhook
-
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        _, challenge = _pkce_pair()
-        request = _make_post_request(_approve_form(challenge))
-        response = await view.post(request)
-
-        advertised = mcp_webhook._legacy_authorization_server_document(
-            mcp_webhook._build_base_url(request)
-        )["issuer"]
-        assert advertised == EXPECTED_ISSUER
-        assert _extract_query_param(response.headers["Location"], "iss") == advertised
-
-    async def test_inactive_provider_returns_404(self):
-        provider = _make_provider(active=False)
-        view = oauth_legacy.AuthorizeView(provider)
-        request = MagicMock()
-        request.post = AsyncMock(return_value={})
-        response = await view.post(request)
-        assert response.status == 404
-
-    async def test_malformed_port_redirect_returns_400_not_500(self):
-        # A crafted out-of-range port must be rejected cleanly at validation and
-        # never reach yarl in _redirect_with, which would raise → uncaught 500.
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        _, challenge = _pkce_pair()
-        request = _make_post_request(
-            _approve_form(
-                challenge, redirect_uri="https://client.example.com:999999/cb"
-            )
-        )
-        response = await view.post(request)
-        assert response.status == 400
-
-    async def test_unknown_action_returns_400(self):
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        _, challenge = _pkce_pair()
-        request = _make_post_request(_approve_form(challenge, action="bogus"))
-        response = await view.post(request)
-        assert response.status == 400
-
-    async def test_code_store_at_capacity_redirects_temporarily_unavailable(self):
-        # RFC 6749 §4.1.2.1: issue_code returning None (store at cap) must
-        # surface as an error redirect, not a silent failure or a 500.
-        provider = _make_provider()
-        _, challenge = _pkce_pair()
-        for _ in range(oauth_legacy.MAX_PENDING_CODES):
-            provider.issue_code(REDIRECT_URI, challenge)
-        view = oauth_legacy.AuthorizeView(provider)
-        request = _make_post_request(_approve_form(challenge))
-        response = await view.post(request)
-        assert response.status == 302
-        location = response.headers["Location"]
-        assert _extract_query_param(location, "error") == "temporarily_unavailable"
-        assert _extract_query_param(location, "state") == "xyz"
-        assert _extract_query_param(location, "iss") == EXPECTED_ISSUER
-
-
-# ---------------------------------------------------------------------------
-# TokenView (POST authorization_code + refresh_token grants)
-# ---------------------------------------------------------------------------
-
-
-class TestTokenViewPost:
-    async def test_inactive_provider_returns_not_found(self):
-        provider = _make_provider(active=False)
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(return_value={})
-        response = await view.post(request)
-        assert response.status == 404
-        assert response_json(response) == {"error": "not_found"}
-
-    async def test_basic_auth_authenticates_a_raw_unencoded_secret(self):
-        """#2219 review round 3: the behavior this PR exists for, driven
-        end-to-end. A configured secret containing a literal '+' / '%XX',
-        sent raw by a client that skips RFC 6749 §2.3.1 form-encoding, must
-        authenticate — the decoded candidate alone mangles it."""
-        secret = "se%41cret+x"
-        provider = _make_provider(client_secret=secret)
-        view = oauth_legacy.TokenView(provider)
-        token = base64.b64encode(f"{CLIENT_ID}:{secret}".encode()).decode()
-        request = MagicMock()
-        request.headers = {"Authorization": f"Basic {token}"}
-        request.post = AsyncMock(return_value={"grant_type": "unsupported_probe"})
-
-        response = await view.post(request)
-
-        # Past the client gate: the probe grant fails, not the credentials.
-        assert response.status == 400
-        assert response_json(response)["error"] == "unsupported_grant_type"
-
-    async def test_consent_post_undecodable_body_returns_400_not_500(self):
-        """The consent POST is the fourth guarded call site — reverting its
-        guard must fail here rather than 500 an anonymous view."""
-        provider = _make_provider()
-        view = oauth_legacy.AuthorizeView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
-
-        response = await view.post(request)
-
-        assert response.status == 400
-
-    async def test_undecodable_form_body_returns_400_not_500(self):
-        """#2219 review round 3: aiohttp raises LookupError (not ValueError)
-        when Content-Type names an unknown charset, so an anonymous caller
-        could turn one header into a 500 + traceback."""
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
-
-        response = await view.post(request)
-
-        assert response.status == 400
-        assert response_json(response)["error"] == "invalid_request"
-
-    async def test_non_string_form_credentials_return_401_not_500(self):
-        """#2219 review round 3: request.post() yields str | bytes |
-        FileField; the non-str shapes are truthy, so an unwrapped value would
-        slip past the emptiness guard and raise AttributeError on .encode()."""
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={"client_id": b"bytes-id", "client_secret": b"bytes-secret"}
-        )
-
-        response = await view.post(request)
-
-        assert response.status == 401
-        assert response_json(response)["error"] == "invalid_client"
-
-    async def test_invalid_client_credentials_returns_401(self):
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={"client_id": CLIENT_ID, "client_secret": "wrong"}
-        )
-        response = await view.post(request)
-        assert response.status == 401
-        assert response_json(response)["error"] == "invalid_client"
-
-    async def test_authorization_code_grant_returns_valid_tokens(self):
-        provider = _make_provider()
-        verifier, challenge = _pkce_pair()
-        code = provider.issue_code(REDIRECT_URI, challenge)
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": REDIRECT_URI,
-                "code_verifier": verifier,
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 200
-        assert response_json(response)["token_type"] == "Bearer"
-        access = response_json(response)["access_token"]
-        refresh = response_json(response)["refresh_token"]
-        assert provider.validate_access_token(access) is True
-        assert provider.validate_refresh_token(refresh) is True
-        # RFC 6749 §5.1: the token body carries credentials and must not be cached.
-        assert response.headers["Cache-Control"] == "no-store"
-        assert response.headers["Pragma"] == "no-cache"
-
-    async def test_authorization_code_grant_rejects_bad_code(self):
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": "bogus",
-                "redirect_uri": REDIRECT_URI,
-                "code_verifier": "x" * 43,
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 400
-        assert response_json(response)["error"] == "invalid_grant"
-
-    async def test_refresh_token_grant_returns_new_tokens(self):
-        provider = _make_provider()
-        refresh = provider.issue_refresh_token()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh,
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 200
-        access = response_json(response)["access_token"]
-        assert provider.validate_access_token(access) is True
-        # The refresh grant carries credentials too — same no-cache headers.
-        assert response.headers["Cache-Control"] == "no-store"
-        assert response.headers["Pragma"] == "no-cache"
-
-    async def test_unsupported_grant_type_returns_400(self):
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "client_credentials",
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 400
-        assert response_json(response)["error"] == "unsupported_grant_type"
-
-    async def test_authorization_code_grant_missing_param_returns_invalid_request(
-        self,
-    ):
-        # A real code exists, but the request omits code_verifier -- the
-        # missing-param guard must answer invalid_request, not invalid_grant.
-        provider = _make_provider()
-        _, challenge = _pkce_pair()
-        code = provider.issue_code(REDIRECT_URI, challenge)
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": REDIRECT_URI,
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 400
-        assert response_json(response)["error"] == "invalid_request"
-
-    async def test_refresh_grant_empty_token_returns_invalid_grant(self):
-        provider = _make_provider()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
-                "refresh_token": "",
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 400
-        assert response_json(response)["error"] == "invalid_grant"
-
-    async def test_refresh_grant_expired_token_rejected(self):
-        provider = _make_provider()
-        with patch.object(oauth_legacy.time, "time", return_value=1_000_000.0):
-            refresh = provider.issue_refresh_token()
-        view = oauth_legacy.TokenView(provider)
-        request = MagicMock()
-        request.headers = {}
-        request.post = AsyncMock(
-            return_value={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh,
-            }
-        )
-        response = await view.post(request)
-        assert response.status == 400
-        assert response_json(response)["error"] == "invalid_grant"
-
-
-# ---------------------------------------------------------------------------
-# bind_legacy_views (route ownership + rebind semantics)
-# ---------------------------------------------------------------------------
-
-
-def _make_hass(*, is_running: bool = True) -> MagicMock:
-    hass = MagicMock(name="hass")
-    hass.data = {}
-    hass.is_running = is_running
-    return hass
-
-
-class TestBindLegacyViews:
-    def test_first_bind_registers_views_and_stores_provider(self):
-        hass = _make_hass(is_running=False)
-        provider, _ = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-        )
-        assert isinstance(provider, oauth_legacy.LegacyOAuthProvider)
-        assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == oauth_legacy._DOMAIN
-        assert hass.data[oauth_legacy._LEGACY_PROVIDER_KEY] is provider
-        assert hass.http.register_view.call_count == 2
-
-    def test_first_bind_at_boot_needs_no_restart(self):
-        hass = _make_hass(is_running=False)
-        _, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-        )
-        assert restart_needed is False
-
-    def test_first_bind_mid_session_needs_restart(self):
-        hass = _make_hass(is_running=True)
-        _, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-        )
-        assert restart_needed is True
-
-    def test_credential_change_alone_flags_restart(self):
-        # Isolates the creds_changed disjunct of the reuse branch: after a
-        # boot bind the stored pending flag is False, so a True here can only
-        # come from the fingerprint mismatch.
-        hass = _make_hass(is_running=False)
-        key = secrets.token_bytes(32)
-        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
-        _, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, "rotated-secret", key
-        )
-        assert restart_needed is True
-
-    def test_reload_after_boot_bind_reuses_provider_and_stays_live(self):
-        # First bind at boot (is_running False) → live immediately, no restart.
-        # A later reload while running reuses the provider and stays live: the
-        # pending flag is read from hass.data (False), not recomputed from the
-        # now-True hass.is_running.
-        hass = _make_hass(is_running=False)
-        key = secrets.token_bytes(32)
-        provider1, first_restart = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, key
-        )
-        assert first_restart is False
-        hass.http.register_view.reset_mock()
-        hass.is_running = True  # a later reload happens while HA is running
-
-        provider2, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, key
-        )
-
-        assert provider2 is provider1
-        assert restart_needed is False
-        hass.http.register_view.assert_not_called()
-
-    def test_reload_after_mid_session_bind_stays_restart_pending(self):
-        # First bind mid-session (is_running True) → not live until a restart.
-        # An unrelated reload before that restart, with unchanged credentials,
-        # must KEEP reporting restart-needed (the views are still not live) —
-        # otherwise _async_update_legacy_oauth_issue would clear the repair
-        # prematurely.
-        hass = _make_hass(is_running=True)
-        key = secrets.token_bytes(32)
-        provider1, first_restart = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, key
-        )
-        assert first_restart is True
-        hass.http.register_view.reset_mock()
-
-        provider2, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, key
-        )
-
-        assert provider2 is provider1
-        assert restart_needed is True
-        hass.http.register_view.assert_not_called()
-
-    def test_second_bind_changed_credentials_keeps_old_provider_but_needs_restart(self):
-        hass = _make_hass(is_running=True)
-        provider1, _ = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-        )
-
-        provider2, restart_needed = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, "a-new-secret", secrets.token_bytes(32)
-        )
-
-        # aiohttp cannot rebind an already-registered view -- the OLD
-        # provider stays authoritative until a full HA restart.
-        assert provider2 is provider1
-        assert restart_needed is True
-
-    def test_raises_route_conflict_when_another_owner_holds_the_routes(self):
-        hass = _make_hass()
-        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy"
-        with pytest.raises(oauth_legacy.LegacyOAuthRouteConflict):
-            oauth_legacy.bind_legacy_views(
-                hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-            )
-
-    def test_accepts_hex_string_signing_key(self):
-        hass = _make_hass()
-        hex_key = secrets.token_bytes(32).hex()
-        provider, _ = oauth_legacy.bind_legacy_views(
-            hass, CLIENT_ID, CLIENT_SECRET, hex_key
-        )
-        assert isinstance(provider, oauth_legacy.LegacyOAuthProvider)
-
-
-class TestLegacyCredentialsActive:
-    """The bound-identity check embedded_setup uses to withhold rotated
-    credentials from the startup log while the rotation is pending a restart
-    (review finding on #1880)."""
-
-    def test_false_when_never_bound(self):
-        hass = _make_hass()
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-            )
-            is False
-        )
-
-    def test_false_when_another_integration_owns_routes(self):
-        hass = _make_hass()
-        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
-        hass.data[oauth_legacy.OAUTH_ROUTE_KEY_FINGERPRINT] = "anything"
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass, CLIENT_ID, CLIENT_SECRET, secrets.token_bytes(32)
-            )
-            is False
-        )
-
-    def test_true_for_the_bound_credentials(self):
-        hass = _make_hass()
-        key = secrets.token_bytes(32)
-        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
-        assert (
-            oauth_legacy.legacy_credentials_active(hass, CLIENT_ID, CLIENT_SECRET, key)
-            is True
-        )
-
-    def test_false_after_credential_change_until_rebind(self):
-        # The reuse branch keeps the OLD provider bound after a credential
-        # change, so the NEW credentials must not report as active.
-        hass = _make_hass()
-        key = secrets.token_bytes(32)
-        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass, CLIENT_ID, "rotated-secret", key
-            )
-            is False
-        )
-
-    def test_accepts_hex_string_signing_key(self):
-        hass = _make_hass()
-        key = secrets.token_bytes(32)
-        oauth_legacy.bind_legacy_views(hass, CLIENT_ID, CLIENT_SECRET, key)
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass, CLIENT_ID, CLIENT_SECRET, key.hex()
-            )
-            is True
-        )
-
-    def test_foreign_owner_uses_scoped_provider_fingerprint(self):
-        """Accept only scoped-provider credentials when a foreign owner holds root."""
-        hass = _make_hass()
-        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
-        key = secrets.token_bytes(32)
-        oauth_legacy.build_unbound_legacy_provider(
-            hass,
-            CLIENT_ID,
-            CLIENT_SECRET,
-            key,
-        )
-
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass,
-                CLIENT_ID,
-                CLIENT_SECRET,
-                key,
-            )
-            is True
-        )
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass,
-                CLIENT_ID,
-                "different-secret",
-                key,
-            )
-            is False
-        )
-
-    def test_clear_scoped_credentials_removes_stale_identity(self):
-        """An unloaded scoped provider must no longer expose its credentials."""
-        hass = _make_hass()
-        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
-        key = secrets.token_bytes(32)
-        oauth_legacy.build_unbound_legacy_provider(
-            hass,
-            CLIENT_ID,
-            CLIENT_SECRET,
-            key,
-        )
-
-        oauth_legacy.clear_scoped_legacy_credentials(hass)
-
-        assert (
-            oauth_legacy.legacy_credentials_active(
-                hass,
-                CLIENT_ID,
-                CLIENT_SECRET,
-                key,
-            )
-            is False
-        )
-
-
-# ---------------------------------------------------------------------------
-# embedded_entry._ensure_legacy_oauth_secrets (credential provisioning)
-# ---------------------------------------------------------------------------
-
-
-class TestEnsureLegacyOAuthSecrets:
-    """Pure dict-mutation helper behind the legacy OAuth credential lifecycle
-    -- operates on plain ``entry.data``/``entry.options`` dicts, so no
-    hass/entry mocking is needed."""
-
-    def test_first_run_mints_client_id_secret_and_signing_key(self):
-        data: dict = {}
-        options: dict = {}
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is True
-        assert data[DATA_OAUTH_CLIENT_ID].startswith("hamcp-")
-        assert data[DATA_OAUTH_CLIENT_SECRET]
-        # signing_key is stored as a hex string (entry.data must be JSON
-        # serializable) -- must decode cleanly.
-        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
-
-    def test_second_run_is_a_noop(self):
-        data: dict = {}
-        options: dict = {}
-        eentry._ensure_legacy_oauth_secrets(data, options)
-        snapshot = dict(data)
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is False
-        assert data == snapshot
-
-    def test_regenerate_mints_fresh_id_secret_and_rotates_signing_key(self):
-        data = {
-            DATA_OAUTH_CLIENT_ID: "hamcp-old",
-            DATA_OAUTH_CLIENT_SECRET: "old-secret",
-            DATA_OAUTH_SIGNING_KEY: "aa" * 32,
-        }
-        options = {OPT_OAUTH_REGENERATE: True}
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is True
-        assert data[DATA_OAUTH_CLIENT_ID] != "hamcp-old"
-        assert data[DATA_OAUTH_CLIENT_SECRET] != "old-secret"
-        # Every credential change rotates the key (hard revocation; kills the
-        # A->B->A resurrection). #1880 review finding.
-        assert data[DATA_OAUTH_SIGNING_KEY] != "aa" * 32
-        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
-        assert options[OPT_OAUTH_REGENERATE] is False
-        assert options[OPT_OAUTH_CLIENT_ID] == ""
-        assert options[OPT_OAUTH_CLIENT_SECRET] == ""
-
-    def test_override_adopts_user_supplied_client_id(self):
-        data = {
-            DATA_OAUTH_CLIENT_ID: "hamcp-old",
-            DATA_OAUTH_CLIENT_SECRET: "s",
-            DATA_OAUTH_SIGNING_KEY: "cc" * 32,
-        }
-        options = {OPT_OAUTH_CLIENT_ID: "my-custom-client-id"}
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is True
-        assert data[DATA_OAUTH_CLIENT_ID] == "my-custom-client-id"
-        # A client_id change also rotates the key so a re-used former id
-        # (A->B->A) can't resurrect its old tokens (#1880 review finding).
-        assert data[DATA_OAUTH_SIGNING_KEY] != "cc" * 32
-        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
-        # The override is consumed out of options (cleartext must not linger
-        # where ha_get_integration(include_options=True) can read it).
-        assert options[OPT_OAUTH_CLIENT_ID] == ""
-
-    def test_override_adopts_user_supplied_client_secret(self):
-        data = {
-            DATA_OAUTH_CLIENT_ID: "hamcp-x",
-            DATA_OAUTH_CLIENT_SECRET: "old",
-            DATA_OAUTH_SIGNING_KEY: "dd" * 32,
-        }
-        options = {OPT_OAUTH_CLIENT_SECRET: "my-custom-secret"}
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is True
-        assert data[DATA_OAUTH_CLIENT_SECRET] == "my-custom-secret"
-        # Token validation never involves the secret, so a secret-only
-        # rotation must rotate the signing key to evict outstanding tokens
-        # (otherwise an evicted holder keeps its access-token TTL -- and can
-        # read the new secret from the admin log through the server itself).
-        assert data[DATA_OAUTH_SIGNING_KEY] != "dd" * 32
-        bytes.fromhex(data[DATA_OAUTH_SIGNING_KEY])
-        # Consumed out of options — the cleartext new secret must not stay
-        # readable via ha_get_integration(include_options=True).
-        assert options[OPT_OAUTH_CLIENT_SECRET] == ""
-
-    def test_matching_override_is_still_consumed_from_options(self):
-        # Even when the override equals the current value (no data change),
-        # the cleartext copy must be cleared out of options -- so this now
-        # reports a change (it did not before the security fix landed).
-        data = {
-            DATA_OAUTH_CLIENT_ID: "already-set",
-            DATA_OAUTH_CLIENT_SECRET: "s",
-            DATA_OAUTH_SIGNING_KEY: "ee" * 32,
-        }
-        options = {OPT_OAUTH_CLIENT_ID: "already-set"}
-
-        changed = eentry._ensure_legacy_oauth_secrets(data, options)
-
-        assert changed is True
-        assert data[DATA_OAUTH_CLIENT_ID] == "already-set"
-        assert data[DATA_OAUTH_SIGNING_KEY] == "ee" * 32  # unchanged
-        assert options[OPT_OAUTH_CLIENT_ID] == ""
-
-
-class TestRfc9207MetadataAdvertisement:
-    """RFC 9207 §3: the legacy document advertises response issuer support."""
-
-    def test_legacy_document_advertises_iss_support(self):
-        from custom_components.ha_mcp_tools import mcp_webhook
-
-        doc = mcp_webhook._legacy_authorization_server_document("https://ha.example")
-        assert doc["authorization_response_iss_parameter_supported"] is True

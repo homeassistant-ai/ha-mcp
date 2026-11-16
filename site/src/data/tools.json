@@ -1899,7 +1899,7 @@
   {
     "name": "ha_config_list_groups",
     "title": "List Groups",
-    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group carries Core's state fields and attributes, its\nmembers as `entity_ids`, and its object_id. `auto` is true for a group\ncreated by ha_config_set_group (group.set) and false for a YAML group.\nCore does not expose a group's all/any mode.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
+    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group carries Core's state fields and attributes, its\nmembers as `entity_ids`, and its object_id. `auto` is true for a group\ncreated by ha_config_set_group (group.set) and false for a YAML group.\nCore does not expose a group's all/any mode.\nWithout the ha_mcp_tools component, `last_reported` comes from Core's\nREST API, can lag the live time, and the reply says so.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
     "inputSchema": {
       "properties": {
         "limit": {

@@ -169,12 +169,11 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `camera`, `conversation`) cannot be imported here; the component reaches it
   through a small function of its own that the test replaces.
 
-Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
-(`rules/no-fake-core-objects.yml`), an import of the old shared fakes
-(`rules/no-shared-core-fakes.yml`), `patch.dict(sys.modules, ...)` or an
+(`rules/no-fake-core-objects.yml`), `patch.dict(sys.modules, ...)` or an
 assignment of a Core module name in `sys.modules`
 (`rules/no-core-module-stand-ins.yml`), a replaced client method, client or
 HTTP transport, or a hand-written client class
@@ -184,13 +183,13 @@ hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
 and a comment that switches one of these checks off for a line or a file
 (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
 bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
-`assignment`, `attr-defined` or `misc`). The eighth
+`assignment`, `attr-defined` or `misc`). The seventh
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
-The ninth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
+The eighth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
 a test registers (`@websocket_api.websocket_command`) and a reply it writes on
 a connection (`connection.send_result`, `send_error`, `send_message`,
-`send_event`); it has no list, so every unit test complies. The tenth
+`send_event`); it has no list, so every unit test complies. The ninth
 (`rules/no-test-registry-store-writes.yml`) refuses a write into a registry's
 store (`.issues`, `.entities`, `.deleted_entities`, `.devices`,
 `.deleted_devices`, `.areas`, `.floors`, `.labels`, `.categories`): an item
@@ -200,23 +199,27 @@ restored one by having Core load it from storage. It has no list either.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
-which is why the fourth rule exists.
+which is why the third rule exists.
 
-Test files written before a check are listed with it: in the rule's `ignores`
-and in the guard. Converting a file removes it from every list it is on: the
-ast-grep `ignores`, the guard, `SLF001` and the mypy list below. A file taken
-off one list and left on another fails the ratchet below.
-`src/unit/test_core_reply_rules.py` keeps the lists of the hass, reply,
-shared-client, suppression and fixture-annotation rules exact: a listed file that no longer
-violates fails it, as does a violating file that is not listed.
+Test files written before a check are listed with it, in the rule's `ignores`.
+Only the reply and shared-client rules still have a list; the hand-made
+`hass`, fake Core object, suppression and fixture-annotation rules and the
+`sys.modules` guard have none, so every test complies with them. Converting a
+file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
+the mypy list below. A file taken off one list and left on another fails the
+ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
+listed file that no longer violates fails it, as does a violating file that is
+not listed); a rule without a list fails any violating file in the
+`ast-grep scan` Fast Checks runs.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
 is not in the base appears on one, whatever else the pull request changes. A
 file that is in the base may be added only by the pull request that creates the
 check or changes what its ast-grep rule matches, because a wider rule matches
-older files. The script also fails a rule that is removed, renamed or made to
-scan fewer files.
+older files. The script also fails a rule that is removed (unless the script
+names it as retired and its list is empty), renamed or made to scan fewer
+files.
 
 A listed file is exempt for what it already holds, not for what is added to
 it. For each file on an ast-grep rule's list or a `SLF001` list that the pull

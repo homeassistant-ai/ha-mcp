@@ -7,6 +7,7 @@ listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
 
 from __future__ import annotations
 
+import random
 import socket
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
@@ -23,12 +24,24 @@ if TYPE_CHECKING:
     from ha_mcp.client.rest_client import HomeAssistantClient
 
 
+_PORTS = random.SystemRandom()
+
+
 def free_port() -> int:
-    """A loopback port nothing listens on once the probe lets it go."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-    return port
+    """A loopback port nothing listens on once the probe lets it go.
+
+    Picked below every OS's ephemeral range, which port 0 draws from: an
+    outgoing connection of a parallel test could take that port before the
+    test binds it.
+    """
+    while True:
+        port = _PORTS.randrange(20000, 32768)
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
 
 
 def refused_url() -> str:

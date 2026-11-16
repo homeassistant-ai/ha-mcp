@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
@@ -28,6 +29,22 @@ OAUTH_ISSUE = "oauth_restart_required"
 def state_path(fs_root: Path, path: str | PurePath) -> Path:
     """The redirected location of an absolute ``/config`` or ``/data`` path."""
     return fs_root / str(path).lstrip("/")
+
+
+def make_fs_root(tmp_path: Path) -> Path:
+    """An empty ``/config`` and ``/data`` tree under ``tmp_path``."""
+    root = tmp_path / "fs"
+    for state_root in STATE_ROOTS:
+        (root / state_root.lstrip("/")).mkdir(parents=True)
+    return root
+
+
+def forget_package(package_name: str) -> None:
+    """Drop a package and its submodules from ``sys.modules``."""
+    for name in [
+        m for m in sys.modules if m == package_name or m.startswith(f"{package_name}.")
+    ]:
+        del sys.modules[name]
 
 
 def proxy_config_path(fs_root: Path, variant: Variant) -> Path:
