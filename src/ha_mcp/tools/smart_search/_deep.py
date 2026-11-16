@@ -9,7 +9,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
-from ..component_api import component_supports, get_component_caps
+from ..component_api import UNKNOWN_COMMAND_CODE, component_supports, get_component_caps
 from ..dashboard_read_errors import CONFIG_NOT_FOUND_CODE, NO_STORED_CONFIG_MESSAGES
 from ..helpers import exception_to_structured_error, safe_progress
 from ..tools_config_dashboards import (
@@ -39,6 +39,7 @@ from ._graph import (
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
+_NOT_LOADED = frozenset({UNKNOWN_COMMAND_CODE})  # Core lacks the command
 
 
 async def _scrub_results_for_enforce(
@@ -802,10 +803,10 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         ``<type>/list`` backend was unreachable (raised) or returned a
         non-success response — distinct from a successful empty match set.
         A soft ``{"success": False}`` is a backend failure, not a "no
-        helpers" signal, so it must surface as ``partial`` rather than be
-        swallowed to an empty list: otherwise the caller cannot tell a real
-        zero-match from a partial backend outage (helpers run on every
-        default ``ha_search`` call).
+        helpers" signal, so it must surface as ``partial``: otherwise the
+        caller cannot tell a real zero-match from a partial backend outage
+        (helpers run on every default ``ha_search`` call). The exception is
+        Core's ``unknown_command``: that integration is not loaded.
 
         ``registry_by_uid`` maps a helper's storage ``unique_id`` to its
         CURRENT ``(entity_id, name)`` from the entity registry (built by
@@ -823,14 +824,13 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         async with semaphore:
             try:
                 resp = await self.client.send_websocket_message(
-                    {"type": f"{helper_type}/list"}
+                    {"type": f"{helper_type}/list"}, expected_error_codes=_NOT_LOADED
                 )
-                # A soft failure (``{"success": False, "error": ...}``) does not
-                # raise; match that documented shape explicitly so it surfaces
-                # as a backend failure instead of a clean zero-match.
+                # A soft failure does not raise: a backend failure, not a clean
+                # zero-match, unless the integration is not loaded (no helpers).
                 if isinstance(resp, dict) and resp.get("success") is False:
                     logger.debug(f"{helper_type}/list returned non-success: {resp!r}")
-                    return [], True
+                    return [], resp.get("error_code") not in _NOT_LOADED
 
                 matches: list[dict[str, Any]] = []
                 for helper in resp.get("result", []):
