@@ -32,7 +32,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/test_tools_camera.py"
 message: |
   Do not import from another test module or from the old fake-client helpers,
   and do not take the `mock_client` fixture: each hands this file a hand-written

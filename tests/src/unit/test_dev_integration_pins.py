@@ -1,13 +1,8 @@
 """The dev group installs the integration libraries Core's manifests pin.
 
 Unit tests run Core's own Thread, OTBR, Z-Wave JS, Matter, ZHA, KNX, Local Calendar,
-<<<<<<< ours
-Remote Calendar and conversation handlers, so the dev group installs their
+Remote Calendar, Camera and conversation handlers, so the dev group installs their
 requirements. A Core update that moves a manifest pin must move the dev pin with it, or the
-=======
-Remote Calendar and Camera handlers, so the dev group installs their requirements. A
-Core update that moves a manifest pin must move the dev pin with it, or the
->>>>>>> theirs
 tests run a library that Core version never ships with.
 """
 
