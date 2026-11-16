@@ -517,6 +517,20 @@ async def test_removing_a_missing_subentry_says_it_was_not_found(
     assert "ha_get_integration" in message
 
 
+async def test_a_subentry_id_without_the_helper_type_never_removes_the_whole_entry(
+    hass: HomeAssistant, parent: MockConfigEntry, client: HomeAssistantClient
+) -> None:
+    """A caller who names a subentry means that subentry: leaving out
+    helper_type must not delete the parent integration."""
+    result = await IntegrationTools(client).ha_remove_helpers_integrations(
+        target=parent.entry_id, subentry_id=_EXISTING, confirm=True
+    )
+
+    assert result["success"] is True
+    assert hass.config_entries.async_get_entry(parent.entry_id) is parent
+    assert _EXISTING not in parent.subentries
+
+
 async def test_a_refused_subentry_removal_is_a_failure_not_a_missing_subentry(
     parent: MockConfigEntry,
     client: HomeAssistantClient,

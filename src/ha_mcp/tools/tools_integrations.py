@@ -1891,7 +1891,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Config subentry ID to remove when helper_type='config_subentry'."
+                    "Config subentry ID to remove; target is its parent entry_id."
                 ),
                 default=None,
             ),
@@ -2030,6 +2030,9 @@ class IntegrationTools:
             )
             return resolved
 
+        if helper_type is None and subentry_id is not None:
+            # A subentry_id names one subentry, never its whole parent entry.
+            helper_type = "config_subentry"
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
