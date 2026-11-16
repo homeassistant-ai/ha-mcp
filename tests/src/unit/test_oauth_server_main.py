@@ -28,6 +28,8 @@ async def started_oauth_server(
     """Run ``main_oauth`` with ``env`` (``None`` unsets) on top of a valid OAuth
     setup; the server it would serve, after the serve call returned at once."""
     monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:8123")
+    # ``main_oauth`` writes its own value over an empty one; this puts it back.
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", os.environ.get("HOMEASSISTANT_TOKEN", ""))
     monkeypatch.setenv("MCP_BASE_URL", PUBLIC_URL)
     monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)

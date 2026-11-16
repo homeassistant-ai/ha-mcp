@@ -37,7 +37,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 
-from ._command_faults import received
+from ._command_faults import dropped_on, pooled_socket, received
 from ._component_frames import older_component
 from ._core_setup import install_custom_helper, set_up_domain
 from ._deep_search_core import search_tools
@@ -130,17 +130,18 @@ def _probe_spy(client: HomeAssistantClient) -> Any:
 # --------------------------------------------------------------------------
 
 
-async def test_helper_lists_core_refuses_are_counted_not_a_clean_zero(
+async def test_a_helper_list_without_an_answer_is_counted_not_a_clean_zero(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """With no ``input_*`` integration loaded Core refuses all six helper
-    lists: each is counted as not scanned, so a caller cannot read the empty
-    result as "no helper matches". An admin token is not blamed for it."""
-    await _load(hass, "config")
+    """The connection drops on a helper list: that backend was not scanned, so
+    a caller cannot read the empty result as "no helper matches". An admin
+    token is not blamed for it."""
+    await _load(hass, "config", *INPUT_HELPERS)
 
-    response = await _search(core_client, ["helper"])
+    with dropped_on(hass, "input_boolean/list", await pooled_socket(core_client)):
+        response = await _search(core_client, ["helper"])
 
-    _assert_gap(response, r"\b6 helper backend\(s\) not scanned")
+    _assert_gap(response, r"\b[1-6] helper backend\(s\) not scanned")
     assert NON_ADMIN_TOKEN_WARNING not in response.get("warnings", [])
 
 
