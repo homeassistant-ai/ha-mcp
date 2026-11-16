@@ -376,7 +376,7 @@ async def _radio(mcp_client: Client, action: str, **arguments: Any) -> dict[str,
         )
 
 
-async def _switch_device_id(ha_client: HomeAssistantClient, entry_id: str) -> str:
+async def _switch_device_id(ha_client: HomeAssistantClient) -> str:
     """The device Home Assistant registered for the mock switch."""
     listed = await ha_client.send_websocket_message(
         {"type": "config/device_registry/list"}
@@ -384,10 +384,9 @@ async def _switch_device_id(ha_client: HomeAssistantClient, entry_id: str) -> st
     (device_id,) = [
         device["id"]
         for device in listed["result"]
-        if entry_id in device["config_entries"]
-        and any(
+        if any(
             domain == "zwave_js" and node.endswith(f"-{NODE_ID}")
-            for domain, node in device["identifiers"]
+            for domain, node in device.get("identifiers", ())
         )
     ]
     return device_id
@@ -434,7 +433,7 @@ async def zwave_network(
                     timeout=60,
                     description="the mock Z-Wave network is loaded",
                 )
-                device_id = await _switch_device_id(ha_client, entry_id)
+                device_id = await _switch_device_id(ha_client)
                 await _parameters_listed(mcp_client, device_id)
                 yield ZwaveNetwork(entry_id, device_id)
             finally:
