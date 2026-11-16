@@ -33,7 +33,6 @@ files:
   - "tests/addon/**"
 ignores:
   - "tests/src/unit/test_search_related_graph.py"
-  - "tests/src/unit/test_smart_search_scene_phase25.py"
   - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_assist_pipeline.py"
   - "tests/src/unit/test_tools_bug_report.py"
