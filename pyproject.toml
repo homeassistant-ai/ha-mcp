@@ -219,7 +219,6 @@ module = [
     "tests.src.unit.test_oauth_core_forward_tls",
     "tests.src.unit.test_oauth_ha_auth",
     "tests.src.unit.test_oidc_compat",
-    "tests.src.unit.test_overview_system_info",
     "tests.src.unit.test_performance_parallelization",
     "tests.src.unit.test_read_only",
     "tests.src.unit.test_redaction",
