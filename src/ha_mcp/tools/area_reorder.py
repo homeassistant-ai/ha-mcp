@@ -6,6 +6,7 @@ from typing import Any
 from pydantic.fields import FieldInfo
 
 from ..backup_registry_items import registry_rows
+from ..client.exceptions import HomeAssistantCommandNotSent
 from ..errors import ErrorCode, create_error_response
 from .coercion import UNSET, parse_string_list_param
 from .helpers import (
@@ -84,6 +85,15 @@ async def reorder_area_or_floor(
         result = await client.send_websocket_message(
             {"type": f"config/{kind}_registry/reorder", f"{kind}_ids": ids}
         )
+    except HomeAssistantCommandNotSent as e:
+        exception_to_structured_error(
+            e,
+            context=context,
+            suggestions=[
+                f"Nothing was reordered: the reorder of the {kind}s was not "
+                "sent. Try again"
+            ],
+        )
     except Exception as e:  # noqa: BLE001
         exception_to_structured_error(
             e,
@@ -126,6 +136,6 @@ async def reorder_area_or_floor(
         )
         reply["warnings"].append(
             f"The {kind}s were reordered, but the new order could not be read "
-            f"back ({e}). Read it with ha_list_floors_areas()."
+            f"back ({e!r}). Read it with ha_list_floors_areas()."
         )
     return reply

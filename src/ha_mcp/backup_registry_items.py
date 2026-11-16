@@ -148,10 +148,19 @@ async def _registry_fields(
     try:
         answer = await ask_component(client, "registry_fields", **params)
     except HomeAssistantConnectionError as exc:
-        logger.warning("registry_fields got no answer; going on without it: %r", exc)
+        logger.warning(
+            "registry_fields got no answer for %s; going on without it: %r",
+            params,
+            exc,
+        )
         return None
     if answer is not None and not _well_formed(answer):
-        logger.warning("registry_fields answered in another shape; going on without it")
+        logger.warning(
+            "registry_fields answered %s in another shape (keys %s); going on "
+            "without it",
+            params,
+            sorted(answer),
+        )
         return None
     return answer
 

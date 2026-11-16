@@ -143,9 +143,9 @@ async def fetch_registries_via_component(
         )
         return None
     result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    if not _has_valid_shape(result, registries, category_scopes):
+    if not isinstance(result, dict) or not _has_valid_shape(
+        result, registries, category_scopes
+    ):
         logger.warning(
             "%s returned an unexpected shape; fell back to legacy", WS_REGISTRIES
         )

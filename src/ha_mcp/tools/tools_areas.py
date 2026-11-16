@@ -495,14 +495,18 @@ class AreaTools:
             return
         try:
             listed = await registry_list_reply(self._client, "area")
+            unread = None if listed.get("success") else str(listed.get("error"))
         except Exception as exc:  # noqa: BLE001
-            # Write already succeeded; a transport failure on re-read must
-            # not look like a failed create (retry would duplicate the area).
+            unread = str(exc)
+        if unread is not None:
+            # Write already succeeded; a re-read that fails must not look like
+            # a failed create (retry would duplicate the area), nor like
+            # labels Core dropped.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Area write succeeded, but label verification failed",
-                    details=str(exc),
+                    details=unread,
                     context=self._label_verify_context(
                         parsed_labels=parsed_labels,
                         kind=kind,
@@ -517,7 +521,7 @@ class AreaTools:
                     ],
                 )
             )
-        rows = listed.get("result") if listed.get("success") else None
+        rows = listed.get("result")
         found: dict[str, Any] | None = None
         if isinstance(rows, list):
             found = next(

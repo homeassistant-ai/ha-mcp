@@ -11,6 +11,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Literal
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.config import floor_registry as config_floors
@@ -22,6 +23,7 @@ from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.json import json_bytes, json_fragment
 from homeassistant.setup import async_setup_component
 
+from ha_mcp.client.exceptions import HomeAssistantCommandNotSent
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_areas import AreaTools
@@ -451,6 +453,35 @@ async def test_a_reorder_is_not_sent_when_the_order_before_it_cannot_be_read(
         ground.floor_id,
         attic.floor_id,
     ]
+
+
+async def test_a_reorder_that_was_not_sent_says_nothing_was_reordered(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reorder that never left the server changed nothing: the error says so
+    instead of sending the caller to check whether it was applied."""
+    floors = fr.async_get(hass)
+    ground = floors.async_create("Ground", level=0)
+    attic = floors.async_create("Attic", level=2)
+    # The order before it is read on a connection of its own, so this fails
+    # the reorder alone.
+    monkeypatch.setattr(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantCommandNotSent("no connection")),
+    )
+
+    error = await rejected_call_body(
+        tools.ha_set_area_or_floor(
+            kind="floor", order=[attic.floor_id, ground.floor_id]
+        )
+    )
+
+    assert error["previous_order"] == [ground.floor_id, attic.floor_id]
+    assert any("Nothing was reordered" in s for s in error["error"]["suggestions"])
 
 
 async def test_a_reorder_core_does_not_answer_says_how_to_check_and_go_back(

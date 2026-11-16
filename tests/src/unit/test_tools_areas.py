@@ -681,7 +681,15 @@ class TestSetAreaLabels:
             "config/area_registry/list",
         ]
 
-    async def test_verify_list_transport_failure_marks_write_committed(self, tools):
+    @pytest.mark.parametrize(
+        "list_answer",
+        [ConnectionError("ws dropped"), {"success": False, "error": "ws dropped"}],
+        ids=["raised", "refused"],
+    )
+    async def test_verify_list_failure_marks_write_committed(self, tools, list_answer):
+        """A re-read that fails, raised or refused, leaves the labels unverified:
+        the error says so and carries the cause, not that Core dropped them."""
+
         async def handler(msg):
             msg_type = msg.get("type")
             if msg_type == "config/label_registry/list":
@@ -692,7 +700,9 @@ class TestSetAreaLabels:
                     "result": {"area_id": "kitchen", "name": "Kitchen"},
                 }
             if msg_type == "config/area_registry/list":
-                raise ConnectionError("ws dropped")
+                if isinstance(list_answer, Exception):
+                    raise list_answer
+                return list_answer
             return {"success": True, "result": {}}
 
         tools._client.send_websocket_message.side_effect = handler
