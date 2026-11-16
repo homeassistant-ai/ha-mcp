@@ -217,40 +217,6 @@ YAML_KEY_DENYLIST = frozenset(
     }
 )
 
-# Post-edit action required for each YAML key.
-# template, mqtt, group, automation, script, and scene have first-party
-# reload services in HA core. All others require a full HA restart.
-# ``TestPostActionTableContract`` pins the in-repo shape; the HA-core
-# side of the contract is a write-time snapshot, not a continuous check.
-YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
-    "template": {
-        "post_action": "reload_available",
-        "reload_service": "homeassistant.reload_custom_templates",
-    },
-    "mqtt": {
-        "post_action": "reload_available",
-        "reload_service": "mqtt.reload",
-    },
-    "group": {
-        "post_action": "reload_available",
-        "reload_service": "group.reload",
-    },
-    "automation": {
-        "post_action": "reload_available",
-        "reload_service": "automation.reload",
-    },
-    "script": {
-        "post_action": "reload_available",
-        "reload_service": "script.reload",
-    },
-    "scene": {
-        "post_action": "reload_available",
-        "reload_service": "scene.reload",
-    },
-}
-# Default for keys not in YAML_KEY_POST_ACTIONS:
-YAML_KEY_DEFAULT_POST_ACTION = {"post_action": "restart_required"}
-
 # YAML-mode dashboard url_path validation (issue #1034).
 # Pattern: lowercase letters/digits, hyphen-separated, must contain at least
 # one hyphen (HA's lovelace dashboard rule). No leading/trailing/double hyphens.

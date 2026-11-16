@@ -140,38 +140,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await task",
-        "False positive on the bare 'await task' inside pytest.raises in "
-        "test_send_command_cancellation_drops_the_pending_future: awaiting "
-        "the cancelled send_command task IS the effect (it drives the task to "
-        "completion and raises the CancelledError the context manager "
-        "asserts).",
-    ),
-    (
-        "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await first",
-        "False positive on the bare 'await first' inside pytest.raises in "
-        "test_a_second_connect_is_not_torn_down_by_the_first: awaiting the "
-        "cancelled first connect attempt IS the effect (it drives the "
-        "attempt through its cleanup and raises the CancelledError the "
-        "context manager asserts).",
-    ),
-    (
-        "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await second",
-        "False positive on the bare 'await second' inside pytest.raises in "
-        "test_a_second_connect_is_not_torn_down_by_the_first: the second "
-        "attempt is cancelled to end the test, and awaiting it is what "
-        "drives that cancellation to completion.",
-    ),
-    (
-        "py/ineffectual-statement",
         "tests/src/unit/test_ha_search_dashboard_leg_failure.py",
         "This statement has no effect",
         "await call",
@@ -618,14 +586,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "",
         "Test assertion, not URL validation: checks that the landing page's "
         "help copy mentions dash.cloudflare.com.",
-    ),
-    (
-        "py/incomplete-url-substring-sanitization",
-        "tests/src/unit/test_oauth.py",
-        "may be at an arbitrary position",
-        "",
-        "Test assertion, not URL validation: checks that the consent HTML "
-        "displays the redirect host to the user.",
     ),
     (
         "py/incomplete-url-substring-sanitization",

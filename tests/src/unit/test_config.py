@@ -366,8 +366,7 @@ def isolated_data_dir(tmp_path, monkeypatch):
     ``get_data_dir`` is ``@lru_cache(maxsize=1)`` — without clearing
     the cache, the first test bakes in whichever tmp_path the runner
     saw and every subsequent test reads from a stale path. Clear the
-    cache both before AND after the test so the fixture is symmetric
-    with `_reset_data_dir_cache` in ``test_settings_ui.py``.
+    cache both before AND after the test.
     """
     from ha_mcp.utils.data_paths import get_data_dir
 

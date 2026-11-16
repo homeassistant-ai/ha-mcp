@@ -54,7 +54,7 @@ def _fake_post_request_with_token():
 
 @pytest.fixture(autouse=True)
 def _reset_data_dir_cache():
-    """Match test_settings_ui.py: clear the memoized data-dir between cases."""
+    """Clear the memoized data-dir between cases."""
     from ha_mcp.utils.data_paths import get_data_dir
 
     get_data_dir.cache_clear()

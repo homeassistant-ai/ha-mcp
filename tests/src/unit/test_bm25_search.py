@@ -1,21 +1,90 @@
-"""Unit tests for BM25-based fuzzy search (issue #851).
+"""BM25 fuzzy search (issue #851) on entities and configs from real Core.
 
-Tests the BM25Scorer class, tokenizer, FuzzyEntitySearcher BM25 integration,
-and the BM25 path in SmartSearchTools._search_in_dict.
+The tokenizer and the BM25 scorer are pure and get token lists. Entity search
+runs ``smart_entity_search`` on the server's own client against a real
+``hass``: states come from Core's state machine, aliases and ``hidden_by``
+from its entity registry. Config scoring runs ``deep_search`` over
+automations Core loaded.
 """
 
+from __future__ import annotations
+
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.utils.fuzzy_search import (
     HIDDEN_SCORE_PENALTY,
     BM25Scorer,
-    FuzzyEntitySearcher,
     apply_hidden_penalty,
     tokenize,
 )
+
+from ._deep_search_core import automation, load_automations, search_tools
+
+ROOMS = {
+    "light.kitchen_ceiling": "Kitchen Ceiling Light",
+    "light.living_room": "Living Room Light",
+    "sensor.kitchen_temperature": "Kitchen Temperature",
+    "light.bedroom": "Bedroom Light",
+    "binary_sensor.garage_door": "Garage Door",
+}
+LIGHTS = {
+    "light.bed_light": "Bed Light",
+    "light.ceiling_lights": "Ceiling Lights",
+    "light.kitchen_lights": "Kitchen Lights",
+    "cover.garage_door": "Garage Door",
+}
+
+
+async def _add_states(hass: HomeAssistant, names: dict[str, str]) -> None:
+    """``names`` as states, on a Core whose registry commands answer."""
+    assert await async_setup_component(hass, "config", {})
+    for entity_id, name in names.items():
+        hass.states.async_set(entity_id, "on", {"friendly_name": name})
+
+
+async def _register(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_id: str,
+    name: str,
+    **changes: Any,
+) -> None:
+    """``entity_id`` in Core's registry with ``changes``, and its state."""
+    domain, object_id = entity_id.split(".", 1)
+    entry = entity_registry.async_get_or_create(
+        domain, "bm25_test", object_id, suggested_object_id=object_id
+    )
+    assert entry.entity_id == entity_id
+    if changes:
+        entity_registry.async_update_entity(entity_id, **changes)
+    await _add_states(hass, {entity_id: name})
+
+
+async def _search(
+    client: HomeAssistantClient,
+    query: str,
+    *,
+    threshold: int = 60,
+    limit: int = 10,
+    offset: int = 0,
+) -> dict[str, Any]:
+    return await SmartSearchTools(
+        client=client, fuzzy_threshold=threshold
+    ).smart_entity_search(query, limit=limit, offset=offset)
+
+
+def _ids(result: dict[str, Any]) -> list[str]:
+    return [match["entity_id"] for match in result["matches"]]
+
 
 # ---------------------------------------------------------------------------
 # tokenize()
@@ -23,13 +92,13 @@ from ha_mcp.utils.fuzzy_search import (
 
 
 class TestTokenize:
-    def test_entity_id_splits_on_dot_and_underscore(self):
+    def test_entity_id_splits_on_dot_and_underscore(self) -> None:
         assert tokenize("light.kitchen_ceiling") == ["light", "kitchen", "ceiling"]
 
-    def test_friendly_name_splits_on_spaces(self):
+    def test_friendly_name_splits_on_spaces(self) -> None:
         assert tokenize("Kitchen Ceiling Light") == ["kitchen", "ceiling", "light"]
 
-    def test_mixed_delimiters(self):
+    def test_mixed_delimiters(self) -> None:
         assert tokenize("sensor.living_room-temp 2") == [
             "sensor",
             "living",
@@ -38,10 +107,10 @@ class TestTokenize:
             "2",
         ]
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert tokenize("") == []
 
-    def test_single_token(self):
+    def test_single_token(self) -> None:
         assert tokenize("light") == ["light"]
 
 
@@ -52,7 +121,7 @@ class TestTokenize:
 
 class TestBM25Scorer:
     @pytest.fixture
-    def simple_corpus(self):
+    def simple_corpus(self) -> list[list[str]]:
         return [
             ["kitchen", "ceiling", "light"],
             ["living", "room", "light"],
@@ -61,673 +130,413 @@ class TestBM25Scorer:
             ["garage", "door"],
         ]
 
-    def test_fit_builds_idf(self, simple_corpus):
+    def test_rarer_terms_weigh_more(self, simple_corpus: list[list[str]]) -> None:
+        """'light' is in 3/5 docs, 'kitchen' in 2/5, 'garage' in 1/5."""
         scorer = BM25Scorer()
         scorer.fit(simple_corpus)
-        # "light" appears in 3/5 docs, "kitchen" in 2/5, "garage" in 1/5
-        assert scorer._idf["kitchen"] > scorer._idf["light"]
-        assert scorer._idf["garage"] > scorer._idf["kitchen"]
+        light, kitchen, garage = (
+            scorer.max_possible_score([token])
+            for token in ("light", "kitchen", "garage")
+        )
+        assert garage > kitchen > light
 
-    def test_score_prefers_rare_term(self, simple_corpus):
+    def test_score_prefers_rare_term(self, simple_corpus: list[list[str]]) -> None:
+        """'kitchen light' ranks the kitchen ceiling light above the living
+        room light, because 'kitchen' is rarer than 'light'."""
         scorer = BM25Scorer()
         scorer.fit(simple_corpus)
-        # "kitchen light" should rank the kitchen ceiling light higher than
-        # living room light because "kitchen" is rarer than "light"
         scores = scorer.score_all(["kitchen", "light"])
-        kitchen_ceiling_score = scores[0]
-        living_room_score = scores[1]
-        assert kitchen_ceiling_score > living_room_score
+        assert scores[0] > scores[1]
 
-    def test_score_zero_for_no_match(self, simple_corpus):
+    def test_score_zero_for_no_match(self, simple_corpus: list[list[str]]) -> None:
         scorer = BM25Scorer()
         scorer.fit(simple_corpus)
-        scores = scorer.score_all(["nonexistent"])
-        assert all(s == 0.0 for s in scores)
+        assert all(s == 0.0 for s in scorer.score_all(["nonexistent"]))
 
-    def test_multi_word_non_adjacent(self, simple_corpus):
-        """BM25 finds documents where query terms exist but are not adjacent.
-        This is the 'dryer override' case from issue #851."""
+    def test_multi_word_non_adjacent(self, simple_corpus: list[list[str]]) -> None:
+        """Query terms that exist but are not adjacent still score: the
+        'dryer override' case from issue #851."""
         scorer = BM25Scorer()
         scorer.fit(simple_corpus)
-        # "kitchen sensor" — terms exist in doc 2 but not adjacent
-        score = scorer.score(["kitchen", "sensor"], 2)
-        assert score > 0
+        assert scorer.score(["kitchen", "sensor"], 2) > 0
 
-    def test_empty_corpus(self):
-        scorer = BM25Scorer()
-        scorer.fit([])
-        assert scorer.score_all(["test"]) == []
-
-    def test_single_doc(self):
+    def test_single_doc(self) -> None:
+        """Config scoring fits a one-document corpus; its terms still score."""
         scorer = BM25Scorer()
         scorer.fit([["hello", "world"]])
-        scores = scorer.score_all(["hello"])
-        assert scores[0] > 0
+        assert scorer.score_all(["hello"])[0] > 0
 
 
 # ---------------------------------------------------------------------------
-# FuzzyEntitySearcher with BM25
+# Entity search with BM25
 # ---------------------------------------------------------------------------
 
 
-class TestFuzzyEntitySearcherBM25:
-    @pytest.fixture
-    def entities(self):
-        return [
-            {
-                "entity_id": "light.kitchen_ceiling",
-                "attributes": {"friendly_name": "Kitchen Ceiling Light"},
-                "state": "on",
-            },
-            {
-                "entity_id": "light.living_room",
-                "attributes": {"friendly_name": "Living Room Light"},
-                "state": "on",
-            },
-            {
-                "entity_id": "sensor.kitchen_temperature",
-                "attributes": {"friendly_name": "Kitchen Temperature"},
-                "state": "22.5",
-            },
-            {
-                "entity_id": "light.bedroom",
-                "attributes": {"friendly_name": "Bedroom Light"},
-                "state": "off",
-            },
-            {
-                "entity_id": "binary_sensor.garage_door",
-                "attributes": {"friendly_name": "Garage Door"},
-                "state": "closed",
-            },
-        ]
-
-    def test_multi_word_query_ranks_correctly(self, entities):
-        """'kitchen light' should rank kitchen ceiling light first."""
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results, total = searcher.search_entities(entities, "kitchen light", limit=5)
-        assert total > 0
-        assert results[0]["entity_id"] == "light.kitchen_ceiling"
-
-    def test_production_threshold_passes_full_match(self, entities):
-        """A match containing all query tokens must pass the production threshold (60)."""
-        searcher = FuzzyEntitySearcher(threshold=60)
-        results, total = searcher.search_entities(entities, "kitchen ceiling", limit=5)
-        assert total > 0, (
-            "Full token match ('kitchen' + 'ceiling') must survive threshold=60 "
-            "under absolute IDF-based normalization"
-        )
-        assert results[0]["entity_id"] == "light.kitchen_ceiling"
-
-    def test_production_threshold_filters_partial_match(self, entities):
-        """A query sharing only a common token should not dominate at threshold=60."""
-        searcher = FuzzyEntitySearcher(threshold=60)
-        # "light nonexistent" only matches on the very common 'light' token —
-        # with absolute normalization, a half-match of a common term should
-        # score well below 60.
-        results, _ = searcher.search_entities(entities, "light nonexistent", limit=5)
-        # Either zero results or only those where 'light' carries enough IDF
-        # weight — no noise floor of 100 from empirical normalization.
-        assert all(r["score"] < 100 for r in results), (
-            "Partial match on common token should not be normalized to 100"
-        )
-
-    def test_single_word_query(self, entities):
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results, total = searcher.search_entities(entities, "garage", limit=5)
-        assert total >= 1
-        assert any(r["entity_id"] == "binary_sensor.garage_door" for r in results)
-
-    def test_no_match_returns_empty(self, entities):
-        """BM25 should return 0 results for completely unrelated query."""
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results, total = searcher.search_entities(
-            entities, "microcontroller zebra", limit=5
-        )
-        assert total == 0
-        assert results == []
-
-    def test_empty_query_returns_empty(self, entities):
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(entities, "", limit=5)
-        assert total == 0
-
-    def test_empty_entities_returns_empty(self):
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities([], "kitchen", limit=5)
-        assert total == 0
-
-    def test_pagination(self, entities):
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results_p1, total = searcher.search_entities(
-            entities, "light", limit=2, offset=0
-        )
-        results_p2, _ = searcher.search_entities(entities, "light", limit=2, offset=2)
-        # Pages should not overlap
-        ids_p1 = {r["entity_id"] for r in results_p1}
-        ids_p2 = {r["entity_id"] for r in results_p2}
-        assert not ids_p1.intersection(ids_p2)
-
-    def test_typo_fallback(self, entities):
-        """Slight typo should still find results via SequenceMatcher fallback."""
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results, total = searcher.search_entities(entities, "kitchn", limit=5)
-        # "kitchn" is close to "kitchen" — typo fallback should catch it
-        assert total > 0
-
-    def test_underscore_space_equivalence(self, entities):
-        """'tesla_ble' and 'tesla ble' should return the same results (unified tokenization)."""
-        extra_entities = [
-            {
-                "entity_id": "number.tesla_ble_charging_amps",
-                "attributes": {"friendly_name": "Tesla BLE Charging Amps"},
-                "state": "16",
-            },
-        ]
-        searcher = FuzzyEntitySearcher(threshold=30)
-        results_underscore, total_u = searcher.search_entities(
-            extra_entities, "tesla_ble", limit=5
-        )
-        results_space, total_s = searcher.search_entities(
-            extra_entities, "tesla ble", limit=5
-        )
-        assert total_u == total_s
-        assert results_underscore[0]["entity_id"] == results_space[0]["entity_id"]
-
-
-# ---------------------------------------------------------------------------
-# _search_in_dict BM25 path (via SmartSearchTools)
-# ---------------------------------------------------------------------------
-
-
-class TestSearchInDictBM25:
-    """Test the BM25 fuzzy path in SmartSearchTools._search_in_dict."""
-
-    @pytest.fixture
-    def smart_tools(self):
-        from unittest.mock import AsyncMock
-
-        from ha_mcp.tools.smart_search import SmartSearchTools
-
-        mock_client = AsyncMock()
-        mock_client.get_states = AsyncMock(return_value=[])
-        return SmartSearchTools(client=mock_client, fuzzy_threshold=60)
-
-    def test_multi_word_finds_non_adjacent_terms(self, smart_tools):
-        """The 'dryer override' case: terms exist but not adjacent."""
-        config = {
-            "alias": "Tesla Mobile Connector Dryer Load Sharing",
-            "trigger": [{"entity_id": "sensor.dryer_power"}],
-            "action": [
-                {"service": "input_boolean.toggle"},
-                {"entity_id": "input_boolean.emporia_vehicle_tesla_override"},
-            ],
-        }
-        score = smart_tools._search_in_dict(config, "dryer override", exact_match=False)
-        assert score > 0
-
-    def test_exact_match_requires_contiguous_substring(self, smart_tools):
-        """Exact match: 'dryer override' is NOT a contiguous substring."""
-        config = {
-            "alias": "Tesla Mobile Connector Dryer Load Sharing",
-            "trigger": [{"entity_id": "sensor.dryer_power"}],
-            "action": [
-                {"entity_id": "input_boolean.emporia_vehicle_tesla_override"},
-            ],
-        }
-        score = smart_tools._search_in_dict(config, "dryer override", exact_match=True)
-        assert score == 0
-
-    def test_exact_match_finds_contiguous_substring(self, smart_tools):
-        config = {"alias": "Turn on dryer override mode"}
-        score = smart_tools._search_in_dict(config, "dryer override", exact_match=True)
-        assert score == 100
-
-    def test_fuzzy_empty_data(self, smart_tools):
-        assert smart_tools._search_in_dict({}, "test", exact_match=False) == 0
-
-    def test_fuzzy_nested_structure(self, smart_tools):
-        config = {
-            "trigger": [
-                {
-                    "platform": "state",
-                    "entity_id": "binary_sensor.kitchen_motion",
-                }
-            ],
-            "action": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.kitchen"}}
-            ],
-        }
-        score = smart_tools._search_in_dict(config, "kitchen motion", exact_match=False)
-        assert score > 0
-
-    @pytest.mark.parametrize("exact_match", [True, False])
-    def test_deeply_nested_config_is_searched_in_full(
-        self, smart_tools: SmartSearchTools, exact_match: bool
+class TestEntitySearchBM25:
+    async def test_multi_word_query_ranks_correctly(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
-        deep: dict[str, Any] = {"entity": "light.deep"}
-        for _ in range(1500):
-            deep = {"n": deep}
-        assert smart_tools._search_in_dict(deep, "light.deep", exact_match) > 0
+        """'kitchen light' puts the kitchen ceiling light first."""
+        await _add_states(hass, ROOMS)
+        result = await _search(core_client, "kitchen light", threshold=30, limit=5)
+        assert _ids(result)[0] == "light.kitchen_ceiling"
+
+    async def test_production_threshold_passes_full_match(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A match holding every query token clears the production threshold."""
+        await _add_states(hass, ROOMS)
+        result = await _search(core_client, "kitchen ceiling", limit=5)
+        assert _ids(result)[0] == "light.kitchen_ceiling"
+
+    async def test_production_threshold_filters_partial_match(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A query sharing only the common token 'light' does not reach the
+        production threshold: scores are normalised against the query's
+        theoretical maximum, not inflated to 100 for the best hit."""
+        await _add_states(hass, ROOMS)
+        result = await _search(core_client, "light nonexistent", limit=5)
+        assert result["matches"] == []
+
+    async def test_single_word_query(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _add_states(hass, ROOMS)
+        result = await _search(core_client, "garage", threshold=30, limit=5)
+        assert "binary_sensor.garage_door" in _ids(result)
+
+    async def test_no_match_returns_empty(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _add_states(hass, ROOMS)
+        result = await _search(
+            core_client, "microcontroller zebra", threshold=30, limit=5
+        )
+        assert (result["total_matches"], result["matches"]) == (0, [])
+
+    async def test_empty_query_returns_empty(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _add_states(hass, ROOMS)
+        result = await _search(core_client, "", limit=5)
+        assert result["total_matches"] == 0
+
+    async def test_no_entities_returns_empty(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _add_states(hass, {})
+        result = await _search(core_client, "kitchen", limit=5)
+        assert result["total_matches"] == 0
+
+    async def test_pages_do_not_overlap(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _add_states(hass, ROOMS)
+        first = await _search(core_client, "light", threshold=30, limit=2)
+        second = await _search(core_client, "light", threshold=30, limit=2, offset=2)
+        assert len(_ids(first)) == 2
+        assert _ids(second)
+        assert not set(_ids(first)) & set(_ids(second))
+
+    async def test_underscore_space_equivalence(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """'tesla_ble' and 'tesla ble' find the same entity."""
+        await _add_states(
+            hass, {"number.tesla_ble_charging_amps": "Tesla BLE Charging Amps"}
+        )
+        underscore = await _search(core_client, "tesla_ble", threshold=30, limit=5)
+        space = await _search(core_client, "tesla ble", threshold=30, limit=5)
+        assert _ids(underscore) == _ids(space) == ["number.tesla_ble_charging_amps"]
 
 
 # ---------------------------------------------------------------------------
-# Issue #1170 — fuzzy_search.py algorithmic regression tests
+# Config scoring in deep_search
+# ---------------------------------------------------------------------------
+
+DRYER_LOAD_SHARING = automation(
+    "uid_dryer",
+    "Tesla Mobile Connector Dryer Load Sharing",
+    triggers=[{"trigger": "state", "entity_id": "sensor.dryer_power"}],
+    actions=[
+        {
+            "action": "input_boolean.toggle",
+            "target": {"entity_id": "input_boolean.emporia_vehicle_tesla_override"},
+        }
+    ],
+)
+
+
+class TestDeepSearchConfigScoring:
+    async def test_fuzzy_finds_non_adjacent_terms_in_config(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """The 'dryer override' case: both terms are in the config, apart."""
+        await load_automations(hass, [DRYER_LOAD_SHARING])
+        result = await search_tools(core_client).deep_search(
+            "dryer override", search_types=["automation"], exact_match=False
+        )
+        [found] = result["automations"]
+        assert found["match_in_config"] is True
+
+    async def test_exact_match_requires_contiguous_substring(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await load_automations(hass, [DRYER_LOAD_SHARING])
+        result = await search_tools(core_client).deep_search(
+            "dryer override", search_types=["automation"], exact_match=True
+        )
+        assert result["automations"] == []
+
+    async def test_exact_match_finds_contiguous_substring(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await load_automations(
+            hass,
+            [
+                automation(
+                    "uid_laundry",
+                    "Laundry Helper",
+                    description="Turn on dryer override mode",
+                )
+            ],
+        )
+        result = await search_tools(core_client).deep_search(
+            "dryer override", search_types=["automation"], exact_match=True
+        )
+        [found] = result["automations"]
+        assert (found["match_in_name"], found["match_in_config"]) == (False, True)
+
+
+# ---------------------------------------------------------------------------
+# Issue #1170: elided separators, typo fallback gates, aliases
 # ---------------------------------------------------------------------------
 
 
 class TestFuzzySearcherIssue1170:
-    """Lock down the fuzzy-search behavior changes from #1170 findings 2/5/8."""
+    async def test_finding_2_elided_separator_query_finds_target_uniquely(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """``bedlight`` (no separator) matches only ``light.bed_light``, not
+        every light at one tied score."""
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "bedlight")
+        assert _ids(result) == ["light.bed_light"]
+        assert result["matches"][0]["score"] >= 75
 
-    @pytest.fixture
-    def lights_corpus(self):
-        return [
+    async def test_finding_5_multi_token_garbage_rejected(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A 3-token nonsense query whose one token grazes ``garage``
+        (``garbage``) does not surface the garage door."""
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "xyz_irrelevant_garbage")
+        assert result["total_matches"] == 0
+
+    async def test_finding_5_single_token_typo_still_recalls(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A single-token typo (``ligth``) still finds the lights."""
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "ligth")
+        assert _ids(result)
+        assert all(eid.startswith("light.") for eid in _ids(result))
+
+    async def test_typo_fallback_short_single_token_returns_empty(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A 3-character query (``lit``) surfaced ``u7_lite_*`` and
+        ``shopping_list`` through partial overlap; it finds nothing."""
+        await _add_states(
+            hass,
             {
-                "entity_id": "light.bed_light",
-                "attributes": {"friendly_name": "Bed Light"},
-                "state": "off",
+                "button.u7_lite_restart": "U7 Lite Restart",
+                "light.u7_lite_led": "U7 Lite LED",
+                "todo.shopping_list": "Shopping List",
             },
-            {
-                "entity_id": "light.ceiling_lights",
-                "attributes": {"friendly_name": "Ceiling Lights"},
-                "state": "off",
-            },
-            {
-                "entity_id": "light.kitchen_lights",
-                "attributes": {"friendly_name": "Kitchen Lights"},
-                "state": "off",
-            },
-            {
-                "entity_id": "cover.garage_door",
-                "attributes": {"friendly_name": "Garage Door"},
-                "state": "closed",
-            },
+        )
+        result = await _search(core_client, "lit")
+        assert result["total_matches"] == 0
+
+    async def test_typo_fallback_four_char_single_token_still_fires(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """The length gate stops at 3 characters: the 4-character typo
+        ``gats`` still finds the gates."""
+        await _add_states(hass, {"light.gates": "Gates"})
+        result = await _search(core_client, "gats")
+        assert [(m["entity_id"], m["match_type"]) for m in result["matches"]] == [
+            ("light.gates", "typo_fallback")
         ]
 
-    def test_finding_2_elided_separator_query_finds_target_uniquely(
-        self, lights_corpus
-    ):
-        """Query ``bedlight`` (no separator) matches only ``light.bed_light``,
-        not the entire 3-light tie cluster pre-fix saw at score 76.
-
-        Implementation: separator-stripped concat tokens are added to the
-        BM25 corpus so a single-token query can match a multi-word entity
-        name directly, with high IDF (rare token = strong signal).
-        """
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(lights_corpus, "bedlight", limit=10)
-        assert total == 1, (
-            f"bedlight should uniquely match bed_light, not tie-cluster: {results}"
+    async def test_finding_8_alias_search_with_match_type_label(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        """A registry alias that neither the id nor the name holds finds the
+        entity, labelled ``alias_match``."""
+        await _register(
+            hass,
+            entity_registry,
+            "light.bed_light",
+            "Bed Light",
+            aliases=["lullaby lamp"],
         )
-        assert results[0]["entity_id"] == "light.bed_light"
-        assert results[0]["score"] >= 75, (
-            f"score should remain useful after fix: {results[0]}"
-        )
-
-    def test_finding_5_multi_token_garbage_rejected(self, lights_corpus):
-        """A 3-token nonsense query where only one token grazes a doc token
-        does NOT surface that doc.
-
-        Pre-fix: ``xyz_irrelevant_garbage`` returned ``cover.garage_door`` at
-        score 92 because typo_fallback compared each query token against
-        each doc token and a single ``garbage~garage`` ratio of 92 was
-        enough.
-
-        Post-fix: typo_fallback requires multi-token coverage ≥50% on
-        multi-token queries.
-        """
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(
-            lights_corpus, "xyz_irrelevant_garbage", limit=10
-        )
-        assert total == 0, (
-            f"low-coverage garbage query must yield no matches: {results}"
-        )
-
-    def test_finding_5_single_token_typo_still_recalls(self, lights_corpus):
-        """Single-token typos like ``ligth`` still recall (no coverage gate
-        on single-token queries — that would be too aggressive)."""
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(lights_corpus, "ligth", limit=10)
-        # Should still find a real light.* entity via typo_fallback — not
-        # just *something*.
-        assert total >= 1, f"single-token typo recall regressed: {results}"
-        assert any(r["entity_id"].startswith("light.") for r in results), (
-            f"coverage gate falsely rejected legitimate single-token typo: "
-            f"{[r['entity_id'] for r in results]}"
-        )
-
-    def test_typo_fallback_short_single_token_returns_empty(self):
-        """Locks down the single-token min-length gate. A 3-char single
-        token (``lit``) used to surface unrelated entities like
-        ``u7_lite_*`` and ``shopping_list`` via partial overlap at score
-        85. The coverage gate from finding 5 only handles multi-token
-        garbage — short single-token queries needed their own gate."""
-        entities = [
-            {
-                "entity_id": "button.u7_lite_restart",
-                "attributes": {"friendly_name": "U7 Lite Restart"},
-                "state": "off",
-            },
-            {
-                "entity_id": "light.u7_lite_led",
-                "attributes": {"friendly_name": "U7 Lite LED"},
-                "state": "on",
-            },
-            {
-                "entity_id": "todo.shopping_list",
-                "attributes": {"friendly_name": "Shopping List"},
-                "state": "1",
-            },
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "lullaby")
+        assert [(m["entity_id"], m["match_type"]) for m in result["matches"]] == [
+            ("light.bed_light", "alias_match")
         ]
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(entities, "lit", limit=10)
-        assert total == 0, (
-            f"short single-token typo query should not surface sub-word "
-            f"noise: {results}"
-        )
 
-    def test_typo_fallback_four_char_single_token_still_fires(self):
-        """Boundary: 4-char single token still triggers typo_fallback so
-        common typos like ``ligth``→``light`` survive the new gate."""
-        entities = [
-            {
-                "entity_id": "light.kitchen",
-                "attributes": {"friendly_name": "Kitchen"},
-                "state": "on",
-            },
-        ]
-        searcher = FuzzyEntitySearcher()
-        # 5-char typo of "light" — the 4-char gate should not block this.
-        results, total = searcher.search_entities(entities, "ligth", limit=10)
-        assert total >= 1, (
-            f"4+ char single-token typo should still fire typo_fallback: {results}"
-        )
+    async def test_finding_8_no_alias_no_match(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        await _register(hass, entity_registry, "light.bed_light", "Bed Light")
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "lullaby")
+        assert result["total_matches"] == 0
 
-    def test_finding_8_alias_search_with_match_type_label(self, lights_corpus):
-        """Aliases are searchable when the caller supplies them on the
-        entity dict via ``_aliases``. Matches surface as
-        ``match_type='alias_match'`` so callers can distinguish."""
-        # Add an alias ONLY known via the `_aliases` field — neither
-        # entity_id nor friendly_name contain "lullaby".
-        enriched = []
-        for e in lights_corpus:
-            e2 = dict(e)
-            if e2["entity_id"] == "light.bed_light":
-                e2["_aliases"] = ["lullaby lamp"]
-            enriched.append(e2)
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(enriched, "lullaby", limit=10)
-        assert total == 1, f"alias should be searchable as a query token: {results}"
-        assert results[0]["entity_id"] == "light.bed_light"
-        assert results[0]["match_type"] == "alias_match", (
-            f"alias-driven match should be labeled alias_match: {results[0]}"
+    async def test_finding_8_alias_does_not_overshadow_name_match(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        """A query token in both the id and an alias is labelled by the id
+        match, not ``alias_match``."""
+        await _register(
+            hass,
+            entity_registry,
+            "light.bed_light",
+            "Bed Light",
+            aliases=["bed lullaby"],
         )
-
-    def test_finding_8_no_alias_no_match(self, lights_corpus):
-        """Without ``_aliases``, an alias-only query yields no result."""
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(lights_corpus, "lullaby", limit=10)
-        assert total == 0, f"no alias data → no match: {results}"
-
-    def test_finding_8_alias_does_not_overshadow_name_match(self, lights_corpus):
-        """When a query token matches BOTH the friendly_name and an alias,
-        the result keeps a name-driven match_type rather than mislabeling
-        as ``alias_match``. A future code change that swapped the
-        precedence (or used a too-broad set intersection) would surface
-        as a confused match_type for queries that obviously matched on
-        the entity's primary identity."""
-        # alias contains "bed" (which also tokenizes from "Bed Light")
-        # plus a unique alias-only token "lullaby".
-        enriched = []
-        for e in lights_corpus:
-            e2 = dict(e)
-            if e2["entity_id"] == "light.bed_light":
-                e2["_aliases"] = ["bed lullaby"]
-            enriched.append(e2)
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(enriched, "bed", limit=10)
-        assert total >= 1
-        target = next(r for r in results if r["entity_id"] == "light.bed_light")
-        # "bed" is a substring of "light.bed_light", so _get_match_type
-        # returns "partial_id". Asserting the specific value (not just
-        # !="alias_match") locks in the precedence: id/name path wins
-        # over alias_match labeling whenever the query token has *any*
-        # primary-identity hit.
-        assert target["match_type"] == "partial_id", (
-            f"query 'bed' should be labeled partial_id (entity_id contains "
-            f"'bed'), got: {target}"
+        await _add_states(hass, LIGHTS)
+        result = await _search(core_client, "bed")
+        target = next(
+            m for m in result["matches"] if m["entity_id"] == "light.bed_light"
         )
+        assert target["match_type"] == "partial_id"
 
 
 class TestSmartEntitySearchPropagation:
-    """Lock down the finding-6 fix at the service layer: a fatal
-    ``get_states`` failure must propagate as a ``ToolError`` rather
-    than being swallowed into a zero-result dump.
+    async def test_get_states_failure_propagates_as_tool_error(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """No answer to the states request is an error, not a zero-result
+        success the caller would accept."""
+        with (
+            patch.object(
+                core_client,
+                "get_states",
+                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _search(core_client, "anything", limit=5)
 
-    The pre-fix code masked auth/connection failures by emitting a
-    ``partial_listing`` of every entity at score 0 with
-    ``partial: True`` — agents that read ``success: True`` would
-    silently accept the noise pile. After the fix, the failure surfaces
-    as ``isError=true`` so the caller can act on it.
-    """
 
-    @pytest.mark.asyncio
-    async def test_get_states_failure_propagates_as_tool_error(self):
-        from unittest.mock import AsyncMock
-
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-        from ha_mcp.tools.smart_search import SmartSearchTools
-
-        mock_client = AsyncMock()
-        mock_client.get_states = AsyncMock(
-            side_effect=RuntimeError("simulated transport failure")
-        )
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {}}
-        )
-        smart_tools = SmartSearchTools(client=mock_client, fuzzy_threshold=60)
-
-        with pytest.raises(ToolError):
-            await smart_tools.smart_entity_search("anything", limit=5)
+# ---------------------------------------------------------------------------
+# Hidden entities: penalised, not filtered
+# ---------------------------------------------------------------------------
 
 
 class TestHiddenScorePenalty:
-    """Lock down option (c) for finding 9: hidden entities stay in
-    results but receive a score penalty so visible matches sort
-    above them. Filtering remains available via
-    ``include_hidden=False``.
-    """
+    def test_apply_hidden_penalty_subtracts_for_hidden(self) -> None:
+        user, integration = (
+            er.RegistryEntryHider.USER,
+            er.RegistryEntryHider.INTEGRATION,
+        )
+        assert apply_hidden_penalty(100, user) == 100 - HIDDEN_SCORE_PENALTY
+        assert apply_hidden_penalty(80, integration) == 80 - HIDDEN_SCORE_PENALTY
 
-    def test_apply_hidden_penalty_subtracts_for_hidden(self):
-        assert apply_hidden_penalty(100, "user") == 100 - HIDDEN_SCORE_PENALTY
-        assert apply_hidden_penalty(80, "integration") == 80 - HIDDEN_SCORE_PENALTY
-
-    def test_apply_hidden_penalty_passthrough_for_visible(self):
+    def test_apply_hidden_penalty_passthrough_for_visible(self) -> None:
         assert apply_hidden_penalty(100, None) == 100
         assert apply_hidden_penalty(60, None) == 60
 
-    def test_apply_hidden_penalty_clamps_to_zero(self):
-        # A 10-score hidden entity shouldn't go negative after a 20-pt
-        # penalty.
-        assert apply_hidden_penalty(10, "user") == 0
+    def test_apply_hidden_penalty_clamps_to_zero(self) -> None:
+        assert apply_hidden_penalty(10, er.RegistryEntryHider.USER) == 0
 
-    def test_visible_outranks_hidden_on_same_query(self):
-        """When a visible entity and a hidden entity both match the
-        same query, the visible one ranks first thanks to the penalty.
-        """
-        entities = [
-            {
-                "entity_id": "light.kitchen_main",
-                "attributes": {"friendly_name": "Kitchen Main"},
-                "state": "on",
-                # No _hidden_by → visible.
-            },
-            {
-                "entity_id": "light.kitchen_diag",
-                "attributes": {"friendly_name": "Kitchen Diag"},
-                "state": "on",
-                "_hidden_by": "integration",
-            },
+    async def test_visible_outranks_hidden_on_same_query(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        await _add_states(hass, {"light.kitchen_main": "Kitchen Main"})
+        await _register(
+            hass,
+            entity_registry,
+            "light.kitchen_diag",
+            "Kitchen Diag",
+            hidden_by=er.RegistryEntryHider.INTEGRATION,
+        )
+        result = await _search(core_client, "kitchen")
+        visible, hidden = result["matches"]
+        assert (visible["entity_id"], hidden["entity_id"]) == (
+            "light.kitchen_main",
+            "light.kitchen_diag",
+        )
+        assert hidden["score"] < visible["score"]
+
+    async def test_hidden_typo_fallback_penalised(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        """A typo that matches a hidden and a visible entity equally ranks
+        the hidden one lower by the penalty."""
+        await _add_states(hass, {"light.kitchen": "Kitchen"})
+        await _register(
+            hass,
+            entity_registry,
+            "switch.kitchen_fan",
+            "Kitchen Fan",
+            hidden_by=er.RegistryEntryHider.INTEGRATION,
+        )
+        result = await _search(core_client, "kitchn")
+        visible, hidden = result["matches"]
+        assert [visible["entity_id"], hidden["entity_id"]] == [
+            "light.kitchen",
+            "switch.kitchen_fan",
         ]
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(entities, "kitchen", limit=10)
-        assert total >= 2, f"both entities should match 'kitchen': {results}"
-        # Visible match must come first.
-        assert results[0]["entity_id"] == "light.kitchen_main", (
-            f"visible match should rank above penalised hidden: {results}"
-        )
-        # And the hidden one's score is lower.
-        hidden = next(r for r in results if r["entity_id"] == "light.kitchen_diag")
-        visible = results[0]
-        assert hidden["score"] < visible["score"], (
-            f"hidden score should be < visible: hidden={hidden}, visible={visible}"
-        )
+        assert {visible["match_type"], hidden["match_type"]} == {"typo_fallback"}
+        assert hidden["score"] == visible["score"] - HIDDEN_SCORE_PENALTY
 
-    def test_hidden_borderline_match_still_surfaces(self):
-        """Threshold gates the *raw* score, so a hidden entity that
-        matches at-or-just-above threshold still surfaces (with the
-        penalty applied to the emitted score). Pre-fix, the penalty
-        was applied before the threshold check, silently dropping
-        borderline hidden matches and partially regressing to option
-        (b) for that score range.
-        """
-        # Keep the threshold low (60 default) so the search returns
-        # results at all; engineer a hidden entity whose token-overlap
-        # against the query lands just above threshold.
-        entities = [
-            # A long-friendly-name hidden entity. The unique alias-only
-            # token "diag" gets BM25 traction without dominating.
-            {
-                "entity_id": "switch.diag",
-                "attributes": {"friendly_name": "Diag"},
-                "state": "off",
-                "_hidden_by": "integration",
-            },
+    async def test_hidden_borderline_raw_score_threshold_edge(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        """The threshold gates the raw score before the penalty: a hidden
+        entity scoring exactly the threshold still surfaces, penalised."""
+        await _register(
+            hass,
+            entity_registry,
+            "sensor.borderline",
+            "borderline",
+            hidden_by=er.RegistryEntryHider.INTEGRATION,
+        )
+        result = await _search(core_client, "borderline", threshold=100)
+        assert [(m["entity_id"], m["score"]) for m in result["matches"]] == [
+            ("sensor.borderline", 100 - HIDDEN_SCORE_PENALTY)
         ]
-        searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(entities, "diag", limit=10)
-        # Pre-fix the hidden match would have been raw 100 → penalised
-        # 80 → still ≥ threshold (60), so it would have surfaced. But
-        # at raw 60 → 40 it would have been dropped. We can't easily
-        # construct a raw-60 hit here without HA-side fixture data, so
-        # this test exercises the simpler case (hidden surfaces with
-        # penalty); the threshold-edge regression is locked down by
-        # asserting that ``apply_hidden_penalty`` is the LAST step
-        # before ranking, not before the threshold gate.
-        assert total >= 1, f"hidden borderline match was dropped: {results}"
-        assert results[0]["entity_id"] == "switch.diag"
-        assert results[0]["score"] < 100, (
-            f"penalty should still apply to surfaced hidden: {results[0]}"
-        )
 
-    def test_hidden_typo_fallback_penalised(self):
-        """typo_fallback path also applies the hidden penalty so a
-        single-token typo against a hidden entity surfaces but ranks
-        below a typo against a visible one."""
-        entities = [
-            {
-                "entity_id": "light.kitchen",
-                "attributes": {"friendly_name": "Kitchen"},
-                "state": "on",
-            },
-            {
-                "entity_id": "light.kitchne_diag",  # typo'd
-                "attributes": {"friendly_name": "Kitchne Diag"},
-                "state": "on",
-                "_hidden_by": "integration",
-            },
-        ]
-        searcher = FuzzyEntitySearcher()
-        # "kitchne" is a typo target; BM25 may miss it, falling through
-        # to typo_fallback for the misspelled entity. Either path must
-        # apply the penalty.
-        results, total = searcher.search_entities(entities, "kitchne", limit=10)
-        assert total >= 1, f"typo path returned nothing: {results}"
-        # If both surface, visible kitchen entity should rank above
-        # the penalised hidden one.
-        if total >= 2:
-            assert results[0]["entity_id"] == "light.kitchen", (
-                f"visible match should rank first: {results}"
-            )
-            hidden = next(
-                (r for r in results if r["entity_id"] == "light.kitchne_diag"),
-                None,
-            )
-            if hidden is not None:
-                assert hidden["score"] < results[0]["score"], (
-                    f"hidden typo-match score should be lower: {results}"
-                )
-
-    def test_hidden_borderline_raw_score_threshold_edge(self):
-        """Lock down the threshold-on-raw-score fix at the regression-
-        prone edge: a hidden entity whose raw BM25 score lands
-        EXACTLY at the threshold must still surface, even though
-        ``raw - HIDDEN_SCORE_PENALTY`` falls below threshold.
-
-        Pre-fix the order was:
-            score = round(raw / theoretical_max * 100)
-            score = apply_hidden_penalty(score, hidden)
-            if score < threshold: continue   # ← drops borderline hidden
-        Post-fix the threshold gates the raw score before the penalty
-        is applied. A future revert that recomposes those two lines
-        would break here.
-        """
-        # Build a 1-entity corpus with a single token. Query against
-        # that token: BM25 raw score for the single doc is exactly
-        # theoretical_max → score 100 → at threshold 100 (custom).
-        # Then drop a hidden flag in: penalised would be 80 < 100,
-        # but the gate runs on raw=100 first, so it surfaces.
-        entities = [
-            {
-                "entity_id": "sensor.borderline",
-                "attributes": {"friendly_name": "borderline"},
-                "state": "off",
-                "_hidden_by": "integration",
-            },
-        ]
-        # threshold=100 means only an exact-IDF max BM25 hit clears.
-        # The single-token single-doc case lands at exactly that.
-        searcher = FuzzyEntitySearcher(threshold=100)
-        results, total = searcher.search_entities(entities, "borderline", limit=10)
-        assert total == 1, (
-            f"raw-100 hidden match must clear threshold-100 gate "
-            f"despite the post-gate penalty: {results}"
+    async def test_score_ties_break_on_entity_id_ascending(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Tied scores page in a stable order: entity_id ascending."""
+        await _add_states(
+            hass,
+            {"light.tie_b": "match", "light.tie_a": "match", "light.tie_c": "match"},
         )
-        # And the emitted score reflects the penalty.
-        assert results[0]["score"] == 80, (
-            f"penalty must still apply (100→80) to the surfaced hit: {results[0]}"
-        )
-
-    def test_score_ties_break_on_entity_id_ascending(self):
-        """Locks down the tie-breaker on the BM25 search-result sort.
-        When two entities share a score (very common — visible@100,
-        hidden@80, BM25's coarse buckets), the paginated order must be
-        stable across calls. A regression that drops the secondary key
-        flips this assertion."""
-        # Three entities that all match a single-token query at the
-        # same raw BM25 score. With score-only sort their relative
-        # order would depend on dict iteration; with the (-score,
-        # entity_id) tie-breaker they sort ascending by entity_id.
-        entities = [
-            {
-                "entity_id": "light.tie_b",
-                "attributes": {"friendly_name": "match"},
-                "state": "on",
-            },
-            {
-                "entity_id": "light.tie_a",
-                "attributes": {"friendly_name": "match"},
-                "state": "on",
-            },
-            {
-                "entity_id": "light.tie_c",
-                "attributes": {"friendly_name": "match"},
-                "state": "on",
-            },
-        ]
-        searcher = FuzzyEntitySearcher()
-        results, _ = searcher.search_entities(entities, "match", limit=10)
-        ids = [r["entity_id"] for r in results if r["score"] == results[0]["score"]]
-        assert ids == sorted(ids), (
-            f"tied-score results should sort by entity_id ascending: {ids}"
-        )
+        result = await _search(core_client, "match")
+        assert _ids(result) == ["light.tie_a", "light.tie_b", "light.tie_c"]

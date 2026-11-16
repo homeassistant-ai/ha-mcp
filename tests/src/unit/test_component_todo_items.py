@@ -50,8 +50,9 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.client.rest_client import HomeAssistantError as ClientError
 from ha_mcp.tools import component_todo
-from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.tools.component_api import get_component_caps
 
+from ._command_faults import dropped_on, pooled_socket
 from ._component_core import ws_call, ws_result
 
 LIST = "todo.tasks"
@@ -606,30 +607,6 @@ class TestComponent:
 # --- server client --------------------------------------------------------------
 
 
-class _Client:
-    def __init__(self, result: Any = None, raise_: Exception | None = None) -> None:
-        self.sent: list[dict[str, Any]] = []
-        self.result = result
-        self.raise_ = raise_
-
-    async def send_websocket_message(self, message: dict[str, Any]) -> Any:
-        self.sent.append(message)
-        if self.raise_ is not None:
-            raise self.raise_
-        return self.result
-
-
-@pytest.fixture
-def caps(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    served = ComponentCaps(1, "2.2.2", frozenset({component_todo.CAPABILITY}), {})
-    monkeypatch.setattr(
-        component_todo, "get_component_caps", AsyncMock(return_value=served)
-    )
-    invalidate = MagicMock()
-    monkeypatch.setattr(component_todo, "invalidate_caps", invalidate)
-    return invalidate
-
-
 @pytest.mark.usefixtures("tasks")
 class TestClient:
     async def test_reply_comes_back(
@@ -719,25 +696,44 @@ class TestClient:
         assert body["error"]["code"] == "AUTH_INVALID_TOKEN"
         assert "write_outcome_unknown" not in json.dumps(body)
 
-    async def test_rejection_after_a_sent_attempt_is_an_unknown_outcome(
-        self, caps: MagicMock
+    async def test_write_dropped_after_core_got_it_is_an_unknown_outcome(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tasks: _TaskList,
     ) -> None:
-        # Raised when an earlier attempt may have sent the command.
-        dropped = HomeAssistantConnectionError("rejected")
-        dropped.__cause__ = HomeAssistantAuthError("WebSocket authentication failed")
-        with pytest.raises(ToolError) as exc_info:
-            await component_todo.todo_call(_Client(raise_=dropped), LIST, "add")
+        """The add may have landed, so a retry could add the item twice."""
+        assert await get_component_caps(component_core_client) is not None
+        socket = await pooled_socket(component_core_client)
+        with (
+            dropped_on(hass, todo_items.WS_TODO_ITEM, socket),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await component_todo.todo_call(
+                component_core_client, LIST, "add", data={"item": "Eggs"}
+            )
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["write_outcome_unknown"] is True
+        assert len(tasks.rows) == 3
 
-    async def test_unknown_command_falls_back(
-        self, core_client: HomeAssistantClient, caps: MagicMock
+    async def test_command_the_component_no_longer_has_falls_back(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # The capabilities say todo_item; Core, without the component, answers
-        # unknown_command.
-        assert await component_todo.todo_item(core_client, LIST, "add") is None
-        caps.assert_called_once_with(core_client)
+        """The capabilities still say todo_item; Core answers unknown_command
+        for the command a downgraded component no longer registers."""
+        assert await get_component_caps(component_core_client) is not None
+        monkeypatch.delitem(hass.data["websocket_api"], todo_items.WS_TODO_ITEM)
+        invalidated = MagicMock(wraps=component_todo.invalidate_caps)
+        monkeypatch.setattr(component_todo, "invalidate_caps", invalidated)
+        got = await component_todo.todo_item(
+            component_core_client, LIST, "add", data={"item": "Eggs"}
+        )
+        assert got is None
+        invalidated.assert_called_once_with(component_core_client)
 
     async def test_core_without_todo_parts_falls_back(
         self,
