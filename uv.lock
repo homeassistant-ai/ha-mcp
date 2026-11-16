@@ -1565,7 +1565,7 @@ dev = [
     { name = "hamcp-test-env", editable = "tests/test-env" },
     { name = "homeassistant", specifier = "==2026.11.1" },
     { name = "ical", specifier = "==14.3.1" },
-    { name = "infrared-protocols", specifier = "==10.5.0" },
+    { name = "infrared-protocols", specifier = "==10.6.0" },
     { name = "knx-frontend", specifier = "==2026.11.8.11926" },
     { name = "knx-telegram-store", extras = ["sqlite", "postgres"], specifier = "==0.15.2" },
     { name = "lefthook", specifier = ">=1.10.0" },
@@ -1893,11 +1893,11 @@ wheels = [
 
 [[package]]
 name = "infrared-protocols"
-version = "10.5.0"
+version = "10.6.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b8/d2/af4c025d91cc3e28186de8c2bfd8ffd3e6fabb621cdc184dbd46077a146e/infrared_protocols-10.5.0.tar.gz", hash = "sha256:38e7940929a48f114d4b4a014baf32f7e882793041e401df69d37ef45075aac0", size = 60836, upload-time = "2026-10-26T19:27:47.32Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/91/63e9f67a107ea3d47cb9551ce1237c5bcb6b93cbe1d83391604668f2b981/infrared_protocols-10.6.0.tar.gz", hash = "sha256:b0ec4ca3691656a4f40c56cf8900053c49dff90a114eb1252c1dd7dde0a23c95", size = 61471, upload-time = "2026-11-02T20:13:34.208Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/0b/99e3ea688bfef387bbb6b5853f3b3258037dd2223f45cd70482c6604dcb7/infrared_protocols-10.5.0-py3-none-any.whl", hash = "sha256:bdca92b6dc5875a9a51d0d37ea6b3ac47ed0b98e65a541fe9047b01671d23686", size = 91628, upload-time = "2026-10-26T19:27:45.835Z" },
+    { url = "https://files.pythonhosted.org/packages/68/57/8ab386395b56bef408ff3e2d0c9ccb8f677210ad4be04ce42e6537a1e20b/infrared_protocols-10.6.0-py3-none-any.whl", hash = "sha256:22c9fc63984041939e42f3ba7054ba08238bbe1c8328625e2dd07e303c42ec91", size = 92585, upload-time = "2026-11-02T20:13:32.705Z" },
 ]
 
 [[package]]
