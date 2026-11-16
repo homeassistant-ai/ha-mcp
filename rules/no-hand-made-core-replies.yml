@@ -61,7 +61,6 @@ files:
   - "tests/addon/**"
 ignores:
   - "tests/src/unit/policy/test_decisions.py"
-  - "tests/src/unit/policy/test_middleware.py"
   - "tests/src/unit/test_automation_enabled.py"
   - "tests/src/unit/test_backup_access.py"
   - "tests/src/unit/test_backup_delete.py"
