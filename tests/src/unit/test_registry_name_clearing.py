@@ -287,10 +287,14 @@ class TestSetEntityDeviceNameEcho:
                     entity_id=lamp, new_device_name="Lamp"
                 )
             )
-            await held.reached_by(call)
-            device_registry.async_remove_device(device.id)
-            held.release.set()
-            result = await call
+            try:
+                await held.reached_by(call)
+                device_registry.async_remove_device(device.id)
+                held.release.set()
+                result = await call
+            finally:
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
 
         assert not any(u.startswith("device_name") for u in result["updates"])
         assert result["partial"] is True
