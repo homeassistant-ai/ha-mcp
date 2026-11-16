@@ -42,6 +42,7 @@ from ._server_update import (
     server_entry,
     update_source,
 )
+from ._tools_addons_core import outwait, timers
 from ._tools_dev_core import Supervisor
 from ._tools_dev_core import supervisor as supervisor
 from ._ws_transport import until
@@ -277,11 +278,12 @@ class TestUpdateSource:
         self, hass: HomeAssistant, client: HomeAssistantClient
     ) -> None:
         """A stored override the form no longer accepts makes Core re-show it
-        with an error: the pin did not change."""
+        with an error: the pin did not change, and the form is not left open."""
         entry = server_entry(hass, pip_spec=OLD_PIN, webhook_id_override="bad id")
         with pytest.raises(ToolError, match="did not apply"):
             await update_source(client, PIP_SPEC)
         assert entry.options["pip_spec"] == OLD_PIN
+        assert hass.config_entries.options.async_progress() == []
 
     @pytest.mark.usefixtures("embedded")
     async def test_embedded_the_result_says_this_server_restarts(
@@ -449,9 +451,15 @@ class TestRestart:
         assert _reloads(service_calls) == []
 
     async def test_an_add_on_asks_the_supervisor_to_restart_it(
-        self, core_client: HomeAssistantClient, supervisor: Supervisor
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        supervisor: Supervisor,
     ) -> None:
+        armed_before = timers(hass)
         result = await DevTools(core_client).ha_dev_manage_server(action="restart")
         assert result["data"]["mode"] == "addon"
         assert result["data"]["scheduled"] is True
+        # The restart waits for this response to flush: skip that on Core's clock.
+        await outwait(hass, 0, 1, armed_before)
         await until(lambda: supervisor.restarts == 1)

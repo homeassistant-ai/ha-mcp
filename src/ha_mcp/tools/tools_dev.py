@@ -2038,11 +2038,11 @@ class DevTools:
 
         result = await self._client.submit_options_flow_step(flow_id, user_input)
         if result.get("type") != "create_entry":
-            errors = result.get("errors") or result.get("reason")
+            await abort_options_flow_quietly(self._client, flow)  # the re-shown form
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
-                    f"Options flow did not apply: {errors}",
+                    f"Options flow did not apply: {result.get('errors') or result.get('reason')}",
                     context={"flow_result_type": result.get("type")},
                 )
             )
