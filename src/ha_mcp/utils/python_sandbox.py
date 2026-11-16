@@ -8,7 +8,8 @@ See SECURITY.md § "MCP clients are trusted principals" for the rationale.
 """
 
 import ast
-from typing import Any, cast
+import json
+from typing import Any
 
 
 class PythonSandboxError(Exception):
@@ -430,7 +431,7 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
     Returns:
         The value bound to ``config`` after execution — typically the same
         dict mutated in place, but also supports expressions that reassign
-        ``config`` to a new object.
+        ``config`` to a new dict.
 
     Raises:
         PythonSandboxError: If expression validation fails or execution errors
@@ -440,13 +441,21 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
         >>> safe_execute("config['views'][0]['cards'][0]['icon'] = 'new'", config)
         {'views': [{'cards': [{'icon': 'new'}]}]}
     """
-    # safe_execute_expression returns Any (generic over result_key); at this
-    # call site the result is always the dict bound to `config`, so narrow
-    # for mypy and existing callers that depend on the dict interface.
-    return cast(
-        dict[str, Any],
-        safe_execute_expression(expr, {"config": config}, "config"),
-    )
+    result = safe_execute_expression(expr, {"config": config}, "config")
+    # The callers send the result to Home Assistant as a JSON object, so a
+    # result that is not one is the expression's mistake, reported as such.
+    if not isinstance(result, dict):
+        raise PythonSandboxExecutionError(
+            f"the expression left `config` a {type(result).__name__}; "
+            "it must stay a dict"
+        )
+    try:
+        json.dumps(result)
+    except (TypeError, ValueError) as err:
+        raise PythonSandboxExecutionError(
+            f"the expression left a value that cannot be sent as JSON: {err}"
+        ) from err
+    return result
 
 
 def format_sandbox_error(

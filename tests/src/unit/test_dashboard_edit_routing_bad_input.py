@@ -198,15 +198,15 @@ async def test_a_transform_that_leaves_no_object_is_a_validation_error(
 
 
 @BACKENDS
-async def test_a_value_json_cannot_encode_is_reported_as_never_sent(
+async def test_a_value_json_cannot_encode_is_a_validation_error(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     backend: str,
 ) -> None:
-    """The client fails to encode the message before any byte leaves it, so
-    the edit is known unwritten, not of unknown outcome."""
+    """Nothing can be sent, so the agent is told its transform is wrong; the
+    edit is not of unknown outcome."""
     use_backend(hass, monkeypatch, backend)
 
     body, sent = await _refused_edit(
@@ -217,5 +217,5 @@ async def test_a_value_json_cannot_encode_is_reported_as_never_sent(
     )
 
     assert (sent["save"], sent["edit"]) == (0, 0)
-    assert body["write_committed"] is False
-    assert body["reason"] != "write_outcome_unknown"
+    assert body["error"]["code"].startswith("VALIDATION_")
+    assert body.get("reason") != "write_outcome_unknown"
