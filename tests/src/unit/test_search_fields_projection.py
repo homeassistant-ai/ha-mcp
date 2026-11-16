@@ -1,1223 +1,671 @@
-"""Unit tests for project_fields helper in response_helpers (issue #1199)."""
+"""``fields=`` / ``result_fields=`` projection of ``ha_search`` on real Core (#1199).
+
+``ha_search`` runs on the server's own client against a real ``hass`` without
+the component, so every entity branch is the server's legacy search reading
+Core's states and registries. ``project_fields`` is the shared response helper
+behind the other tools' ``fields=``.
+"""
+
+from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
 
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.components.config import area_registry as config_areas
+from homeassistant.components.config import device_registry as config_devices
+from homeassistant.components.config import entity_registry as config_entities
+from homeassistant.components.config import floor_registry as config_floors
+from homeassistant.components.config import label_registry as config_labels
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.response_helpers import project_fields
-from ha_mcp.tools.search.entities import (
-    _add_membership_fields,
-    _entity_enrichment_fields,
+
+from ._core_setup import add_test_entry
+from ._search_tool import _build_ha_search
+
+GROUP_MEMBERS = ["light.member_two", "light.member_one"]
+KITCHEN_GROUP = {
+    "entity_id": "light.kitchen",
+    "is_group": True,
+    "member_entity_ids": sorted(GROUP_MEMBERS),
+}
+MEMBERSHIP = ["entity_id", "is_group", "member_entity_ids"]
+
+
+# ---------------------------------------------------------------------------
+# project_fields: the shared top-level projection helper
+# ---------------------------------------------------------------------------
+
+
+def test_project_fields_without_fields_returns_the_response_untouched() -> None:
+    data = {"success": True, "results": [1, 2], "count": 2}
+    assert project_fields(data, None) is data
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param(["results", "count"], id="list"),
+        pytest.param("results,count", id="csv-string"),
+        pytest.param('["results", "count"]', id="json-array-string"),
+    ],
 )
-from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
+def test_project_fields_keeps_requested_keys_and_success(fields: Any) -> None:
+    """Every accepted form of ``fields`` narrows to the named keys, and
+    ``success`` survives without being named."""
+    data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
+    result = project_fields(data, fields)
+    assert result == {"success": True, "results": [1, 2], "count": 2}
 
 
-class TestProjectFields:
-    """Test the project_fields shared helper."""
-
-    def test_none_fields_returns_data_unchanged(self):
-        data = {"success": True, "results": [1, 2], "count": 2}
-        result = project_fields(data, None)
-        assert result is data
-
-    def test_single_field_plus_success_retained(self):
-        data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
-        result = project_fields(data, ["results"])
-        assert set(result.keys()) == {"success", "results"}
-        assert result["results"] == [1, 2]
-
-    def test_multiple_fields_retained(self):
-        data = {
-            "success": True,
-            "results": [],
-            "count": 0,
-            "query": "x",
-            "has_more": False,
-        }
-        result = project_fields(data, ["results", "count"])
-        assert set(result.keys()) == {"success", "results", "count"}
-
-    def test_success_always_included_even_if_not_in_fields(self):
-        data = {"success": True, "results": [], "count": 0}
-        result = project_fields(data, ["count"])
-        assert "success" in result
-        assert result["success"] is True
-
-    def test_unknown_field_emits_warning(self):
-        """Unknown fields key now emits a warning instead of being silently dropped."""
-        data = {"success": True, "results": []}
-        result = project_fields(data, ["nonexistent"])
-        assert result["success"] is True
-        assert "warnings" in result
-        assert any("nonexistent" in w for w in result["warnings"])
-
-    def test_empty_fields_list_returns_only_success(self):
-        data = {"success": True, "results": [], "count": 0}
-        result = project_fields(data, [])
-        assert set(result.keys()) == {"success"}
-
-    def test_success_in_fields_not_duplicated(self):
-        data = {"success": True, "results": []}
-        result = project_fields(data, ["success", "results"])
-        assert list(result.keys()).count("success") == 1
-
-    def test_empty_data_with_none_fields(self):
-        data: dict = {}
-        result = project_fields(data, None)
-        assert result == {}
-
-    def test_projection_does_not_mutate_original(self):
-        data = {"success": True, "results": [1], "count": 1}
-        project_fields(data, ["results"])
-        assert "count" in data
-
-    def test_warnings_always_retained_alongside_success(self):
-        """warnings list survives projection so diagnostic messages are not lost."""
-        data = {"success": True, "results": [], "count": 0, "warnings": ["bad field"]}
-        result = project_fields(data, ["results"])
-        assert "warnings" in result
-        assert result["warnings"] == ["bad field"]
-
-    def test_csv_string_input_parsed_correctly(self):
-        data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
-        result = project_fields(data, "results,count")
-        assert set(result.keys()) == {"success", "results", "count"}
-
-    def test_json_array_string_input_parsed_correctly(self):
-        data = {"success": True, "results": [1, 2], "count": 2, "query": "light"}
-        result = project_fields(data, '["results"]')
-        assert set(result.keys()) == {"success", "results"}
+def test_project_fields_empty_list_keeps_only_success() -> None:
+    data = {"success": True, "results": [], "count": 0}
+    assert project_fields(data, []) == {"success": True}
 
 
-class TestHaSearchEntitiesFieldsProjection:
-    """Tool-level coverage of the top-level ``fields=`` projection on the
-    consolidated ``ha_search`` tool.
-
-    Re-enabled (was skipped as "ha_search does not expose ``fields=``"): the
-    consolidated tool exposes ``fields=`` and applies ``_project_response_fields``
-    as the final step of the orchestrator. These exercise the real tool call —
-    param parsing, the always-keep contract, the typo guard, and the malformed-
-    input error path — not just the ``project_fields`` helper. The response is
-    the flat orchestrator envelope (no ``["data"]`` wrapper).
-    """
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        # exact_match=True (default) calls client.get_states() + send_websocket_message()
-        client.get_states = AsyncMock(
-            return_value=[
-                {
-                    "entity_id": "light.kitchen",
-                    "state": "on",
-                    "attributes": {"friendly_name": "Kitchen Light", "brightness": 200},
-                }
-            ]
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart_tools = MagicMock()
-        # ha_search orchestrator fans out to deep_search whenever ``query`` is
-        # set; mock it as an empty-config response so the merge logic doesn't
-        # see a non-awaitable MagicMock. The config buckets are present (empty)
-        # so a projection can be observed dropping them.
-        smart_tools.deep_search = AsyncMock(
-            return_value={
-                "success": True,
-                "automations": [],
-                "scripts": [],
-                "scenes": [],
-                "helpers": [],
-                "warnings": [],
-            }
-        )
-        return smart_tools
-
-    @pytest.fixture
-    def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search"]
-
-    @pytest.mark.asyncio
-    async def test_fields_none_returns_full_response(self, search_tool):
-        """No projection → the full flat envelope, including the config buckets."""
-        data = await search_tool(query="kitchen")
-        assert "success" in data
-        assert "entities" in data
-        assert "automations" in data
-
-    @pytest.mark.asyncio
-    async def test_fields_projection_drops_unrequested_buckets(self, search_tool):
-        """``fields=["entities"]`` keeps the requested bucket and drops the
-        other (non-always-keep) surface buckets — the core projection behavior,
-        exercised through the registered tool's own ``fields=`` param."""
-        data = await search_tool(query="kitchen", fields=["entities"])
-        assert "entities" in data
-        # The other surface buckets are neither requested nor always-keep.
-        assert "automations" not in data
-        assert "scripts" not in data
-        assert "scenes" not in data
-        assert "helpers" not in data
-
-    @pytest.mark.asyncio
-    async def test_fields_projection_retains_always_keep_diagnostics(self, search_tool):
-        """Projection narrows the response but never hides the diagnostic /
-        pagination contract — ``success`` and the always-keep keys survive even
-        when not named in ``fields=``."""
-        data = await search_tool(query="kitchen", fields=["entities"])
-        assert data["success"] is True
-        # Always-keep keys are retained so a narrowing caller can't lose
-        # incompleteness / pagination signal.
-        assert "search_types" in data
-        assert "count" in data
-
-    @pytest.mark.asyncio
-    async def test_fields_unknown_key_emits_typo_warning(self, search_tool):
-        """A requested key absent from the response surfaces a diagnostic
-        warning (with the available keys) rather than a mysteriously empty
-        payload."""
-        data = await search_tool(query="kitchen", fields=["frobnicate"])
-        assert "warnings" in data
-        assert any("frobnicate" in w for w in data["warnings"])
-
-    @pytest.mark.asyncio
-    async def test_malformed_fields_raises_tool_error(self, search_tool):
-        with pytest.raises(ToolError):
-            await search_tool(query="kitchen", fields=123)
-
-    @pytest.mark.asyncio
-    async def test_bad_json_fields_raises_tool_error(self, search_tool):
-        with pytest.raises(ToolError):
-            await search_tool(query="kitchen", fields='["')
+def test_project_fields_does_not_strip_the_callers_response() -> None:
+    data = {"success": True, "results": [1], "count": 1}
+    project_fields(data, ["results"])
+    assert data == {"success": True, "results": [1], "count": 1}
 
 
-class TestHaSearchEntitiesFieldsProjectionAreaBranches:
-    """Tool-level ``fields=`` projection across the entity-branch return paths.
-
-    Re-enabled (was skipped on the false "does not expose ``fields=``" reason).
-    The consolidated orchestrator no longer projects per-branch — it applies a
-    single ``_project_response_fields`` end-pass after every branch assembles
-    its response, so one projection covers all exits. These pin that the
-    end-pass reaches each entity-branch exit (area+query, area-only populated,
-    area-only empty, domain-listing) by projecting onto a non-``entities`` key
-    and asserting the ``entities`` bucket is dropped on each path. The response
-    is the flat envelope (no ``["data"]`` wrapper); ``search_type`` /
-    ``area_names`` / ``message`` are now in ``_ALWAYS_KEEP_PROJECTION``.
-    """
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        # Used by the domain-listing branch (parallel states + registry fetch)
-        client.get_states = AsyncMock(
-            return_value=[
-                {
-                    "entity_id": "light.kitchen",
-                    "state": "on",
-                    "attributes": {
-                        "friendly_name": "Kitchen Light",
-                        "group_entities": [
-                            "light.member_two",
-                            "light.member_one",
-                        ],
-                    },
-                },
-                {
-                    "entity_id": "light.living_room",
-                    "state": "off",
-                    "attributes": {"friendly_name": "Living Room Light"},
-                },
-            ]
-        )
-        # Default WS response (registry list / alias enrichment): empty success.
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools_populated(self):
-        """smart_tools mock returning one area with one entity (kitchen.light)."""
-        smart = MagicMock()
-        smart.get_entities_by_area = AsyncMock(
-            return_value={
-                "areas": {
-                    "kitchen": {
-                        "area_name": "Kitchen",
-                        "entities": {
-                            "light": [
-                                {
-                                    "entity_id": "light.kitchen",
-                                    "friendly_name": "Kitchen Light",
-                                    "state": "on",
-                                    "_hidden_by": None,
-                                    "_attributes": {
-                                        "friendly_name": "Kitchen Light",
-                                        "group_entities": [
-                                            "light.member_two",
-                                            "light.member_one",
-                                        ],
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                }
-            }
-        )
-        return smart
-
-    @pytest.fixture
-    def mock_smart_tools_empty(self):
-        """smart_tools mock returning no matched areas."""
-        smart = MagicMock()
-        smart.get_entities_by_area = AsyncMock(return_value={"areas": {}})
-        return smart
-
-    @pytest.fixture
-    def search_tool_populated(self, mock_mcp, mock_client, mock_smart_tools_populated):
-        register_search_tools(
-            mock_mcp, mock_client, smart_tools=mock_smart_tools_populated
-        )
-        return self.registered_tools["ha_search"]
-
-    @pytest.fixture
-    def search_tool_empty(self, mock_mcp, mock_client, mock_smart_tools_empty):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools_empty)
-        return self.registered_tools["ha_search"]
-
-    @pytest.mark.asyncio
-    async def test_area_plus_query_branch_projects(self, search_tool_populated):
-        """The end-pass honors ``fields=`` on the area+query branch for a
-        *non-always-keep* key: ``entities`` is retained when requested and
-        dropped when not. ``search_type`` is in ``_ALWAYS_KEEP_PROJECTION``, so
-        asserting it survives can't witness projection — only a non-always-keep
-        key can (PR #1529 R8)."""
-        retained = await search_tool_populated(
-            query="kitchen", area_filter="kitchen", fields=["entities"]
-        )
-        assert "entities" in retained
-        dropped = await search_tool_populated(
-            query="kitchen", area_filter="kitchen", fields=["search_type"]
-        )
-        assert "success" in dropped
-        assert "entities" not in dropped
-
-    @pytest.mark.asyncio
-    async def test_area_plus_query_branch_unprojected_baseline(
-        self, search_tool_populated
-    ):
-        """fields=None on area+query returns the full response (sanity check)."""
-        data = await search_tool_populated(query="kitchen", area_filter="kitchen")
-        assert "entities" in data
-        assert "search_type" in data
-        assert data["search_type"] == "area_filtered_query"
-
-    @pytest.mark.asyncio
-    async def test_area_only_populated_branch_projects(self, search_tool_populated):
-        """The end-pass projects the area-only populated branch: the
-        non-always-keep ``entities`` bucket is retained when requested and
-        dropped when not."""
-        retained = await search_tool_populated(
-            area_filter="kitchen", fields=["entities"]
-        )
-        assert "entities" in retained
-        dropped = await search_tool_populated(
-            area_filter="kitchen", fields=["search_type"]
-        )
-        assert "success" in dropped
-        assert "entities" not in dropped
-
-    @pytest.mark.asyncio
-    async def test_area_only_populated_branch_unprojected_baseline(
-        self, search_tool_populated
-    ):
-        """fields=None on area-only returns the full response (sanity check)."""
-        data = await search_tool_populated(area_filter="kitchen")
-        assert "entities" in data
-        assert "search_type" in data
-        assert data["search_type"] == "area_only"
-        assert "area_names" in data
-
-    @pytest.mark.asyncio
-    async def test_area_only_results_strip_internal_fields(self, search_tool_populated):
-        """The area-only branch spreads ``public_fields(entity)`` into each
-        result, so internal enrichment keys (``_hidden_by``) carried by the
-        smart_tools payload must never leak into the tool response."""
-        data = await search_tool_populated(area_filter="kitchen")
-        results = data["entities"]
-        assert results, "fixture should yield at least one area entity"
-        leaked = [k for r in results for k in r if k.startswith("_")]
-        assert not leaked, f"internal fields leaked into area-only results: {leaked}"
-
-    @pytest.mark.asyncio
-    async def test_membership_fields_cover_area_domain_and_state_modes(
-        self,
-        search_tool_populated,
-        mock_smart_tools_populated,
-    ):
-        """Every legacy listing/area branch exposes the same opt-in contract."""
-        kwargs = {"result_fields": ["entity_id", "is_group", "member_entity_ids"]}
-        area_query = await search_tool_populated(
-            query="kitchen", area_filter="kitchen", **kwargs
-        )
-        area_only = await search_tool_populated(area_filter="kitchen", **kwargs)
-        domain = await search_tool_populated(domain_filter="light", **kwargs)
-        state = await search_tool_populated(state_filter="on", **kwargs)
-
-        expected = {
-            "entity_id": "light.kitchen",
-            "is_group": True,
-            "member_entity_ids": ["light.member_one", "light.member_two"],
-        }
-        assert area_query["entities"] == [expected]
-        assert area_only["entities"] == [expected]
-        assert domain["entities"][0] == expected
-        assert state["entities"] == [expected]
-        assert all(
-            call.kwargs["include_membership"] is True
-            for call in mock_smart_tools_populated.get_entities_by_area.await_args_list
-        )
-
-    @pytest.mark.asyncio
-    async def test_membership_stays_absent_by_default_across_legacy_modes(
-        self, search_tool_populated
-    ):
-        """Branch plumbing never expands the default six-field record."""
-        responses = [
-            await search_tool_populated(query="kitchen", area_filter="kitchen"),
-            await search_tool_populated(area_filter="kitchen"),
-            await search_tool_populated(domain_filter="light"),
-            await search_tool_populated(state_filter="on"),
-        ]
-        for response in responses:
-            assert all(
-                "is_group" not in record and "member_entity_ids" not in record
-                for record in response["entities"]
-            )
-
-    @pytest.mark.asyncio
-    async def test_area_only_empty_branch_projects(self, search_tool_empty):
-        """The end-pass projects the area-only empty branch: the non-always-keep
-        ``entities`` bucket (``[]`` on this branch) is retained when requested
-        and dropped when not. ``message`` is always-keep, so requesting it can't
-        witness projection — it survives either way."""
-        retained = await search_tool_empty(
-            area_filter="nonexistent", fields=["entities"]
-        )
-        assert "entities" in retained
-        dropped = await search_tool_empty(area_filter="nonexistent", fields=["message"])
-        assert "success" in dropped
-        assert "message" in dropped
-        assert "entities" not in dropped
-
-    @pytest.mark.asyncio
-    async def test_area_only_empty_branch_unprojected_baseline(self, search_tool_empty):
-        """fields=None on the empty-area branch returns the full response."""
-        data = await search_tool_empty(area_filter="nonexistent")
-        assert "entities" in data
-        assert data["entities"] == []
-        assert "message" in data
-
-    @pytest.mark.asyncio
-    async def test_domain_listing_branch_projects(self, search_tool_populated):
-        """The end-pass projects the domain-listing branch (empty query +
-        domain_filter; client.get_states drives the result): the non-always-keep
-        ``entities`` bucket is retained when requested and dropped when not."""
-        retained = await search_tool_populated(
-            domain_filter="light", fields=["entities"]
-        )
-        assert "entities" in retained
-        dropped = await search_tool_populated(
-            domain_filter="light", fields=["search_type"]
-        )
-        assert "success" in dropped
-        assert "entities" not in dropped
-
-    @pytest.mark.asyncio
-    async def test_domain_listing_branch_unprojected_baseline(
-        self, search_tool_populated
-    ):
-        """fields=None on the domain-listing branch returns the full response."""
-        data = await search_tool_populated(domain_filter="light")
-        assert "entities" in data
-        assert "search_type" in data
-        assert data["search_type"] == "domain_listing"
+def test_project_fields_never_hides_existing_warnings() -> None:
+    """A narrowing caller still sees the diagnostics already in the response."""
+    data = {"success": True, "results": [], "count": 0, "warnings": ["bad field"]}
+    result = project_fields(data, ["results"])
+    assert result["warnings"] == ["bad field"]
 
 
 # ---------------------------------------------------------------------------
-# New test classes for feature #1199 review items
+# The home the tool tests search
 # ---------------------------------------------------------------------------
 
-_MULTI_ENTITY_STATES = [
-    {
-        "entity_id": "light.kitchen",
-        "state": "on",
-        "attributes": {
-            "friendly_name": "Kitchen Light",
-            "group_entities": [
-                "light.member_two",
-                "light.member_one",
-            ],
-        },
-    },
-    {
-        "entity_id": "light.bedroom",
-        "state": "off",
-        "attributes": {"friendly_name": "Bedroom Light"},
-    },
-    {
-        "entity_id": "switch.fan",
-        "state": "on",
-        "attributes": {"friendly_name": "Fan Switch"},
-    },
-    {
-        "entity_id": "switch.pump",
-        "state": "off",
-        "attributes": {"friendly_name": "Pump Switch"},
-    },
+
+def _add(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_id: str,
+    state: str,
+    name: str,
+    *,
+    area_id: str | None = None,
+    device_id: str | None = None,
+    members: list[str] | None = None,
+    hidden: bool = False,
+) -> None:
+    """Register ``entity_id`` in Core and give it a state."""
+    domain, object_id = entity_id.split(".")
+    entity_registry.async_get_or_create(
+        domain,
+        "test",
+        object_id,
+        suggested_object_id=object_id,
+        device_id=device_id,
+        original_name=name,
+    )
+    updates: dict[str, Any] = {}
+    if area_id is not None:
+        updates["area_id"] = area_id
+    if hidden:
+        updates["hidden_by"] = er.RegistryEntryHider.USER
+    if updates:
+        entity_registry.async_update_entity(entity_id, **updates)
+    attributes: dict[str, Any] = {"friendly_name": name}
+    if members is not None:
+        attributes["group_entities"] = members
+    hass.states.async_set(entity_id, state, attributes)
+
+
+@pytest.fixture
+async def config(hass: HomeAssistant) -> None:
+    """``config`` answers the registry commands the search reads."""
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+def search(core_client: HomeAssistantClient) -> Any:
+    """``ha_search`` on the server's client, without the component."""
+    return _build_ha_search(core_client)
+
+
+@pytest.fixture
+def home(
+    hass: HomeAssistant,
+    area_registry: ar.AreaRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """``light.kitchen`` (a group, on) in the Kitchen; ``light.bedroom`` (off),
+    ``switch.fan`` (on) and ``switch.pump`` (off) in no area."""
+    kitchen = area_registry.async_create("Kitchen")
+    _add(
+        hass,
+        entity_registry,
+        "light.kitchen",
+        "on",
+        "Kitchen Light",
+        area_id=kitchen.id,
+        members=GROUP_MEMBERS,
+    )
+    _add(hass, entity_registry, "light.bedroom", "off", "Bedroom Light")
+    _add(hass, entity_registry, "switch.fan", "on", "Fan Switch")
+    _add(hass, entity_registry, "switch.pump", "off", "Pump Switch")
+
+
+def _ids(records: list[dict[str, Any]]) -> set[str]:
+    return {record["entity_id"] for record in records}
+
+
+def _record(result: dict[str, Any], entity_id: str) -> dict[str, Any]:
+    return next(r for r in result["entities"] if r.get("entity_id") == entity_id)
+
+
+def _warned(result: dict[str, Any], text: str) -> bool:
+    return any(text in warning for warning in result.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
+# fields=: top-level projection of the response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_fields_drops_the_buckets_not_asked_for(search: Any) -> None:
+    """``fields=["entities"]`` keeps the entity bucket and drops the config
+    buckets an unprojected search returns."""
+    full = await search(query="kitchen")
+    projected = await search(query="kitchen", fields=["entities"])
+
+    assert {"entities", "automations", "scripts", "scenes", "helpers"} <= set(full)
+    assert _ids(projected["entities"]) == {"light.kitchen"}
+    assert not {"automations", "scripts", "scenes", "helpers"} & set(projected)
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_fields_never_hides_success_and_pagination_keys(search: Any) -> None:
+    """A narrowing caller still gets ``success`` and the pagination /
+    completeness keys, so it cannot lose the signal that results are partial."""
+    data = await search(query="kitchen", fields=["entities"])
+
+    assert data["success"] is True
+    assert "search_types" in data
+    assert "count" in data
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_fields_typo_is_reported_not_an_empty_answer(search: Any) -> None:
+    data = await search(query="kitchen", fields=["frobnicate"])
+    assert _warned(data, "frobnicate")
+
+
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize(
+    "fields", [pytest.param(123, id="not-a-list"), pytest.param('["', id="bad-json")]
+)
+async def test_unreadable_fields_is_rejected(search: Any, fields: Any) -> None:
+    with pytest.raises(ToolError):
+        await search(query="kitchen", fields=fields)
+
+
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize(
+    ("kwargs", "search_type", "found"),
+    [
+        pytest.param(
+            {"query": "kitchen", "area_filter": "kitchen"},
+            "area_filtered_query",
+            True,
+            id="area-and-query",
+        ),
+        pytest.param({"area_filter": "kitchen"}, "area_only", True, id="area-only"),
+        pytest.param(
+            {"area_filter": "nonexistent"}, "area_only", False, id="unknown-area"
+        ),
+        pytest.param(
+            {"domain_filter": "light"}, "domain_listing", True, id="domain-only"
+        ),
+    ],
+)
+async def test_fields_projection_reaches_every_entity_branch(
+    search: Any, kwargs: dict[str, Any], search_type: str, found: bool
+) -> None:
+    """Each entity branch's response is projected: ``entities`` stays when
+    asked for and goes when not."""
+    full = await search(**kwargs)
+    kept = await search(**kwargs, fields=["entities"])
+    dropped = await search(**kwargs, fields=["success"])
+
+    assert full["search_type"] == search_type
+    assert bool(full["entities"]) is found
+    assert "entities" in kept
+    assert dropped["success"] is True
+    assert "entities" not in dropped
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_area_listing_does_not_leak_internal_keys(search: Any) -> None:
+    """Area records carry no ``_``-prefixed bookkeeping keys of the search."""
+    data = await search(area_filter="kitchen")
+
+    assert _ids(data["entities"]) == {"light.kitchen"}
+    leaked = [key for record in data["entities"] for key in record if key[0] == "_"]
+    assert not leaked
+
+
+# ---------------------------------------------------------------------------
+# Membership (is_group / member_entity_ids) across the legacy branches
+# ---------------------------------------------------------------------------
+
+_LEGACY_MODES = [
+    pytest.param({"query": "kitchen", "area_filter": "kitchen"}, id="area-and-query"),
+    pytest.param({"area_filter": "kitchen"}, id="area-only"),
+    pytest.param({"domain_filter": "light"}, id="domain-listing"),
+    pytest.param({"state_filter": "on"}, id="state-listing"),
 ]
 
 
-class _SearchToolFixture:
-    """Shared fixture mixin for ha_search tests."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart_tools = MagicMock()
-        # ha_search orchestrator fans out to deep_search whenever ``query`` is
-        # set; mock it as an empty-config response so the merge logic doesn't
-        # see a non-awaitable MagicMock.
-        smart_tools.deep_search = AsyncMock(
-            return_value={
-                "success": True,
-                "automations": [],
-                "scripts": [],
-                "scenes": [],
-                "helpers": [],
-                "warnings": [],
-            }
-        )
-        return smart_tools
-
-    @pytest.fixture
-    def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search"]
-
-
-class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
-    """Tests for per_domain_limit= cap on group_by_domain results (issue #1199)."""
-
-    @pytest.mark.asyncio
-    async def test_per_domain_limit_caps_by_domain_entries(self, search_tool):
-        """per_domain_limit=1 with group_by_domain=True caps each domain to 1 entity."""
-        result = await search_tool(
-            query="light",
-            group_by_domain=True,
-            per_domain_limit=1,
-            limit=20,
-        )
-        by_domain = result.get("by_domain", {})
-        assert "light" in by_domain
-        assert len(by_domain["light"]) <= 1, (
-            "per_domain_limit=1 should cap each domain bucket to at most 1 entity"
-        )
-
-    @pytest.mark.asyncio
-    async def test_per_domain_limit_no_cap_without_group_by_domain(self, search_tool):
-        """per_domain_limit is ignored when group_by_domain=False (no by_domain key)."""
-        result = await search_tool(
-            query="light",
-            group_by_domain=False,
-            per_domain_limit=1,
-        )
-        data = result
-        # Results still present; no by_domain grouping
-        assert "entities" in data
-        assert "by_domain" not in data
-
-    @pytest.mark.asyncio
-    async def test_per_domain_limit_domain_listing_branch(self, search_tool):
-        """per_domain_limit=1 with group_by_domain=True works in domain_listing branch."""
-        result = await search_tool(
-            domain_filter="light",
-            group_by_domain=True,
-            per_domain_limit=1,
-            limit=20,
-        )
-        by_domain = result.get("by_domain", {})
-        assert "light" in by_domain
-        assert len(by_domain["light"]) <= 1
-
-    @pytest.mark.asyncio
-    async def test_domain_listing_member_only_projection_keeps_group_signal(
-        self, search_tool
-    ):
-        """Member-only domain grouping retains the group discriminator."""
-        result = await search_tool(
-            domain_filter="light",
-            group_by_domain=True,
-            result_fields=["member_entity_ids"],
-            limit=20,
-        )
-
-        expected_group = {
-            "is_group": True,
-            "member_entity_ids": ["light.member_one", "light.member_two"],
-        }
-        assert expected_group in result["entities"]
-        assert expected_group in result["by_domain"]["light"]
-        assert {"is_group": False} in result["by_domain"]["light"]
-
-
-class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
-    """Tests for state_filter= normalization and per-branch behavior (issue #1199)."""
-
-    @pytest.mark.asyncio
-    async def test_state_filter_exact_match_keeps_matching_entities(self, search_tool):
-        """state_filter='on' in exact_match mode keeps only 'on' entities."""
-        result = await search_tool(query="light", state_filter="on")
-        data = result
-        for entity in data["entities"]:
-            assert entity["state"] == "on", (
-                "state_filter='on' should remove non-'on' entities from results"
-            )
-
-    @pytest.mark.asyncio
-    async def test_state_filter_strips_surrounding_whitespace(self, search_tool):
-        """state_filter with whitespace padding is normalized before matching."""
-        result_padded = await search_tool(query="light", state_filter="  on  ")
-        result_plain = await search_tool(query="light", state_filter="on")
-        # Both should return the same set of entities
-        padded_ids = {e["entity_id"] for e in result_padded["entities"]}
-        plain_ids = {e["entity_id"] for e in result_plain["entities"]}
-        assert padded_ids == plain_ids
-
-    @pytest.mark.asyncio
-    async def test_state_filter_not_echoed_at_top_level(self, search_tool):
-        """state_filter is a caller-input echo and must not bleed into the
-        ha_search top-level envelope (entities-branch strip — see
-        `ENTITIES_BRANCH_SKIP_KEYS`). The filtering still applies to
-        `entities`; the caller already has the input they passed.
-        """
-        result = await search_tool(query="light", state_filter="on")
-        assert "state_filter" not in result, (
-            f"state_filter must not echo at top level of ha_search; "
-            f"got keys {sorted(result)}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_state_filter_domain_listing_branch(self, search_tool):
-        """state_filter works in the domain_listing branch (empty query + domain_filter).
-
-        The filter still applies to each entity in ``entities``; the input
-        echo at top level is stripped at the orchestrator (see
-        ``ENTITIES_BRANCH_SKIP_KEYS``), so callers must not expect the
-        echo even when they read it through the domain_listing branch.
-        """
-        result = await search_tool(domain_filter="light", state_filter="on")
-        data = result
-        for entity in data["entities"]:
-            assert entity["state"] == "on"
-        assert "state_filter" not in data, (
-            f"state_filter must not echo at top level even in domain_listing; "
-            f"got keys {sorted(data)}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_state_filter_whitespace_only_treated_as_no_filter(self, search_tool):
-        """state_filter='   ' (whitespace only) is treated as no filter (None)."""
-        result_no_filter = await search_tool(query="light")
-        result_ws_filter = await search_tool(query="light", state_filter="   ")
-        no_filter_count = result_no_filter["count"]
-        ws_filter_count = result_ws_filter["count"]
-        # Both should return the same number of results (no filtering applied)
-        assert ws_filter_count == no_filter_count
-
-    @pytest.mark.asyncio
-    async def test_state_only_group_by_domain_spans_domains(self, search_tool):
-        """state_filter-only + group_by_domain groups matches across domains.
-
-        _MULTI_ENTITY_STATES has light.kitchen=on and switch.fan=on, so a
-        state_filter="on" listing with group_by_domain=True must produce a
-        by_domain map keyed by BOTH domains (the cross-domain grouping helper,
-        not the single-domain one).
-        """
-        result = await search_tool(state_filter="on", group_by_domain=True, limit=20)
-        assert result.get("search_type") == "state_listing"
-        by_domain = result.get("by_domain", {})
-        assert "light" in by_domain and "switch" in by_domain, (
-            f"expected both 'light' and 'switch' domains, got {sorted(by_domain)}"
-        )
-        for entities in by_domain.values():
-            for entity in entities:
-                assert entity["state"] == "on"
-
-
-class TestHaSearchEntitiesResultFields(_SearchToolFixture):
-    """Tests for result_fields= per-record projection (issue #1199)."""
-
-    def test_tool_description_guides_exclusion_safe_membership_request(
-        self, search_tool
-    ):
-        """Tell models to opt into membership before exclusionary control."""
-        description = search_tool.__doc__ or ""
-
-        assert 'control requests with exclusions such as "except"' in description
-        assert "include `is_group` and `member_entity_ids`" in description
-        assert "prefer leaf entities" in description
-
-    @pytest.mark.asyncio
-    async def test_result_fields_projects_entity_records(self, search_tool):
-        """result_fields=['entity_id','state'] limits each record to those keys."""
-        result = await search_tool(query="light", result_fields=["entity_id", "state"])
-        data = result
-        for entity in data["entities"]:
-            assert set(entity.keys()) == {"entity_id", "state"}
-
-    @pytest.mark.asyncio
-    async def test_result_fields_outer_response_keys_preserved(self, search_tool):
-        """result_fields only projects inside results[]; top-level keys are unchanged."""
-        result = await search_tool(query="light", result_fields=["entity_id"])
-        data = result
-        assert "success" in data
-        assert "entity_total_matches" in data
-        assert "count" in data
-
-    @pytest.mark.asyncio
-    async def test_result_fields_unknown_key_rejected(self, search_tool):
-        """An unknown result_fields key is now a hard validation error.
-
-        result_fields drives area/floor/labels/aliases enrichment (issue #1813
-        C1), so the server must recognise every requested key — an unknown one is
-        rejected up front rather than silently projecting each record to ``{}``.
-        """
-        with pytest.raises(ToolError) as excinfo:
-            await search_tool(query="light", result_fields=["nonexistent_key"])
-        assert "Unknown result_fields" in str(excinfo.value)
-
-    @pytest.mark.asyncio
-    async def test_result_fields_domain_listing_branch(self, search_tool):
-        """result_fields works in the domain_listing branch."""
-        result = await search_tool(domain_filter="light", result_fields=["entity_id"])
-        data = result
-        for entity in data["entities"]:
-            assert set(entity.keys()) == {"entity_id"}
-
-    @pytest.mark.asyncio
-    async def test_enrichment_healthy_reads_emit_no_warning(self, search_tool):
-        """Byte-parity guard: with every registry read succeeding, an enrichment
-        request adds no degraded-enrichment warning."""
-        data = await search_tool(query="light", result_fields=["entity_id", "area"])
-        assert not any(
-            "enrichment incomplete" in w for w in data.get("warnings", [])
-        ), f"healthy enrichment must not warn; got {data.get('warnings')}"
-
-    @pytest.mark.asyncio
-    async def test_member_only_projection_retains_group_discriminator(
-        self, search_tool
-    ):
-        result = await search_tool(
-            query="fan",
-            result_fields=["member_entity_ids"],
-        )
-
-        assert result["entities"] == [{"is_group": False}]
-        assert not any(
-            "matched no record keys" in warning
-            for warning in result.get("warnings", [])
-        )
-
-
-class TestHaSearchMembershipFuzzy(_SearchToolFixture):
-    """Opt-in membership survives the legacy fuzzy projection seam."""
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.get_states = AsyncMock(
-            return_value=[
-                {
-                    "entity_id": "light.group",
-                    "state": "on",
-                    "attributes": {
-                        "friendly_name": "Group",
-                        "group_entities": [
-                            "light.hidden_member",
-                            "light.visible_member",
-                        ],
-                    },
-                }
-            ]
-        )
-
-        async def send_websocket_message(payload):
-            if payload.get("type") == "config/entity_registry/list":
-                return {
-                    "success": True,
-                    "result": [
-                        {"entity_id": "light.hidden_member", "hidden_by": "user"}
-                    ],
-                }
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=send_websocket_message)
-        return client
-
-    @pytest.fixture
-    def real_smart_tools(self, mock_client):
-        """Use the real smart-search transform chain for membership redaction."""
-        smart = SmartSearchTools(mock_client)
-        smart.deep_search = AsyncMock(
-            return_value={
-                "success": True,
-                "automations": [],
-                "scripts": [],
-                "scenes": [],
-                "helpers": [],
-                "warnings": [],
-            }
-        )
-        return smart
-
-    @pytest.fixture
-    def search_tool(self, mock_mcp, mock_client, real_smart_tools):
-        """Register ha_search with the real smart-search fixture."""
-        register_search_tools(mock_mcp, mock_client, smart_tools=real_smart_tools)
-        return self.registered_tools["ha_search"]
-
-    @pytest.mark.asyncio
-    async def test_fuzzy_search_redacts_hidden_member_but_keeps_group(
-        self, search_tool
-    ):
-        result = await search_tool(
-            query="group",
-            exact_match=False,
-            include_hidden=False,
-            result_fields=["entity_id", "is_group", "member_entity_ids"],
-        )
-
-        assert result["entities"] == [
-            {
-                "entity_id": "light.group",
-                "is_group": True,
-            }
-        ]
-
-        assert "attributes" not in result["entities"][0]
-
-    @pytest.mark.asyncio
-    async def test_exact_search_preserves_redacted_group_indicator(self, search_tool):
-        result = await search_tool(
-            query="group",
-            include_hidden=False,
-            result_fields=["entity_id", "is_group", "member_entity_ids"],
-        )
-
-        assert result["entities"] == [
-            {
-                "entity_id": "light.group",
-                "is_group": True,
-            }
-        ]
-
-
-class TestHaSearchEnrichmentDegraded(_SearchToolFixture):
-    """A failed registry read during result_fields enrichment surfaces a top-level
-    warning and logs, instead of silently emitting null area/floor/labels
-    indistinguishable from a genuinely-unassigned entity (silent-failure fix,
-    issue #1813 F1)."""
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
-
-        async def _ws(msg):
-            # One registry read fails; every other read succeeds (empty).
-            if msg.get("type") == "config/area_registry/list":
-                return {"success": False, "error": "boom"}
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        return client
-
-    @pytest.mark.asyncio
-    async def test_degraded_enrichment_read_surfaces_warning(self, search_tool, caplog):
-        with caplog.at_level(logging.WARNING):
-            data = await search_tool(query="light", result_fields=["entity_id", "area"])
-        # Records are still returned — enrichment never withholds results.
-        assert data["entities"], "entities must still be returned on a degraded join"
-        # The degradation is surfaced as a top-level warning...
-        assert any("enrichment incomplete" in w for w in data.get("warnings", [])), (
-            f"expected a degraded-enrichment warning; got {data.get('warnings')}"
-        )
-        # ...and logged, not silent.
-        assert any(
-            "result_fields_enrichment_failed" in r.getMessage() for r in caplog.records
-        )
-
-
-# Fuzzy results returned by smart_tools.smart_entity_search mock.
-# 5 total matches in the index; this page contains 3, only 1 matches "on".
-_FUZZY_RESULT = {
-    "results": [
-        {"entity_id": "light.kitchen", "state": "on", "domain": "light"},
-        {"entity_id": "light.bedroom", "state": "off", "domain": "light"},
-        {"entity_id": "light.hall", "state": "unavailable", "domain": "light"},
-    ],
-    "total_matches": 5,
-    "has_more": True,
-    "offset": 0,
-    "limit": 3,
-    "count": 3,
-}
-
-
-class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
-    """Tests for state_filter= semantics on the fuzzy (exact_match=False) branch.
-
-    Pins the dual-count contract: total_matches is the unfiltered fuzzy count,
-    count reflects only the entities on this page that matched the state filter.
-    """
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.smart_entity_search = AsyncMock(return_value=dict(_FUZZY_RESULT))
-        smart.deep_search = AsyncMock(
-            return_value={
-                "success": True,
-                "automations": [],
-                "scripts": [],
-                "scenes": [],
-                "helpers": [],
-                "warnings": [],
-            }
-        )
-        return smart
-
-    @pytest.mark.asyncio
-    async def test_fuzzy_state_filter_total_matches_is_unfiltered(self, search_tool):
-        """total_matches stays at the unfiltered fuzzy count; count is post-filter.
-
-        This pins the dual-count contract: the fuzzy engine already paginated
-        internally so total_matches cannot be recomputed after state filtering.
-        """
-        result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result
-        # count reflects only the filtered page
-        assert data["count"] == 1, "count should reflect only the on-state entity"
-        assert data["entities"][0]["entity_id"] == "light.kitchen"
-        # total_matches is the raw fuzzy-engine number, not re-counted
-        assert data["entity_total_matches"] == 5, (
-            "entity_total_matches must remain the unfiltered fuzzy count"
-        )
-
-    @pytest.mark.asyncio
-    async def test_fuzzy_state_filter_note_present(self, search_tool):
-        """state_filter_note appears in the response to explain the dual-count."""
-        result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result
-        assert "state_filter_note" in data
-        assert "has_more" in data["state_filter_note"]
-
-    @pytest.mark.asyncio
-    async def test_state_filter_note_survives_fields_projection(self, search_tool):
-        """state_filter_note is force-retained even when not in fields=.
-
-        A caller projecting to only ``entities`` still needs the note to
-        understand that ``entity_total_matches`` is the unfiltered fuzzy
-        count, not the post-filter result count. Pinned via
-        ``_ALWAYS_KEEP_PROJECTION``.
-        """
-        result = await search_tool(
-            query="light",
-            exact_match=False,
-            state_filter="on",
-            fields=["entities"],
-        )
-        data = result
-        # state_filter_note must be force-retained even when not listed in fields=
-        assert "state_filter_note" in data, (
-            "state_filter_note must survive fields= projection "
-            f"(in _ALWAYS_KEEP_PROJECTION); got keys {sorted(data)}"
-        )
-        # Requested key present.
-        assert "entities" in data
-        # entity_total_matches is also force-retained (in _ALWAYS_KEEP_PROJECTION).
-        assert "entity_total_matches" in data
-
-
-class TestEntityEnrichmentAliasSentinel:
-    """The legacy ``result_fields`` enrichment must drop the COMPUTED_NAME alias
-    sentinel (serialized ``null`` over the WS registry read) rather than emit the
-    literal string ``"None"`` — the component's join filters non-strings, so a blind
-    ``str()`` cast desynced the two paths and exposed a bogus alias (Codex P3)."""
-
-    def test_null_alias_sentinel_is_dropped_not_stringified(self):
-        entry = {"aliases": ["Kitchen", None, "Cocina"]}
-        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, {}, ("aliases",))
-        assert fields["aliases"] == ["Cocina", "Kitchen"]
-        assert "None" not in fields["aliases"]
-
-    def test_all_string_aliases_unaffected(self):
-        entry = {"aliases": ["b", "a"]}
-        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, {}, ("aliases",))
-        assert fields["aliases"] == ["a", "b"]
-
-    def test_missing_aliases_key_yields_empty(self):
-        fields = _entity_enrichment_fields({}, {}, {}, {}, {}, {}, ("aliases",))
-        assert fields["aliases"] == []
-
-
-class TestEntityEnrichmentAreaPrecedence:
-    """Entity placement uses Core's presence-based direct-area precedence."""
-
-    def test_device_effective_area_drives_area_and_floor_projection(self):
-        fields = _entity_enrichment_fields(
-            {"area_id": None, "device_id": "child"},
-            {"office": {"name": "Office", "floor_id": "upstairs"}},
-            {"upstairs": {"name": "Upstairs"}},
-            {},
-            {"child": {"id": "child", "parent_device_id": "parent"}},
-            {"child": "office"},
-            ("area", "floor"),
-        )
-
-        assert fields == {"area": "Office", "floor": "Upstairs"}
-
-    def test_present_invalid_area_does_not_inherit_device_area(self):
-        fields = _entity_enrichment_fields(
-            {"area_id": "", "device_id": "child"},
-            {"office": {"name": "Office", "floor_id": "upstairs"}},
-            {"upstairs": {"name": "Upstairs"}},
-            {},
-            {"child": {"id": "child"}},
-            {"child": "office"},
-            ("area", "floor"),
-        )
-        assert fields == {"area": None, "floor": None}
-
-
-class TestHaSearchAreaQueryPrefetchFailure(_SearchToolFixture):
-    """A FAILED entity-registry prefetch in the area+query branch must surface the
-    degraded-enrichment warning, not collapse to an empty map that bypasses it.
-
-    The prefetch (``config/entity_registry/get_entries`` for the alias haystack) is
-    reused as ``prefetched_entries`` for opt-in enrichment. When it fails it now
-    returns ``None`` (vs an empty-but-successful ``{}``), so the enrichment re-fetches
-    and reports the failure instead of silently emitting null area/floor/labels
-    indistinguishable from a genuinely-unassigned entity (Codex P2)."""
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client.get_states = AsyncMock(return_value=_MULTI_ENTITY_STATES)
-
-        async def _ws(msg):
-            # The entity-registry entries read (prefetch AND enrichment re-fetch)
-            # fails; every other registry read succeeds (empty).
-            if msg.get("type") == "config/entity_registry/get_entries":
-                return {"success": False, "error": "boom"}
-            return {"success": True, "result": []}
-
-        client.send_websocket_message = AsyncMock(side_effect=_ws)
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_entities_by_area = AsyncMock(
-            return_value={
-                "areas": {
-                    "kitchen": {
-                        "area_name": "Kitchen",
-                        "entities": {
-                            "light": [
-                                {
-                                    "entity_id": "light.kitchen",
-                                    "friendly_name": "Kitchen Light",
-                                    "state": "on",
-                                    "_hidden_by": None,
-                                    "_attributes": {
-                                        "friendly_name": "Kitchen Light",
-                                        "group_entities": [
-                                            "light.member_two",
-                                            "light.member_one",
-                                        ],
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                }
-            }
-        )
-        return smart
-
-    @pytest.mark.asyncio
-    async def test_failed_prefetch_surfaces_enrichment_warning(
-        self, search_tool, caplog
-    ):
-        with caplog.at_level(logging.WARNING):
-            data = await search_tool(
-                query="kitchen",
-                area_filter="kitchen",
-                result_fields=["entity_id", "area"],
-            )
-        assert data["search_type"] == "area_filtered_query"
-        # Records are still returned — enrichment never withholds results.
-        assert data["entities"], "entities must still be returned on a degraded join"
-        # The failed prefetch is surfaced as a top-level warning, not swallowed.
-        assert any("enrichment incomplete" in w for w in data.get("warnings", [])), (
-            f"expected a degraded-enrichment warning; got {data.get('warnings')}"
-        )
-        assert any(
-            "result_fields_enrichment_failed" in r.getMessage() for r in caplog.records
-        )
-
-
-@pytest.mark.asyncio
-async def test_area_search_real_chain_redacts_hidden_group_member() -> None:
-    """Exercise area membership redaction through the real smart-search mixin."""
-    client = MagicMock()
-    client.get_states = AsyncMock(
-        return_value=[
-            {
-                "entity_id": "light.area_group",
-                "state": "on",
-                "attributes": {
-                    "friendly_name": "Area Group",
-                    "group_entities": ["light.visible", "light.hidden"],
-                },
-            },
-            {
-                "entity_id": "light.visible",
-                "state": "on",
-                "attributes": {"friendly_name": "Visible"},
-            },
-            {
-                "entity_id": "light.hidden",
-                "state": "on",
-                "attributes": {"friendly_name": "Hidden"},
-            },
-        ]
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize("kwargs", _LEGACY_MODES)
+async def test_membership_is_served_on_request_in_every_listing_mode(
+    search: Any, kwargs: dict[str, Any]
+) -> None:
+    """A model told to check group membership before an "all except" command
+    gets it whichever way it found the group, and only when it asks."""
+    asked = await search(**kwargs, result_fields=MEMBERSHIP)
+    default = await search(**kwargs)
+
+    assert _record(asked, "light.kitchen") == KITCHEN_GROUP
+    record = _record(default, "light.kitchen")
+    assert "is_group" not in record
+    assert "member_entity_ids" not in record
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_member_only_projection_keeps_the_group_flag(search: Any) -> None:
+    """Asking only for member ids still says which record is a group, so an
+    entity without members is not mistaken for one whose members were withheld."""
+    result = await search(
+        domain_filter="light",
+        group_by_domain=True,
+        result_fields=["member_entity_ids"],
+        limit=20,
+    )
+    fan = await search(query="fan", result_fields=["member_entity_ids"])
+
+    group = {"is_group": True, "member_entity_ids": sorted(GROUP_MEMBERS)}
+    assert group in result["entities"]
+    assert group in result["by_domain"]["light"]
+    assert {"is_group": False} in result["by_domain"]["light"]
+    assert fan["entities"] == [{"is_group": False}]
+    assert not _warned(fan, "matched no record keys")
+
+
+@pytest.fixture
+def hidden_member_home(
+    hass: HomeAssistant,
+    area_registry: ar.AreaRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """``light.group`` in the Living room groups a visible member and one the
+    user hid."""
+    living = area_registry.async_create("Living")
+    _add(
+        hass,
+        entity_registry,
+        "light.group",
+        "on",
+        "Group",
+        area_id=living.id,
+        members=["light.visible_member", "light.hidden_member"],
+    )
+    _add(
+        hass,
+        entity_registry,
+        "light.visible_member",
+        "on",
+        "Visible Member",
+        area_id=living.id,
+    )
+    _add(
+        hass,
+        entity_registry,
+        "light.hidden_member",
+        "on",
+        "Hidden Member",
+        area_id=living.id,
+        hidden=True,
     )
 
-    async def send(payload):
-        registry_type = payload["type"]
-        if registry_type == "config/area_registry/list":
-            result = [{"area_id": "living", "name": "Living"}]
-        elif registry_type == "config/entity_registry/list":
-            result = [
-                {"entity_id": "light.area_group", "area_id": "living"},
-                {"entity_id": "light.visible", "area_id": "living"},
-                {
-                    "entity_id": "light.hidden",
-                    "area_id": "living",
-                    "hidden_by": "user",
-                },
-            ]
-        else:
-            result = []
-        return {"success": True, "result": result}
 
-    client.send_websocket_message = AsyncMock(side_effect=send)
-    smart = SmartSearchTools(client)
-    result = await smart.get_entities_by_area(
-        "Living",
+_REDACTED_GROUP = {"entity_id": "light.group", "is_group": True}
+
+
+@pytest.mark.usefixtures("config", "hidden_member_home")
+async def test_exact_search_withholds_members_of_a_group_with_a_hidden_member(
+    search: Any,
+) -> None:
+    """With hidden entities excluded, a group naming one keeps its group flag
+    but not its member list; with them included the list is served."""
+    redacted = await search(
+        query="group", include_hidden=False, result_fields=MEMBERSHIP
+    )
+    served = await search(query="group", include_hidden=True, result_fields=MEMBERSHIP)
+
+    assert redacted["entities"] == [_REDACTED_GROUP]
+    assert _record(served, "light.group")["member_entity_ids"] == [
+        "light.hidden_member",
+        "light.visible_member",
+    ]
+
+
+@pytest.mark.usefixtures("config", "hidden_member_home")
+async def test_fuzzy_search_withholds_members_of_a_group_with_a_hidden_member(
+    search: Any,
+) -> None:
+    result = await search(
+        query="group",
+        exact_match=False,
         include_hidden=False,
-        include_membership=True,
+        result_fields=MEMBERSHIP,
     )
-    group = next(
-        record
-        for record in result["areas"]["living"]["entities"]["light"]
-        if record["entity_id"] == "light.area_group"
+    assert result["entities"] == [_REDACTED_GROUP]
+
+
+@pytest.mark.usefixtures("config", "hidden_member_home")
+async def test_area_listing_withholds_members_of_a_group_with_a_hidden_member(
+    search: Any,
+) -> None:
+    result = await search(
+        area_filter="Living", include_hidden=False, result_fields=MEMBERSHIP
     )
-    record: dict = {}
-    _add_membership_fields(
-        record,
-        group["_attributes"],
-        ("is_group", "member_entity_ids"),
-        denied_member_ids=set(),
+    assert _record(result, "light.group") == _REDACTED_GROUP
+    assert "light.hidden_member" not in _ids(result["entities"])
+
+
+# ---------------------------------------------------------------------------
+# group_by_domain / per_domain_limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"query": "light"}, id="exact-match"),
+        pytest.param({"domain_filter": "light"}, id="domain-listing"),
+    ],
+)
+async def test_per_domain_limit_caps_each_domain_bucket(
+    search: Any, kwargs: dict[str, Any]
+) -> None:
+    uncapped = await search(**kwargs, group_by_domain=True, limit=20)
+    capped = await search(**kwargs, group_by_domain=True, per_domain_limit=1, limit=20)
+
+    assert len(uncapped["by_domain"]["light"]) == 2
+    assert len(capped["by_domain"]["light"]) == 1
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_per_domain_limit_without_grouping_changes_nothing(search: Any) -> None:
+    result = await search(query="light", group_by_domain=False, per_domain_limit=1)
+
+    assert _ids(result["entities"]) == {"light.kitchen", "light.bedroom"}
+    assert "by_domain" not in result
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_state_only_listing_groups_matches_across_domains(search: Any) -> None:
+    result = await search(state_filter="on", group_by_domain=True, limit=20)
+
+    assert result["search_type"] == "state_listing"
+    assert {
+        domain: _ids(records) for domain, records in result["by_domain"].items()
+    } == {"light": {"light.kitchen"}, "switch": {"switch.fan"}}
+
+
+# ---------------------------------------------------------------------------
+# state_filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"query": "light"}, id="exact-match"),
+        pytest.param({"domain_filter": "light"}, id="domain-listing"),
+    ],
+)
+async def test_state_filter_keeps_only_entities_in_that_state(
+    search: Any, kwargs: dict[str, Any]
+) -> None:
+    """The filter narrows the entities, and the caller's own input is not
+    echoed back at the top level."""
+    result = await search(**kwargs, state_filter="on")
+
+    assert _ids(result["entities"]) == {"light.kitchen"}
+    assert "state_filter" not in result
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_state_filter_ignores_surrounding_whitespace(search: Any) -> None:
+    padded = await search(query="light", state_filter="  on  ")
+    assert _ids(padded["entities"]) == {"light.kitchen"}
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_whitespace_only_state_filter_filters_nothing(search: Any) -> None:
+    result = await search(query="light", state_filter="   ")
+    assert _ids(result["entities"]) == {"light.kitchen", "light.bedroom"}
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_fuzzy_state_filter_reports_the_unfiltered_total_and_says_so(
+    search: Any,
+) -> None:
+    """The fuzzy engine pages before the state filter runs, so
+    ``entity_total_matches`` stays the unfiltered count while ``count`` is
+    what survived the filter, and a note explains the difference."""
+    unfiltered = await search(query="light", exact_match=False)
+    filtered = await search(query="light", exact_match=False, state_filter="on")
+
+    assert _ids(filtered["entities"]) == {"light.kitchen"}
+    assert filtered["count"] == 1
+    assert filtered["entity_total_matches"] == unfiltered["entity_total_matches"] > 1
+    assert "has_more" in filtered["state_filter_note"]
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_state_filter_note_survives_fields_projection(search: Any) -> None:
+    result = await search(
+        query="light", exact_match=False, state_filter="on", fields=["entities"]
     )
-    assert record == {"is_group": True}
+
+    assert "entities" in result
+    assert "state_filter_note" in result
+    assert "entity_total_matches" in result
+
+
+# ---------------------------------------------------------------------------
+# result_fields: per-record projection and enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_tool_description_tells_models_to_check_membership_before_exclusions(
+    search: Any,
+) -> None:
+    description = search.__doc__ or ""
+
+    assert 'control requests with exclusions such as "except"' in description
+    assert "include `is_group` and `member_entity_ids`" in description
+    assert "prefer leaf entities" in description
+
+
+@pytest.mark.usefixtures("config", "home")
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"query": "light"}, id="exact-match"),
+        pytest.param({"domain_filter": "light"}, id="domain-listing"),
+    ],
+)
+async def test_result_fields_narrows_each_record_only(
+    search: Any, kwargs: dict[str, Any]
+) -> None:
+    """Each record keeps just the named keys; the envelope around them is
+    untouched."""
+    result = await search(**kwargs, result_fields=["entity_id", "state"])
+
+    assert result["entities"]
+    assert all(set(r) == {"entity_id", "state"} for r in result["entities"])
+    assert {"success", "entity_total_matches", "count"} <= set(result)
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_unknown_result_fields_key_is_rejected(search: Any) -> None:
+    """An unknown key is refused instead of projecting every record to ``{}``."""
+    with pytest.raises(ToolError, match="Unknown result_fields"):
+        await search(query="light", result_fields=["nonexistent_key"])
+
+
+@pytest.mark.usefixtures("config", "home")
+async def test_area_enrichment_names_each_entitys_area_without_warning(
+    search: Any,
+) -> None:
+    data = await search(query="light", result_fields=["entity_id", "area"])
+
+    assert _record(data, "light.kitchen")["area"] == "Kitchen"
+    assert _record(data, "light.bedroom")["area"] is None
+    assert not _warned(data, "enrichment incomplete")
+
+
+@pytest.mark.usefixtures("home")
+async def test_area_registry_refused_during_enrichment_is_reported(
+    hass: HomeAssistant, search: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Core without its area registry commands refuses that read: the records
+    still come back, and the empty area is flagged instead of reading as
+    "in no area"."""
+    for section in (config_devices, config_entities, config_floors, config_labels):
+        assert section.async_setup(hass)
+
+    with caplog.at_level(logging.WARNING):
+        data = await search(query="light", result_fields=["entity_id", "area"])
+
+    assert _ids(data["entities"]) == {"light.kitchen", "light.bedroom"}
+    assert _record(data, "light.kitchen")["area"] is None
+    assert _warned(data, "enrichment incomplete")
+    assert "result_fields_enrichment_failed" in caplog.text
+
+
+@pytest.mark.usefixtures("home")
+async def test_refused_registry_entries_read_on_area_query_is_reported(
+    hass: HomeAssistant, search: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The area+query branch's entry read is refused by Core: the enrichment
+    reports it rather than taking the failed read for "no entries"."""
+    for section in (config_areas, config_devices, config_floors, config_labels):
+        assert section.async_setup(hass)
+    websocket_api.async_register_command(hass, config_entities.websocket_list_entities)
+
+    with caplog.at_level(logging.WARNING):
+        data = await search(
+            query="kitchen", area_filter="kitchen", result_fields=["entity_id", "area"]
+        )
+
+    assert data["search_type"] == "area_filtered_query"
+    assert _ids(data["entities"]) == {"light.kitchen"}
+    assert _warned(data, "enrichment incomplete")
+    assert "result_fields_enrichment_failed" in caplog.text
+
+
+@pytest.mark.usefixtures("config")
+async def test_computed_name_alias_is_not_published_as_none(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, search: Any
+) -> None:
+    """Core sends its "computed name" alias as ``null``; the aliases served
+    are the real ones, sorted, never the string ``"None"``."""
+    _add(hass, entity_registry, "light.lamp", "on", "Lamp")
+    entity_registry.async_update_entity(
+        "light.lamp", aliases=[er.COMPUTED_NAME, "Kitchen", "Cocina"]
+    )
+
+    data = await search(query="lamp", result_fields=["entity_id", "aliases"])
+
+    assert data["entities"] == [
+        {"entity_id": "light.lamp", "aliases": ["Cocina", "Kitchen"]}
+    ]
+
+
+@pytest.mark.usefixtures("config")
+async def test_entity_without_registry_entry_has_no_aliases(
+    hass: HomeAssistant, search: Any
+) -> None:
+    hass.states.async_set("light.loose", "on", {"friendly_name": "Loose"})
+
+    data = await search(query="loose", result_fields=["entity_id", "aliases"])
+
+    assert data["entities"] == [{"entity_id": "light.loose", "aliases": []}]
+
+
+@pytest.fixture
+def office(area_registry: ar.AreaRegistry, floor_registry: fr.FloorRegistry) -> str:
+    """The Office area on the Upstairs floor; returns its id."""
+    upstairs = floor_registry.async_create("Upstairs")
+    return area_registry.async_create("Office", floor_id=upstairs.floor_id).id
+
+
+@pytest.mark.usefixtures("config")
+async def test_entity_on_child_device_is_placed_by_parent_devices_area(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    office: str,
+    search: Any,
+) -> None:
+    entry = add_test_entry(hass)
+    parent = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "parent")}
+    )
+    device_registry.async_update_device(parent.id, area_id=office)
+    child = device_registry.async_get_or_create_child(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "child")},
+        parent_device_id=parent.id,
+    )
+    _add(hass, entity_registry, "sensor.child", "1", "Child", device_id=child.id)
+
+    data = await search(query="child", result_fields=["area", "floor"])
+
+    assert data["entities"] == [{"area": "Office", "floor": "Upstairs"}]
+
+
+@pytest.mark.usefixtures("config")
+async def test_empty_entity_area_does_not_inherit_its_devices_area(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    office: str,
+    search: Any,
+) -> None:
+    """Core stores an entity's area as ``""`` when it is cleared to empty; that
+    entity is not reported in its device's area."""
+    entry = add_test_entry(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "device")}
+    )
+    device_registry.async_update_device(device.id, area_id=office)
+    _add(hass, entity_registry, "sensor.probe", "1", "Probe", device_id=device.id)
+    entity_registry.async_update_entity("sensor.probe", area_id="")
+
+    data = await search(query="probe", result_fields=["area", "floor"])
+
+    assert data["entities"] == [{"area": None, "floor": None}]
