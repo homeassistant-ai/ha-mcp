@@ -892,3 +892,54 @@ def test_a_converted_test_imports_no_private_name(tmp_path: Path) -> None:
     assert violating <= _grandfathered_tests(), sorted(
         violating - _grandfathered_tests()
     )
+
+
+_SERVER_ANSWERS = "no-typed-in-server-answers"
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged"),
+    [
+        pytest.param(
+            'patch("ha_mcp.tools.x.get_component_caps", return_value={"caps": []})\n',
+            True,
+            id="patch-return-value",
+        ),
+        pytest.param(
+            'patch.object(update_check, "get_update_info", AsyncMock(return_value=None))\n',
+            True,
+            id="patch-object-mock",
+        ),
+        pytest.param(
+            'monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", lambda *_: [])\n',
+            True,
+            id="setattr-lambda",
+        ),
+        pytest.param(
+            'patch.object(tools_addons, "get_addon_info", wraps=tools_addons.get_addon_info)\n',
+            False,
+            id="spy",
+        ),
+        pytest.param(
+            'patch.object(update_check, "fetch_latest", side_effect=TimeoutError)\n',
+            False,
+            id="failure",
+        ),
+        pytest.param(
+            'patch.object(paths, "get_data_dir", return_value=tmp_path)\n',
+            False,
+            id="another-function",
+        ),
+    ],
+)
+def test_only_a_typed_in_server_answer_is_refused(
+    source: str, flagged: bool, tmp_path: Path
+) -> None:
+    assert _flagged(_SERVER_ANSWERS, source, tmp_path) is flagged
+
+
+def test_no_test_types_in_a_server_answer() -> None:
+    """The rule has no list of exempt files: every hit is a violation."""
+    rows = _scan(_RULES / f"{_SERVER_ANSWERS}.yml", _REPO, "tests")
+
+    assert sorted({row["file"].replace("\\", "/") for row in rows}) == []

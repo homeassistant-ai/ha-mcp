@@ -42,11 +42,6 @@ def _core_helper_flows() -> None:
 
 
 @pytest.fixture
-def _server_helper_flows() -> None:
-    """Core's ``flow_handlers?type=helper`` answers the server itself."""
-
-
-@pytest.fixture
 def custom_helper_integration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
 ) -> None:

@@ -45,11 +45,6 @@ CUSTOM_NOT_SCANNED = "1 custom helper integration entry not scanned"
 
 
 @pytest.fixture
-def _server_helper_flows() -> None:
-    """The server reads Core's helper flow lists itself."""
-
-
-@pytest.fixture
 async def storage_helpers(hass: HomeAssistant) -> None:
     """The ``input_*`` lists answer, so only the flow helpers can make a
     search partial."""

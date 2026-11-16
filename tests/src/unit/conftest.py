@@ -19,15 +19,12 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import WebSocketGenerator
-
-if TYPE_CHECKING:
-    from ha_mcp.tools.component_api import ComponentCaps
 
 # Core's own test plugin: the ``hass`` fixture, ``MockConfigEntry`` and its
 # socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
@@ -45,24 +42,6 @@ pytest_plugins = [
 # quickjs starts its shared worker thread on import; importing it here starts
 # that thread before any test, so Core's leftover-thread check never sees it.
 importlib.import_module("quickjs")
-
-
-@pytest.fixture
-def logbook_component_caps() -> Iterator[ComponentCaps]:
-    """Pretend the component advertises ``logbook_events`` (transport tests)."""
-    from ha_mcp.tools.component_api import ComponentCaps
-
-    caps = ComponentCaps(
-        schema_version=1,
-        component_version="2.2.3",
-        capabilities=frozenset({"logbook_events"}),
-        limits={},
-    )
-    with patch(
-        "ha_mcp.tools.log_sources_logbook.get_component_caps",
-        AsyncMock(return_value=caps),
-    ):
-        yield caps
 
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
@@ -336,52 +315,12 @@ def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.fixture(autouse=True)
-def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the server's ``flow_handlers?type=helper`` read with Core's list.
-
-    The helper tools read Core's helper flows at call time
-    (``helper_flows.helper_flow_types``) through the REST client, which unit
-    tests mock per test. This answers with Core's own ``FLOWS["helper"]`` and
-    starts every test with an empty per-client cache. A test that needs another
-    list patches ``_fetch_helper_flow_types`` again.
-    """
-    from ha_mcp.tools import helper_flows
-
-    from ._core_helper_flows import CORE_HELPER_FLOWS
-
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=CORE_HELPER_FLOWS),
-    )
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_core_helper_domains",
-        AsyncMock(return_value=CORE_HELPER_FLOWS),
-        raising=False,
-    )
-    monkeypatch.setattr(helper_flows, "_CACHE", {})
-    getattr(helper_flows, "_CORE_CACHE", {}).clear()
-
-
 @pytest.fixture
 def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve the search catalog on the main endpoint (``ENABLE_TOOL_SEARCH``)."""
     from ha_mcp.config import get_global_settings
 
     monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
-
-
-@pytest.fixture
-def no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No component describes a flow's declared steps, for a test whose client
-    is a test double: a form then says only what its own step reports."""
-    from ha_mcp.tools.config_helpers import describe
-
-    monkeypatch.setattr(describe, "flow_outline", AsyncMock(return_value=None))
-    # The component is there; it has no declaration for the test's flow.
-    monkeypatch.setattr(describe, "component_serves", AsyncMock(return_value=True))
 
 
 @pytest.fixture(autouse=True)

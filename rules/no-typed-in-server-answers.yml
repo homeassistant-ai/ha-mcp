@@ -1,0 +1,26 @@
+# A unit test that replaces a server function handing back what Home Assistant
+# Core, the ha_mcp_tools component, the Supervisor or PyPI answered, and types
+# the answer in, asserts against a guess of that answer (#3023). The reply rule
+# (no-hand-made-core-replies) knows the client's methods only; this one covers
+# the functions between the client and the tools. Reach the state through the
+# real thing instead: the component set up in `hass`, Core's own integrations,
+# Core's Supervisor test support, a local HTTP server for PyPI.
+# No file is exempt.
+id: no-typed-in-server-answers
+language: python
+rule:
+  all:
+    # patch("pkg.mod.get_component_caps", ...), patch.object(mod,
+    # "get_update_info", ...), monkeypatch.setattr(mod, "_fetch_x", ...)
+    - kind: call
+      regex: '^(\w+\.)*(patch(\.object|\.multiple)?|setattr)\('
+      has:
+        kind: string
+        regex: '^\w*["'']([\w.]*\.)?(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+        stopBy: end
+    # ... given an answer written in the test. A spy (wraps=) or a failure
+    # (side_effect=) carries no answer and stays.
+    - regex: '\breturn_value\s*=|\blambda\b'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"

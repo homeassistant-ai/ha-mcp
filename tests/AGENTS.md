@@ -175,7 +175,7 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   Core (`cloud`) cannot be imported here; the component reaches it through a
   small function of its own that the test replaces.
 
-Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
@@ -202,6 +202,14 @@ store (`.issues`, `.entities`, `.deleted_entities`, `.devices`,
 assigned or deleted by key, or `pop`, `clear`, `update` or `setdefault` on
 it. The test creates, changes or removes the entry through Core, and gets a
 restored one by having Core load it from storage. It has no list either.
+The tenth (`rules/no-typed-in-server-answers.yml`) refuses a replacement of a
+server function that hands back what Core, the component, the Supervisor or
+PyPI answered (`get_component_caps`, `component_serves`, `component_supports`,
+`get_addon_info`, `get_update_info`, any `fetch_*` or `_fetch_*`) when the
+replacement carries an answer written in the test (`return_value=`, a
+`lambda`). A spy (`wraps=`) and a failure (`side_effect=`) stay. The test sets
+up the real component or integration, uses Core's Supervisor test support, or
+serves PyPI's JSON from a local server. It has no list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
