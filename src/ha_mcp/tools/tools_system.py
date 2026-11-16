@@ -314,15 +314,19 @@ class SystemTools:
 
         Extracted verbatim from ``ha_reload_core``'s ``target == "all"`` branch.
         """
-        # Reload all reloadable components. Fire the calls concurrently
-        # but cap the in-flight count with a semaphore so a large
-        # install doesn't hit HA with ~16 simultaneous service calls.
-        # A single failing target must not cancel its siblings, so the
-        # calls are gathered with ``return_exceptions=True`` and
-        # attributed per target below (preserving RELOAD_TARGETS order).
+        # A subsystem whose integration is not loaded has no reload service.
+        registered = {
+            (entry["domain"], service)
+            for entry in await self._client.get_services()
+            for service in entry["services"]
+        }
         reloadable = [
-            (name, info) for name, info in RELOAD_TARGETS.items() if info is not None
+            (name, info)
+            for name, info in RELOAD_TARGETS.items()
+            if info is not None and info in registered
         ]
+        # At most four at once, so a large install does not get ~16 service
+        # calls together; one failing target must not cancel its siblings.
         semaphore = asyncio.Semaphore(4)
 
         async def _reload_one(domain: str, service: str) -> None:
@@ -338,17 +342,11 @@ class SystemTools:
         errors = []
         for (reload_target, _), outcome in zip(reloadable, outcomes, strict=True):
             if isinstance(outcome, BaseException):
-                # A non-Exception BaseException (CancelledError,
-                # KeyboardInterrupt, SystemExit) must still unwind the
-                # request, exactly as the prior sequential
-                # ``except Exception`` let it propagate — never demote
-                # it to a per-target warning.
+                # A CancelledError or KeyboardInterrupt still unwinds the
+                # request; it is never a per-target warning.
                 if not isinstance(outcome, Exception):
                     raise outcome
-                # Some services might not be available in all installations
-                error_msg = str(outcome)
-                if "not found" not in error_msg.lower():
-                    errors.append(f"{reload_target}: {error_msg}")
+                errors.append(f"{reload_target}: {outcome}")
             else:
                 results.append(reload_target)
 
