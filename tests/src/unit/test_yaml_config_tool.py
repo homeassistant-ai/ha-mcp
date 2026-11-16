@@ -580,7 +580,7 @@ async def test_remove_keeps_the_comment_block_above_the_next_key(
 ) -> None:
     """The tool promises to keep comments; a remove must take only the removed
     key's own lines, not the notes the user wrote above the key after it."""
-    kept_head = "\nhomeassistant:\n  name: Home\n\n"
+    kept_head = "homeassistant:\n  name: Home\n\n"
     removed = (
         "command_line:\n  - sensor:\n      name: Uptime\n      command: uptime\n\n"
     )

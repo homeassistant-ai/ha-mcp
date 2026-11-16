@@ -14,7 +14,10 @@ from typing import Any
 from annotatedyaml import SECRET_YAML
 from annotatedyaml.loader import FastSafeLoader
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.error import CommentMark
 from ruamel.yaml.scalarbool import ScalarBoolean
+from ruamel.yaml.tokens import CommentToken
 
 
 class _TaggedScalar:
@@ -175,6 +178,50 @@ def yaml_dumps(ry: YAML, data: Any) -> str:
     buf = StringIO()
     ry.dump(data, buf)
     return buf.getvalue()
+
+
+def _comment_block_ending(data: Any, key: str, column: int) -> list[CommentToken]:
+    """The comment lines at ``column`` that close the value of ``key``."""
+    token: Any = None
+    node: Any = data
+    last: Any = key
+    while True:
+        slot = node.ca.items.get(last) if hasattr(node, "ca") else None
+        # A mapping keeps the comment after a value in slot 2, a list in slot 0.
+        found = slot and slot[0 if isinstance(node, CommentedSeq) else 2]
+        token = found or token
+        node = node[last]
+        if isinstance(node, CommentedMap) and node:
+            last = list(node)[-1]
+        elif isinstance(node, CommentedSeq) and node:
+            last = len(node) - 1
+        else:
+            break
+    block: list[CommentToken] = []
+    # The token starts with the rest of the value's own line.
+    for line in reversed(token.value.split("\n")[1:-1] if token else []):
+        text = line.lstrip()
+        if not text.startswith("#") or len(line) - len(text) != column:
+            break
+        block.insert(0, CommentToken(text + "\n", CommentMark(column)))
+    return block
+
+
+def drop_key(data: Any, key: str) -> None:
+    """Delete ``key`` from a loaded mapping, keeping the comments above the next key.
+
+    ruamel keeps the comment lines above a key at the end of the value before
+    it, so deleting that value alone would delete them too.
+    """
+    keys = list(data)
+    following = keys[keys.index(key) + 1 : keys.index(key) + 2]
+    block: list[CommentToken] = []
+    if following and isinstance(data, CommentedMap) and following[0] in data.lc.data:
+        block = _comment_block_ending(data, key, data.lc.key(following[0])[1])
+    del data[key]
+    if block:
+        before = data.ca.items.setdefault(following[0], [None, [], None, None])
+        before[1] = [*block, *(before[1] or [])]
 
 
 def _jsonify_float(node: float) -> float | str:
