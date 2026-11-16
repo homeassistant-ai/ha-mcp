@@ -71,7 +71,6 @@ ignores:
   - "tests/src/unit/test_call_service_ws_command.py"
   - "tests/src/unit/test_component_api.py"
   - "tests/src/unit/test_component_todo_items.py"
-  - "tests/src/unit/test_config_entry_reload_watch.py"
   - "tests/src/unit/test_context_injection.py"
   - "tests/src/unit/test_dashboard_edit_routing.py"
   - "tests/src/unit/test_dashboard_screenshot_paths.py"
