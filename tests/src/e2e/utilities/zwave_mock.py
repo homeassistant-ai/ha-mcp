@@ -73,7 +73,11 @@ def start_zwave_mock() -> tuple[DockerContainer, str]:
             container.get_wrapped_container().id
         )
     except BaseException:
-        # A start that timed out leaves its container running.
-        container.stop()
+        # A start that timed out leaves its container running. A stop that
+        # fails as well must not replace the error that says why.
+        try:
+            container.stop()
+        except Exception:
+            logger.exception("Stopping the Z-Wave mock container failed")
         raise
     return container, f"ws://{address}:3000"
