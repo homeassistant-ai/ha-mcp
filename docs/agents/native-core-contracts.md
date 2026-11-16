@@ -311,7 +311,9 @@ from Core on every call.
   entry, the diff of a label, category, area or floor leaves out `created_at`
   and `modified_at`, and the diff of a device reports them with a warning.
 
-When the command was sent and got no answer, the diff or restore fails.
+A command that was sent and got no answer counts as a component that cannot
+be asked: the [component guide](custom-component.md#compatibility) treats a
+read the component fails as a missing component.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

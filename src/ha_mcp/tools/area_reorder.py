@@ -94,8 +94,8 @@ async def reorder_area_or_floor(
                     "ha_list_floors_areas()"
                 ),
                 (
-                    "previous_order is the order before the call: pass it as "
-                    "order to go back"
+                    "previous_order is the order read before the reorder: pass "
+                    "it as order to go back to it"
                 ),
             ],
         )
@@ -107,8 +107,9 @@ async def reorder_area_or_floor(
         "previous_order": previous,
         "order": None,
         "warnings": [
-            "A reorder is not covered by the auto-backup: previous_order is the "
-            "only record of the order it replaced. Pass it as order to go back."
+            "A reorder is not covered by the auto-backup: previous_order, read "
+            "just before the reorder, is the only record of the earlier order. "
+            "Pass it as order to go back to it."
         ],
         "message": f"Successfully reordered {kind}s",
     }

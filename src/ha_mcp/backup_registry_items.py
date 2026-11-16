@@ -34,17 +34,24 @@ What Core's commands take and how Core keeps a row is asked of the component
   category, area or floor leaves out ``created_at`` and ``modified_at``; the
   diff of a device reports them as differences and says so.
 
-When the command was sent and got no answer, the diff or restore fails.
+A command that was sent and got no answer counts as a component that cannot
+be asked.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from typing import Any
 
 from .backup_entity_ids import _manager
-from .client.rest_client import HomeAssistantCommandError
+from .client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def registry_rows(client: Any, kind: str) -> list[Any]:
@@ -120,8 +127,8 @@ async def _registry_fields(
 ) -> dict[str, Any] | None:
     """The component's ``registry_fields`` answer for a registry and, with
     ``item_id``, for one of its entries; None when the component cannot be asked
-    (no usable component, one without the command, command not sent) or
-    refuses. The command sent and left without an answer raises."""
+    (no usable component, one without the command, command not sent or left
+    without an answer) or refuses."""
     from .tools.component_api import ask_component  # import cycle, as registry_rows
 
     params = {"registry": registry}
@@ -129,7 +136,12 @@ async def _registry_fields(
         params["item_id"] = item_id
     if scope:
         params["scope"] = scope
-    return await ask_component(client, "registry_fields", **params)
+    try:
+        return await ask_component(client, "registry_fields", **params)
+    except HomeAssistantConnectionError as exc:
+        # A read: one left without an answer is a component that cannot be asked.
+        logger.warning("registry_fields got no answer; going on without it: %r", exc)
+        return None
 
 
 def _only(row: dict[str, Any], keys: Any) -> dict[str, Any]:

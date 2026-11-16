@@ -25,7 +25,6 @@ from ha_mcp.backup_manager import BackupManager, BackupRestoreError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
-    HomeAssistantConnectionError,
 )
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
@@ -543,27 +542,25 @@ async def test_without_the_component_core_refuses_a_stored_key_it_does_not_take(
     assert (left and left.color) == (None if deleted else "blue")
 
 
-async def test_a_question_the_component_does_not_answer_fails_the_restore(
+async def test_a_restore_whose_question_the_component_does_not_answer_goes_on_without_it(
     hass: HomeAssistant,
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A question that was sent and got no answer is not a missing component:
-    the restore fails rather than send a row the component may rule out, and
-    the label stays as it was."""
+    """A question that was sent and got no answer counts as a component that
+    cannot be asked: the label is restored as it is without the component."""
     registry = lr.async_get(hass)
     label = registry.async_create("Security", color="red")
     snapshot = await _snapshot(backup_manager, "label", label.label_id)
     registry.async_update(label.label_id, color="blue")
 
     async with unanswered(hass, WS_REGISTRY_FIELDS, monkeypatch):
-        with pytest.raises(HomeAssistantConnectionError):
-            await backup_manager.restore_snapshot(snapshot)
+        await backup_manager.restore_snapshot(snapshot)
 
     left = registry.async_get_label(label.label_id)
     assert left is not None
-    assert left.color == "blue"
+    assert left.color == "red"
 
 
 async def test_a_second_restore_of_an_area_whose_label_is_gone_names_the_holder(

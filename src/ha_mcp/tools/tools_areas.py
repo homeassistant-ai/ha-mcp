@@ -728,7 +728,7 @@ class AreaTools:
         Provide name only to create a new entry; provide id to update an existing one.
         Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
         Pass order alone to set the order Home Assistant lists areas or floors in.
-        A reorder is not covered by the auto-backup; its reply names the order it replaced as previous_order.
+        A reorder is not covered by the auto-backup; its reply carries the order read just before it as previous_order.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")

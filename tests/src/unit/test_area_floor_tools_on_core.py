@@ -333,11 +333,11 @@ async def test_floors_are_reordered_with_cores_reorder(
     ]
 
 
-async def test_a_reorder_reply_names_the_order_it_replaced(
+async def test_a_reorder_reply_names_the_order_read_before_it(
     hass: HomeAssistant, tools: AreaTools
 ) -> None:
-    """No backup keeps the order a reorder replaces: the reply carries it and
-    says so."""
+    """No backup keeps the order from before a reorder: the reply carries the
+    order read before it and says so."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
@@ -429,10 +429,10 @@ async def test_a_reorder_core_applied_succeeds_when_the_order_cannot_be_read_bac
     ]
 
 
-async def test_a_reorder_is_not_sent_when_the_order_it_replaces_cannot_be_read(
+async def test_a_reorder_is_not_sent_when_the_order_before_it_cannot_be_read(
     hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The order before the call is the only record of what a reorder replaces;
+    """The order read before the reorder is the only record of the earlier order;
     without it nothing is reordered, and the error says so."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
@@ -457,8 +457,8 @@ async def test_a_reorder_core_does_not_answer_says_how_to_check_and_go_back(
     hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A reorder that was sent and got no answer may have been applied: the
-    error carries the order before the call and says how to read the one after
-    it and how to go back."""
+    error carries the order read before the reorder and says how to read the
+    one after it and how to go back."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
