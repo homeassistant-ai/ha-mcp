@@ -185,7 +185,6 @@ disable_error_code = ["import-not-found", "import-untyped"]
 module = [
     "tests.haos_image_build.build_image",
     "tests.haos_image_build.dev_addon_tree",
-    "tests.src.unit._backup_snapshot_fakes",
     "tests.src.unit._js_harness",
     "tests.src.unit.policy.test_handlers",
     "tests.src.unit.policy.test_mrtr",

@@ -1,8 +1,9 @@
 # A test module is not a library. Importing from another test module, or
 # taking the old `mock_client` fixture, brings in that file's hand-written
 # Home Assistant client without the stand-in rules seeing it in the importing
-# file. The three old fake-client helper modules, and the removed
-# `_logbook_fallback`, are refused for the same reason. A shared helper that builds no stand-in goes in a `_*.py` module.
+# file. The old fake-client helper modules are gone; importing one by name is
+# still refused, so none comes back. A shared helper that builds no stand-in
+# goes in a `_*.py` module. Every test complies: the rule has no list.
 id: no-shared-fake-clients
 language: python
 rule:
@@ -31,7 +32,6 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-ignores:
 message: |
   Do not import from another test module or from the old fake-client helpers,
   and do not take the `mock_client` fixture: each hands this file a hand-written

@@ -14,7 +14,6 @@ extend-select = ["SLF001"]
 
 [lint.extend-per-file-ignores]
 "_embedded_helpers.py" = ["SLF001"]
-"conftest.py" = ["SLF001"]
 "policy/test_approval_queue.py" = ["SLF001"]
 "policy/test_decisions.py" = ["SLF001"]
 "policy/test_handlers.py" = ["SLF001"]

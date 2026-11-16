@@ -2,8 +2,8 @@
 # (private member access). A unit test that reaches into a private attribute
 # of a Home Assistant object can force a state Core never produces and then
 # pin a fallback for it; one that calls a private function skips the public
-# entry point the user reaches. Files written before the check are listed
-# below. Converting one removes it from the list; no file is ever added.
+# entry point the user reaches. Every file in this tree complies: the list
+# below is empty, and no file is ever added to it.
 extend = "../../pyproject.toml"
 # Import sorting resolves first-party modules from the repository root, as the
 # root settings do.

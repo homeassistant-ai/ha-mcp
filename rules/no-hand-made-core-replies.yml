@@ -60,9 +60,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/_backup_snapshot_fakes.py"
-  - "tests/src/unit/_error_log_test_helpers.py"
-  - "tests/src/unit/conftest.py"
   - "tests/src/unit/policy/test_decisions.py"
   - "tests/src/unit/policy/test_middleware.py"
   - "tests/src/unit/test_automation_enabled.py"

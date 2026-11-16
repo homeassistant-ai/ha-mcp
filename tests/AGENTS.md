@@ -202,9 +202,9 @@ swaps and computed names; it cannot see a swap the test has already undone,
 which is why the third rule exists.
 
 Test files written before a check are listed with it, in the rule's `ignores`.
-Only the reply and shared-client rules still have a list; the hand-made
-`hass`, fake Core object, suppression and fixture-annotation rules and the
-`sys.modules` guard have none, so every test complies with them. Converting a
+Only the reply rule still has a list; the hand-made `hass`, fake Core object,
+shared-client, suppression and fixture-annotation rules and the `sys.modules`
+guard have none, so every test complies with them. Converting a
 file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
 the mypy list below. A file taken off one list and left on another fails the
 ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
