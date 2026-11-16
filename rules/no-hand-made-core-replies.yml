@@ -82,7 +82,6 @@ ignores:
   - "tests/src/unit/test_integration_flow_steps.py"
   - "tests/src/unit/test_integration_reconfigure.py"
   - "tests/src/unit/test_integration_schema.py"
-  - "tests/src/unit/test_oauth.py"
   - "tests/src/unit/test_performance_parallelization.py"
   - "tests/src/unit/test_redaction.py"
   - "tests/src/unit/test_rest_client_admin_gate.py"
