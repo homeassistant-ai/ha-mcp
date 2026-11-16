@@ -23,11 +23,12 @@ from homeassistant.helpers.json import json_bytes, json_fragment
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_areas import AreaTools
 
 from ._client_spies import sent_commands
+from ._command_faults import unanswered
+from ._routing_core import pooled_socket, sent_types
 from ._tool_errors import rejected_call_body
 
 
@@ -49,24 +50,12 @@ def component_tools(component_core_client: HomeAssistantClient) -> AreaTools:
     return AreaTools(component_core_client)
 
 
-async def _sent(client: HomeAssistantClient) -> Any:
-    """A spy on every command the tools send for ``client``; Core answers each."""
-    return sent_commands(
-        await get_websocket_client(
-            url=client.base_url, token=client.token, verify_ssl=client.verify_ssl
-        )
-    )
-
-
-def _types(spy: Any) -> list[str]:
-    return [str(call.args[0]) for call in spy.call_args_list]
-
-
 @contextmanager
 def _floor_list_failing_on_read(
     monkeypatch: pytest.MonkeyPatch, read: int
 ) -> Iterator[None]:
-    """Core refuses its ``read``-th floor list from here on and answers the others."""
+    """Counted from here, Core refuses the ``read``-th floor list and answers
+    every other."""
     list_floors = fr.FloorRegistry.async_list_floors
     reads = 0
 
@@ -111,12 +100,12 @@ async def test_floors_are_listed_in_the_order_core_keeps_with_the_component(
     component_tools: AreaTools,
     component_core_client: HomeAssistantClient,
 ) -> None:
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         await _floors_in_reordered_registry(hass, component_tools)
 
-    assert WS_REGISTRIES in _types(sent)
-    assert "config/area_registry/list" not in _types(sent)
-    assert "config/floor_registry/list" not in _types(sent)
+    assert WS_REGISTRIES in sent_types(sent)
+    assert "config/area_registry/list" not in sent_types(sent)
+    assert "config/floor_registry/list" not in sent_types(sent)
 
 
 async def test_a_field_core_adds_to_a_row_reaches_the_listing(
@@ -141,12 +130,12 @@ async def test_a_field_core_adds_to_a_row_reaches_the_listing(
     ground = floors.async_create("Ground", level=0)
     ar.async_get(hass).async_create("Kitchen", floor_id=ground.floor_id)
 
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         listed = await component_tools.ha_list_floors_areas()
 
-    assert WS_REGISTRIES in _types(sent)
-    assert "config/area_registry/list" not in _types(sent)
-    assert "config/floor_registry/list" not in _types(sent)
+    assert WS_REGISTRIES in sent_types(sent)
+    assert "config/area_registry/list" not in sent_types(sent)
+    assert "config/floor_registry/list" not in sent_types(sent)
     assert listed["floors"][0]["future_field"] == 1
     assert listed["floors"][0]["areas"][0]["future_field"] == 1
 
@@ -226,7 +215,7 @@ async def test_an_unknown_id_is_looked_up_through_the_component(
 ) -> None:
     """With the component, the tool asks the component for the registry that
     tells an unknown id from another "Unknown error"."""
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         error = await rejected_call_body(
             component_tools.ha_set_area_or_floor(
                 kind="area", id="missing", name="Attic"
@@ -234,7 +223,7 @@ async def test_an_unknown_id_is_looked_up_through_the_component(
         )
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert WS_REGISTRIES in _types(sent)
+    assert WS_REGISTRIES in sent_types(sent)
 
 
 async def test_labels_core_dropped_are_read_back_through_the_component(
@@ -252,7 +241,7 @@ async def test_labels_core_dropped_are_read_back_through_the_component(
         lr, "async_get_missing_label_ids", lambda hass, label_ids: set(label_ids)
     )
 
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         error = await rejected_call_body(
             component_tools.ha_set_area_or_floor(
                 kind="area", id=area.id, labels=[label.label_id]
@@ -260,7 +249,7 @@ async def test_labels_core_dropped_are_read_back_through_the_component(
         )
 
     assert error["write_committed"] is True
-    assert "config/area_registry/list" not in _types(sent)
+    assert "config/area_registry/list" not in sent_types(sent)
 
 
 async def test_an_update_core_refuses_with_a_code_of_its_own_reads_no_registry(
@@ -274,7 +263,7 @@ async def test_an_update_core_refuses_with_a_code_of_its_own_reads_no_registry(
     areas.async_create("Kitchen")
     hall = areas.async_create("Hall")
 
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         error = await rejected_call_body(
             component_tools.ha_set_area_or_floor(
                 kind="area", id=hall.id, name="Kitchen"
@@ -282,7 +271,7 @@ async def test_an_update_core_refuses_with_a_code_of_its_own_reads_no_registry(
         )
 
     assert error["ha_error_code"] == "invalid_info"
-    assert WS_REGISTRIES not in _types(sent)
+    assert WS_REGISTRIES not in sent_types(sent)
 
 
 async def test_an_unknown_error_for_an_area_core_holds_stays_cores_refusal(
@@ -363,6 +352,29 @@ async def test_a_reorder_reply_names_the_order_it_replaced(
     assert "previous_order" in warning
 
 
+@pytest.mark.parametrize("kind", ["floor", "area"])
+async def test_a_reorder_reply_names_the_order_core_lists_not_the_one_sent(
+    hass: HomeAssistant, tools: AreaTools, kind: str
+) -> None:
+    """Core takes an id named twice at its first place. The reply's order is
+    read from Core after the reorder, so it names each id once."""
+    if kind == "floor":
+        floors = fr.async_get(hass)
+        first, second = (floors.async_create(n).floor_id for n in ("Ground", "Attic"))
+    else:
+        areas = ar.async_get(hass)
+        first, second = (areas.async_create(n).id for n in ("Kitchen", "Hall"))
+
+    result = await tools.ha_set_area_or_floor(kind=kind, order=[second, first, second])
+
+    listed = (
+        [f.floor_id for f in fr.async_get(hass).async_list_floors()]
+        if kind == "floor"
+        else [a.id for a in ar.async_get(hass).async_list_areas()]
+    )
+    assert result["order"] == listed == [second, first]
+
+
 async def test_a_reorder_reads_both_orders_through_the_component(
     hass: HomeAssistant,
     component_tools: AreaTools,
@@ -374,13 +386,13 @@ async def test_a_reorder_reads_both_orders_through_the_component(
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
 
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         await component_tools.ha_set_area_or_floor(
             kind="floor", order=[attic.floor_id, ground.floor_id]
         )
 
     reorder = "config/floor_registry/reorder"
-    assert [t for t in _types(sent) if t in (WS_REGISTRIES, reorder)] == [
+    assert [t for t in sent_types(sent) if t in (WS_REGISTRIES, reorder)] == [
         WS_REGISTRIES,
         reorder,
         WS_REGISTRIES,
@@ -388,10 +400,14 @@ async def test_a_reorder_reads_both_orders_through_the_component(
 
 
 async def test_a_reorder_core_applied_succeeds_when_the_order_cannot_be_read_back(
-    hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant,
+    tools: AreaTools,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Core applied the reorder, so a failed read of the new order is a warning,
-    not a failed call, and the reply's order is None, not a guess."""
+    not a failed call, and the reply's order is None, not a guess. The log keeps
+    why the read failed."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
@@ -405,6 +421,8 @@ async def test_a_reorder_core_applied_succeeds_when_the_order_cannot_be_read_bac
     assert result["previous_order"] == [ground.floor_id, attic.floor_id]
     assert result["order"] is None
     assert len(result["warnings"]) == 2
+    (logged,) = [r for r in caplog.records if r.name == "ha_mcp.tools.area_reorder"]
+    assert (logged.levelname, bool(logged.exc_info)) == ("WARNING", True)
     assert [f.floor_id for f in floors.async_list_floors()] == [
         attic.floor_id,
         ground.floor_id,
@@ -415,7 +433,7 @@ async def test_a_reorder_is_not_sent_when_the_order_it_replaces_cannot_be_read(
     hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The order before the call is the only record of what a reorder replaces;
-    without it nothing is reordered."""
+    without it nothing is reordered, and the error says so."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
@@ -428,10 +446,34 @@ async def test_a_reorder_is_not_sent_when_the_order_it_replaces_cannot_be_read(
         )
 
     assert error["success"] is False
+    assert any("Nothing was reordered" in s for s in error["error"]["suggestions"])
     assert [f.floor_id for f in floors.async_list_floors()] == [
         ground.floor_id,
         attic.floor_id,
     ]
+
+
+async def test_a_reorder_core_does_not_answer_says_how_to_check_and_go_back(
+    hass: HomeAssistant, tools: AreaTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reorder that was sent and got no answer may have been applied: the
+    error carries the order before the call and says how to read the one after
+    it and how to go back."""
+    floors = fr.async_get(hass)
+    ground = floors.async_create("Ground", level=0)
+    attic = floors.async_create("Attic", level=2)
+
+    async with unanswered(hass, "config/floor_registry/reorder", monkeypatch):
+        error = await rejected_call_body(
+            tools.ha_set_area_or_floor(
+                kind="floor", order=[attic.floor_id, ground.floor_id]
+            )
+        )
+
+    assert error["previous_order"] == [ground.floor_id, attic.floor_id]
+    suggestions = error["error"]["suggestions"]
+    assert any("ha_list_floors_areas" in s for s in suggestions)
+    assert any("previous_order" in s for s in suggestions)
 
 
 async def test_areas_are_reordered_with_cores_reorder(
@@ -491,14 +533,14 @@ async def test_an_update_core_accepts_reads_no_registry(
     areas = ar.async_get(hass)
     kitchen = areas.async_create("Kitchen")
 
-    with await _sent(component_core_client) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         result = await component_tools.ha_set_area_or_floor(
             kind="area", id=kitchen.id, name="Galley"
         )
 
     assert result["success"] is True
-    assert WS_REGISTRIES not in _types(sent)
-    assert "config/area_registry/list" not in _types(sent)
+    assert WS_REGISTRIES not in sent_types(sent)
+    assert "config/area_registry/list" not in sent_types(sent)
     stored = areas.async_get_area(kitchen.id)
     assert stored is not None
     assert stored.name == "Galley"

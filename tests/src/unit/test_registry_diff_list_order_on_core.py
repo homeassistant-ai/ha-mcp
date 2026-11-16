@@ -1,4 +1,4 @@
-"""A backup diff of an entity or a device, on real Core.
+"""A backup diff's list order and points in time, on real Core.
 
 Core keeps the labels of an entity and of a device, and a device's identifiers
 and connections, in sets, and lists a set in hash order. Which lists those are
@@ -29,6 +29,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
 
 from custom_components.ha_mcp_tools.websocket_api import registries
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_REGISTRY_FIELDS
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import (
@@ -40,8 +41,7 @@ from ha_mcp.settings_ui import build_settings_handlers
 from ._backup_restore_helpers import backup_tool, use_backup_manager
 from ._command_faults import received, taking, unanswered
 from ._component_frames import older_component
-
-_FIELDS = "ha_mcp_tools/registry_fields"
+from ._registry_item_snapshots import _snapshot
 
 
 async def _snapshot_reversing(
@@ -168,7 +168,7 @@ async def test_a_question_the_component_does_not_answer_fails_the_diff(
     device = _device(hass)
     snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
 
-    async with unanswered(hass, _FIELDS, monkeypatch):
+    async with unanswered(hass, WS_REGISTRY_FIELDS, monkeypatch):
         with pytest.raises(HomeAssistantConnectionError):
             await backup_manager.diff_snapshot(snapshot)
 
@@ -274,15 +274,17 @@ async def test_a_diff_of_an_unchanged_device_asks_the_component_nothing(
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
 ) -> None:
+    """The component is asked only when the live row differs from the snapshot:
+    an unchanged device costs no question."""
     device = _device(hass)
     path = await backup_manager.maybe_snapshot("device", device.id, force=True)
     assert path is not None
 
-    with received(hass, _FIELDS) as seen:
+    with received(hass, WS_REGISTRY_FIELDS) as seen:
         diff = await backup_manager.diff_snapshot(path.name)
 
     assert diff["unchanged"] is True, diff
-    assert seen[_FIELDS] == []
+    assert seen[WS_REGISTRY_FIELDS] == []
 
 
 async def test_the_backup_tool_puts_the_diff_warning_beside_the_diff(
@@ -327,10 +329,9 @@ async def _snapshot_then_rename(
     """Snapshot a device, then give it a name, which gives it a new
     ``modified_at`` too."""
     device = _device(hass)
-    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
-    assert path is not None
+    snapshot = await _snapshot(backup_manager, "device", device.id)
     dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
-    return path.name
+    return snapshot
 
 
 async def test_a_device_diff_names_the_changed_field_and_not_modified_at(
@@ -420,9 +421,9 @@ async def test_a_device_diff_answers_for_a_snapshot_whose_config_is_no_mapping(
 async def test_a_helper_diff_reports_options_in_another_order(
     hass: HomeAssistant, core_client: HomeAssistantClient, backup_manager: BackupManager
 ) -> None:
-    """Only a list Core keeps in a set is compared without regard to its order:
-    an input_select keeps its options in the order given, so another order is a
-    difference."""
+    """A helper is no registry row the component is asked about, so its lists
+    are compared in the order given: an input_select keeps its options in that
+    order, and another order is a difference."""
     assert await async_setup_component(hass, "input_select", {})
     created = await core_client.send_websocket_message(
         {"type": "input_select/create", "name": "Mode", "options": ["first", "second"]}

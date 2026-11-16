@@ -292,21 +292,24 @@ commands take and how Core keeps a row is Core's to say: the component's
 from Core on every call.
 
 - The keys of the schemas Core registered for the registry's update and create
-  commands: the restore sends only those. When the component cannot be asked or
-  refuses, it sends the stored row without `created_at` and `modified_at`.
+  commands: the restore sends only those, and names every other stored key in
+  a warning unless Core's row carries the key and neither command takes it
+  (Core sets that one itself). When the component cannot be asked or refuses,
+  it sends the stored row without `created_at` and `modified_at`.
 - The fields of the live entry whose value is a set. Core lists a set in hash
   order, so a list the bridge names matches in any order; every other list is
   compared in the order given. When the component cannot be asked or refuses,
   the diff reports the order as a difference and the restore takes the row an
   earlier restore created, each with a warning that the order could not be
-  judged. A list nested inside a row value (the lists in a device's
-  `config_entries_subentries`, the pairs in `identifiers`) is compared by
-  position, with or without the component.
+  judged. When the component does not find the entry, the diff does the same
+  and the restore creates the item again. A list nested inside a row value
+  (the lists in a device's `config_entries_subentries`, the pairs in
+  `identifiers`) is compared by position, with or without the component.
 - The fields of the live entry that hold a point in time and that the update
   command does not take: Core sets those itself, so the diff does not report
-  them. When the component cannot be asked or refuses, the diff of a label,
-  category, area or floor leaves out `created_at` and `modified_at`, and the
-  diff of a device reports them with a warning.
+  them. When the component cannot be asked, refuses or does not find the
+  entry, the diff of a label, category, area or floor leaves out `created_at`
+  and `modified_at`, and the diff of a device reports them with a warning.
 
 When the command was sent and got no answer, the diff or restore fails.
 

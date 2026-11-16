@@ -104,7 +104,8 @@ async def fetch_registries_via_component(
     failed (re)connect — is caught here and mapped to ``None``: the auto-backup capture fetchers'
     legacy ``_ws_send`` builds a DEDICATED one-shot WS client (which can succeed
     while the pooled socket is wedged) under a best-effort contract that requires
-    warn-and-skip, never a blocked write; ``ha_list_floors_areas``' legacy rides
+    warn-and-skip, never a blocked write; a tool's legacy list call
+    (``ha_list_floors_areas``, the label tools, ``validate_registry_ids``) rides
     the ``send_websocket_message`` bridge, which is the SAME pooled connection
     and raises on a dead transport (#1947) rather than degrading. Only the
     capture path's dedicated socket survives a wedged pool, so a

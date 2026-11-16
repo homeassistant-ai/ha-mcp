@@ -20,7 +20,13 @@ from typing import ClassVar, get_args
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._js_harness import (
+    HarnessResult,
+    _assert_clean_init,
+    _probe,
+    extract_script_body,
+    run_script,
+)
 from ._locale_catalogs import catalog_messages
 from ._settings_ui_dom import (
     _TOP_LEVEL_ELEMENT_IDS,
@@ -453,24 +459,6 @@ class TestTranslationHtmlSanitization:
         assert "<code>DISABLED_TOOLS</code>" in result.dom
         assert "&lt;em" in result.dom
         assert "<em onmouseover" not in result.dom
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    """Fail loud on any script-init or transpile error.
-
-    Each test in this file asserts on side effects (fetches, broadcasts,
-    reloads, alerts). When the script throws at init time the side
-    effects come back empty, the side-effect assertion fires with a
-    misleading message ("expected 1 POST, got 0"), and the actual root
-    cause sits in ``result.errors``. Calling this at the top of every
-    test surfaces the real error first.
-    """
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -5939,17 +5927,6 @@ class TestToastFeedback:
             f"reused toast was removed by stale timer: {result.dom[-600:]}"
         )
         assert ">second<" in result.dom, result.dom[-600:]
-
-
-def _probe(result: HarnessResult, attr: str) -> str | None:
-    """Read a ``data-<attr>`` value stamped onto an element in result.dom.
-
-    The JS behaviour tests stash assertion data into data-* attributes
-    (live, before the fake clock advances past toast auto-dismiss). This
-    pulls the value back out without depending on attribute order.
-    """
-    m = re.search(rf'data-{attr}="([^"]*)"', result.dom)
-    return m.group(1) if m else None
 
 
 class TestModalFocusTrap:

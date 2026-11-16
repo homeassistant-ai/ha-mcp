@@ -2222,17 +2222,18 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 # Registry read-only fields
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
-# ``modified_at`` their lists return, which snapshots keep. Which keys those
-# commands take is the component's answer (``backup_registry_items``); this
-# list stands in where no component gives it.
+# ``modified_at`` their lists return, which snapshots keep. The restore of a
+# label, category, area or floor asks the component which keys those commands
+# take, and the diff asks it which points in time Core sets itself
+# (``backup_registry_items``); this list is what both use when the component
+# gives no answer. The other restores apply it without asking.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
 def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """Return ``config`` with read-only registry fields removed.
 
-    ``extra`` names per-registry id keys (``label_id``, ...) the update command
-    takes separately (``/create`` has no id) and both refuse inside the payload body.
+    ``extra`` names further keys to remove, such as the row's ``id``.
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}

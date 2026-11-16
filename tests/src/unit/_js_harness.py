@@ -132,6 +132,35 @@ class HarnessResult:
         return out
 
 
+def _assert_clean_init(result: HarnessResult) -> None:
+    """Fail loud on any script-init or transpile error.
+
+    A JS behaviour test asserts on side effects (fetches, broadcasts,
+    reloads, alerts). When the script throws at init time the side
+    effects come back empty, the side-effect assertion fires with a
+    misleading message ("expected 1 POST, got 0"), and the actual root
+    cause sits in ``result.errors``. Calling this at the top of every
+    test surfaces the real error first.
+    """
+    init_errors = [
+        e
+        for e in result.errors
+        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
+    ]
+    assert not init_errors, f"script failed to initialise: {init_errors}"
+
+
+def _probe(result: HarnessResult, attr: str) -> str | None:
+    """Read a ``data-<attr>`` value stamped onto an element in result.dom.
+
+    The JS behaviour tests stash assertion data into data-* attributes
+    (live, before the fake clock advances past toast auto-dismiss). This
+    pulls the value back out without depending on attribute order.
+    """
+    m = re.search(rf'data-{attr}="([^"]*)"', result.dom)
+    return m.group(1) if m else None
+
+
 def run_script(
     script: str,
     *,

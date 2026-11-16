@@ -73,6 +73,8 @@ class LabelTools:
     ) -> list[dict[str, Any]]:
         """Return all labels from the registry (shared by get/set).
 
+        The ha_mcp_tools component is asked first; without its answer Core's
+        list command is sent.
         Raises ToolError (SERVICE_CALL_FAILED) if the list call fails or returns
         an unexpected non-list envelope — a degraded response must not collapse
         to an empty registry, or callers would confidently report a real label
@@ -142,7 +144,8 @@ class LabelTools:
     async def _list_area_registry(
         self, *, context: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """Return the area registry, failing closed on a degraded envelope."""
+        """Return the area registry: the ha_mcp_tools component's rows, or
+        without its answer Core's list, failing closed on a degraded envelope."""
         via_component = await fetch_registries_via_component(self._client, ["area"])
         if via_component is not None:
             rows: list[dict[str, Any]] = via_component["areas"]

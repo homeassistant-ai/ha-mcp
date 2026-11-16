@@ -2,35 +2,34 @@
 
 A snapshot is captured from Core's registry through the server's own client; the
 item is then changed, deleted or restored in Core, and the diff runs through the
-backup manager's public entry point. Every registry row compared is Core's.
+backup manager's public entry point; one test hands the list comparison itself
+Core's row and an edited copy. Every live registry row is Core's.
 """
 
 from __future__ import annotations
 
-from typing import cast
+from functools import partial
+from typing import Any, cast
 
 import orjson
-import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
 
-from custom_components.ha_mcp_tools.websocket_api import registries
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_REGISTRY_FIELDS
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager
 from ha_mcp.backup_registry_items import reordered_lists
 from ha_mcp.client.rest_client import HomeAssistantClient
 
-from ._command_faults import received
+from ._command_faults import before_handling, received
 from ._registry_item_snapshots import (
     _second_restore_with_lists_reversed,
     _snapshot,
     _store_reversed,
 )
-
-_FIELDS = "ha_mcp_tools/registry_fields"
 
 
 async def test_a_diff_after_a_restore_finds_the_item_and_reports_its_new_id(
@@ -93,6 +92,16 @@ async def test_a_diff_after_a_restore_finds_the_item_and_reports_its_new_id(
         ], snapshot
 
 
+def _drop_the_entry(hass: HomeAssistant, msg: dict[str, Any]) -> None:
+    """Delete the label, area or floor a ``registry_fields`` question names."""
+    delete = {
+        "label": lr.async_get(hass).async_delete,
+        "area": ar.async_get(hass).async_delete,
+        "floor": fr.async_get(hass).async_delete,
+    }
+    delete[msg["registry"]](msg["item_id"])
+
+
 async def _restored_under_the_same_id(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> list[str]:
@@ -128,21 +137,44 @@ async def test_a_diff_after_a_restore_under_the_same_id_ignores_the_timestamps(
     asked once per diff for the row's own registry."""
     snapshots = await _restored_under_the_same_id(hass, backup_manager)
 
-    with received(hass, _FIELDS) as seen:
+    with received(hass, WS_REGISTRY_FIELDS) as seen:
         diffs = [await backup_manager.diff_snapshot(name) for name in snapshots]
 
     for diff in diffs:
         assert (diff["entity_missing"], diff["unchanged"]) == (False, True), diff
         assert "warnings" not in diff
-    assert [msg["registry"] for msg in seen[_FIELDS]] == ["label", "area", "floor"]
+    assert [msg["registry"] for msg in seen[WS_REGISTRY_FIELDS]] == [
+        "label",
+        "area",
+        "floor",
+    ]
+
+
+async def test_a_category_diff_asks_about_the_category_in_its_scope(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A category id is unique within its scope only. A question without the
+    scope is one the component refuses, so the diff's question names it."""
+    categories = cr.async_get(hass)
+    category = categories.async_create(scope="automation", name="Lighting")
+    category_id = category.category_id
+    snapshot = await _snapshot(backup_manager, "category", f"automation:{category_id}")
+    categories.async_update(scope="automation", category_id=category_id, icon="mdi:tag")
+
+    with received(hass, WS_REGISTRY_FIELDS) as seen:
+        await backup_manager.diff_snapshot(snapshot)
+
+    (question,) = seen[WS_REGISTRY_FIELDS]
+    assert (question["item_id"], question["scope"]) == (category_id, "automation")
 
 
 async def test_a_diff_without_the_component_ignores_the_timestamps_too(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """Without the component the diff of a label, area or floor leaves out
-    ``created_at`` and ``modified_at``, as it did before the component named
-    them, and has nothing to warn about."""
+    ``created_at`` and ``modified_at`` and has nothing to warn about."""
     snapshots = await _restored_under_the_same_id(hass, backup_manager)
 
     for snapshot in snapshots:
@@ -155,17 +187,37 @@ async def test_a_diff_of_an_entry_the_component_does_not_find_ignores_the_timest
     hass: HomeAssistant,
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core can drop an entry between the diff's read and its question. The
     component then names no point in time, and the diff leaves out the two it
     leaves out without a component."""
     snapshots = await _restored_under_the_same_id(hass, backup_manager)
-    monkeypatch.setattr(registries, "_registry_entry", lambda *args: None)
 
-    for snapshot in snapshots:
-        diff = await backup_manager.diff_snapshot(snapshot)
+    with before_handling(hass, WS_REGISTRY_FIELDS, partial(_drop_the_entry, hass)):
+        diffs = [await backup_manager.diff_snapshot(name) for name in snapshots]
+
+    for diff in diffs:
         assert (diff["entity_missing"], diff["unchanged"]) == (False, True), diff
+
+
+async def test_a_diff_of_an_entry_the_component_does_not_find_reports_the_order(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component names the sets of an entry it finds. For one Core dropped
+    meanwhile it names none, so a list in another order is reported, with the
+    warning a diff without the component gives."""
+    area = ar.async_get(hass).async_create("Hall", aliases={"entrance", "lobby"})
+    snapshot = await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}")
+    _store_reversed(backup_manager, snapshot, area, "aliases")
+
+    with before_handling(hass, WS_REGISTRY_FIELDS, partial(_drop_the_entry, hass)):
+        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert diff["unchanged"] is False
+    (warning,) = diff["warnings"]
+    assert "aliases" in warning
 
 
 async def test_a_diff_after_a_restore_ignores_the_order_core_lists_aliases_in(
@@ -246,7 +298,7 @@ async def test_a_diff_after_a_restore_shows_the_label_core_dropped(
 async def test_a_diff_of_a_present_item_changed_since_the_snapshot_is_not_missing(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
-    """The item still holds its id, so the lookup by fields stays out of it."""
+    """The item still holds its id, so the lookup by name stays out of it."""
     labels = lr.async_get(hass)
     label = labels.async_create("Security")
     categories = cr.async_get(hass)

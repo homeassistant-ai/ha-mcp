@@ -1,5 +1,6 @@
 """Reordering for ``ha_set_area_or_floor``."""
 
+import logging
 from typing import Any
 
 from pydantic.fields import FieldInfo
@@ -12,6 +13,8 @@ from .helpers import (
     raise_core_refusal,
     raise_tool_error,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _passed_params(plain: dict[str, Any], clearable: dict[str, Any]) -> list[str]:
@@ -67,12 +70,35 @@ async def reorder_area_or_floor(
         )
     try:
         previous = await _order(client, kind)
-        context["previous_order"] = previous
+    except Exception as e:  # noqa: BLE001
+        exception_to_structured_error(
+            e,
+            context=context,
+            suggestions=[
+                f"Nothing was reordered: the order of the {kind}s before the "
+                "call could not be read. Try again"
+            ],
+        )
+    context["previous_order"] = previous
+    try:
         result = await client.send_websocket_message(
             {"type": f"config/{kind}_registry/reorder", f"{kind}_ids": ids}
         )
     except Exception as e:  # noqa: BLE001
-        exception_to_structured_error(e, context=context)
+        exception_to_structured_error(
+            e,
+            context=context,
+            suggestions=[
+                (
+                    "The reorder may have been applied: read the order with "
+                    "ha_list_floors_areas()"
+                ),
+                (
+                    "previous_order is the order before the call: pass it as "
+                    "order to go back"
+                ),
+            ],
+        )
     if not result.get("success"):
         raise_core_refusal(f"Failed to reorder {kind}s", result, context=context)
     reply: dict[str, Any] = {
@@ -88,8 +114,13 @@ async def reorder_area_or_floor(
     }
     try:
         reply["order"] = await _order(client, kind)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Core applied the reorder; a failed read of it is not a failed write.
+        logger.warning(
+            "The order of the %ss could not be read back after the reorder",
+            kind,
+            exc_info=True,
+        )
         reply["warnings"].append(
             f"The {kind}s were reordered, but the new order could not be read "
             f"back ({e}). Read it with ha_list_floors_areas()."

@@ -291,8 +291,8 @@ the info handshake carries no capability entry:
   update command does not take; both ``None`` without ``item_id`` or when
   Core holds no such entry). The restore of a label, category, area or floor
   sends only the fields named here, and a backup diff asks this before it
-  takes a list in another order as the same or a point in time as a
-  difference. A ``category`` entry REQUIRES its ``scope``.
+  treats a list in another order as unchanged, and before it reports a point
+  in time that differs. A ``category`` entry REQUIRES its ``scope``.
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next

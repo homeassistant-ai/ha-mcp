@@ -1,17 +1,19 @@
-"""What Core received, the two ways a client gets no answer to a command, and
-a command that takes one more key.
+"""What Core received, a change in Core just before it handles a command, the
+two ways a client gets no answer to a command, and a command that takes one
+more key.
 
 Each helper re-registers a command's own handler: with its own schema to see
-the messages Core received for it, to hold it until the client's wait has run
-out, or to drop the connection once Core has it; with one more key in that
-schema to stand for a Core release whose command takes the key. Core's handler
-still answers every message it is handed; nothing here answers for it.
+the messages Core received for it, to change Core before the handler runs, to
+hold it until the client's wait has run out, or to drop the connection once
+Core has it; with one more key in that schema to stand for a Core release
+whose command takes the key. Core's handler still answers every message it is
+handed; nothing here answers for it.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
@@ -66,6 +68,28 @@ def received(hass: HomeAssistant, *commands: str) -> Iterator[dict[str, list[Any
             websocket_api.async_register_command(hass, command, core_handler, schema)
 
 
+@contextmanager
+def before_handling(
+    hass: HomeAssistant, command: str, change: Callable[[dict[str, Any]], None]
+) -> Iterator[None]:
+    """``change`` runs on each message Core receives for ``command`` meanwhile,
+    before the command's handler: what happens in Core between a caller's read
+    and its question."""
+    core_handler, schema = _handler(hass, command)
+
+    def changed_first(
+        core: HomeAssistant, connection: Any, msg: dict[str, Any]
+    ) -> None:
+        change(msg)
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(hass, command, changed_first, schema)
+    try:
+        yield
+    finally:
+        websocket_api.async_register_command(hass, command, core_handler, schema)
+
+
 @asynccontextmanager
 async def unanswered(
     hass: HomeAssistant, command: str, monkeypatch: pytest.MonkeyPatch
@@ -113,8 +137,8 @@ def dropped_on(
 
 @contextmanager
 def taking(hass: HomeAssistant, command: str, key: str) -> Iterator[None]:
-    """Core's ``command`` takes ``key`` as well meanwhile, as on a Core release
-    whose command grew that field."""
+    """While the block runs, Core's ``command`` also takes ``key``, as on a
+    Core release whose command grew that field."""
     core_handler, schema = _handler(hass, command)
     websocket_api.async_register_command(
         hass, command, core_handler, schema.extend({vol.Optional(key): str})

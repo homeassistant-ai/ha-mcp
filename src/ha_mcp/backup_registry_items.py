@@ -5,17 +5,19 @@ floor's with "Unknown error"), so a deleted item is created again. A created
 label, area or floor gets the id Core derives from its name, a created category
 an id Core picks: neither is the snapshot's after a rename, or for a category
 at all, and the restore says so. A second restore takes the row whose fields all
-match the snapshot's as the one the first restore created. Names are unique in
-these registries, so returning that row is right, and the alternative is Core's
-"already in use" refusal. A restore Core refuses for that reason names the item
-that holds the name, or says Core refused it. The diff finds the live item that
-holds a deleted item's name, and reports an id that differs. It compares the
-row of an entity and of a device through ``compared_row`` as well.
+match those a create would send as the one the first restore created. Names are
+unique in these registries, so returning that row is right, and the alternative
+is Core's "already in use" refusal. A restore Core refuses for that reason names
+the item that holds the name, or says Core refused it. The diff finds the live
+item that holds a deleted item's name, and reports an id that differs. It
+compares the row of an entity and of a device through ``compared_row`` as well.
 
 What Core's commands take and how Core keeps a row is asked of the component
 (``ha_mcp_tools/registry_fields``), which reads both from Core:
 
 - The keys a restore sends are those Core's update or create command takes.
+  It names every other stored key in a warning, unless Core's row carries the
+  key and neither command takes it: Core sets that one itself.
   When the component cannot be asked or refuses, the restore sends the stored
   row without ``created_at`` and ``modified_at``, which those commands refuse
   on the Core releases this server knows.
@@ -23,12 +25,14 @@ What Core's commands take and how Core keeps a row is asked of the component
   differs between runs. A list the component names as a set matches in any
   order, every other list in the order given. When the component cannot be
   asked or refuses, the diff reports the order as a difference and a restore
-  still takes the row an earlier restore created, and each says so.
+  still takes the row an earlier restore created, and each says so. When the
+  component does not find the entry, the diff does the same and a restore
+  creates the item again.
 - Core sets some points in time of a row itself, and no restore puts them
   back: the diff leaves out the ones the component names. When the component
-  cannot be asked or refuses, the diff of a label, category, area or floor
-  leaves out ``created_at`` and ``modified_at``; the diff of a device reports
-  them as differences and says so.
+  cannot be asked, refuses or does not find the entry, the diff of a label,
+  category, area or floor leaves out ``created_at`` and ``modified_at``; the
+  diff of a device reports them as differences and says so.
 
 When the command was sent and got no answer, the diff or restore fails.
 """
@@ -152,7 +156,7 @@ def _order_untold(what: str, lists: list[str]) -> str:
         f"{what} the items in {', '.join(sorted(lists))} in another order than in "
         "the backup. Home Assistant keeps some lists of a registry entry in a "
         "set, whose order means nothing. Whether that holds for these lists only "
-        f"the ha_mcp_tools component can tell. {_get_the_component()}"
+        f"the ha_mcp_tools component can tell, and it did not. {_get_the_component()}"
     )
 
 
@@ -162,8 +166,38 @@ def _stamps_untold(keys: list[str]) -> str:
         f"The diff reports {', '.join(keys)} as a difference. Home Assistant "
         "sets some points in time of a registry entry itself, and no restore "
         "puts those back. Whether that holds for these only the ha_mcp_tools "
-        f"component can tell. {_get_the_component()}"
+        f"component can tell, and it did not. {_get_the_component()}"
     )
+
+
+def _not_restored(
+    noun: str,
+    command: str,
+    stored: dict[str, Any],
+    sent: dict[str, Any],
+    row: Any,
+    taken: dict[str, Any] | None,
+) -> list[str]:
+    """The warning for the stored keys a restore left out of ``command``.
+
+    ``taken`` is the component's answer and ``row`` the row Core has after the
+    restore. A key that row carries and neither of Core's commands takes is one
+    Core sets itself (``created_at``): no restore puts it back, and it is not
+    named. Without the component's answer the restore leaves out
+    ``created_at`` and ``modified_at`` only, and nothing is named.
+    """
+    if taken is None:
+        return []
+    writable = {*taken["update_fields"], *(taken["create_fields"] or ())}
+    keys = sorted(
+        key for key in stored if key not in sent and (key in writable or key not in row)
+    )
+    if not keys:
+        return []
+    return [
+        f"Not restored: {', '.join(keys)}. The backup holds a value for each, and "
+        f"Home Assistant's command to {command} a {noun} does not take it."
+    ]
 
 
 def _has_fields(row: dict[str, Any], fields: dict[str, Any]) -> bool:
@@ -208,7 +242,6 @@ def _other_id_warning(row: Any, id_key: str, item_id: str) -> str | None:
 async def _restore_item(
     client: Any,
     rows: list[Any],
-    registry: str,
     id_key: str,
     item_id: str,
     stored: dict[str, Any],
@@ -217,9 +250,11 @@ async def _restore_item(
 ) -> Any:
     """Update the item, or create it again when Core no longer holds its id.
 
-    ``stored`` is the snapshot's row without its ids. An update sends the keys
-    of it that Core's update command takes and a create those its create command
-    takes, as the component names them; when the component cannot be asked or
+    ``stored`` is the snapshot's row without its own id and the ``kind`` or
+    ``scope`` the snapshot adds. An update sends the keys of it that Core's
+    update command takes and a create those its create command takes, as the
+    component names them, and the row carries a warning for the stored keys
+    left out (``_not_restored``); when the component cannot be asked or
     refuses, both send the row without ``created_at`` and ``modified_at``.
 
     A row whose fields all match the create's stands for the item an earlier
@@ -240,6 +275,7 @@ async def _restore_item(
     bm = _manager()
     extra_ids = extra_ids or {}
     noun = id_key.removesuffix("_id")
+    registry = f"{noun}_registry"
     taken = await _registry_fields(client, noun)
     if taken is None:
         update = payload = bm._strip_readonly(stored)
@@ -247,7 +283,7 @@ async def _restore_item(
         update = _only(stored, taken["update_fields"])
         payload = _only(stored, taken["create_fields"])
     if any(r.get(id_key) == item_id for r in rows):
-        return await bm._ws_send(
+        row = await bm._ws_send(
             client,
             {
                 "type": f"config/{registry}/update",
@@ -256,6 +292,7 @@ async def _restore_item(
                 **update,
             },
         )
+        return _noting(row, *_not_restored(noun, "update", stored, update, row, taken))
     row = _like(rows, payload)
     order_warning = None
     if row is not None and (lists := reordered_lists(row, payload)):
@@ -301,7 +338,9 @@ async def _restore_item(
                 ],
             ) from err
     return _noting(
-        row, *filter(None, [order_warning, _other_id_warning(row, id_key, item_id)])
+        row,
+        *filter(None, [order_warning, _other_id_warning(row, id_key, item_id)]),
+        *_not_restored(noun, "create", stored, payload, row, taken),
     )
 
 
@@ -315,7 +354,6 @@ async def restore_label(client: Any, entity_id: str, config: Any) -> Any:
     return await _restore_item(
         client,
         rows,
-        "label_registry",
         "label_id",
         entity_id,
         _without(config, "label_id"),
@@ -340,7 +378,6 @@ async def restore_category(client: Any, entity_id: str, config: Any) -> Any:
     return await _restore_item(
         client,
         rows,
-        "category_registry",
         "category_id",
         cat_id,
         _without(config, "category_id", "scope"),
@@ -370,7 +407,6 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
         row = await _restore_item(
             client,
             rows,
-            f"{kind}_registry",
             f"{kind}_id",
             real_id,
             stored,
@@ -445,15 +481,15 @@ async def compared_row(
     A diff compares lists position by position. A list that holds the
     snapshot's items in another order gets the snapshot's order when the
     component names it as a set of Core's; one it does not name stays as Core
-    lists it, and when the component cannot be asked or refuses every such list
-    stays and a warning says so.
+    lists it, and when the component cannot be asked, refuses or does not find
+    the entry every such list stays and a warning says so.
 
     A point in time Core sets itself gets the snapshot's value, since no
     restore puts it back: the ones the component names for the entry. When the
     component cannot be asked, refuses or does not find the entry, those are
-    ``created_at`` and ``modified_at`` for a label, category, area or floor, as
-    before the component named them. For any other row none is left out, and a
-    warning names the ones that differ.
+    ``created_at`` and ``modified_at`` for a label, category, area or floor.
+    For any other row none is left out, and a warning names the ones that
+    differ.
 
     The component's ``registry_fields`` is asked once, and only when the rows
     differ.
@@ -469,14 +505,14 @@ async def compared_row(
     registry = current["kind"] if domain == "area_or_floor" else domain
     item_id = current.get("id" if domain == "device" else f"{registry}_id")
     entry = await _registry_fields(client, registry, item_id, current.get("scope"))
+    sets: Any = None if entry is None else entry["set_fields"]
+    stamped: Any = None if entry is None else entry["stamped_fields"]
     if lists := reordered_lists(current, config):
-        if entry is None:
+        if sets is None:
             warnings.append(_order_untold("The diff reports as a difference", lists))
         else:
-            sets = entry["set_fields"] or ()
             in_order = {key: config[key] for key in lists if key in sets}
             current = {**current, **in_order}
-    stamped: Any = None if entry is None else entry["stamped_fields"]
     if stamped is None:
         readonly = _manager()._REGISTRY_READONLY_KEYS
         if domain in REGISTRY_ITEM_DOMAINS:

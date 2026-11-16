@@ -233,8 +233,9 @@ async def _lookups_via_component(
 ) -> list[tuple[bool, list[dict[str, Any]], Exception | None, str | None]] | None:
     """Answer every check from one read by the component, in ``checks`` order.
 
-    None when the component cannot be asked or does not answer: the caller
-    sends Core's list commands then.
+    None when the component cannot be asked, refuses, times out, loses its
+    connection or answers in another shape: the caller sends Core's list
+    commands then.
     """
     reply = await fetch_registries_via_component(
         client,
@@ -346,10 +347,10 @@ async def validate_registry_ids(
     so the caller gets a clear error with the available IDs to choose from.
 
     ``categories`` maps a category SCOPE ("helpers", "automation", "script",
-    "scene") to the category_id being assigned in that scope; each distinct
-    scope is a separate registry lookup. With the ``ha_mcp_tools`` component
-    one read answers them all; without it every lookup is one of Core's list
-    commands, sent concurrently.
+    "scene") to the category_id being assigned in that scope. With the
+    ``ha_mcp_tools`` component one read answers every check; without it each
+    registry, and each distinct scope, is one of Core's list commands, sent
+    concurrently.
 
     Skips:
       - None values (caller did not pass — no change to apply). Inside

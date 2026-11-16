@@ -16,12 +16,12 @@ from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_categories import CategoryTools
 from ha_mcp.tools.tools_labels import LabelTools
 
 from ._client_spies import sent_commands
+from ._routing_core import pooled_socket, sent_types
 from ._tool_errors import rejected_call_body
 
 
@@ -279,17 +279,13 @@ async def test_labels_are_listed_through_the_component(
     """With the component the label rows come from its registries command, and
     they are the rows Core's own list command sends."""
     lr.async_get(hass).async_create("Security", color="red")
-    socket = await get_websocket_client(
-        url=component_core_client.base_url,
-        token=component_core_client.token,
-        verify_ssl=component_core_client.verify_ssl,
-    )
+    socket = await pooled_socket(component_core_client)
     cores_rows = (await socket.send_command("config/label_registry/list"))["result"]
 
     with sent_commands(socket) as sent:
         result = await component_labels.ha_config_get_label()
 
-    types = [str(call.args[0]) for call in sent.call_args_list]
+    types = sent_types(sent)
     assert result["labels"] == cores_rows
     assert WS_REGISTRIES in types
     assert "config/label_registry/list" not in types
@@ -307,13 +303,7 @@ async def test_a_label_is_added_to_an_area_read_through_the_component(
     kept = registry.async_create("Guests")
     added = registry.async_create("Security")
     area = ar.async_get(hass).async_create("Hall", labels={kept.label_id})
-    socket = await get_websocket_client(
-        url=component_core_client.base_url,
-        token=component_core_client.token,
-        verify_ssl=component_core_client.verify_ssl,
-    )
-
-    with sent_commands(socket) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         await component_labels.ha_config_set_label(
             label_id=added.label_id, areas=[area.id]
         )
@@ -321,8 +311,7 @@ async def test_a_label_is_added_to_an_area_read_through_the_component(
     stored = ar.async_get(hass).async_get_area(area.id)
     assert stored is not None
     assert stored.labels == {kept.label_id, added.label_id}
-    types = [str(call.args[0]) for call in sent.call_args_list]
-    assert "config/area_registry/list" not in types
+    assert "config/area_registry/list" not in sent_types(sent)
 
 
 async def test_category_update_without_a_name_keeps_the_name(

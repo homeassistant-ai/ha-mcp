@@ -9,11 +9,13 @@ entry here is created through Core's own registry.
 
 from __future__ import annotations
 
+from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import device_registry as dr
@@ -91,6 +93,8 @@ async def test_the_fields_core_keeps_in_a_set_are_named(
     kind: str,
     set_fields: list[str],
 ) -> None:
+    """For an entry the answer names the fields Core keeps in a set, which a
+    diff may match in any order, and the points in time Core sets itself."""
     params = {"registry": kind, **_entries(hass)[kind]}
 
     result = await ws_result(component_ws, _COMMAND, **params)
@@ -105,8 +109,8 @@ async def test_the_fields_a_command_takes_are_read_from_cores_schema(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """The keys are those of the schema Core registered, so a key Core's
-    command starts to take is named, each command for itself; the keys of the
-    message itself are not fields of the row."""
+    command starts to take is named, each command for itself; the transport
+    keys ``id`` and ``type`` are left out."""
     before = await ws_result(component_ws, _COMMAND, registry="label")
 
     with taking(hass, "config/label_registry/update", "badge"):
@@ -137,6 +141,8 @@ async def test_the_fields_a_command_takes_are_read_from_cores_schema(
 async def test_a_registry_core_creates_no_entry_in_by_command_has_no_create_fields(
     component_ws: MockHAClientWebSocket, kind: str
 ) -> None:
+    """Core registers no create command for the device and the entity registry,
+    so the answer has no create fields and still names the update's."""
     result = await ws_result(component_ws, _COMMAND, registry=kind)
 
     assert result["create_fields"] is None
@@ -185,16 +191,30 @@ async def test_a_registry_core_registers_no_update_command_for_is_refused(
 
 
 @pytest.mark.usefixtures("config_commands")
-async def test_a_device_registry_core_does_not_hand_out_is_refused(
-    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+@pytest.mark.parametrize(
+    ("kind", "module", "scope"),
+    [
+        pytest.param("device", dr, {}, id="device"),
+        pytest.param("category", cr, {"scope": "automation"}, id="category"),
+    ],
+)
+async def test_a_registry_core_does_not_hand_out_is_refused(
+    component_ws: MockHAClientWebSocket,
+    kind: str,
+    module: ModuleType,
+    scope: dict[str, str],
 ) -> None:
-    """A device registry that cannot be read is an error, as for the other
-    registries, and not the answer for a device Core does not hold."""
-    with patch.object(dr, "async_get", side_effect=RuntimeError("core drift")):
-        reply = await ws_call(component_ws, _COMMAND, registry="device", item_id="any")
+    """A registry that cannot be read is an error, and not the answer for an
+    entry Core does not hold."""
+    unreadable = HomeAssistantError(f"{kind} registry is not readable")
+    with patch.object(module, "async_get", side_effect=unreadable):
+        reply = await ws_call(
+            component_ws, _COMMAND, registry=kind, item_id="any", **scope
+        )
 
     assert reply["success"] is False, reply
-    assert "device registry" in reply["error"]["message"], reply
+    assert f"{kind} registry" in reply["error"]["message"], reply
+    assert "not readable" not in reply["error"]["message"], reply
 
 
 @pytest.mark.usefixtures("config_commands")

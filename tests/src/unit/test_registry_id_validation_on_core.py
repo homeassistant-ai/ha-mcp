@@ -17,11 +17,11 @@ from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.config_helpers.registry import validate_registry_ids
 
 from ._client_spies import sent_commands
+from ._routing_core import pooled_socket, sent_types
 from ._tool_errors import rejected_call_body
 
 
@@ -67,16 +67,10 @@ async def test_the_registries_are_read_in_one_question_to_the_component(
 ) -> None:
     """With the component, ids of four registries and two category scopes cost
     one read, and none of Core's list commands is sent."""
-    socket = await get_websocket_client(
-        url=component_core_client.base_url,
-        token=component_core_client.token,
-        verify_ssl=component_core_client.verify_ssl,
-    )
-
-    with sent_commands(socket) as sent:
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
         await _validate(component_core_client, references)
 
-    types = [str(call.args[0]) for call in sent.call_args_list]
+    types = sent_types(sent)
     assert types.count(WS_REGISTRIES) == 1
     assert [name for name in types if name.endswith("_registry/list")] == []
 
@@ -95,6 +89,8 @@ async def test_an_id_the_component_does_not_list_is_refused(
     unknown: dict[str, Any],
     named: dict[str, Any],
 ) -> None:
+    """A reference to an id the component's rows do not hold is refused, and
+    the error names it."""
     error = await rejected_call_body(
         _validate(component_core_client, {**references, **unknown})
     )

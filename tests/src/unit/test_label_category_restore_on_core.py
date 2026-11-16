@@ -20,6 +20,7 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
 
 from custom_components.ha_mcp_tools.websocket_api import registries
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_REGISTRY_FIELDS
 from ha_mcp.backup_manager import BackupManager, BackupRestoreError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -29,14 +30,12 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
-from ._command_faults import taking, unanswered
+from ._command_faults import before_handling, received, taking, unanswered
 from ._registry_item_snapshots import (
     _second_restore_with_lists_reversed,
     _snapshot,
     _store,
 )
-
-_FIELDS = "ha_mcp_tools/registry_fields"
 
 
 async def test_a_label_changed_since_the_snapshot_is_updated_in_place(
@@ -306,8 +305,38 @@ async def test_a_second_restore_matches_a_set_in_any_order(
 
     outcome = await backup_manager.restore_snapshot(snapshot)
 
-    assert [a.name for a in ar.async_get(hass).areas.values()] == ["Corridor"]
+    (area,) = ar.async_get(hass).async_list_areas()
+    assert (area.name, area.aliases) == ("Corridor", {"entrance", "lobby"})
     assert not [w for w in outcome["result"]["warnings"] if "order" in w]
+
+
+async def test_a_second_restore_creates_the_area_again_when_core_dropped_the_first_ones(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core can drop the area the first restore created between the restore's
+    read and its question about the area's lists. The component then names no
+    set, so the area is not taken and the restore creates it again."""
+    snapshot = await _second_restore_with_lists_reversed(
+        hass, backup_manager, "aliases"
+    )
+    areas = ar.async_get(hass)
+
+    def drop(msg: dict[str, Any]) -> None:
+        if "item_id" in msg:
+            areas.async_delete(msg["item_id"])
+
+    create = "config/area_registry/create"
+    with (
+        before_handling(hass, WS_REGISTRY_FIELDS, drop),
+        received(hass, create) as seen,
+    ):
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert len(seen[create]) == 1
+    (area,) = areas.async_list_areas()
+    assert (area.name, area.aliases) == ("Corridor", {"entrance", "lobby"})
 
 
 async def test_a_second_restore_without_the_component_says_it_matched_in_another_order(
@@ -402,16 +431,20 @@ async def test_a_stored_key_cores_command_does_not_take_is_not_sent(
 ) -> None:
     """Which keys of a stored row a restore sends is the component's answer,
     read from Core's commands: a key they do not take is left out of the update
-    of a label Core holds and of the create of one it no longer holds."""
+    of a label Core holds and of the create of one it no longer holds, and the
+    restore names it."""
     snapshot, label_id = await _label_snapshot_with_a_badge(
         hass, backup_manager, deleted=deleted
     )
 
-    await backup_manager.restore_snapshot(snapshot)
+    outcome = await backup_manager.restore_snapshot(snapshot)
 
     restored = lr.async_get(hass).async_get_label(label_id)
     assert restored is not None
     assert restored.color == "red"
+    (warning,) = outcome["result"]["warnings"]
+    assert "badge" in warning
+    assert ("create a label" if deleted else "update a label") in warning
 
 
 @pytest.mark.parametrize(("grown", "deleted"), [("update", True), ("create", False)])
@@ -424,17 +457,66 @@ async def test_a_key_only_cores_other_command_takes_is_not_sent(
 ) -> None:
     """Core's create and update command each take their own keys: on a Core
     whose update takes a key the create does not, the create goes out without
-    it, and the reverse."""
+    it, and the reverse. The restore names the key, also when it is one Core's
+    answer carries, as ``created_at`` is."""
     snapshot, label_id = await _label_snapshot_with_a_badge(
         hass, backup_manager, deleted=deleted
     )
+    command = f"config/label_registry/{grown}"
 
-    with taking(hass, f"config/label_registry/{grown}", "badge"):
-        await backup_manager.restore_snapshot(snapshot)
+    with taking(hass, command, "badge"), taking(hass, command, "created_at"):
+        outcome = await backup_manager.restore_snapshot(snapshot)
 
     restored = lr.async_get(hass).async_get_label(label_id)
     assert restored is not None
     assert restored.color == "red"
+    (warning,) = outcome["result"]["warnings"]
+    assert "badge, created_at" in warning
+
+
+async def test_a_restore_with_the_component_names_no_key_core_sets_itself(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A snapshot holds ``created_at`` and ``modified_at``, which neither of
+    Core's commands takes: the update and the create of a label, category, area
+    and floor leave them out and say nothing about them."""
+    labels = lr.async_get(hass)
+    label = labels.async_create("Security")
+    categories = cr.async_get(hass)
+    category = categories.async_create(scope="automation", name="Lighting")
+    areas = ar.async_get(hass)
+    area = areas.async_create("Hall")
+    floors = fr.async_get(hass)
+    floor = floors.async_create("Ground")
+    snapshots = [
+        await _snapshot(backup_manager, "label", label.label_id),
+        await _snapshot(
+            backup_manager, "category", f"automation:{category.category_id}"
+        ),
+        await _snapshot(backup_manager, "area_or_floor", f"area:{area.id}"),
+        await _snapshot(backup_manager, "area_or_floor", f"floor:{floor.floor_id}"),
+    ]
+    labels.async_update(label.label_id, icon="mdi:tag")
+    categories.async_update(
+        scope="automation", category_id=category.category_id, icon="mdi:tag"
+    )
+    areas.async_update(area.id, icon="mdi:tag")
+    floors.async_update(floor.floor_id, icon="mdi:tag")
+
+    updated = [await backup_manager.restore_snapshot(name) for name in snapshots]
+    labels.async_delete(label.label_id)
+    categories.async_delete(scope="automation", category_id=category.category_id)
+    areas.async_delete(area.id)
+    floors.async_delete(floor.floor_id)
+    created = [await backup_manager.restore_snapshot(name) for name in snapshots]
+
+    # A created category gets an id Core picks, which the restore names.
+    (other_id,) = created.pop(1)["result"].pop("warnings")
+    assert category.category_id in other_id
+    for outcome in (*updated, *created):
+        assert "warnings" not in outcome["result"], outcome
 
 
 @pytest.mark.parametrize(
@@ -475,7 +557,7 @@ async def test_a_question_the_component_does_not_answer_fails_the_restore(
     snapshot = await _snapshot(backup_manager, "label", label.label_id)
     registry.async_update(label.label_id, color="blue")
 
-    async with unanswered(hass, _FIELDS, monkeypatch):
+    async with unanswered(hass, WS_REGISTRY_FIELDS, monkeypatch):
         with pytest.raises(HomeAssistantConnectionError):
             await backup_manager.restore_snapshot(snapshot)
 

@@ -848,6 +848,9 @@ class TestAreaFloorIntegration:
             )
         )
         assert reorder.get("success"), f"Reorder failed: {reorder}"
+        # The reply names Core's own listing before and after the reorder.
+        assert [i for i in reorder["previous_order"] if i in created] == created
+        assert [i for i in reorder["order"] if i in created] == new_order
 
         listed = parse_mcp_result(
             await mcp_client.call_tool("ha_list_floors_areas", {})
