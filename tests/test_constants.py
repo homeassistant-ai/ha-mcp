@@ -28,6 +28,11 @@ NON_ADMIN_TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIzNzkyOTc
 _DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.11.1"
 HA_TEST_IMAGE = os.environ.get("HA_TEST_IMAGE", _DEFAULT_HA_TEST_IMAGE)
 
+# Node image that runs the Z-Wave JS server on zwave-js's mock controller
+# (tests/zwave_mock) for the radio E2E tests.
+# renovate: datasource=docker depName=public.ecr.aws/docker/library/node
+ZWAVE_MOCK_IMAGE = "public.ecr.aws/docker/library/node:22.23.5-slim"
+
 # Test user credentials (for UI access)
 TEST_USER = "mcp"
 TEST_PASSWORD = "mcp"

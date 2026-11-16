@@ -376,6 +376,8 @@ Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wai
 
 **Exception handling in polling helpers.** `wait_helpers.py` catches a narrow `_POLLING_TRANSIENT_ERRORS` tuple inside retry loops; bugs like `TypeError` / `AttributeError` / `KeyError` / `AssertionError` propagate immediately. Don't broaden to `except Exception`.
 
+**Z-Wave without a radio.** `start_zwave_mock()` (`src/e2e/utilities/zwave_mock.py`) runs `tests/zwave_mock` in a Node container: a Z-Wave JS server whose driver talks to zwave-js's mock controller in the same process, with one switch node. The `zwave_network` fixture in `src/e2e/tools/test_radio_management.py` adds Core's `zwave_js` entry for it and removes the entry after the class, so every other test still runs without a radio. Tests that use it are `container_only`: the Home Assistant container reaches the server over Docker's bridge. A test that starts inclusion or exclusion stops it in its `finally`. The mock has no firmware update service and does not finish a hard reset. To move the pinned versions, edit `tests/zwave_mock/package.json` and run `npm install --package-lock-only` in that directory.
+
 ## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
 
 Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui/` — page
