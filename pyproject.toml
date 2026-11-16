@@ -189,7 +189,6 @@ module = [
     "tests.src.unit.policy.test_handlers",
     "tests.src.unit.policy.test_mrtr",
     "tests.src.unit.test_auto_backup_e2e_isolation",
-    "tests.src.unit.test_backup_access",
     "tests.src.unit.test_backup_diff",
     "tests.src.unit.test_backup_integrations",
     "tests.src.unit.test_build_skill_content",
