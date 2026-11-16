@@ -2014,7 +2014,10 @@ class IntegrationTools:
         wait_bool = wait
         warnings: list[str] = []
 
-        # === Routing dispatch ===
+        # === Routing dispatch: a subentry_id names its subentry, entity target or not ===
+        helper_type = removal_helper_type(
+            {"helper_type": helper_type, "subentry_id": subentry_id}
+        )
         if helper_type is None and "." in target:
             # An entity_id alone: its registry entry names the helper, and the
             # resolved call runs the matching path with its own backup.
@@ -2024,9 +2027,6 @@ class IntegrationTools:
             )
             return resolved
 
-        helper_type = removal_helper_type(
-            {"helper_type": helper_type, "subentry_id": subentry_id}
-        )
         if helper_type is None:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
