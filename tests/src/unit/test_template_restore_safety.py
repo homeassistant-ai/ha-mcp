@@ -227,7 +227,8 @@ async def test_active_restore_pins_source_and_safety_during_other_capture(
         assert stored_state(manager, safety) == state_template("before")
     finally:
         held.release.set()
-        await task
+        await asyncio.wait([task])
+        task.result()
 
 
 async def test_serialized_restores_capture_immediate_predecessor(
@@ -397,7 +398,8 @@ async def test_active_restore_protects_source_and_safety_from_deletion(
         assert set(_others(manager)) == protected
     finally:
         held.release.set()
-        await task
+        await asyncio.wait([task])
+        task.result()
     assert set(manager.delete_bulk(domain=DOMAIN)["deleted"]) == protected
 
 
@@ -475,8 +477,8 @@ async def test_cancellation_releases_entry_for_next_restore_and_keeps_recovery(
     task = asyncio.create_task(manager.restore_snapshot(source.name))
     await asyncio.wait_for(held.entered.wait(), 2)
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    await asyncio.wait([task])
+    assert task.cancelled()
 
     assert source.exists()
     assert len(manager.list_snapshots(domain=DOMAIN)) == 2

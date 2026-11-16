@@ -68,7 +68,7 @@ def answered(
         if change is not None:
             result = change()
             if inspect.isawaitable(result):
-                await result
+                await asyncio.gather(result)
 
     hooks = client.httpx_client.event_hooks["response"]
     hooks.append(on_answer)

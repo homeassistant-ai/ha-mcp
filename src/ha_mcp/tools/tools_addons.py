@@ -203,13 +203,12 @@ def _summarize_ws_messages(
 def _apply_response_transform(response: Any, expr: str) -> Any:
     """Run a sandboxed ``python_transform`` expression against ``response``.
 
-    Exposes the value to the expression as ``response``. Supports both
-    in-place mutation and reassignment (``response = [...]``). Raises
-    ToolError with VALIDATION_FAILED on sandbox errors so the agent gets
-    a structured code it can react to.
+    Exposes the value to the expression as ``response``; in-place mutation and
+    reassignment (``response = [...]``) both work. A sandbox error is raised
+    as a ToolError with VALIDATION_FAILED, a code the agent can react to.
     """
     try:
-        return safe_execute_expression(expr, {"response": response}, "response")
+        result = safe_execute_expression(expr, {"response": response}, "response")
     except PythonSandboxError as e:
         message, suggestions = format_sandbox_error(e, expr, variable_name="response")
         raise_tool_error(
@@ -220,6 +219,7 @@ def _apply_response_transform(response: Any, expr: str) -> Any:
                 suggestions=suggestions,
             )
         )
+    return result
 
 
 def _merge_options(base: dict, override: dict) -> dict:

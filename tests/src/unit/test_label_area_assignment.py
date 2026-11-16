@@ -285,8 +285,8 @@ async def test_cancelled_call_during_assign_is_not_swallowed(
         )
         await held.arrived.wait()
         call.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await call
+        await asyncio.wait([call])
+        assert call.cancelled()
 
 
 async def test_label_added_to_a_later_area_meanwhile_is_kept(
@@ -307,7 +307,8 @@ async def test_label_added_to_a_later_area_meanwhile_is_kept(
         )
         await arrived.wait()
         area_registry.async_update(living.id, labels={late.label_id})
-    await call
+    await asyncio.wait([call])
+    call.result()
 
     stored = area_registry.async_get_area(living.id)
     assert stored is not None

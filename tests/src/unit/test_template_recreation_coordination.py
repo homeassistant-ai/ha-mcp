@@ -189,8 +189,8 @@ async def test_cancelled_recreation_releases_waiting_entry_write(
         await attempted.wait()
         assert not entered.is_set()
         restore.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await restore
+        await asyncio.wait([restore])
+        assert restore.cancelled()
         await asyncio.wait_for(writer, 2)
     finally:
         await _settle(restore, writer)
@@ -250,8 +250,8 @@ async def test_cancelled_waiting_restore_does_not_block_new_writes(
             await attempted.wait()
             task.cancel()
             task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            await asyncio.wait([task])
+            assert task.cancelled()
             await asyncio.create_task(another_write())
 
 
@@ -272,7 +272,8 @@ async def test_nested_ordinary_write_can_finish_after_restore_queues(
             await attempted.wait()
             async with guard("new-entry"), guard("another-entry"):
                 assert not entered.is_set()
-        await task
+        await asyncio.wait([task])
+        task.result()
         assert entered.is_set()
 
 
@@ -297,9 +298,10 @@ async def test_cancelled_queued_entry_guard_does_not_hold_up_restore(
             await attempted.wait()
             restoring = asyncio.create_task(restore())
             task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        await restoring
+            await asyncio.wait([task])
+            assert task.cancelled()
+        await asyncio.wait([restoring])
+        restoring.result()
 
 
 async def test_guard_upgrade_refuses_instead_of_deadlocking(
@@ -328,5 +330,6 @@ async def test_exclusive_restores_for_different_entries_serialize(
             task = asyncio.create_task(restore())
             await attempted.wait()
             assert not entered.is_set()
-        await task
+        await asyncio.wait([task])
+        task.result()
         assert entered.is_set()
