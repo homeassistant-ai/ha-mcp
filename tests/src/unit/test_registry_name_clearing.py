@@ -7,245 +7,306 @@ quote-only name is rejected before any registry write, and a device rename
 that did not happen is no longer echoed in ``updates``.
 """
 
-import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
+
+import asyncio
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_registry import RegistryTools
+
+from ._held_command import held_command
+from ._tool_errors import error_of
 
 QUOTE_ONLY_NAMES = ['""', "''", '" "']
 
 
-def _sent(client: MagicMock) -> list[dict[str, Any]]:
-    return [call.args[0] for call in client.send_websocket_message.call_args_list]
-
-
-def _sent_of_type(client: MagicMock, msg_type: str) -> list[dict[str, Any]]:
-    return [msg for msg in _sent(client) if msg["type"] == msg_type]
-
-
 def _assert_rejected_with_clear_hint(exc_info: pytest.ExceptionInfo[ToolError]) -> None:
-    error = json.loads(str(exc_info.value))["error"]
+    error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     hints = " ".join([error.get("suggestion", ""), *error.get("suggestions", [])])
     assert "' '" in hints, f"hint must offer the single-space clear: {error}"
 
 
-@pytest.fixture
-def client() -> MagicMock:
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock()
-    return client
+@pytest.fixture(autouse=True)
+async def registry_commands(hass: HomeAssistant) -> None:
+    """Core's ``config`` integration, which answers the registry commands."""
+    assert await async_setup_component(hass, "config", {})
 
 
 @pytest.fixture
-def registry_tools(client: MagicMock) -> RegistryTools:
-    return RegistryTools(client)
+def device(hass: HomeAssistant, device_registry: dr.DeviceRegistry) -> dr.DeviceEntry:
+    """A device the user named."""
+    entry = MockConfigEntry(domain="demo")
+    entry.add_to_hass(hass)
+    created = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("demo", "lamp")}
+    )
+    named = device_registry.async_update_device(created.id, name_by_user="Old Lamp")
+    assert named is not None
+    return named
 
 
 @pytest.fixture
-def set_entity(client: MagicMock) -> Any:
-    tools: dict[str, Any] = {}
-
-    def capture_add_tool(method: Any) -> None:
-        tools[method.__fastmcp__.name] = method
-
-    mcp = MagicMock()
-    mcp.add_tool = capture_add_tool
-    register_entity_tools(mcp, client)
-    return tools["ha_set_entity"]
+def lamp(device: dr.DeviceEntry, entity_registry: er.EntityRegistry) -> str:
+    """A light on ``device``."""
+    return entity_registry.async_get_or_create(
+        "light", "demo", "lamp", device_id=device.id
+    ).entity_id
 
 
-def _entity_ws_handler(
-    *, device_id: str | None = "dev1", device_update_ok: bool = True
-) -> Any:
-    async def handler(msg: dict[str, Any], **_: Any) -> dict[str, Any]:
-        msg_type = msg["type"]
-        if msg_type == "config/area_registry/list":
-            return {"success": True, "result": [{"area_id": "living_room"}]}
-        if msg_type == "config/entity_registry/update":
-            entry = {"entity_id": msg["entity_id"], "device_id": device_id}
-            return {"success": True, "result": {"entity_entry": entry}}
-        if msg_type == "config/entity_registry/get":
-            return {
-                "success": True,
-                "result": {"entity_id": msg["entity_id"], "device_id": device_id},
-            }
-        if msg_type == "config/device_registry/update":
-            if device_update_ok:
-                return {"success": True, "result": {}}
-            return {"success": False, "error": {"message": "device update refused"}}
-        raise AssertionError(f"unexpected WS message: {msg}")
-
-    return handler
+@pytest.fixture
+def bulb(entity_registry: er.EntityRegistry) -> str:
+    """A light on no device."""
+    return entity_registry.async_get_or_create("light", "demo", "bulb").entity_id
 
 
 class TestSetDeviceNameClearing:
     @pytest.mark.parametrize("name", QUOTE_ONLY_NAMES)
     async def test_quote_only_name_is_not_stored_as_device_name(
-        self, registry_tools: RegistryTools, client: MagicMock, name: str
+        self,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        name: str,
     ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await registry_tools.ha_set_device(device_id="dev1", name=name)
+            await RegistryTools(core_client).ha_set_device(
+                device_id=device.id, name=name
+            )
 
         _assert_rejected_with_clear_hint(exc_info)
-        assert _sent(client) == []
+        assert device_registry.async_get(device.id) == device
 
     async def test_quote_only_disabled_by_is_rejected(
-        self, registry_tools: RegistryTools, client: MagicMock
+        self,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
     ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await registry_tools.ha_set_device(device_id="dev1", disabled_by='""')
+            await RegistryTools(core_client).ha_set_device(
+                device_id=device.id, disabled_by='""'
+            )
 
         _assert_rejected_with_clear_hint(exc_info)
-        assert _sent(client) == []
+        assert device_registry.async_get(device.id) == device
 
     @pytest.mark.parametrize("name", ["Bob's Lamp", '12" Monitor'])
     async def test_name_containing_quotes_is_stored(
-        self, registry_tools: RegistryTools, client: MagicMock, name: str
+        self,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        name: str,
     ) -> None:
-        client.send_websocket_message.return_value = {"success": True, "result": {}}
+        await RegistryTools(core_client).ha_set_device(device_id=device.id, name=name)
 
-        await registry_tools.ha_set_device(device_id="dev1", name=name)
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.name_by_user == name
 
-        assert _sent(client)[0]["name_by_user"] == name
-
-    @pytest.mark.parametrize(
-        ("field", "value", "sent_key"),
-        [
-            ("name", "", "name_by_user"),
-            ("name", " ", "name_by_user"),
-            ("area_id", " ", "area_id"),
-            ("disabled_by", " ", "disabled_by"),
-        ],
-    )
+    @pytest.mark.parametrize("field", ["name", "area_id", "disabled_by"])
     async def test_blank_value_clears_device_field(
         self,
-        registry_tools: RegistryTools,
-        client: MagicMock,
+        core_client: HomeAssistantClient,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+        area_registry: ar.AreaRegistry,
         field: str,
-        value: str,
-        sent_key: str,
     ) -> None:
-        client.send_websocket_message.return_value = {"success": True, "result": {}}
+        kitchen = area_registry.async_create("Kitchen")
+        device_registry.async_update_device(
+            device.id,
+            area_id=kitchen.id,
+            disabled_by=dr.DeviceEntryDisabler.USER,
+        )
 
-        await registry_tools.ha_set_device(device_id="dev1", **{field: value})
+        await RegistryTools(core_client).ha_set_device(
+            device_id=device.id, **{field: " "}
+        )
 
-        assert [msg["type"] for msg in _sent(client)] == [
-            "config/device_registry/update"
-        ]
-        assert _sent(client)[0][sent_key] is None
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        cleared = {
+            "name": stored.name_by_user,
+            "area_id": stored.area_id,
+            "disabled_by": stored.disabled_by,
+        }
+        assert cleared[field] is None
+        assert all(value is not None for key, value in cleared.items() if key != field)
 
 
 class TestSetEntityNameClearing:
     async def test_padded_device_class_is_stripped(
-        self, set_entity: Any, client: MagicMock
+        self,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
+        window = entity_registry.async_get_or_create("binary_sensor", "demo", "window")
 
-        await set_entity(entity_id="binary_sensor.test", device_class=" window ")
+        await EntityTools(core_client).ha_set_entity(
+            entity_id=window.entity_id, device_class=" window "
+        )
 
-        (update,) = _sent_of_type(client, "config/entity_registry/update")
-        assert update["device_class"] == "window"
+        stored = entity_registry.async_get(window.entity_id)
+        assert stored is not None
+        assert stored.device_class == "window"
 
     @pytest.mark.parametrize("field", ["name", "icon", "device_class"])
     async def test_quote_only_value_is_not_stored(
-        self, set_entity: Any, client: MagicMock, field: str
+        self,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        entity_registry: er.EntityRegistry,
+        field: str,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
+        before = entity_registry.async_get(lamp)
 
         with pytest.raises(ToolError) as exc_info:
-            await set_entity(entity_id="light.test", **{field: '""'})
-
-        _assert_rejected_with_clear_hint(exc_info)
-        assert _sent(client) == []
-
-    async def test_quote_only_device_name_rejected_before_entity_write(
-        self, set_entity: Any, client: MagicMock
-    ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity(
-                entity_id="light.test", icon="mdi:lamp", new_device_name='""'
+            await EntityTools(core_client).ha_set_entity(
+                entity_id=lamp, **{field: '""'}
             )
 
         _assert_rejected_with_clear_hint(exc_info)
-        assert _sent(client) == []
+        assert entity_registry.async_get(lamp) == before
+
+    async def test_quote_only_device_name_rejected_before_entity_write(
+        self,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        device: dr.DeviceEntry,
+        entity_registry: er.EntityRegistry,
+        device_registry: dr.DeviceRegistry,
+    ) -> None:
+        before = entity_registry.async_get(lamp)
+
+        with pytest.raises(ToolError) as exc_info:
+            await EntityTools(core_client).ha_set_entity(
+                entity_id=lamp, icon="mdi:lamp", new_device_name='""'
+            )
+
+        _assert_rejected_with_clear_hint(exc_info)
+        assert entity_registry.async_get(lamp) == before
+        assert device_registry.async_get(device.id) == device
 
     @pytest.mark.parametrize("field", ["name", "area_id", "icon"])
     async def test_whitespace_clears_entity_override(
-        self, set_entity: Any, client: MagicMock, field: str
+        self,
+        core_client: HomeAssistantClient,
+        bulb: str,
+        entity_registry: er.EntityRegistry,
+        area_registry: ar.AreaRegistry,
+        field: str,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
+        kitchen = area_registry.async_create("Kitchen")
+        entity_registry.async_update_entity(
+            bulb, name="Desk", area_id=kitchen.id, icon="mdi:desk-lamp"
+        )
 
-        await set_entity(entity_id="light.test", **{field: " "})
+        await EntityTools(core_client).ha_set_entity(entity_id=bulb, **{field: " "})
 
-        (update,) = _sent_of_type(client, "config/entity_registry/update")
-        assert update[field] is None
+        stored = entity_registry.async_get(bulb)
+        assert stored is not None
+        cleared = {"name": stored.name, "area_id": stored.area_id, "icon": stored.icon}
+        assert cleared[field] is None
+        assert all(value is not None for key, value in cleared.items() if key != field)
 
 
 class TestSetEntityDeviceNameEcho:
-    @pytest.mark.parametrize("new_device_name", ["", " "])
     async def test_blank_device_name_neither_renames_nor_echoes(
-        self, set_entity: Any, client: MagicMock, new_device_name: str
+        self,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        device: dr.DeviceEntry,
+        entity_registry: er.EntityRegistry,
+        device_registry: dr.DeviceRegistry,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
-
-        result = await set_entity(
-            entity_id="light.test", icon="mdi:lamp", new_device_name=new_device_name
+        result = await EntityTools(core_client).ha_set_entity(
+            entity_id=lamp, icon="mdi:lamp", new_device_name=" "
         )
 
-        assert _sent_of_type(client, "config/device_registry/update") == []
+        stored = entity_registry.async_get(lamp)
+        assert stored is not None
+        assert stored.icon == "mdi:lamp"
+        assert device_registry.async_get(device.id) == device
         assert not any(u.startswith("device_name") for u in result["updates"])
         assert any("ha_set_device(name='')" in w for w in result["warnings"])
         assert "device_rename" not in result
         assert "partial" not in result
 
-    @pytest.mark.parametrize("new_device_name", ["", " "])
     async def test_blank_device_name_alone_is_an_error(
-        self, set_entity: Any, client: MagicMock, new_device_name: str
+        self,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
-
         with pytest.raises(ToolError) as exc_info:
-            await set_entity(entity_id="light.test", new_device_name=new_device_name)
+            await EntityTools(core_client).ha_set_entity(
+                entity_id=lamp, new_device_name=" "
+            )
 
         _assert_rejected_with_clear_hint(exc_info)
-        assert _sent(client) == []
+        assert device_registry.async_get(device.id) == device
 
     async def test_deviceless_entity_rename_not_echoed(
-        self, set_entity: Any, client: MagicMock
+        self,
+        core_client: HomeAssistantClient,
+        bulb: str,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler(device_id=None)
-
-        result = await set_entity(entity_id="light.test", new_device_name="Lamp")
+        result = await EntityTools(core_client).ha_set_entity(
+            entity_id=bulb, new_device_name="Lamp"
+        )
 
         assert not any(u.startswith("device_name") for u in result["updates"])
         assert result["device_rename"]["warnings"]
         assert result["warnings"] == result["device_rename"]["warnings"]
 
     async def test_failed_device_rename_not_echoed(
-        self, set_entity: Any, client: MagicMock
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler(
-            device_update_ok=False
-        )
-
-        result = await set_entity(entity_id="light.test", new_device_name="Lamp")
+        """The device is removed while the rename is on its way: Core refuses it."""
+        async with held_command(hass, "config/device_registry/update") as held:
+            call = asyncio.create_task(
+                EntityTools(core_client).ha_set_entity(
+                    entity_id=lamp, new_device_name="Lamp"
+                )
+            )
+            await held.arrived.wait()
+            device_registry.async_remove_device(device.id)
+            held.release.set()
+            result = await call
 
         assert not any(u.startswith("device_name") for u in result["updates"])
         assert result["partial"] is True
 
     async def test_successful_device_rename_is_echoed(
-        self, set_entity: Any, client: MagicMock
+        self,
+        core_client: HomeAssistantClient,
+        lamp: str,
+        device: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
     ) -> None:
-        client.send_websocket_message.side_effect = _entity_ws_handler()
+        result = await EntityTools(core_client).ha_set_entity(
+            entity_id=lamp, new_device_name="Lamp"
+        )
 
-        result = await set_entity(entity_id="light.test", new_device_name="Lamp")
-
+        stored = device_registry.async_get(device.id)
+        assert stored is not None
+        assert stored.name_by_user == "Lamp"
         assert any(u.startswith("device_name") for u in result["updates"])
