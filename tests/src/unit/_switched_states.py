@@ -37,9 +37,16 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_TEMPERATURE,
     EVENT_CALL_SERVICE,
+    EVENT_STATE_CHANGED,
     UnitOfTemperature,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import (
+    Event,
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    callback,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity
 from homeassistant.setup import async_setup_component
@@ -326,3 +333,30 @@ async def set_up_devices(
     await hass.async_block_till_done()
     hass.bus.async_listen(EVENT_CALL_SERVICE, devices.heard)
     return devices
+
+
+def recording_service(
+    hass: HomeAssistant, domain: str, service: str
+) -> list[ServiceCall]:
+    """Register a service that does nothing; return the calls it receives.
+
+    For a test's own domain: a Core entity integration's service is never
+    registered here, its entities come from ``set_up_devices``.
+    """
+    calls: list[ServiceCall] = []
+
+    async def _handler(call: ServiceCall) -> ServiceResponse:
+        calls.append(call)
+        return None
+
+    hass.services.async_register(domain, service, _handler)
+    return calls
+
+
+def listeners_at_call(hass: HomeAssistant, devices: Devices) -> list[int]:
+    """How many ``state_changed`` listeners were on the bus at each command."""
+    seen: list[int] = []
+    devices.on_call = lambda: seen.append(
+        hass.bus.async_listeners().get(EVENT_STATE_CHANGED, 0)
+    )
+    return seen

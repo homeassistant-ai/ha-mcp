@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from homeassistant.const import EVENT_STATE_CHANGED
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import async_capture_events
 
@@ -29,6 +29,8 @@ from ._switched_states import (
     RANG,
     Devices,
     Received,
+    listeners_at_call,
+    recording_service,
     set_up_devices,
     set_up_ringing_automation,
 )
@@ -58,28 +60,9 @@ def _state_listeners(hass: HomeAssistant) -> int:
     return hass.bus.async_listeners().get(EVENT_STATE_CHANGED, 0)
 
 
-def _register(hass: HomeAssistant, domain: str, service: str) -> list[ServiceCall]:
-    """Register a service that does nothing; return the calls it receives."""
-    calls: list[ServiceCall] = []
-
-    async def _handler(call: ServiceCall) -> ServiceResponse:
-        calls.append(call)
-        return None
-
-    hass.services.async_register(domain, service, _handler)
-    return calls
-
-
 async def _lamp(hass: HomeAssistant, state: str = "off") -> Devices:
     """``light.a``, a device below Core's ``light`` integration."""
     return await set_up_devices(hass, {"light.a": state})
-
-
-def _listeners_at_call(hass: HomeAssistant, devices: Devices) -> list[int]:
-    """How many ``state_changed`` listeners were on the bus at each command."""
-    seen: list[int] = []
-    devices.on_call = lambda: seen.append(_state_listeners(hass))
-    return seen
 
 
 async def _answering_script(hass: HomeAssistant, reply: dict[str, Any]) -> None:
@@ -113,7 +96,7 @@ class TestRefusedBeforeDispatch:
         """A caller must never reach the component's own admin services
         (``get_caller_token``, then every file/YAML service) through this
         command, whatever the domain's case or padding."""
-        calls = _register(hass, "ha_mcp_tools", "get_caller_token")
+        calls = recording_service(hass, "ha_mcp_tools", "get_caller_token")
         before = _state_listeners(hass)
 
         reply = await ws_call(
@@ -154,7 +137,7 @@ class TestConfirmedTransition:
         """The reply carries the state change the call caused, confirmed, and
         the device receives the caller's data exactly once."""
         devices = await _lamp(hass)
-        listeners = _listeners_at_call(hass, devices)
+        listeners = listeners_at_call(hass, devices)
         before = _state_listeners(hass)
 
         res = await _call(
@@ -278,7 +261,7 @@ class TestUnconfirmedWrite:
         confirmation listener registered for it does not stay on the bus."""
         devices = await _lamp(hass)
         devices.behaviour["light.a"] = "fail_once"
-        listeners = _listeners_at_call(hass, devices)
+        listeners = listeners_at_call(hass, devices)
         before = _state_listeners(hass)
 
         reply = await ws_call(

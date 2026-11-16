@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from homeassistant.const import EVENT_STATE_CHANGED
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
+from homeassistant.core import HomeAssistant, ServiceCall
 from pytest_homeassistant.common import async_capture_events
 
 from custom_components.ha_mcp_tools.websocket_api.constants import (
@@ -26,8 +26,9 @@ from custom_components.ha_mcp_tools.websocket_api.constants import (
 from ._component_core import ws_call, ws_result
 from ._switched_states import (
     RANG,
-    Devices,
     Received,
+    listeners_at_call,
+    recording_service,
     set_up_devices,
     set_up_ringing_automation,
 )
@@ -53,18 +54,6 @@ def _state_listeners(hass: HomeAssistant) -> int:
     return hass.bus.async_listeners().get(EVENT_STATE_CHANGED, 0)
 
 
-def _register(hass: HomeAssistant, domain: str, service: str) -> list[ServiceCall]:
-    """Register a service that does nothing; return the calls it receives."""
-    calls: list[ServiceCall] = []
-
-    async def _handler(call: ServiceCall) -> ServiceResponse:
-        calls.append(call)
-        return None
-
-    hass.services.async_register(domain, service, _handler)
-    return calls
-
-
 def _turn_on(entity_id: str, service: str = "turn_on", **extra: Any) -> dict[str, Any]:
     """An op as the server sends it: Core's target in ``service_data``, the
     confirmation target in ``entity_ids``."""
@@ -75,13 +64,6 @@ def _turn_on(entity_id: str, service: str = "turn_on", **extra: Any) -> dict[str
         "entity_ids": [entity_id],
         **extra,
     }
-
-
-def _listeners_at_call(hass: HomeAssistant, devices: Devices) -> list[int]:
-    """How many ``state_changed`` listeners were on the bus at each command."""
-    seen: list[int] = []
-    devices.on_call = lambda: seen.append(_state_listeners(hass))
-    return seen
 
 
 def _overlap_probe(hass: HomeAssistant) -> list[str]:
@@ -127,7 +109,7 @@ class TestRefusedBeforeDispatch:
         services: one such op, in any spelling, refuses the frame before even
         the valid op ahead of it runs."""
         devices = await set_up_devices(hass, {"light.a": "off"})
-        token_calls = _register(hass, "ha_mcp_tools", "get_caller_token")
+        token_calls = recording_service(hass, "ha_mcp_tools", "get_caller_token")
         before = _state_listeners(hass)
 
         reply = await ws_call(
@@ -375,7 +357,7 @@ class TestUnconfirmedBatch:
         calls start; an op without entities adds no listener and is not
         ``partial``; nothing stays on the bus afterwards."""
         devices = await set_up_devices(hass, {"light.a": "off"})
-        listeners = _listeners_at_call(hass, devices)
+        listeners = listeners_at_call(hass, devices)
         automation = await set_up_ringing_automation(hass)
         rang = async_capture_events(hass, RANG)
         before = _state_listeners(hass)
