@@ -1,9 +1,11 @@
 """Long snapshot names retain their original Core config-entry identities."""
 
 import asyncio
+import errno
 import hashlib
 import os
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
@@ -99,8 +101,9 @@ async def test_long_identities_get_separate_files_with_complete_headers(
     assert not list(first.parent.glob("*.tmp"))
 
 
+@pytest.mark.parametrize("link_supported", [True, False])
 async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
-    hass: HomeAssistant, manager: BackupManager
+    hass: HomeAssistant, manager: BackupManager, link_supported: bool
 ) -> None:
     longer = "a" * 113
     digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
@@ -112,7 +115,16 @@ async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
         both_writers.wait()
         return mkstemp(**kwargs)
 
+    link = (
+        nullcontext()
+        if link_supported
+        else patch(
+            "ha_mcp.backup_manager.os.link",
+            side_effect=OSError(errno.EOPNOTSUPP, "hard links unavailable"),
+        )
+    )
     with (
+        link,
         patch("ha_mcp.backup_manager._now_ts", return_value="20260101_000000"),
         patch("ha_mcp.backup_manager.tempfile", SimpleNamespace(mkstemp=overlap)),
     ):
@@ -151,7 +163,8 @@ async def test_publication_preserves_a_snapshot_created_at_the_selected_name(
         patch("ha_mcp.backup_manager._now_ts", return_value=stamp),
         patch("ha_mcp.backup_manager.os", wraps=os) as backup_os,
     ):
-        backup_os.replace.side_effect = occupy_before_publish(os.replace)
+        backup_os.name = os.name
+        backup_os.rename.side_effect = occupy_before_publish(os.rename)
         backup_os.link.side_effect = occupy_before_publish(os.link)
         written = await capture(hass, manager, longer)
 

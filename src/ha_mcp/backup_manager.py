@@ -43,6 +43,7 @@ One handler per backed-up domain. Storage helper types each register one keyed
 from __future__ import annotations
 
 import asyncio
+import errno
 import functools
 import logging
 import os
@@ -134,6 +135,7 @@ from .client.rest_client import (
 )
 from .errors import ErrorCode, get_error_code
 from .storage_helper_types import SIMPLE_HELPER_TYPES
+from .utils.config_write_lock import file_write_lock
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
@@ -1089,9 +1091,26 @@ class BackupManager:
             suffix = f"_{seq:02d}" if seq else ""
             target = self._dir / f"{stem}{suffix}.yaml"
             try:
-                os.link(source, target)
+                if os.name == "nt":
+                    os.rename(source, target)
+                else:
+                    os.link(source, target)
             except FileExistsError:
                 continue
+            except OSError as exc:
+                if os.name == "nt" or exc.errno not in {
+                    errno.ENOSYS,
+                    errno.EOPNOTSUPP,
+                    errno.EPERM,
+                    errno.EXDEV,
+                }:
+                    raise
+                with file_write_lock(
+                    self._dir / ".snapshot-publication.lock", required=True
+                ):
+                    if os.path.lexists(target):
+                        continue
+                    os.replace(source, target)
             return target
         raise OSError(
             f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
