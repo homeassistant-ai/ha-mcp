@@ -544,14 +544,15 @@ class TestZwaveNetwork:
         )
         assert read["source"] == "cache"
 
-    async def test_a_reinterviewed_node_is_usable_again(
+    async def test_a_reinterview_starts_for_the_node_behind_a_device(
         self, mcp_client: Client, zwave_network: ZwaveNetwork
     ) -> None:
         result = await _radio(
             mcp_client, "reinterview", device_id=zwave_network.device_id
         )
 
-        assert result["long_running"] is True
+        assert (result["action"], result["long_running"]) == ("reinterview", True)
+        # The interview runs on; the next test needs the node's parameters.
         await _parameters_listed(mcp_client, zwave_network.device_id)
 
     async def test_a_network_route_rebuild_starts(
