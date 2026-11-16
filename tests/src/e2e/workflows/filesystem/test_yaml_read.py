@@ -286,9 +286,10 @@ class TestReadFileYamlPath:
 class TestSecretsMasking:
     """secrets.yaml reads back masked through the yaml_path views too.
 
-    The unit half (test_custom_component_filesystem.py::
-    TestReadFileSecretsMaskingOrder) pins the ordering that makes this hold;
-    this is the behavioural half against the real component.
+    The unit half (test_custom_component_read_file.py::TestSecretsMasking)
+    checks every view of the file through the component's service; this
+    checks that the tool's yaml_path and include_parsed reads reach that
+    masked read on a real install.
     """
 
     async def test_subtree_and_parsed_are_masked(self, mcp_client):

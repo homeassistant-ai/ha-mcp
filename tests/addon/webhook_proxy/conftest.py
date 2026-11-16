@@ -18,7 +18,14 @@ from types import ModuleType
 import pytest
 from aiohttp import web
 
-from ._proxy import STATE_ROOTS, Upstream, UpstreamRequest, state_path
+from ._proxy import (
+    STATE_ROOTS,
+    Upstream,
+    UpstreamRequest,
+    forget_package,
+    make_fs_root,
+    state_path,
+)
 from ._variants import VARIANTS, Variant
 
 
@@ -45,20 +52,10 @@ def _custom_components_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
-def _forget(package_name: str) -> None:
-    for name in [
-        m for m in sys.modules if m == package_name or m.startswith(f"{package_name}.")
-    ]:
-        del sys.modules[name]
-
-
 @pytest.fixture
 def fs_root(tmp_path: Path) -> Path:
     """Where the component's and start.py's ``/config`` and ``/data`` live."""
-    root = tmp_path / "fs"
-    for state_root in STATE_ROOTS:
-        (root / state_root.lstrip("/")).mkdir(parents=True)
-    return root
+    return make_fs_root(tmp_path)
 
 
 @pytest.fixture
@@ -75,7 +72,7 @@ def component(
     """
     monkeypatch.syspath_prepend(str(_custom_components_root))
     package_name = f"custom_components.{variant.component}"
-    _forget(package_name)
+    forget_package(package_name)
     package = importlib.import_module(package_name)
     modules = [package] + [
         importlib.import_module(f"{package_name}.{path.stem}")
@@ -90,7 +87,7 @@ def component(
     if isinstance(heartbeat, Path):
         heartbeat.touch()
     yield package
-    _forget(package_name)
+    forget_package(package_name)
 
 
 @pytest.fixture

@@ -110,6 +110,36 @@ async def test_the_component_lists_a_confirmed_calls_changed_state_once(
     assert "warnings" not in response, response
 
 
+async def test_a_target_reported_again_after_its_write_is_listed_once(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A repeated report moves only ``last_reported`` on the same state, so the
+    confirmed state is the write already listed, not a second record."""
+
+    async def turn_on(call: ServiceCall) -> ServiceResponse:
+        for reported_at in (1_800_000_000.0, 1_800_000_060.0):
+            hass.states.async_set(
+                "light.x",
+                "on",
+                {"brightness": 10},
+                context=call.context,
+                timestamp=reported_at,
+            )
+        return dict(SHELL_RESPONSE)
+
+    hass.states.async_set("light.x", "off")
+    hass.services.async_register(
+        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+    )
+
+    response = await ServiceTools(component_core_client, None).ha_call_service(
+        domain="light", service="turn_on", entity_id="light.x", return_response=True
+    )
+
+    assert [record["entity_id"] for record in response["result"]] == ["light.x"]
+    assert response["verified_state"] == "on"
+
+
 async def test_a_verbose_confirmed_call_keeps_every_write_of_its_target(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:

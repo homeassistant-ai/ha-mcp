@@ -789,8 +789,8 @@
       "description": "Bir və ya bir neçə obyektin (işıqlar, açarlar, sensorlar, iqlim cihazları, örtüklər, kilidlər, ventilyatorlar) cari vəziyyəti, halı və atributları haqqında məlumat alın."
     },
     "ha_get_system_health": {
-      "title": "Sistemin işləkliyini al (ZHA/Z-Wave/inteqrasiya diaqnostikası daxil olmaqla)",
-      "description": "Zigbee (ZHA), Z-Wave JS və hər inteqrasiyaya aid diaqnostika məlumatları daxil olmaqla, Home Assistant sisteminin işləkliyi haqqında məlumat alın."
+      "title": "Sistem Sağlamlığını əldə edin (ZHA/Z-Wave/Thread/Matter şəbəkələri daxil olmaqla)",
+      "description": "Zigbee (ZHA), Z-Wave JS, Thread və Matter şəbəkələri daxil olmaqla Home Assistant sistem sağlamlığını əldə edin."
     },
     "ha_get_todo": {
       "title": "Tapşırıqları al",

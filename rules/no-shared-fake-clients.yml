@@ -1,8 +1,8 @@
 # A test module is not a library. Importing from another test module, or
 # taking the old `mock_client` fixture, brings in that file's hand-written
 # Home Assistant client without the stand-in rules seeing it in the importing
-# file. The four old fake-client helper modules are refused for the same
-# reason. A shared helper that builds no stand-in goes in a `_*.py` module.
+# file. The three old fake-client helper modules, and the removed
+# `_logbook_fallback`, are refused for the same reason. A shared helper that builds no stand-in goes in a `_*.py` module.
 id: no-shared-fake-clients
 language: python
 rule:
@@ -34,23 +34,11 @@ files:
 ignores:
   - "tests/addon/test_backup_controls.py"
   - "tests/src/unit/test_action_discriminator.py"
-  - "tests/src/unit/test_backup_dashboards.py"
-  - "tests/src/unit/test_backup_restore_consumers.py"
   - "tests/src/unit/test_backup_snapshot.py"
   - "tests/src/unit/test_backup_snapshot_restore.py"
-  - "tests/src/unit/test_backup_target_identity.py"
-  - "tests/src/unit/test_backup_todo.py"
-  - "tests/src/unit/test_card_review_regressions.py"
-  - "tests/src/unit/test_card_review_round6.py"
-  - "tests/src/unit/test_config_flow_server.py"
   - "tests/src/unit/test_config_subentries_folded.py"
   - "tests/src/unit/test_deep_search_tier3_parallel.py"
-  - "tests/src/unit/test_embedded_server_stop.py"
-  - "tests/src/unit/test_embedded_version_dist.py"
-  - "tests/src/unit/test_entity_backup.py"
-  - "tests/src/unit/test_entity_backup_component.py"
   - "tests/src/unit/test_error_code_consistency_1297.py"
-  - "tests/src/unit/test_helper_flows.py"
   - "tests/src/unit/test_helper_icon_core_contract.py"
   - "tests/src/unit/test_helper_input_validation.py"
   - "tests/src/unit/test_helper_registry_id_validation.py"
@@ -59,8 +47,6 @@ ignores:
   - "tests/src/unit/test_identifier_validation_family.py"
   - "tests/src/unit/test_label_area_assignment.py"
   - "tests/src/unit/test_listen_sockets.py"
-  - "tests/src/unit/test_llm_api.py"
-  - "tests/src/unit/test_oauth_redirect_allowlist.py"
   - "tests/src/unit/test_overview_system_info.py"
   - "tests/src/unit/test_radio_management.py"
   - "tests/src/unit/test_radio_zigbee.py"
@@ -97,13 +83,8 @@ ignores:
   - "tests/src/unit/test_tools_history.py"
   - "tests/src/unit/test_tools_integrations.py"
   - "tests/src/unit/test_tools_resources.py"
-  - "tests/src/unit/test_tools_resources_patch.py"
   - "tests/src/unit/test_tools_todo_bridge.py"
   - "tests/src/unit/test_tools_utility_error_log_records.py"
-  - "tests/src/unit/test_tools_utility_error_log_structured.py"
-  - "tests/src/unit/test_tools_utility_log_order.py"
-  - "tests/src/unit/test_tools_utility_logbook_transports.py"
-  - "tests/src/unit/test_tools_utility_supervisor_logs.py"
   - "tests/src/unit/test_wait_helpers.py"
   - "tests/src/unit/test_wait_parameter.py"
   - "tests/src/unit/test_yaml_find_key.py"

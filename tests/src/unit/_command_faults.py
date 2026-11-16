@@ -92,29 +92,32 @@ def before_handling(
 
 @asynccontextmanager
 async def unanswered(
-    hass: HomeAssistant, command: str, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, command: str, monkeypatch: pytest.MonkeyPatch, *also: str
 ) -> AsyncIterator[None]:
-    """Core holds ``command`` until the client stopped waiting, then answers it.
+    """Core holds ``command``, and each command of ``also``, until the client
+    stopped waiting, then answers it.
 
-    The client's wait is cut to ``HELD_WAIT_S`` meanwhile; Core's handler runs
-    once the block ends, and the test waits for it.
+    The client's wait is cut to ``HELD_WAIT_S`` meanwhile; Core's handlers run
+    once the block ends, and the test waits for them.
     """
-    core_handler, schema = _handler(hass, command)
+    originals = {name: _handler(hass, name) for name in (command, *also)}
     release = asyncio.Event()
 
     async def hold(core: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
         await release.wait()
-        core_handler(core, connection, msg)
+        originals[msg["type"]][0](core, connection, msg)
 
-    websocket_api.async_register_command(
-        hass, command, websocket_api.async_response(hold), schema
-    )
+    for name, (_, schema) in originals.items():
+        websocket_api.async_register_command(
+            hass, name, websocket_api.async_response(hold), schema
+        )
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", HELD_WAIT_S)
     try:
         yield
     finally:
         release.set()
-        websocket_api.async_register_command(hass, command, core_handler, schema)
+        for name, (core_handler, schema) in originals.items():
+            websocket_api.async_register_command(hass, name, core_handler, schema)
         await hass.async_block_till_done(wait_background_tasks=True)
 
 

@@ -77,6 +77,23 @@ def _state_read_fails(entity_id: str) -> Iterator[None]:
         yield
 
 
+async def _list_after_a_repeated_report(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> tuple[dict[str, Any], str]:
+    """List once so Core caches the group's serialized state, report the same
+    state a minute later, and list again. Returns the reply and the live
+    ``last_reported``."""
+    tools = GroupTools(client)
+    attrs = {"entity_id": ["light.a"]}
+    hass.states.async_set("group.g", "on", attrs, timestamp=1_800_000_000.0)
+    await tools.ha_config_list_groups()
+    hass.states.async_set("group.g", "on", attrs, timestamp=1_800_000_060.0)
+    result = await tools.ha_config_list_groups()
+    live = hass.states.get("group.g")
+    assert live is not None
+    return result, live.last_reported.isoformat()
+
+
 class TestListGroups:
     async def test_list_keeps_the_fields_core_sends(
         self, hass: HomeAssistant, tools: GroupTools
@@ -109,6 +126,34 @@ class TestListGroups:
 
         assert group["entity_id"] == "group.from_yaml"
         assert group["auto"] is False
+
+    async def test_list_serves_the_live_last_reported(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        """A group re-reporting an unchanged state (#3086)."""
+        result, live = await _list_after_a_repeated_report(hass, component_core_client)
+
+        assert result["groups"][0]["last_reported"] == live
+        assert "warnings" not in result
+
+    async def test_list_without_the_component_names_a_stale_last_reported(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        result, _ = await _list_after_a_repeated_report(hass, core_client)
+
+        assert any("last_reported" in w for w in result["warnings"])
+
+    async def test_list_falls_back_to_rest_when_the_snapshot_reply_is_lost(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        with patch(
+            "ha_mcp.tools.tools_groups.ask_component",
+            AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
+        ):
+            result, _ = await _list_after_a_repeated_report(hass, component_core_client)
+
+        assert [g["entity_id"] for g in result["groups"]] == ["group.g"]
+        assert any("last_reported" in w for w in result["warnings"])
 
     async def test_list_without_an_answer_is_a_tool_error(
         self,

@@ -13,12 +13,15 @@ from packaging.utils import canonicalize_name
 
 _LOGGER = logging.getLogger(__name__)
 # Function's private executor/context contract is tested against this wrapper.
+# Renovate moves this pin and the dev group's together (renovate.json).
+# renovate: datasource=pypi depName=quickjs-ng
 QUICKJS_VERSION = "0.17.0.1"
 QUICKJS_REQUIREMENT = f"quickjs-ng=={QUICKJS_VERSION}"
 
 
 def _provider_state() -> str:
-    """Never replace a provider or violate another installed package's needs."""
+    """Never replace another provider or violate another installed package's
+    needs; a quickjs-ng at another version moves to this pin."""
     versions = {}
     for name in ("quickjs", "quickjs-ng"):
         try:
@@ -28,11 +31,11 @@ def _provider_state() -> str:
             pass
     if "quickjs" in versions:
         raise ValueError("the quickjs package already owns the quickjs module")
-    if "quickjs-ng" in versions and versions["quickjs-ng"] != QUICKJS_VERSION:
-        raise ValueError("an existing quickjs-ng version must not be replaced")
     _check_consumers()
     if "quickjs-ng" in versions:
-        return "ready"
+        # Every installed package that requires quickjs-ng accepts this pin
+        # (checked above), so an older pin of this component is replaced.
+        return "ready" if versions["quickjs-ng"] == QUICKJS_VERSION else "missing"
     if importlib.util.find_spec("quickjs") is not None:
         raise ValueError("an unmanaged quickjs module is already present")
     return "missing"

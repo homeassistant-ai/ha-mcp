@@ -127,13 +127,6 @@ class ComponentCaps:
     capabilities: frozenset[str]
     limits: dict[str, Any]
     timezone: str | None = None
-    # Whether the tools entry's filesystem/YAML HA services are registered.
-    # Additive ``info`` field (2.1.0, #2292): since the server entry also
-    # registers the WS surface (#2289), caps-present no longer implies those
-    # services exist; ``None`` means a component too old to report it (where
-    # the old implication still holds — only the tools entry registered
-    # ``info`` there).
-    tools_services: bool | None = None
 
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
@@ -368,7 +361,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     except TypeError, ValueError:
         schema_version = 0
     raw_timezone = result.get("timezone")
-    raw_tools_services = result.get("tools_services")
     return ComponentCaps(
         schema_version=schema_version,
         component_version=str(result.get("component_version", "")),
@@ -377,11 +369,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         # Additive info field: a component too old to report it (or an unset
         # time_zone) leaves this None; a non-string value is ignored likewise.
         timezone=raw_timezone if isinstance(raw_timezone, str) else None,
-        # Additive info field (#2292): non-bool (including absent, on a
-        # pre-2.1.0 component) stays None.
-        tools_services=raw_tools_services
-        if isinstance(raw_tools_services, bool)
-        else None,
     )
 
 
@@ -630,6 +617,15 @@ COMPONENT_VIA_HACS = (
 # Said wherever a response is poorer for want of a component command.
 COMPONENT_INSTALL_HINT = (
     f"Install or update the ha_mcp_tools component {COMPONENT_VIA_HACS}"
+)
+
+
+# Said where a state's last_reported comes from REST rather than the component.
+REST_LAST_REPORTED_WARNING = (
+    "last_reported comes from Home Assistant's REST API, which can keep an "
+    "older time while an entity reports an unchanged state "
+    "(home-assistant/core#181392); the ha_mcp_tools component serves the live "
+    f"value. {COMPONENT_INSTALL_HINT}"
 )
 
 

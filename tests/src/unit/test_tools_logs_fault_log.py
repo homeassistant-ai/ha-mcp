@@ -20,7 +20,6 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 
-import custom_components.ha_mcp_tools as component
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -29,7 +28,6 @@ from ha_mcp.tools.log_common import DEFAULT_LOG_LIMIT
 from ha_mcp.tools.log_sources_fault import (
     FAULT_LOG_PATH,
     FAULT_LOG_WINDOW_LINES,
-    MIN_COMPONENT_VERSION_FAULT_LOG,
 )
 from ha_mcp.tools.tools_filesystem import call_mcp_tools_service
 from ha_mcp.tools.tools_logs import LogTools
@@ -286,31 +284,6 @@ class TestRecordedCrash:
 
 
 class TestFailures:
-    @pytest.mark.usefixtures("tools_entry")
-    async def test_path_not_allowed_means_component_too_old(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # A component older than MIN_COMPONENT_VERSION_FAULT_LOG: its read
-        # allowlist does not carry the fault log yet.
-        await _write_fault_log(hass, _TWO_CRASHES)
-        monkeypatch.setattr(
-            component,
-            "ALLOWED_READ_FILES",
-            [f for f in component.ALLOWED_READ_FILES if f != FAULT_LOG_PATH],
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await _get(core_client)
-
-        payload = error_body(exc_info)
-        assert payload["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-        assert MIN_COMPONENT_VERSION_FAULT_LOG in payload["error"]["message"]
-        # create_error_response spreads ``context`` beside ``error``.
-        assert payload["source"] == "fault_log"
-
     @pytest.mark.usefixtures("tools_entry")
     async def test_other_read_failure_is_service_call_failed(
         self, hass: HomeAssistant, core_client: HomeAssistantClient

@@ -40,12 +40,6 @@
     "tests/src/unit/test_helper_input_validation.py::_assert_invalid_param",
     "tests/src/unit/test_helper_registry_id_validation.py::_assert_invalid_param"
   ],
-  "16880f41f844": [
-    "tests/src/unit/test_embedded_server.py::TestImportingWorkerRegistry._isolate_env",
-    "tests/src/unit/test_embedded_server.py::TestServeBrowserLanding._isolate_env",
-    "tests/src/unit/test_embedded_server.py::TestServeLogFilters._isolate_env",
-    "tests/src/unit/test_embedded_server.py::TestServeRunningVersionCapture._isolate_env"
-  ],
   "17acad1bbaea": [
     "tests/src/unit/test_config.py::isolated_data_dir",
     "tests/src/unit/test_individual_fetch_settings.py::isolated_data_dir",
@@ -213,11 +207,6 @@
     "custom_components/ha_mcp_tools/oauth_dcr.py::bind_dcr_view",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py::bind_dcr_view"
   ],
-  "5279596c21b9": [
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::TestGetAddonLogsViaSupervisor.mock_async_client_class",
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::TestGetSystemServiceLogs.mock_async_client_class",
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::TestJournaldWindowLinesParam.mock_async_client_class"
-  ],
   "53d660951f36": [
     "tests/src/unit/test_settings_ui.py::_reset_data_dir_cache",
     "tests/src/unit/test_settings_ui_handler_selection.py::_reset_data_dir_cache"
@@ -283,10 +272,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::origin_client_id",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::origin_client_id"
   ],
-  "6aafcb28909a": [
-    "tests/src/unit/test_embedded_server.py::TestServeBrowserLanding.test_serve_tolerates_missing_browser_landing_module",
-    "tests/src/unit/test_embedded_server.py::TestServeLogFilters.test_serve_tolerates_missing_log_filters_module"
-  ],
   "6efc58b2f40e": [
     "tests/src/unit/test_set_dashboard_metadata.py::TestSetDashboardListCallDedup.mock_client",
     "tests/src/unit/test_set_dashboard_metadata.py::TestSetDashboardMetadataUpdate.mock_client",
@@ -329,10 +314,6 @@
   "7ddf78ed433f": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_fetch_pinned_cimd",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_fetch_pinned_cimd"
-  ],
-  "7e1bb324591b": [
-    "tests/src/unit/_error_log_test_helpers.py::register_and_collect",
-    "tests/src/unit/test_tools_utility_supervisor_logs.py::_register_and_collect"
   ],
   "8197824bfe64": [
     "tests/src/unit/test_error_code_consistency_1297.py::TestZoneGetMissingReturnsResourceNotFound.tools",
@@ -501,10 +482,6 @@
   "be61eddea6a0": [
     "custom_components/ha_mcp_tools/repairs.py::LegacyOAuthRestartRepairFlow.async_step_confirm",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/repairs.py::OAuthRestartRepairFlow.async_step_confirm"
-  ],
-  "c388a139837f": [
-    "tests/src/unit/test_oauth_ha_auth.py::_ChunkedContent.iter_chunked",
-    "tests/src/unit/test_webhook_proxy_oauth_unified.py::_CimdContent.iter_chunked"
   ],
   "c4eac30f49b7": [
     "tests/src/unit/test_oauth.py::TestDCRPersistence.tmp_data_dir",

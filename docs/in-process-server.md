@@ -50,7 +50,10 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Requirements
 
-Three floors apply, from the outside in:
+Only the current stable Home Assistant release is officially supported; a
+beta may be, with a fallback to stable, but that is not guaranteed. The floors
+below are technical limits, not supported versions. Three apply, from the
+outside in:
 
 - **HACS (the Marketplace from 2026.11) installs the component only on Home
   Assistant 2026.8.0 or newer** (`hacs.json`), the floor the config flow also enforces for the in-process
@@ -67,8 +70,6 @@ Older Core releases also constrain other dependencies to versions that cannot
 run current `ha-mcp` servers.
 
 ## Setup
-
-The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
 
 In the navigation paths below, older installed releases use **HA-MCP Custom
 Component** where the new release uses **HA-MCP — Manage Home Assistant with AI**.
@@ -304,8 +305,9 @@ restarts the server in place, with no Home Assistant restart. Clear the field to
 return to the server this component release installed. Home Assistant puts the
 paired server back each time it starts, so with an override set, every Home
 Assistant restart installs the override again afterwards (this needs network
-access at startup). Updating to version 9.0.0 clears an override saved before
-it, once, so the update runs the server it pins.
+access at startup). An override stays across updates until you clear the field;
+only one saved under a much older release is cleared, once, by updating to the
+current stable release.
 
 `ha-mcp` and `ha-mcp-dev` share the same import package. When the pin or an
 override installs one of them while the other is present, the other is
@@ -444,7 +446,7 @@ The in-process server offers three authentication postures, chosen with the
   silently granted admin-equivalent control. There is no separate password or
   credential to manage — it is your existing Home Assistant admin login.
 - **`legacy`: a self-hosted OAuth server with a static Client ID + Secret.** For
-  clients that need a credential to paste (as of 2.0.0, `ha_auth` also serves
+  clients that need a credential to paste (`ha_auth` also serves
   Google Gemini Spark and GitHub Copilot CLI, so this is a fallback). The
   component runs its own OAuth 2.1 authorization server at the
   Home Assistant root and issues a static **Client ID / Client Secret** to paste

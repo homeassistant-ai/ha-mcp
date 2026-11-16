@@ -194,54 +194,35 @@ module = [
     "tests.src.unit.test_backup_access",
     "tests.src.unit.test_backup_diff",
     "tests.src.unit.test_backup_integrations",
-    "tests.src.unit.test_backup_manager",
-    "tests.src.unit.test_backup_restore_consumers",
     "tests.src.unit.test_backup_snapshot",
     "tests.src.unit.test_backup_snapshot_restore",
-    "tests.src.unit.test_backup_todo",
     "tests.src.unit.test_build_skill_content",
     "tests.src.unit.test_bulk_device_control",
     "tests.src.unit.test_bulk_selector",
     "tests.src.unit.test_call_service_ws_command",
-    "tests.src.unit.test_caller_token_auth",
-    "tests.src.unit.test_card_definitions",
-    "tests.src.unit.test_card_review_round6",
     "tests.src.unit.test_component_api",
-    "tests.src.unit.test_config_flow",
-    "tests.src.unit.test_config_flow_server",
     "tests.src.unit.test_dashboard_edit_routing",
     "tests.src.unit.test_dashboard_screenshot_theme_guard",
     "tests.src.unit.test_e2e_failure_diagnostics",
     "tests.src.unit.test_e2e_lane_env_shape",
     "tests.src.unit.test_e2e_session_fixture_cleanup",
-    "tests.src.unit.test_embedded_server",
-    "tests.src.unit.test_embedded_setup",
-    "tests.src.unit.test_embedded_version_dist",
     "tests.src.unit.test_embedded_worker_teardown_2127",
-    "tests.src.unit.test_entity_backup_component",
     "tests.src.unit.test_entity_expose_changed",
     "tests.src.unit.test_extract_tools_field_info",
     "tests.src.unit.test_ha_call_event",
-    "tests.src.unit.test_ha_mcp_server_entry",
     "tests.src.unit.test_ha_search_merge",
     "tests.src.unit.test_hacs_actions",
     "tests.src.unit.test_hacs_repo_registration",
     "tests.src.unit.test_haos_supervisor_wait",
-    "tests.src.unit.test_helper_flows",
     "tests.src.unit.test_helper_input_validation",
     "tests.src.unit.test_http_transport_options",
     "tests.src.unit.test_integration_reconfigure",
     "tests.src.unit.test_listen_sockets",
-    "tests.src.unit.test_llm_api",
     "tests.src.unit.test_llm_api_probe",
-    "tests.src.unit.test_mcp_webhook",
     "tests.src.unit.test_oauth",
-    "tests.src.unit.test_oauth_autoapprove",
     "tests.src.unit.test_oauth_consent_binding",
     "tests.src.unit.test_oauth_core_forward_tls",
-    "tests.src.unit.test_oauth_dcr",
     "tests.src.unit.test_oauth_ha_auth",
-    "tests.src.unit.test_oauth_legacy_component",
     "tests.src.unit.test_oidc_compat",
     "tests.src.unit.test_overview_system_info",
     "tests.src.unit.test_performance_parallelization",
@@ -273,24 +254,17 @@ module = [
     "tests.src.unit.test_tools_config_scenes",
     "tests.src.unit.test_tools_config_scripts",
     "tests.src.unit.test_tools_entities",
-    "tests.src.unit.test_tools_entry_lifecycle",
-    "tests.src.unit.test_tools_filesystem",
     "tests.src.unit.test_tools_get_states",
     "tests.src.unit.test_tools_integrations",
-    "tests.src.unit.test_tools_resources_patch",
     "tests.src.unit.test_tools_system",
     "tests.src.unit.test_tools_todo",
     "tests.src.unit.test_tools_todo_bridge",
     "tests.src.unit.test_tools_utility_error_log_records",
-    "tests.src.unit.test_tools_utility_error_log_structured",
-    "tests.src.unit.test_tools_utility_supervisor_logs",
     "tests.src.unit.test_translate_locales",
-    "tests.src.unit.test_ui_panel",
     "tests.src.unit.test_usage_logger",
     "tests.src.unit.test_validation_middleware",
     "tests.src.unit.test_webhook_proxy_dev_isolation",
     "tests.src.unit.test_webhook_proxy_liveness",
-    "tests.src.unit.test_webhook_proxy_oauth_unified",
     "tests.src.unit.test_webhook_proxy_sync",
     "tests.src.unit.test_websocket_client",
     "tests.src.unit.test_ws_degraders_warn",
@@ -579,7 +553,10 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-timeout>=2.3.0",
     # Exercise the component's real sandbox thread affinity in focused unit tests.
-    "quickjs-ng==0.17.0.2",
+    # The version the component installs (card_runtime.QUICKJS_VERSION);
+    # Renovate moves both together (renovate.json).
+    # renovate: datasource=pypi depName=quickjs-ng
+    "quickjs-ng==0.17.0.1",
     "pytest-rerunfailures>=15.0",
     # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts
     # the REAL tool-schema catalog exactly like llm_api.py does at runtime.
@@ -643,12 +620,14 @@ hamcp-test-env = { path = "tests/test-env", editable = true }
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 # The HACS component shares the server's version and pins the server build it
-# ships with, so each release commit stamps all three below as well as
+# ships with, and the server's file and YAML tools need the component of its
+# own release, so each release commit stamps all four below as well as
 # project.version (#2427).
 version_variables = [
     "custom_components/ha_mcp_tools/manifest.json:version",
     "custom_components/ha_mcp_tools/manifest.json:ha-mcp",
     "custom_components/ha_mcp_tools/const.py:COMPONENT_VERSION",
+    "src/ha_mcp/tools/tools_filesystem.py:MIN_COMPONENT_VERSION",
 ]
 build_command = """
 pip install uv && uv lock

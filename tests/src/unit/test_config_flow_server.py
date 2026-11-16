@@ -1,606 +1,329 @@
-"""Server-entry setup and the options added for the HACS review (#2427).
+"""The server entry's setup flow (#2427) and the options flow each entry type gets.
 
-Split from test_config_flow.py, whose flow fakes and Home Assistant stubs it
-reuses.
+Every step runs through Core's flow managers, with real accounts and long-lived
+tokens in Core's auth. The in-process server itself is replaced, since a
+created entry is set up the moment the flow finishes.
 """
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
+from homeassistant.auth.models import User
+from homeassistant.auth.providers.homeassistant import HassAuthProvider
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
+from pytest_homeassistant.common import MockConfigEntry
 
-from .test_config_flow import _make_flow, _make_options_flow, cf, const
+from custom_components.ha_mcp_tools.config_flow import (
+    REMOTE_ACCESS_DISABLED,
+    SETUP_ADMIN_TOKEN,
+    SETUP_REMOTE_ACCESS,
+)
+from custom_components.ha_mcp_tools.const import (
+    BIND_HOST_ALL,
+    BIND_HOST_LOOPBACK,
+    CONF_ENTRY_TYPE,
+    DATA_ADMIN_TOKEN,
+    DATA_ISSUED_TOKEN_ID,
+    DOMAIN,
+    ENTRY_TYPE_SERVER,
+    ENTRY_TYPE_TOOLS,
+    OPT_BIND_HOST,
+    OPT_ENABLE_WEBHOOK,
+    OPT_WEBHOOK_AUTH,
+    SERVER_ENTRY_TITLE,
+    WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_LEGACY,
+    WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.server_credentials import (
+    ADMIN_PASSWORD,
+    ADMIN_USERNAME,
+)
+
+from ._config_flow_core import (
+    FlowResultDict,
+    add_local_account,
+    add_tools_entry,
+    long_lived_token,
+    schema_markers,
+    start_entry_type_flow,
+    start_options_flow,
+    submit_config_step,
+)
+from ._server_entry import add_server_entry, replace_server
 
 
-class TestServerBranch:
-    TOKEN = "admin-llat"
+@pytest.fixture(autouse=True)
+def server(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """A finished setup flow sets the entry up; no server starts."""
+    return replace_server(monkeypatch)
 
-    @pytest.fixture(autouse=True)
-    def _token_check(self, monkeypatch):
-        # Accept TOKEN; anything else is refused the way Home Assistant would.
-        self.checked: list[str] = []
 
-        def problem(_hass, token):
-            self.checked.append(token)
-            return None if token == self.TOKEN else "invalid_token"
+@pytest.fixture
+async def admin_token(hass: HomeAssistant, hass_admin_user: User) -> str:
+    """A long-lived token of an administrator: what the form asks to be pasted."""
+    return await long_lived_token(hass, hass_admin_user)
 
-        monkeypatch.setattr(cf.server_credentials, "token_problem", problem)
 
-    def test_server_step_shows_confirm_form(self):
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "server"
+async def _setup(
+    hass: HomeAssistant, user_input: dict[str, Any]
+) -> tuple[str, FlowResultDict]:
+    """Open the server form and submit ``user_input``; the form's id and the result."""
+    form = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    return form["flow_id"], await submit_config_step(hass, form["flow_id"], user_input)
 
-    def _defaults(self, form) -> dict:
-        values = {
-            marker.schema: marker.default()
-            for marker in form["data_schema"].schema
-            if marker.schema
-            not in (
-                cf.SETUP_ADMIN_TOKEN,
-                cf.server_credentials.ADMIN_USERNAME,
-                cf.server_credentials.ADMIN_PASSWORD,
-            )
-        }
-        return {**values, cf.SETUP_ADMIN_TOKEN: self.TOKEN}
 
-    def test_new_install_defaults_to_no_webhook_and_loopback_only(self):
-        # #2427 (HACS review): a fresh install exposes nothing beyond the Home
-        # Assistant machine until the admin chooses otherwise during setup.
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        defaults = self._defaults(form)
+def saved_options(hass: HomeAssistant) -> dict[str, Any]:
+    """The options of the one entry the setup flow created."""
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    return dict(entry.options)
 
-        entry = asyncio.run(flow.async_step_server(defaults))
 
-        assert entry["type"] == "entry"
-        assert entry["title"] == cf.SERVER_ENTRY_TITLE
-        assert entry["data"][const.CONF_ENTRY_TYPE] == const.ENTRY_TYPE_SERVER
-        assert entry["options"][const.OPT_ENABLE_WEBHOOK] is False
-        assert entry["options"][const.OPT_BIND_HOST] == const.BIND_HOST_LOOPBACK
+async def test_server_branch_shows_the_setup_form(hass: HomeAssistant) -> None:
+    """Choosing the server asks for the account, remote access and network access."""
+    form = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
 
-    def test_new_install_options_are_saved_not_inherited(self):
-        # Seeding them keeps later default changes from moving this entry, and
-        # leaves entries created before this change on the defaults they had.
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        entry = asyncio.run(flow.async_step_server(self._defaults(form)))
-        assert {
-            const.OPT_ENABLE_WEBHOOK,
-            const.OPT_WEBHOOK_AUTH,
-            const.OPT_BIND_HOST,
-        } <= set(entry["options"])
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == "server"
+    assert set(schema_markers(form)) == {
+        SETUP_ADMIN_TOKEN,
+        ADMIN_USERNAME,
+        ADMIN_PASSWORD,
+        SETUP_REMOTE_ACCESS,
+        OPT_BIND_HOST,
+    }
 
-    @pytest.mark.parametrize(
-        "mode",
-        [const.WEBHOOK_AUTH_NONE, const.WEBHOOK_AUTH_HA, const.WEBHOOK_AUTH_LEGACY],
+
+async def test_new_install_defaults_to_no_webhook_and_loopback_only(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """#2427: a fresh install exposes nothing beyond the Home Assistant machine."""
+    _, created = await _setup(hass, {SETUP_ADMIN_TOKEN: admin_token})
+
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+    assert created["title"] == SERVER_ENTRY_TITLE
+    assert created["data"][CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER
+    options = saved_options(hass)
+    assert options[OPT_ENABLE_WEBHOOK] is False
+    assert options[OPT_BIND_HOST] == BIND_HOST_LOOPBACK
+
+
+async def test_new_install_options_are_saved_not_inherited(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """Saved choices keep later default changes from moving this entry."""
+    await _setup(hass, {SETUP_ADMIN_TOKEN: admin_token})
+
+    assert {OPT_ENABLE_WEBHOOK, OPT_WEBHOOK_AUTH, OPT_BIND_HOST} <= set(
+        saved_options(hass)
     )
-    def test_choosing_remote_access_enables_the_webhook_with_that_auth(self, mode):
-        flow = _make_flow()
-        entry = asyncio.run(
-            flow.async_step_server(
-                {
-                    cf.SETUP_REMOTE_ACCESS: mode,
-                    const.OPT_BIND_HOST: const.BIND_HOST_ALL,
-                    cf.SETUP_ADMIN_TOKEN: self.TOKEN,
-                }
-            )
-        )
-        assert entry["options"][const.OPT_ENABLE_WEBHOOK] is True
-        assert entry["options"][const.OPT_WEBHOOK_AUTH] == mode
-        assert entry["options"][const.OPT_BIND_HOST] == const.BIND_HOST_ALL
-
-    def test_disabled_remote_access_keeps_ha_sign_in_for_a_later_enable(self):
-        # Turning the webhook on later in Configure must not land on the
-        # secret-URL mode by default.
-        flow = _make_flow()
-        entry = asyncio.run(
-            flow.async_step_server(
-                {
-                    cf.SETUP_REMOTE_ACCESS: cf.REMOTE_ACCESS_DISABLED,
-                    const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
-                    cf.SETUP_ADMIN_TOKEN: self.TOKEN,
-                }
-            )
-        )
-        assert entry["options"][const.OPT_WEBHOOK_AUTH] == const.WEBHOOK_AUTH_HA
-
-    def test_the_server_runs_with_the_administrators_token(self):
-        # #2427: setup no longer creates an administrator account for itself.
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        values = {**self._defaults(form), cf.SETUP_ADMIN_TOKEN: f" {self.TOKEN} "}
-
-        entry = asyncio.run(flow.async_step_server(values))
-
-        assert entry["data"][const.DATA_ADMIN_TOKEN] == self.TOKEN
-
-    def test_an_unusable_token_keeps_the_form_open(self):
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        values = {**self._defaults(form), cf.SETUP_ADMIN_TOKEN: "wrong"}
-
-        result = asyncio.run(flow.async_step_server(values))
-
-        assert result["type"] == "form"
-        assert result["errors"] == {cf.SETUP_ADMIN_TOKEN: "invalid_token"}
-
-    def test_an_accounts_login_sets_up_the_server_without_a_pasted_token(
-        self, monkeypatch
-    ):
-        # #2427: the token is issued for the account; its id is kept so a
-        # switch or the entry's removal revokes it.
-        issue = AsyncMock(return_value=("issued-tok", "i1"))
-        monkeypatch.setattr(cf.server_credentials, "async_credential_from_input", issue)
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        values = {
-            **self._defaults(form),
-            cf.SETUP_ADMIN_TOKEN: "",
-            cf.server_credentials.ADMIN_USERNAME: " ha-mcp ",
-            cf.server_credentials.ADMIN_PASSWORD: "pw",
-        }
-
-        entry = asyncio.run(flow.async_step_server(values))
-
-        assert issue.await_args.kwargs == {
-            "token": "",
-            "username": "ha-mcp",
-            "password": "pw",
-        }
-        assert entry["data"][const.DATA_ADMIN_TOKEN] == "issued-tok"
-        assert entry["data"][const.DATA_ISSUED_TOKEN_ID] == "i1"
-        assert cf.server_credentials.ADMIN_PASSWORD not in entry["options"]
-
-    def test_a_setup_that_lost_the_race_revokes_the_token_it_issued(
-        self, monkeypatch
-    ) -> None:
-        # Two setups with two accounts: the other one created the entry while
-        # this one's login was checked, so its issued token has no entry.
-        class _AlreadyConfigured(Exception):
-            pass
-
-        monkeypatch.setattr(
-            cf.server_credentials,
-            "async_credential_from_input",
-            AsyncMock(return_value=("issued-tok", "i1")),
-        )
-        release = AsyncMock()
-        monkeypatch.setattr(cf.server_credentials, "async_release_credentials", release)
-        flow = _make_flow()
-        flow._abort_if_unique_id_configured.side_effect = [None, _AlreadyConfigured()]
-        values = {
-            cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
-            cf.server_credentials.ADMIN_PASSWORD: "pw",
-        }
-
-        with pytest.raises(_AlreadyConfigured):
-            asyncio.run(flow.async_step_server(values))
-
-        release.assert_awaited_once_with(flow.hass, {const.DATA_ISSUED_TOKEN_ID: "i1"})
-        flow.async_create_entry.assert_not_called()
-
-    def test_a_refused_login_keeps_the_form_open(self, monkeypatch):
-        monkeypatch.setattr(
-            cf.server_credentials,
-            "async_credential_from_input",
-            AsyncMock(
-                side_effect=cf.server_credentials.CredentialRefused("invalid_login")
-            ),
-        )
-        flow = _make_flow()
-        form = asyncio.run(flow.async_step_server(None))
-        values = {
-            **self._defaults(form),
-            cf.SETUP_ADMIN_TOKEN: "",
-            cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
-            cf.server_credentials.ADMIN_PASSWORD: "bad",
-        }
-
-        result = asyncio.run(flow.async_step_server(values))
-
-        assert result["errors"] == {"base": "invalid_login"}
-
-    def test_an_abandoned_setup_does_not_block_a_new_one(self):
-        # A setup dialog that never aborts (tab closed mid-setup) stays open
-        # until Home Assistant restarts. Home Assistant aborts any new flow
-        # that claims the same unique id with raise_on_progress left on.
-        flow = _make_flow()
-
-        async def claim(unique_id, *, raise_on_progress=True):
-            if raise_on_progress:
-                raise RuntimeError("already_in_progress")
-
-        flow.async_set_unique_id = claim
-
-        form = asyncio.run(flow.async_step_server(None))
-
-        assert form["type"] == "form"
-
-    def test_server_refuses_a_second_entry_on_every_submit(self):
-        # Two open dialogs may both reach submit; the second must abort rather
-        # than let Home Assistant replace the first entry.
-        class _AlreadyConfigured(Exception):
-            pass
-
-        flow = _make_flow()
-        # The first dialog's entry exists by the time this one submits.
-        flow._abort_if_unique_id_configured.side_effect = _AlreadyConfigured
-        values = {cf.SETUP_ADMIN_TOKEN: self.TOKEN}
-        with pytest.raises(_AlreadyConfigured):
-            asyncio.run(flow.async_step_server(values))
-        flow.async_create_entry.assert_not_called()
-
-    def test_server_uses_distinct_unique_id(self):
-        flow = _make_flow()
-        asyncio.run(flow.async_step_server(None))
-        assert flow.async_set_unique_id.await_args.args == (cf._SERVER_UNIQUE_ID,)
-        # Distinct from the tools entry's unique id so both can coexist.
-        assert cf._SERVER_UNIQUE_ID != const.DOMAIN
-
-    def test_server_aborts_on_unsupported_home_assistant(self, monkeypatch):
-        monkeypatch.setattr(cf, "HA_VERSION", "2025.9.4")
-        flow = _make_flow()
-
-        result = asyncio.run(flow.async_step_server(None))
-
-        assert result["type"] == "abort"
-        assert result["reason"] == "unsupported_home_assistant"
-        assert result["description_placeholders"] == {
-            "installed": "2025.9.4",
-            "required": "2026.8.0",
-        }
-        flow.async_set_unique_id.assert_not_awaited()
-
-
-class TestOAuthCallbackAllowlistOption:
-    """The Configure screen edits the none-mode callback allowlist (#2427)."""
-
-    CALLBACK = "https://chatgpt.example/cb"
-
-    def _suggested(self, form):
-        marker = next(
-            m
-            for m in form["data_schema"].schema
-            if m.schema == const.OPT_OAUTH_REDIRECT_ALLOWLIST
-        )
-        return marker.description["suggested_value"]
-
-    def test_an_unedited_entry_shows_the_default_list(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        assert self._suggested(form) == list(const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
-
-    def test_saves_the_entered_callbacks(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: [f" {self.CALLBACK} "]}
-            )
-        )
-        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == [self.CALLBACK]
-
-    def test_an_unusable_callback_blocks_the_save(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["http://not-loopback/cb"]}
-            )
-        )
-        assert result["errors"] == {
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST: "invalid_oauth_callback"
-        }
-        # With several callbacks listed, the error names the one to fix.
-        assert result["description_placeholders"]["invalid_callbacks"] == (
-            "http://not-loopback/cb"
-        )
-
-    def test_more_callbacks_than_the_cap_block_the_save(self):
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        many = [f"{self.CALLBACK}{n}" for n in range(const.MAX_OAUTH_CALLBACKS + 1)]
-        result = asyncio.run(
-            flow.async_step_init({const.OPT_OAUTH_REDIRECT_ALLOWLIST: many})
-        )
-        assert result["errors"] == {
-            const.OPT_OAUTH_REDIRECT_ALLOWLIST: "too_many_oauth_callbacks"
-        }
-
-    def test_saving_the_untouched_default_keeps_following_it(self):
-        # Pinning the default would hide callbacks a later release adds to it.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    const.OPT_OAUTH_REDIRECT_ALLOWLIST: list(
-                        const.DEFAULT_OAUTH_REDIRECT_ALLOWLIST
-                    )
-                }
-            )
-        )
-        assert const.OPT_OAUTH_REDIRECT_ALLOWLIST not in result["data"]
-
-    def test_a_configure_save_that_changes_only_the_list_needs_no_reload(self):
-        # The frontend resubmits every field; with only the list changed, the
-        # update listener must see no reload-relevant difference (#2427).
-        import custom_components.ha_mcp_tools.embedded_entry as entry_mod
-
-        first = asyncio.run(
-            _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"}).async_step_init(
-                {const.OPT_OAUTH_REDIRECT_ALLOWLIST: [self.CALLBACK]}
-            )
-        )["data"]
-        second = asyncio.run(
-            _make_options_flow(
-                options=first, data={const.DATA_WEBHOOK_ID: "mcp_abc"}
-            ).async_step_init(
-                {
-                    **first,
-                    const.OPT_OAUTH_REDIRECT_ALLOWLIST: ["https://other.example/cb"],
-                }
-            )
-        )["data"]
-        assert second != first
-        assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
-
-    def test_the_allow_any_switch_saves_without_a_reload(self) -> None:
-        # Read per request like the list, so turning it on needs no reload.
-        import custom_components.ha_mcp_tools.embedded_entry as entry_mod
-
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        first = asyncio.run(flow.async_step_init({}))["data"]
-        flow = _make_options_flow(
-            options=first, data={const.DATA_WEBHOOK_ID: "mcp_abc"}
-        )
-        second = asyncio.run(
-            flow.async_step_init({**first, const.OPT_OAUTH_ALLOW_ANY_CALLBACK: True})
-        )["data"]
-        assert second[const.OPT_OAUTH_ALLOW_ANY_CALLBACK] is True
-        assert entry_mod._reload_relevant(second) == entry_mod._reload_relevant(first)
-
-    def test_removing_every_callback_sticks(self):
-        # Home Assistant's frontend omits an emptied optional field.
-        flow = _make_options_flow(
-            options={const.OPT_OAUTH_REDIRECT_ALLOWLIST: [self.CALLBACK]},
-            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
-        )
-        result = asyncio.run(flow.async_step_init({}))
-        assert result["data"][const.OPT_OAUTH_REDIRECT_ALLOWLIST] == []
-
-
-class TestAdminTokenReplacement:
-    """Configure replaces the server's administrator token (#2427)."""
-
-    @pytest.fixture(autouse=True)
-    def _token_check(self, monkeypatch):
-        monkeypatch.setattr(
-            cf.server_credentials,
-            "token_problem",
-            lambda _hass, token: None if token == "good" else "token_not_admin",
-        )
-
-    def _marker(self, form):
-        return next(
-            m
-            for m in form["data_schema"].schema
-            if m.schema == const.OPT_ADMIN_TOKEN_REPLACEMENT
-        )
-
-    def test_the_login_fields_never_offer_a_saved_login(self) -> None:
-        # A browser would autofill the administrator's own saved login, which
-        # must never go there; a filled login also switches the server's account.
-        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-        form = asyncio.run(flow.async_step_init(None))
-        fields = {m.schema: v for m, v in form["data_schema"].schema.items()}
-        assert (
-            fields[cf.server_credentials.ADMIN_USERNAME].config["autocomplete"] == "off"
-        )
-        assert fields[cf.server_credentials.ADMIN_PASSWORD].config["autocomplete"] == (
-            "new-password"
-        )
-
-    def test_the_stored_token_is_never_shown(self):
-        flow = _make_options_flow(
-            options={const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"},
-            data={const.DATA_ADMIN_TOKEN: "secret"},
-        )
-        form = asyncio.run(flow.async_step_init(None))
-        assert not (self._marker(form).description or {}).get("suggested_value")
-
-    def _token_flow(self, options=None):
-        return _make_options_flow(options=options, data={"webhook_id": "w"})
-
-    def test_a_working_token_goes_into_the_entry_data_not_the_options(self):
-        # config_entries/get returns the options, so the token must never
-        # pass through them.
-        flow = self._token_flow()
-        result = asyncio.run(
-            flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: " good "})
-        )
-        assert const.OPT_ADMIN_TOKEN_REPLACEMENT not in result["data"]
-        update = flow.hass.config_entries.async_update_entry.call_args
-        assert update.kwargs["data"] == {"webhook_id": "w", "admin_token": "good"}
-
-    def test_a_token_only_save_restarts_the_server_with_it(self):
-        # Unchanged options do not reload the entry by themselves.
-        saved = asyncio.run(self._token_flow().async_step_init({}))["data"]
-        flow = self._token_flow(options=saved)
-        asyncio.run(flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"}))
-        flow.hass.config_entries.async_schedule_reload.assert_called_once_with("srv1")
-
-    def test_a_save_that_changes_options_leaves_the_reload_to_the_listener(self):
-        flow = self._token_flow()
-        asyncio.run(flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "good"}))
-        flow.hass.config_entries.async_schedule_reload.assert_not_called()
-
-    def test_an_unusable_token_blocks_the_save(self):
-        flow = _make_options_flow()
-        result = asyncio.run(
-            flow.async_step_init({const.OPT_ADMIN_TOKEN_REPLACEMENT: "bad"})
-        )
-        assert result["errors"] == {
-            const.OPT_ADMIN_TOKEN_REPLACEMENT: "token_not_admin"
-        }
-
-    def test_an_accounts_login_switches_the_server_and_is_never_stored(
-        self, monkeypatch
-    ):
-        monkeypatch.setattr(
-            cf.server_credentials,
-            "async_credential_from_input",
-            AsyncMock(return_value=("issued-tok", "i1")),
-        )
-        flow = self._token_flow()
-        result = asyncio.run(
-            flow.async_step_init(
-                {
-                    cf.server_credentials.ADMIN_USERNAME: "ha-mcp",
-                    cf.server_credentials.ADMIN_PASSWORD: "pw",
-                }
-            )
-        )
-        assert cf.server_credentials.ADMIN_USERNAME not in result["data"]
-        assert cf.server_credentials.ADMIN_PASSWORD not in result["data"]
-        update = flow.hass.config_entries.async_update_entry.call_args
-        assert update.kwargs["data"] == {
-            "webhook_id": "w",
-            "admin_token": "issued-tok",
-            "issued_token_id": "i1",
-        }
-
-    def test_leaving_it_empty_keeps_the_current_token(self):
-        flow = _make_options_flow()
-        result = asyncio.run(flow.async_step_init({}))
-        assert const.OPT_ADMIN_TOKEN_REPLACEMENT not in result["data"]
-
-
-class TestOptionsFlowDispatch:
-    def test_server_entry_gets_server_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_SERVER})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpServerOptionsFlow)
-
-    def test_tools_entry_gets_info_options_flow(self):
-        entry = SimpleNamespace(data={const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-
-    def test_missing_entry_type_defaults_to_info_options(self):
-        # A pre-existing (pre-fold) tools entry carries no entry_type key; it must
-        # be treated as "tools", so it gets the informational tools flow, never
-        # the server options flow.
-        entry = SimpleNamespace(data={})
-        result = cf.HaMcpToolsConfigFlow.async_get_options_flow(entry)
-        assert isinstance(result, cf.HaMcpToolsInfoOptionsFlow)
-        assert not isinstance(result, cf.HaMcpServerOptionsFlow)
-
-
-class TestOAuthCredsHint:
-    """All three branches of the admin-only credentials hint on the options
-    form (review gap: zero coverage on any of them)."""
-
-    def test_non_legacy_mode_points_at_the_mode_selector(self) -> None:
-        # Stored credentials from an earlier legacy period must not show
-        # while another mode is configured; only the select-mode hint does.
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
-                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
-            },
-        )
-        common = {**cf._COMMON_FALLBACKS, "oauth_select_legacy_mode": "<pick>"}
-        assert flow._oauth_creds_hint(common) == "<pick>"
-
-    def test_legacy_mode_before_minting_says_appear_after_start(self) -> None:
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY}
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "once the server" in hint
-
-    def test_legacy_mode_live_creds_shows_values_without_caveat(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Bound AND live (post-restart steady state): no restart caveat.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
-        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: False)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
-                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-abc" in hint
-        assert "Client Secret: s3cr3t" in hint
-        assert "not serving these yet" not in hint
-
-    def test_legacy_mode_first_enable_carries_not_live_caveat(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Review finding: mid-session first enable binds the current identity
-        # (active True) but /authorize is not live until the restart -- the
-        # hint must caveat, matching the startup log's first-enable branch.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: True)
-        monkeypatch.setattr(cf, "_legacy_restart_pending", lambda *a: True)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-abc",
-                const.DATA_OAUTH_CLIENT_SECRET: "s3cr3t",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-abc" in hint
-        assert "not serving these yet" in hint
-
-    def test_legacy_mode_pending_rotation_carries_restart_caveat(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Review finding on #1880: after a rotation, entry.data updates
-        # immediately but the bound views keep the previous identity until
-        # restart -- the hint must say the shown values do not work yet.
-        monkeypatch.setattr(cf, "_legacy_credentials_active", lambda *a: False)
-        flow = _make_options_flow(
-            options={const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_LEGACY},
-            data={
-                const.DATA_OAUTH_CLIENT_ID: "hamcp-new",
-                const.DATA_OAUTH_CLIENT_SECRET: "new-secret",
-            },
-        )
-        hint = flow._oauth_creds_hint(cf._COMMON_FALLBACKS)
-        assert "Client ID: hamcp-new" in hint
-        assert "Client Secret: new-secret" in hint
-        assert "not serving these yet" in hint
-        assert "restart" in hint
 
 
 @pytest.mark.parametrize(
-    ("options", "expected"),
-    [
-        ({}, "ha-mcp-dev==9.0.0.dev3"),
-        ({const.OPT_PIP_SPEC: "acme-ha-mcp==1.0"}, "acme-ha-mcp==1.0"),
-    ],
-    ids=["pre-release-pin", "override"],
+    "mode", [WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY]
 )
-def test_the_version_line_reads_what_the_server_runs(monkeypatch, options, expected):
-    # #2787: the form reads the version as bring-up does, so an ha-mcp left
-    # beside the pre-release pin or an override cannot mask it.
-    from unittest.mock import MagicMock
-
-    flow = _make_options_flow(options=options, data={const.DATA_WEBHOOK_ID: "mcp_abc"})
-    flow.hass = MagicMock()
-    flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
-    integration = SimpleNamespace(requirements=["ha-mcp-dev==9.0.0.dev3"], version="9")
-    monkeypatch.setattr(
-        cf, "async_get_integration", AsyncMock(return_value=integration)
+async def test_choosing_remote_access_enables_the_webhook_with_that_auth(
+    hass: HomeAssistant, admin_token: str, mode: str
+) -> None:
+    """Each remote-access choice turns the webhook on with that sign-in mode."""
+    await _setup(
+        hass,
+        {
+            SETUP_REMOTE_ACCESS: mode,
+            OPT_BIND_HOST: BIND_HOST_ALL,
+            SETUP_ADMIN_TOKEN: admin_token,
+        },
     )
-    read: list[str] = []
-    monkeypatch.setattr(cf, "_installed_server_version", read.append)
-    asyncio.run(flow.async_step_init(None))
-    assert read == [expected]
+
+    options = saved_options(hass)
+    assert options[OPT_ENABLE_WEBHOOK] is True
+    assert options[OPT_WEBHOOK_AUTH] == mode
+    assert options[OPT_BIND_HOST] == BIND_HOST_ALL
+
+
+async def test_disabled_remote_access_keeps_ha_sign_in_for_a_later_enable(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """Turning the webhook on later in Configure must not land on the secret-URL mode."""
+    await _setup(
+        hass,
+        {SETUP_REMOTE_ACCESS: REMOTE_ACCESS_DISABLED, SETUP_ADMIN_TOKEN: admin_token},
+    )
+
+    options = saved_options(hass)
+    assert options[OPT_ENABLE_WEBHOOK] is False
+    assert options[OPT_WEBHOOK_AUTH] == WEBHOOK_AUTH_HA
+
+
+async def test_the_server_runs_with_the_administrators_token(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """#2427: setup makes no account for itself; the pasted token is what it keeps."""
+    _, created = await _setup(hass, {SETUP_ADMIN_TOKEN: f" {admin_token} "})
+
+    assert created["data"][DATA_ADMIN_TOKEN] == admin_token
+
+
+@pytest.mark.parametrize("who", ["unknown", "non-admin"])
+async def test_an_unusable_token_keeps_the_form_open(
+    hass: HomeAssistant, hass_read_only_user: User, who: str
+) -> None:
+    """A token Core does not accept, or one without administrator rights, is refused."""
+    token = (
+        await long_lived_token(hass, hass_read_only_user)
+        if who == "non-admin"
+        else "wrong"
+    )
+
+    _, result = await _setup(hass, {SETUP_ADMIN_TOKEN: token})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {
+        SETUP_ADMIN_TOKEN: "token_not_admin" if who == "non-admin" else "invalid_token"
+    }
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+async def test_an_accounts_login_sets_up_the_server_without_a_pasted_token(
+    hass: HomeAssistant, local_auth: HassAuthProvider
+) -> None:
+    """#2427: the token is issued for the account; its id is kept so a switch or
+    the entry's removal revokes it."""
+    account = await add_local_account(hass, local_auth, "ha-mcp", "pw")
+
+    _, created = await _setup(hass, {ADMIN_USERNAME: " ha-mcp ", ADMIN_PASSWORD: "pw"})
+
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+    issued = hass.auth.async_validate_access_token(created["data"][DATA_ADMIN_TOKEN])
+    assert issued is not None
+    assert issued.user.id == account.id
+    assert created["data"][DATA_ISSUED_TOKEN_ID] == issued.id
+    assert ADMIN_PASSWORD not in saved_options(hass)
+
+
+@pytest.mark.parametrize("fault", ["wrong-password", "not-local-only"])
+async def test_a_refused_login_keeps_the_form_open_and_issues_nothing(
+    hass: HomeAssistant, local_auth: HassAuthProvider, fault: str
+) -> None:
+    """A bad password or an account reachable from outside the network is refused."""
+    account = await add_local_account(
+        hass, local_auth, "ha-mcp", "pw", local_only=fault != "not-local-only"
+    )
+
+    _, result = await _setup(
+        hass,
+        {
+            ADMIN_USERNAME: "ha-mcp",
+            ADMIN_PASSWORD: "bad" if fault == "wrong-password" else "pw",
+        },
+    )
+
+    assert result["errors"] == {"base": "invalid_login"}
+    assert account.refresh_tokens == {}
+
+
+async def test_a_setup_that_lost_the_race_revokes_the_token_it_issued(
+    hass: HomeAssistant,
+    local_auth: HassAuthProvider,
+    admin_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two setups, two accounts: the other finished while this login was checked,
+    so the token issued for this one must not outlive its refusal."""
+    account = await add_local_account(hass, local_auth, "ha-mcp", "pw")
+    form = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    other = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    check_login = local_auth.async_validate_login
+
+    async def other_setup_finishes_first(username: str, password: str) -> None:
+        await submit_config_step(
+            hass, other["flow_id"], {SETUP_ADMIN_TOKEN: admin_token}
+        )
+        await check_login(username, password)
+
+    monkeypatch.setattr(local_auth, "async_validate_login", other_setup_finishes_first)
+
+    result = await submit_config_step(
+        hass, form["flow_id"], {ADMIN_USERNAME: "ha-mcp", ADMIN_PASSWORD: "pw"}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert account.refresh_tokens == {}
+
+
+async def test_an_abandoned_setup_does_not_block_a_new_one(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """A dialog closed mid-setup stays open until restart; a new setup still opens
+    and finishes."""
+    await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+
+    _, created = await _setup(hass, {SETUP_ADMIN_TOKEN: admin_token})
+
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_a_second_server_entry_is_refused(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """The server entry is single-instance: a setup begun after one exists aborts,
+    and the dialog left open beside the finished one is closed by Core."""
+    first = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    beside = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+    await submit_config_step(hass, first["flow_id"], {SETUP_ADMIN_TOKEN: admin_token})
+
+    later = await start_entry_type_flow(hass, ENTRY_TYPE_SERVER)
+
+    assert later["type"] is FlowResultType.ABORT
+    assert later["reason"] == "already_configured"
+    with pytest.raises(UnknownFlow):
+        await submit_config_step(hass, beside["flow_id"], {})
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_the_server_and_tools_entries_coexist(
+    hass: HomeAssistant, admin_token: str
+) -> None:
+    """Their unique ids differ, so adding one never aborts on the other."""
+    tools = await start_entry_type_flow(hass, ENTRY_TYPE_TOOLS)
+    await submit_config_step(hass, tools["flow_id"], {})
+
+    _, created = await _setup(hass, {SETUP_ADMIN_TOKEN: admin_token})
+
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+    entries = hass.config_entries.async_entries(DOMAIN)
+    assert {entry.data[CONF_ENTRY_TYPE] for entry in entries} == {
+        ENTRY_TYPE_SERVER,
+        ENTRY_TYPE_TOOLS,
+    }
+    assert len({entry.unique_id for entry in entries}) == 2
+
+
+@pytest.mark.parametrize(
+    ("data", "step_id"),
+    [
+        ({CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER}, "init"),
+        ({CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS}, "tools_info"),
+        ({}, "tools_info"),
+    ],
+    ids=["server", "tools", "tools-before-entry-types"],
+)
+async def test_each_entry_type_opens_its_own_options_form(
+    hass: HomeAssistant, data: dict[str, Any], step_id: str
+) -> None:
+    """An entry from before entry types existed carries no marker and is a tools
+    entry: it must never get the server's options."""
+    if data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
+        entry: MockConfigEntry = add_server_entry(hass)
+    else:
+        entry = await add_tools_entry(hass, data=data, loaded=True)
+
+    form = await start_options_flow(hass, entry)
+
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == step_id

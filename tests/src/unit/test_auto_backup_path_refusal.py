@@ -5,7 +5,6 @@ gate, which is wider than the write gate, so a refused path fails there first.
 That must surface as the path refusal, not as a retryable
 ``BACKUP_CAPTURE_FAILED``, and without the read allowlist. Diffing, restoring
 or re-capturing a snapshot of such a path says the live file is unreadable.
-Kept out of ``test_backup_manager.py``, which is at its module-size baseline.
 """
 
 from __future__ import annotations

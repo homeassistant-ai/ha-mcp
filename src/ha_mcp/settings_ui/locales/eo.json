@@ -758,8 +758,8 @@
       "description": "Akiru aktualan statuson, staton, kaj atributojn de unu aŭ pluraj entoj (lumoj, ŝaltiloj, sensiloj, klimato, kovriloj, seruroj, fa"
     },
     "ha_get_system_health": {
-      "title": "Akiri Sisteman Sanon (inkl. ZHA/Z-Wave/integriĝaj diagnozoj)",
-      "description": "Akiru sisteman sanon de Home Assistant, inkluzive de Zigbee (ZHA), Z-Wave JS, kaj diagnozaj elĵetaĵoj por integriĝoj."
+      "title": "Ricevi sistemsanon (inkl. retojn ZHA / Z-Wave / Thread / Matter)",
+      "description": "Ricevi la sistemsanon de Home Assistant, inkluzive de la retoj Zigbee (ZHA), Z-Wave JS, Thread kaj Matter."
     },
     "ha_get_todo": {
       "title": "Akiri Farendaĵon",

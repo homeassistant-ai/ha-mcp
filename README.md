@@ -41,7 +41,7 @@ The recommended way to run ha-mcp is the **HA-MCP integration**. It installs int
 
 **Quick start:**
 
-> The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
+> Only the current stable Home Assistant release is officially supported. Older releases down to 2026.8.0, the technical floor, may or may not run but are not officially supported. A beta release may be supported, but that is not guaranteed; where it is, a fallback keeps current stable working.
 
 1. Install the **HA-MCP integration** (requires **Home Assistant 2026.8.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements)). On **Home Assistant 2026.8–2026.10**, open HACS, search for **HA-MCP**, then **Download**.
    On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
@@ -306,6 +306,8 @@ The **HA-MCP integration** also powers a set of privileged tools that standard H
 | `ha_delete_file` *(beta)* | Delete files from allowed directories |
 
 Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. These five tools return an error with installation instructions if the component is missing.
+
+A server that runs outside Home Assistant (the app, Docker or pip) needs the component of its own release for these tools. After a server update, update HA-MCP in HACS or the Marketplace and restart Home Assistant; until then they return an error that says so. The in-process server always runs the release its component ships with.
 
 These tools also require beta feature flags. See **[Beta Features](docs/beta.md)** for how to enable them — including the `ENABLE_BETA_FEATURES` master flag, which must be on before the filesystem/YAML sub-flags take effect.
 

@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, ServiceRegistry
+from homeassistant.core import HomeAssistant
+from homeassistant.core_config import Config
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import MockHAClientWebSocket
@@ -118,7 +119,11 @@ async def test_a_failed_fresh_read_keeps_the_snapshot_version_and_the_line(
 
     with (
         patch.object(
-            ServiceRegistry, "has_service", side_effect=RuntimeError("core drift")
+            Config,
+            "time_zone",
+            new_callable=PropertyMock,
+            create=True,
+            side_effect=RuntimeError("core drift"),
         ),
         _call_service_spy(component_core_client) as call_service,
     ):
