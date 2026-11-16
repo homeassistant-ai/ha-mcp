@@ -191,14 +191,14 @@ class TestSystemTools:
         """
         logger.info("Testing reload automations...")
 
-        result = await mcp_client.call_tool("ha_reload_core", {"target": "automations"})
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "automation"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload automations result: {data}")
 
         # Verify successful reload
         assert data.get("success") is True, f"Reload failed: {data.get('error')}"
-        assert data.get("target") == "automations", "Target should be 'automations'"
+        assert data.get("target") == "automation", "Target should be 'automation'"
         assert data.get("service") == "automation.reload", (
             f"Service should be 'automation.reload', got: {data.get('service')}"
         )
@@ -212,13 +212,13 @@ class TestSystemTools:
         """
         logger.info("Testing reload scripts...")
 
-        result = await mcp_client.call_tool("ha_reload_core", {"target": "scripts"})
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "script"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload scripts result: {data}")
 
         assert data.get("success") is True, f"Reload failed: {data.get('error')}"
-        assert data.get("target") == "scripts"
+        assert data.get("target") == "script"
         assert data.get("service") == "script.reload"
 
         logger.info("Reload scripts test completed successfully")
@@ -230,13 +230,13 @@ class TestSystemTools:
         """
         logger.info("Testing reload scenes...")
 
-        result = await mcp_client.call_tool("ha_reload_core", {"target": "scenes"})
+        result = await mcp_client.call_tool("ha_reload_core", {"target": "scene"})
         data = parse_mcp_result(result)
 
         logger.info(f"Reload scenes result: {data}")
 
         assert data.get("success") is True, f"Reload failed: {data.get('error')}"
-        assert data.get("target") == "scenes"
+        assert data.get("target") == "scene"
         assert data.get("service") == "scene.reload"
 
         logger.info("Reload scenes test completed successfully")
@@ -285,10 +285,11 @@ class TestSystemTools:
         # Should provide valid targets (returned at top level in error response)
         assert "valid_targets" in data, "Should provide list of valid targets"
         valid_targets = data["valid_targets"]
-        assert "automations" in valid_targets, (
-            "Valid targets should include 'automations'"
+        assert "all" in valid_targets, "Valid targets should include 'all'"
+        assert "automation" in valid_targets, (
+            "Valid targets should include every domain Core can reload"
         )
-        assert "scripts" in valid_targets, "Valid targets should include 'scripts'"
+        assert "script" in valid_targets, "Valid targets should include 'script'"
 
         logger.info("Invalid target test passed with helpful error message")
 
@@ -298,8 +299,8 @@ class TestSystemTools:
         """
         Test: Reload all configuration components.
 
-        This test reloads all reloadable components. Marked as slow
-        because it calls multiple reload services sequentially.
+        Home Assistant's reload-all reloads every integration that can
+        reload its YAML. Marked as slow for that reason.
         """
         logger.info("Testing reload all components...")
 
@@ -310,19 +311,9 @@ class TestSystemTools:
 
         # Verify successful reload
         assert data.get("success") is True, f"Reload all failed: {data.get('error')}"
-        assert "reloaded" in data, "Should list reloaded components"
-
-        reloaded = data["reloaded"]
-        logger.info(f"Reloaded {len(reloaded)} components: {reloaded}")
-
-        # Some core components should always be reloadable
-        assert len(reloaded) > 0, "Should have reloaded at least one component"
-
-        # A clean container should produce no reload warnings — any warning
-        # here means RELOAD_TARGETS lists a target whose reload service does
-        # not exist (e.g. issue #1453: `counter.reload`).
-        warnings = data.get("warnings") or []
-        assert not warnings, f"Reload all produced unexpected warnings: {warnings}"
+        # Core's own reload-all: one service, which reloads every integration
+        # that has a reload service on this container.
+        assert data.get("service") == "homeassistant.reload_all", data
 
         logger.info("Reload all test completed successfully")
 
@@ -720,7 +711,7 @@ class TestSystemToolsIntegration:
 
             # Step 2: Reload automations
             reload_result = await mcp_client.call_tool(
-                "ha_reload_core", {"target": "automations"}
+                "ha_reload_core", {"target": "automation"}
             )
             reload_data = parse_mcp_result(reload_result)
 

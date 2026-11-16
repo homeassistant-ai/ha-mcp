@@ -32,12 +32,14 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import (
+    core_error_message,
     exception_to_structured_error,
     get_connected_ws_client,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+    ws_failure_code,
 )
 from .system_health_sections import (
     add_health_labels,
@@ -103,25 +105,14 @@ def _build_system_snapshot_slices(
     )
 
 
-# Mapping of reload targets to their service domains and services
-RELOAD_TARGETS = {
-    "all": None,  # Special case - reload all
-    "automations": ("automation", "reload"),
-    "scripts": ("script", "reload"),
-    "scenes": ("scene", "reload"),
-    "groups": ("group", "reload"),
-    "input_booleans": ("input_boolean", "reload"),
-    "input_numbers": ("input_number", "reload"),
-    "input_texts": ("input_text", "reload"),
-    "input_selects": ("input_select", "reload"),
-    "input_datetimes": ("input_datetime", "reload"),
-    "input_buttons": ("input_button", "reload"),
-    "timers": ("timer", "reload"),
-    "templates": ("template", "reload"),
-    "persons": ("person", "reload"),
-    "zones": ("zone", "reload"),
+# Core's reloads that are not named ``<domain>.reload``. ``all`` is Core's own
+# sweep: every ``<domain>.reload``, the core config, themes and custom
+# templates, refused while the configuration does not check out.
+NAMED_RELOADS = {
+    "all": ("homeassistant", "reload_all"),
     "core": ("homeassistant", "reload_core_config"),
     "themes": ("frontend", "reload_themes"),
+    "custom_templates": ("homeassistant", "reload_custom_templates"),
 }
 
 
@@ -193,11 +184,14 @@ class SystemTools:
             str,
             Field(
                 description=(
-                    "What to reload: 'all', 'automations', 'scripts', 'scenes', "
-                    "'groups', 'input_booleans', 'input_numbers', 'input_texts', "
-                    "'input_selects', 'input_datetimes', 'input_buttons', "
-                    "'timers', 'templates', 'persons', 'zones', 'core' "
-                    "(customize, packages) or 'themes'."
+                    "What to reload: 'all' (Home Assistant's own reload-all: "
+                    "every integration that can reload its YAML, the core "
+                    "config, themes and custom templates), 'core' (customize, "
+                    "packages), 'themes', 'custom_templates', or the domain of "
+                    "an integration that has a reload service, such as "
+                    "'automation', 'script', 'scene', 'template', 'group', "
+                    "'input_boolean' or 'mqtt'. An unknown target is refused "
+                    "with the domains this Home Assistant can reload."
                 )
             ),
         ] = "all",
@@ -216,13 +210,14 @@ class SystemTools:
     ) -> dict[str, Any]:
         """Execute a Home Assistant configuration reload without a full restart.
 
-        Reloads specific configuration components so changes take effect without
-        restarting Home Assistant — much faster than a full restart. Use it after
-        editing automation/script YAML, adding YAML helpers, or changing
-        customize.yaml or themes.
+        Reloads configuration so changes take effect without restarting Home
+        Assistant. Use it after editing automation/script YAML, adding YAML
+        helpers, or changing customize.yaml or themes. target="all" is Home
+        Assistant's own reload-all; it checks the configuration first and
+        refuses, with the reason, when the check fails.
 
         EXAMPLES:
-        - ha_reload_core(target="automations")
+        - ha_reload_core(target="automation")
         - ha_reload_core(entry_id="abc123")
         """
         target = target.lower().strip()
@@ -257,107 +252,69 @@ class SystemTools:
                 )
             return await self._reload_config_entry(entry_id)
 
-        if target not in RELOAD_TARGETS:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid reload target: {target}",
-                    context={
-                        "target": target,
-                        "valid_targets": list(RELOAD_TARGETS.keys()),
-                    },
-                    suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
-                )
-            )
-
         try:
-            if target == "all":
-                return await self._reload_all_targets()
-
-            else:
-                # Reload specific component
-                service_info = RELOAD_TARGETS[target]
-                if service_info is None:
-                    # This shouldn't happen as we check for "all" above
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.INTERNAL_ERROR,
-                            f"Invalid target configuration for: {target}",
-                            context={"target": target},
-                        )
-                    )
-                domain, service = service_info
-                await self._client.call_service(domain, service, {})
-
-                return {
-                    "success": True,
-                    "message": f"Successfully reloaded {target}",
-                    "target": target,
-                    "service": f"{domain}.{service}",
-                }
-
+            domain, service = NAMED_RELOADS.get(target) or (
+                await self._reloadable_domain(target),
+                "reload",
+            )
+            await self._call_reload(target, domain, service)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"target": target},
-                suggestions=[
-                    f"Ensure the {target} integration is loaded",
-                    "Check Home Assistant logs for details",
-                ],
+                suggestions=["Check Home Assistant logs for details"],
             )
-            return None  # unreachable: exception_to_structured_error always raises
-
-    async def _reload_all_targets(self) -> dict[str, Any]:
-        """Reload every reloadable subsystem concurrently, capped by a semaphore.
-
-        Extracted verbatim from ``ha_reload_core``'s ``target == "all"`` branch.
-        """
-        # A subsystem whose integration is not loaded has no reload service.
-        registered = {
-            (entry["domain"], service)
-            for entry in await self._client.get_services()
-            for service in entry["services"]
+        return {
+            "success": True,
+            "message": f"Successfully reloaded {target}",
+            "target": target,
+            "service": f"{domain}.{service}",
         }
-        reloadable = [
-            (name, info)
-            for name, info in RELOAD_TARGETS.items()
-            if info is not None and info in registered
-        ]
-        # At most four at once, so a large install does not get ~16 service
-        # calls together; one failing target must not cancel its siblings.
-        semaphore = asyncio.Semaphore(4)
 
-        async def _reload_one(domain: str, service: str) -> None:
-            async with semaphore:
-                await self._client.call_service(domain, service, {})
+    async def _reloadable_domain(self, target: str) -> str:
+        """``target`` when Core has a ``<target>.reload`` service.
 
-        outcomes = await asyncio.gather(
-            *(_reload_one(domain, service) for _, (domain, service) in reloadable),
-            return_exceptions=True,
+        Core registers it while the integration is loaded, so what can be
+        reloaded is read from Core, not listed here.
+        """
+        reloadable = sorted(
+            entry["domain"]
+            for entry in await self._client.get_services()
+            if "reload" in entry["services"]
+        )
+        if target in reloadable:
+            return target
+        valid_targets = [*NAMED_RELOADS, *reloadable]
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid reload target: Home Assistant has no '{target}.reload' "
+                "service (an integration that is not loaded has none)",
+                context={"target": target, "valid_targets": valid_targets},
+                suggestions=[f"Use one of: {', '.join(valid_targets)}"],
+            )
         )
 
-        results = []
-        errors = []
-        for (reload_target, _), outcome in zip(reloadable, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
-                # A CancelledError or KeyboardInterrupt still unwinds the
-                # request; it is never a per-target warning.
-                if not isinstance(outcome, Exception):
-                    raise outcome
-                errors.append(f"{reload_target}: {outcome}")
-            else:
-                results.append(reload_target)
-
-        response: dict[str, Any] = {
-            "success": True,
-            "message": f"Reloaded {len(results)} components",
-            "reloaded": results,
-        }
-        if errors:
-            response["warnings"] = errors
-        return response
+    async def _call_reload(self, target: str, domain: str, service: str) -> None:
+        """Call the reload over WebSocket, where Core's refusal keeps its text
+        and code; the REST endpoint answers one with a bare 400 or 500."""
+        reply = await self._client.send_websocket_message(
+            {"type": "call_service", "domain": domain, "service": service}
+        )
+        if reply.get("success"):
+            return
+        error_code = reply.get("error_code")
+        raise_tool_error(
+            create_error_response(
+                ws_failure_code(reply),
+                f"{domain}.{service} failed: "
+                f"{core_error_message(reply.get('error', 'Unknown error'))}",
+                context={"target": target, "ha_error_code": error_code},
+                suggestions=["Fix what Home Assistant reported, then reload again"],
+            )
+        )
 
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Reload a single config entry via the REST config-entries endpoint.

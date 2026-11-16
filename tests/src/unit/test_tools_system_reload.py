@@ -1,22 +1,23 @@
 """``ha_reload_core`` on real Home Assistant Core.
 
-The subsystem reloads are Core service calls. Each reload service is the
-test's own (Core's ``async_mock_service``), so a test sees which ones Core
-ran, and a reload can fail or wait. A single config entry reloads through
+``target="all"`` is Core's own ``homeassistant.reload_all``, and every other
+target is a reload service Core has registered, so the tests set up Core's
+``homeassistant`` integration and watch which services Core runs. A reload
+service of another integration is the test's own (Core's
+``async_mock_service``), so it can fail. A single config entry reloads through
 Core's own config-entries endpoint, on an integration the test mocks with
 Core's ``mock_integration``.
 """
 
-import asyncio
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState, ConfigFlow
 from homeassistant.const import EVENT_CALL_SERVICE
-from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
@@ -30,36 +31,9 @@ from pytest_homeassistant.common import (
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.tools_system import RELOAD_TARGETS, SystemTools
+from ha_mcp.tools.tools_system import SystemTools
 
-# (target, domain, service) of every subsystem target="all" reloads.
-RELOADABLE = [
-    (target, *service) for target, service in RELOAD_TARGETS.items() if service
-]
-# Reloads Home Assistant runs at once for target="all".
-RELOADS_AT_ONCE = 4
 PROBE = "reload_probe"
-
-
-def _reload_services(
-    hass: HomeAssistant, *, failing: str | None = None, missing: str | None = None
-) -> dict[str, list[ServiceCall]]:
-    """Every reload service, keyed by target; ``failing`` raises, ``missing``
-    is not registered (its integration is not loaded)."""
-    return {
-        target: async_mock_service(
-            hass,
-            domain,
-            service,
-            raise_exception=(
-                HomeAssistantError(f"{target} reload blew up")
-                if target == failing
-                else None
-            ),
-        )
-        for target, domain, service in RELOADABLE
-        if target != missing
-    }
 
 
 def _service_calls(hass: HomeAssistant) -> list[Event[Any]]:
@@ -68,101 +42,137 @@ def _service_calls(hass: HomeAssistant) -> list[Event[Any]]:
     return calls
 
 
+def _called(calls: list[Event[Any]]) -> list[str]:
+    return [f"{call.data['domain']}.{call.data['service']}" for call in calls]
+
+
+async def _write_configuration(hass: HomeAssistant, text: str) -> None:
+    path = Path(hass.config.config_dir, "configuration.yaml")
+    await hass.async_add_executor_job(path.write_text, text)
+
+
 def _error(excinfo: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
     error: dict[str, Any] = json.loads(str(excinfo.value))["error"]
     return error
 
 
-async def test_reload_all_runs_a_bounded_number_of_reloads_at_once(
+@pytest.fixture
+async def core_reloads(hass: HomeAssistant) -> None:
+    """Core's ``homeassistant`` services over a configuration that checks out,
+    and the themes reload Core's reload-all also calls."""
+    await _write_configuration(hass, "")
+    assert await async_setup_component(hass, "homeassistant", {})
+    async_mock_service(hass, "frontend", "reload_themes")
+
+
+@pytest.mark.usefixtures("core_reloads")
+async def test_all_is_cores_own_reload_all(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """Every reload is held until the bound's worth are running at Core, which
-    a serial sweep never reaches; by then an unbounded sweep has already sent
-    every call."""
-    running = started = 0
-    sent_when_full: list[int] = []
-    full = asyncio.Event()
-
-    async def reload(call: ServiceCall) -> None:
-        nonlocal running, started
-        running += 1
-        started += 1
-        if running == RELOADS_AT_ONCE or started == len(RELOADABLE):
-            sent_when_full.append(sent.call_count)
-            full.set()
-        async with asyncio.timeout(5):
-            await full.wait()
-        running -= 1
-
-    for _, domain, service in RELOADABLE:
-        hass.services.async_register(domain, service, reload)
-    # Until the client knows its token is an admin's, it sends one call at a
-    # time; Core's auth answers that, as on every install.
-    assert await async_setup_component(hass, "auth", {})
-
-    with patch.object(
-        core_client, "call_service", AsyncMock(wraps=core_client.call_service)
-    ) as sent:
-        result = await SystemTools(core_client).ha_reload_core(target="all")
-
-    assert sent_when_full[0] == RELOADS_AT_ONCE
-    assert result["reloaded"] == [target for target, _, _ in RELOADABLE]
-    assert "warnings" not in result
-
-
-async def test_reload_all_reports_a_failed_reload_and_still_runs_the_others(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    calls = _reload_services(hass, failing="templates")
-
-    result = await SystemTools(core_client).ha_reload_core(target="all")
-
-    assert all(len(made) == 1 for made in calls.values())
-    assert result["success"] is True
-    assert result["reloaded"] == [t for t, _, _ in RELOADABLE if t != "templates"]
-    assert any(
-        w.startswith("templates:") and "templates reload blew up" in w
-        for w in result["warnings"]
-    )
-
-
-async def test_reload_all_skips_a_subsystem_that_is_not_loaded_without_a_warning(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """Not every install loads every reloadable integration."""
-    _reload_services(hass, missing="templates")
+    """Core reloads every integration that has a reload service, whichever
+    they are, plus the core config, themes and custom templates."""
+    async_mock_service(hass, "automation", "reload")
+    async_mock_service(hass, "an_integration_of_tomorrow", "reload")
+    calls = _service_calls(hass)
 
     result = await SystemTools(core_client).ha_reload_core(target="all")
 
     assert result["success"] is True
-    assert "templates" not in result["reloaded"]
-    assert "warnings" not in result
+    assert result["service"] == "homeassistant.reload_all"
+    called = _called(calls)
+    assert called[0] == "homeassistant.reload_all"
+    assert sorted(called[1:]) == [
+        "an_integration_of_tomorrow.reload",
+        "automation.reload",
+        "frontend.reload_themes",
+        "homeassistant.reload_core_config",
+        "homeassistant.reload_custom_templates",
+    ]
 
 
-async def test_reload_one_target_calls_only_its_service(
+@pytest.mark.usefixtures("core_reloads")
+async def test_all_is_refused_with_cores_reason_when_the_configuration_is_invalid(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    calls = _reload_services(hass)
+    await _write_configuration(hass, "homeassistant:\n  latitude: north\n")
+    reloads = async_mock_service(hass, "automation", "reload")
 
-    result = await SystemTools(core_client).ha_reload_core(target="automations")
+    with pytest.raises(ToolError) as excinfo:
+        await SystemTools(core_client).ha_reload_core(target="all")
 
-    assert {target: len(made) for target, made in calls.items() if made} == {
-        "automations": 1
-    }
+    error = _error(excinfo)
+    assert "configuration is not valid" in error["message"]
+    assert "latitude" in error["message"]
+    assert error["suggestion"] == "Fix what Home Assistant reported, then reload again"
+    assert reloads == []
+
+
+@pytest.mark.usefixtures("core_reloads")
+@pytest.mark.parametrize(
+    ("target", "service"),
+    [
+        ("automation", "automation.reload"),
+        ("core", "homeassistant.reload_core_config"),
+        ("themes", "frontend.reload_themes"),
+        ("custom_templates", "homeassistant.reload_custom_templates"),
+    ],
+)
+async def test_one_target_calls_only_its_service(
+    hass: HomeAssistant, core_client: HomeAssistantClient, target: str, service: str
+) -> None:
+    async_mock_service(hass, "automation", "reload")
+    async_mock_service(hass, "script", "reload")
+    calls = _service_calls(hass)
+
+    result = await SystemTools(core_client).ha_reload_core(target=target)
+
+    assert _called(calls) == [service]
     assert result["success"] is True
-    assert result["service"] == "automation.reload"
+    assert result["service"] == service
 
 
-async def test_an_unknown_target_is_refused_before_anything_reloads(
+@pytest.mark.usefixtures("core_reloads")
+async def test_a_domain_core_cannot_reload_is_refused_with_the_ones_it_can(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
+    """An integration that is not loaded has no reload service; Core's list of
+    services says which domains do."""
+    async_mock_service(hass, "automation", "reload")
     calls = _service_calls(hass)
 
     with pytest.raises(ToolError) as excinfo:
-        await SystemTools(core_client).ha_reload_core(target="bogus")
+        await SystemTools(core_client).ha_reload_core(target="group")
 
-    assert _error(excinfo)["code"] == "VALIDATION_INVALID_PARAMETER"
+    response = json.loads(str(excinfo.value))
+    assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert response["valid_targets"] == [
+        "all",
+        "core",
+        "themes",
+        "custom_templates",
+        "automation",
+    ]
     assert calls == []
+
+
+@pytest.mark.usefixtures("core_reloads")
+async def test_a_reload_core_fails_is_reported_with_cores_text(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    async_mock_service(
+        hass,
+        "template",
+        "reload",
+        raise_exception=HomeAssistantError("the template file is unreadable"),
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await SystemTools(core_client).ha_reload_core(target="template")
+
+    error = _error(excinfo)
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "template.reload failed" in error["message"]
+    assert "the template file is unreadable" in error["message"]
 
 
 @pytest.fixture
@@ -281,7 +291,7 @@ async def test_entry_id_with_a_target_is_refused_without_reloading(
 
     with pytest.raises(ToolError) as excinfo:
         await SystemTools(core_client).ha_reload_core(
-            target="scripts", entry_id=setups[0]
+            target="script", entry_id=setups[0]
         )
 
     assert _error(excinfo)["code"] == "VALIDATION_INVALID_PARAMETER"
