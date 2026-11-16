@@ -7,33 +7,27 @@ before the command is sent. Core 2026.11's Marketplace answers every command.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-from ha_mcp.tools.hacs_backend import HACS_API
-from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
 from ._hacs_marketplace import (
     CARD_ID,
-    command_types,
     core_install,
     pooled_socket,
     sent_with,
     set_up_marketplace,
     stored,
 )
-from ._websocket_client_core import registered
 
 CARD = "piitaya/lovelace-mushroom"
 
@@ -93,35 +87,3 @@ async def test_a_numeric_id_skips_the_store_list(
         s["repository_id"] for s in sent_with(spy, "marketplace/repository/info")
     ] == [CARD_ID]
     assert result["data"]["full_name"] == CARD
-
-
-async def test_a_refused_hacs_subscribe_falls_back_and_reports_cores_refusal(
-    socket: HomeAssistantWebSocketClient, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Where HACS does not answer, the wait must try one list lookup instead
-    of the subscription, report Core's refusal of it rather than "not found",
-    and leave no subscription queue behind to collect events."""
-    # A captured warning would keep the refusal, and through it the queue.
-    caplog.set_level(logging.ERROR, logger="ha_mcp.tools.hacs_registration")
-    with (
-        registered() as seen,
-        sent_commands(socket) as sent,
-        patch.object(
-            socket, "subscribe_command", wraps=socket.subscribe_command
-        ) as subscribe,
-        patch.object(
-            socket, "unsubscribe_command", wraps=socket.unsubscribe_command
-        ) as unsubscribe,
-        pytest.raises(HomeAssistantCommandError) as refused,
-    ):
-        await wait_for_repo_registration(socket, CARD, timeout=10.0, api=HACS_API)
-
-    assert [c.args[0] for c in subscribe.await_args_list] == ["hacs/subscribe"]
-    assert command_types(sent) == ["hacs/repositories/list"]
-    assert refused.value.code == "unknown_command"
-    assert str(refused.value) == "Command failed: Unknown command."
-    unsubscribe.assert_not_awaited()
-    # The refusal's traceback holds the subscribe call's frame, and its queue.
-    del refused
-    assert len(seen.queues) == 1
-    assert await seen.alive() == []

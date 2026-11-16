@@ -302,6 +302,10 @@ def test_smoke_test_flag_exits_with_its_result_without_serving(
     entry_points: EntryPoints, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``ha-mcp --smoke-test`` reports the smoke test's result and starts nothing."""
+    # Importing the smoke test sets these for the whole process; monkeypatch
+    # puts them back, so no later test starts with a Home Assistant URL.
+    for name in ("HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN"):
+        monkeypatch.setenv(name, os.environ.get(name, "set by the smoke test"))
     monkeypatch.setattr("ha_mcp.smoke_test.main", lambda: 3)
     server = InProcessServer()
 

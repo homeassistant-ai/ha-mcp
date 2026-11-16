@@ -446,7 +446,7 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
     # result that is not one is the expression's mistake, reported as such.
     if not isinstance(result, dict):
         raise PythonSandboxExecutionError(
-            f"the expression left `config` a {type(result).__name__}; "
+            f"the expression left `config` as {type(result).__name__}; "
             "it must stay a dict"
         )
     try:
