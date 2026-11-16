@@ -1,494 +1,568 @@
-"""Unit tests for the server-side HACS auto-refresh nudge.
+"""The server-side HACS auto-refresh nudge, on a real ``hass``.
 
-On a startup where the version picture changed, the server asks HACS to
-re-fetch the ha_mcp_tools component's repository info so an external install
-(add-on / Docker / pip / stdio) surfaces the paired component update instead of
-waiting out HACS's ~48h custom-repository cache.
+On a startup where the version picture changed, the server asks the store
+(Core's Marketplace on 2026.11+, HACS before it) to re-fetch the ha_mcp_tools
+component's repository info, so an external install surfaces the paired
+component update instead of waiting out the store's cache.
 
-The WebSocket layer is mocked and the marker file is redirected at a tmp dir;
-HACS itself is never involved. No test may sleep — the one covering the retry
-schedule empties it first.
+The server's settings point at the real ``hass``, and every store command and
+its reply is Core's (``_hacs_marketplace``: GitHub is unreachable, so a
+refresh fails as Core fails it offline). Only the newest ha-mcp release, which
+PyPI answers, is the test's own.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.marketplace.base import MarketplaceManager
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from ha_mcp import hacs_auto_refresh
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
+from ha_mcp import __version__, hacs_auto_refresh
+from ha_mcp._vendor import websockets
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import get_websocket_client
+from ha_mcp.config import OAUTH_MODE_TOKEN, get_global_settings, reset_global_settings
+from ha_mcp.hacs_auto_refresh import (
+    MARKER_FILENAME_PREFIX,
+    SETTING,
+    SETTING_ENV,
+    hacs_refresh_lifespan,
+    maybe_refresh_hacs_after_update,
 )
-from ha_mcp.config import OAUTH_MODE_TOKEN
+from ha_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 from ha_mcp.update_check import UpdateInfo
+from ha_mcp.utils.data_paths import get_data_dir
+
+from ._client_spies import sent_commands
+from ._command_faults import received
+from ._core_client import refused_url
+from ._hacs_marketplace import command_types, set_up_marketplace, stored
+from ._marketplace_records import REPOSITORY_IDS, own_records, unload_marketplace
+from ._settings_ui_app import settings_http
+from ._tools_addons_core import armed, outwait, timers
 
 MIRROR, MAIN = hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES
+MIRROR_ID, MAIN_ID = REPOSITORY_IDS[MIRROR], REPOSITORY_IDS[MAIN]
+OTHER_ID = "777000111"
+LIST = "marketplace/repositories/list"
+REFRESH = "marketplace/repository/refresh"
+CURRENT = __version__
+# A release newer than any build under test; PyPI would name it.
+NEWER = "999.0.0"
+# The last, longest retry delay: no command wait (the refresh's is the
+# longest) reaches it, so a timer this far out is the nudge's own.
+RETRY = hacs_auto_refresh.RETRY_DELAYS[-1]
+
+Store = Callable[..., Awaitable[MarketplaceManager]]
 
 
-def _info(latest="1.1.0", *, update_available=True, current="1.0.0"):
-    return UpdateInfo(current=current, latest=latest, update_available=update_available)
-
-
-def _repo(repo_id, full_name, *, installed=True):
-    """One entry of HACS's ``hacs/repositories/list`` result."""
-    return {"id": repo_id, "full_name": full_name, "installed": installed}
-
-
-def _ws(repos=(), error=None):
-    """A WS client whose ``hacs/repositories/list`` returns ``repos``, or raises."""
-    ws = AsyncMock()
-    if error is not None:
-        ws.send_command = AsyncMock(side_effect=error)
-    else:
-        ws.send_command = AsyncMock(
-            return_value={"success": True, "result": list(repos)}
+def newest_release(monkeypatch: pytest.MonkeyPatch, latest: str | None) -> None:
+    """PyPI names ``latest`` as the newest ha-mcp (``None``: no answer)."""
+    info = (
+        None
+        if latest is None
+        else UpdateInfo(
+            current=CURRENT, latest=latest, update_available=latest != CURRENT
         )
-    return ws
-
-
-HA_URL = "http://ha.local:8123"
-
-
-@contextmanager
-def _server(
-    ws,
-    *,
-    info=None,
-    version="1.0.0",
-    disabled=False,
-    oauth=False,
-    opted_in=True,
-    overrides=None,
-):
-    """Patch the startup gates, the WS client factory and the HACS refresh call."""
-    get_ws = AsyncMock(return_value=ws)
-    refresh = AsyncMock(return_value={"success": True})
-    save = AsyncMock(return_value=None)
-    settings = SimpleNamespace(
-        homeassistant_token=OAUTH_MODE_TOKEN if oauth else "a-real-llat",
-        homeassistant_url=HA_URL,
-        hacs_refresh_after_update=opted_in,
     )
-    with (
-        patch(
-            "ha_mcp.hacs_auto_refresh.is_update_check_disabled", return_value=disabled
-        ),
-        patch("ha_mcp.hacs_auto_refresh.get_global_settings", return_value=settings),
-        patch("ha_mcp.hacs_auto_refresh.get_version", return_value=version),
-        patch("ha_mcp.hacs_auto_refresh.get_update_info", return_value=info),
-        patch(
-            "ha_mcp.tools.hacs_registration.send_hacs_repository_refresh", new=refresh
-        ),
-        patch("ha_mcp.client.websocket_client.get_websocket_client", new=get_ws),
-        patch(
-            "ha_mcp.hacs_auto_refresh._read_feature_flag_override_file",
-            return_value=overrides or {},
-        ),
-        patch(
-            "ha_mcp.settings_ui._handlers_advanced._write_advanced_overrides_file",
-            new=save,
-        ),
-    ):
-        yield SimpleNamespace(
-            get_websocket_client=get_ws, refresh=refresh, save=save, settings=settings
-        )
+    monkeypatch.setattr(hacs_auto_refresh, "get_update_info", lambda: info)
+
+
+def older_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server runs a build older than the one under test."""
+    monkeypatch.setattr(hacs_auto_refresh, "get_version", lambda: "0.0.1")
 
 
 @pytest.fixture
-def data_dir(tmp_path):
-    """Redirect the marker file at a tmp dir (patched at the module's import site)."""
-    with patch("ha_mcp.hacs_auto_refresh.get_data_dir", return_value=tmp_path):
-        yield tmp_path
+def server(monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient) -> None:
+    """The server's settings point at the real ``hass``, its update check is
+    on, the nudge is switched on and a newer release is out."""
+    monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url)
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", core_client.token)
+    monkeypatch.delenv("HA_MCP_DISABLE_UPDATE_CHECK")
+    monkeypatch.setenv(SETTING_ENV, "true")
+    newest_release(monkeypatch, NEWER)
+    reset_global_settings()
 
 
-def _written_marker(data_dir, ha_url=HA_URL):
-    path = hacs_auto_refresh._marker_path(ha_url)
-    return json.loads(path.read_text()) if path.exists() else None
+def setting_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neither a variable nor the settings page chose the nudge's setting."""
+    monkeypatch.delenv(SETTING_ENV)
+    reset_global_settings()
 
 
-def _refreshed_ids(mocks):
-    return [call.args[1] for call in mocks.refresh.await_args_list]
+@pytest.fixture
+async def store(
+    hass: HomeAssistant,
+    server: None,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+) -> AsyncIterator[Store]:
+    """Set Core's Marketplace up with the component's records as given."""
 
-
-def _marker(version="1.0.0", latest="1.0.0", **extra):
-    return {"server_version": version, "latest": latest, **extra}
-
-
-class TestNudgeDue:
-    def test_no_marker_is_due(self):
-        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), None) is True
-
-    def test_changed_server_version_is_due(self):
-        # The just-updated case: the paired component release is what HACS
-        # needs to surface.
-        marker = _marker(version="0.9.0", latest="1.1.0")
-        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), marker) is True
-
-    def test_same_version_without_an_update_is_not_due(self):
-        marker = _marker()
-        info = _info(latest="1.0.0", update_available=False)
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
-
-    def test_release_appearing_since_the_last_pass_is_due(self):
-        marker = _marker()
-        info = _info(latest="1.1.0")
-
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is True
-
-    def test_already_recorded_latest_is_not_due(self):
-        marker = _marker(latest="1.1.0")
-        info = _info(latest="1.1.0")
-
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
-
-    def test_missing_update_info_on_the_same_version_is_not_due(self):
-        marker = _marker(latest=None)
-        assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
-
-
-class TestMarkerFile:
-    def test_roundtrip(self, data_dir):
-        marker = {"server_version": "1.0.0", "latest": "1.1.0", "hacs": "present"}
-        hacs_auto_refresh._write_marker(HA_URL, marker)
-
-        assert hacs_auto_refresh._read_marker(HA_URL) == marker
-
-    def test_missing_file_reads_as_none(self, data_dir):
-        assert hacs_auto_refresh._read_marker(HA_URL) is None
-
-    def test_corrupt_file_reads_as_none(self, data_dir):
-        hacs_auto_refresh._marker_path(HA_URL).write_text("{not json")
-
-        assert hacs_auto_refresh._read_marker(HA_URL) is None
-
-    def test_non_dict_payload_reads_as_none(self, data_dir):
-        hacs_auto_refresh._marker_path(HA_URL).write_text('["nope"]')
-
-        assert hacs_auto_refresh._read_marker(HA_URL) is None
-
-    def test_markers_are_scoped_per_ha_target(self, data_dir):
-        # Two server configs sharing one data dir but targeting different
-        # instances keep independent markers — neither suppresses the other's
-        # nudge nor invalidates the other's marker on alternating spawns.
-        hacs_auto_refresh._write_marker(HA_URL, {"server_version": "1.0.0"})
-        other = "http://other-ha:8123"
-
-        assert hacs_auto_refresh._read_marker(other) is None
-        hacs_auto_refresh._write_marker(other, {"server_version": "2.0.0"})
-        assert hacs_auto_refresh._read_marker(HA_URL) == {"server_version": "1.0.0"}
-        assert hacs_auto_refresh._read_marker(other) == {"server_version": "2.0.0"}
-
-    def test_trailing_slash_is_the_same_target(self, data_dir):
-        hacs_auto_refresh._write_marker(HA_URL, {"server_version": "1.0.0"})
-
-        assert hacs_auto_refresh._read_marker(HA_URL + "/") == {
-            "server_version": "1.0.0"
-        }
-
-
-class TestMaybeRefreshHacsAfterUpdate:
-    async def test_embedded_server_nudges_its_component_too(
-        self, data_dir: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Its component update is the one the Marketplace never checks for
-        # without a connected GitHub account.
-        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-        with _server(_ws([_repo(456, MAIN)]), info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        assert _refreshed_ids(mocks) == ["456"]
-
-    async def test_off_by_default_on_a_new_install(self, data_dir, monkeypatch):
-        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
-        with _server(_ws([_repo(456, MAIN)]), info=_info(), opted_in=False) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        mocks.get_websocket_client.assert_not_awaited()
-        mocks.save.assert_not_awaited()
-
-    async def test_install_that_already_ran_it_keeps_it_on(self, data_dir, monkeypatch):
-        # Its marker shows the nudge ran before it became opt-in; with no
-        # explicit choice the setting is saved on, so nothing changes for it.
-        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
-        hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
-        with _server(_ws([_repo(456, MAIN)]), info=_info(), opted_in=False) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        mocks.save.assert_awaited_once_with({hacs_auto_refresh.SETTING: True})
-        assert mocks.settings.hacs_refresh_after_update is True
-        assert _refreshed_ids(mocks) == ["456"]
-
-    async def test_explicit_off_is_kept_even_with_a_marker(self, data_dir, monkeypatch):
-        monkeypatch.delenv(hacs_auto_refresh.SETTING_ENV, raising=False)
-        hacs_auto_refresh._write_marker(HA_URL, _marker(version="0.9.0"))
-        with _server(
-            _ws([_repo(456, MAIN)]),
-            info=_info(),
-            opted_in=False,
-            overrides={hacs_auto_refresh.SETTING: False},
-        ) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        mocks.get_websocket_client.assert_not_awaited()
-        mocks.save.assert_not_awaited()
-
-    async def test_disabled_update_check_is_a_no_op(self, data_dir):
-        with (
-            _server(_ws(), info=_info(), disabled=True) as mocks,
-            patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,
-        ):
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        read_marker.assert_not_called()
-        mocks.get_websocket_client.assert_not_awaited()
-
-    async def test_oauth_mode_is_a_no_op(self, data_dir):
-        # Per-user OAuth mode holds no server-level HA credential; the nudge
-        # would only burn its retry schedule on auth failures.
-        with (
-            _server(_ws(), info=_info(), oauth=True) as mocks,
-            patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,
-        ):
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        read_marker.assert_not_called()
-        mocks.get_websocket_client.assert_not_awaited()
-
-    async def test_both_installed_candidates_are_refreshed(self, data_dir, caplog):
-        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN), _repo(789, "other/repo")])
-
-        with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        # The due-pass line logs BEFORE any WS work — the observable the
-        # HAOS add-on lane greps for, so it is contract, not decoration.
-        assert "HACS auto-refresh: startup pass due" in caplog.text
-        # Both entries the component can be tracked under, and nothing else,
-        # through the Marketplace that answered first.
-        assert _refreshed_ids(mocks) == ["123", "456"]
-        assert ws.send_command.await_args_list[0].args == (
-            "marketplace/repositories/list",
-        )
-        assert {call.args[2].prefix for call in mocks.refresh.await_args_list} == {
-            "marketplace"
-        }
-        assert _written_marker(data_dir) == {
-            "server_version": "1.0.0",
-            "latest": "1.1.0",
-            "hacs": "present",
-        }
-        # The one info line is the operator-visible signal for this feature.
-        assert f"{MIRROR}, {MAIN}" in caplog.text
-
-    async def test_uninstalled_candidate_is_skipped(self, data_dir):
-        # Migration limbo: the mirror record is added but not downloaded, so
-        # only the main entry has an update entity to light up.
-        ws = _ws([_repo(123, MIRROR, installed=False), _repo(456, MAIN)])
-
-        with _server(ws, info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        assert _refreshed_ids(mocks) == ["456"]
-
-    async def test_no_installed_candidate_still_records_the_pass(self, data_dir):
-        ws = _ws([_repo(789, "other/repo")])
-
-        with _server(ws, info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        mocks.refresh.assert_not_awaited()
-        # "nothing to refresh" is a completed pass, so the next startup on this
-        # same version does not re-ask HACS.
-        assert _written_marker(data_dir)["hacs"] == "present"
-
-    async def test_one_failing_refresh_does_not_skip_the_other(self, data_dir):
-        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN)])
-
-        with _server(ws, info=_info()) as mocks:
-            mocks.refresh.side_effect = [
-                HomeAssistantCommandError("Command failed: repository not found"),
-                {"success": True},
-            ]
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
-
-        assert _refreshed_ids(mocks) == ["123", "456"]
-        assert _written_marker(data_dir)["hacs"] == "present"
-
-    async def test_absent_hacs_is_recorded_only_after_retries_exhaust(self, data_dir):
-        # unknown_command is also what a still-booting HA returns before HACS
-        # registers its WS handlers, so absence must survive the whole retry
-        # schedule before it is recorded. RETRY_DELAYS is trimmed (not
-        # emptied) so the test proves the re-attempt without sleeping long.
-        ws = _ws(
-            error=HomeAssistantCommandError(
-                "Command failed: unknown command: hacs/repositories/list",
-                "unknown_command",
+    async def set_up(
+        *, main: bool | None = None, mirror: bool | None = None, other: bool = False
+    ) -> MarketplaceManager:
+        records = own_records(main=main, mirror=mirror)
+        if other:
+            records[OTHER_ID] = stored(
+                "someone/other", "integration", installed="v1.0.0"
             )
-        )
+        entry = await set_up_marketplace(hass, aioclient_mock, hass_storage, records)
+        manager: MarketplaceManager = entry.runtime_data
+        return manager
 
-        with (
-            _server(ws, info=_info()) as mocks,
-            patch.object(hacs_auto_refresh, "RETRY_DELAYS", (0.001,)),
-        ):
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+    yield set_up
+    await unload_marketplace(hass)
 
-        # Immediate attempt + one retry, each asking the Marketplace and then
-        # HACS: absence was NOT accepted first try.
-        assert ws.send_command.await_count == 4
-        mocks.refresh.assert_not_awaited()
-        assert _written_marker(data_dir)["hacs"] == "absent"
 
-    async def test_older_core_falls_back_to_hacs(self, data_dir):
-        ws = _ws()
-        ws.send_command.side_effect = [
-            HomeAssistantCommandError(
-                "Command failed: Unknown command.", "unknown_command"
-            ),
-            {"success": True, "result": [_repo(456, MAIN)]},
-        ]
-        with _server(ws, info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+@contextmanager
+def github_answers(manager: MarketplaceManager, *repository_ids: str) -> Iterator[None]:
+    """GitHub answers the refresh of each of ``repository_ids``; it stays
+    unreachable for every other repository."""
+    with ExitStack() as stack:
+        for repository_id in repository_ids:
+            repository = manager.repositories.get_by_id(repository_id)
+            assert repository is not None
+            stack.enter_context(
+                patch.object(repository, "update_repository", autospec=True)
+            )
+        yield
 
-        assert ws.send_command.await_args_list[1].args == ("hacs/repositories/list",)
-        assert mocks.refresh.await_args.args[2].prefix == "hacs"
 
-    async def test_all_refreshes_failing_leaves_the_marker_unwritten(self, data_dir):
-        # list succeeded but every installed candidate's refresh failed — an
-        # undetermined pass must not write the marker, or the retry schedule
-        # and the next startup's pass are both cancelled.
-        ws = _ws([_repo(123, MIRROR), _repo(456, MAIN)])
+def refreshed(seen: dict[str, list[Any]]) -> list[str]:
+    return [msg["repository"] for msg in seen[REFRESH]]
 
-        with (
-            _server(ws, info=_info()) as mocks,
-            patch.object(hacs_auto_refresh, "RETRY_DELAYS", ()),
-        ):
-            mocks.refresh.side_effect = HomeAssistantCommandTimeout("no answer")
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
-        assert mocks.refresh.await_count == 2
-        assert _written_marker(data_dir) is None
+def markers() -> list[Path]:
+    """The completed passes' markers in the server's data directory."""
+    return sorted(get_data_dir().glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-    async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir, caplog):
-        # Nothing was determined, so the next startup must retry — which is
-        # exactly what an absent marker does. RETRY_DELAYS is emptied so the
-        # test cannot sleep through the real ~8 minute schedule.
-        ws = _ws(error=HomeAssistantConnectionError("websocket down"))
+
+@contextmanager
+def logged(fragment: str) -> Iterator[asyncio.Event]:
+    """Set once the nudge logs a line containing ``fragment``, at any level."""
+    seen = asyncio.Event()
+
+    class Watch(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if fragment in record.getMessage():
+                seen.set()
+
+    log = logging.getLogger(hacs_auto_refresh.__name__)
+    handler, level = Watch(), log.level
+    log.addHandler(handler)
+    log.setLevel(logging.DEBUG)
+    try:
+        yield seen
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(level)
+
+
+class TestRefresh:
+    async def test_first_startup_refreshes_both_installed_component_entries(
+        self, hass: HomeAssistant, store: Store, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        manager = await store(main=True, mirror=True, other=True)
 
         with (
             caplog.at_level(logging.INFO),
-            _server(ws, info=_info()) as mocks,
-            patch.object(hacs_auto_refresh, "RETRY_DELAYS", ()),
+            github_answers(manager, MIRROR_ID, MAIN_ID),
+            received(hass, LIST, REFRESH) as seen,
         ):
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+            await maybe_refresh_hacs_after_update()
 
-        assert ws.send_command.await_count == 1
-        mocks.refresh.assert_not_awaited()
-        assert _written_marker(data_dir) is None
-        # The due-pass line still logged although every WS attempt failed —
-        # the strongest form of "before any WebSocket work", and the property
-        # the HAOS add-on lane depends on (its VM has no HACS to answer).
+        # Both entries the component can be tracked under, and nothing else.
+        assert sorted(refreshed(seen)) == sorted([MIRROR_ID, MAIN_ID])
+        assert len(seen[LIST]) == 1
+        # The due-pass line is what the HAOS add-on lane greps for.
         assert "HACS auto-refresh: startup pass due" in caplog.text
+        # The one info line is the operator-visible signal for this feature.
+        assert MIRROR in caplog.text
+        assert MAIN in caplog.text
+        assert markers()
 
-    async def test_websocket_closure_is_retried(self, data_dir):
-        # send_command re-raises raw websocket exceptions on a mid-send
-        # closure (ambiguous-write contract), so they arrive here unwrapped —
-        # they must consume a retry, not escape to the outer advisory catch.
-        from ha_mcp._vendor import websockets
+    async def test_embedded_server_refreshes_its_component_too(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its component update is the one the Marketplace never checks for
+        without a connected GitHub account."""
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        manager = await store(main=True)
 
-        ws = _ws(error=websockets.exceptions.WebSocketException("closed"))
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID]
+
+    async def test_a_downloaded_entry_only_is_refreshed(
+        self, hass: HomeAssistant, store: Store
+    ) -> None:
+        """Migration limbo: the mirror is added but not downloaded, so only the
+        main entry has an update entity to light up."""
+        manager = await store(main=True, mirror=False)
 
         with (
-            _server(ws, info=_info()) as mocks,
-            patch.object(hacs_auto_refresh, "RETRY_DELAYS", (0.001,)),
+            github_answers(manager, MIRROR_ID, MAIN_ID),
+            received(hass, REFRESH) as seen,
         ):
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+            await maybe_refresh_hacs_after_update()
 
-        assert ws.send_command.await_count == 2
-        mocks.refresh.assert_not_awaited()
-        assert _written_marker(data_dir) is None
+        assert refreshed(seen) == [MAIN_ID]
 
-    async def test_matching_marker_skips_the_websocket(self, data_dir, caplog):
-        # The stdio hot path: a per-conversation spawn on an unchanged version
-        # costs one file read, no WebSocket traffic, and no log noise.
-        hacs_auto_refresh._marker_path(HA_URL).write_text(
-            json.dumps(_marker(latest="1.1.0", hacs="present"))
-        )
-        ws = _ws([_repo(123, MIRROR)])
+    async def test_nothing_to_refresh_still_completes_the_pass(
+        self, hass: HomeAssistant, store: Store
+    ) -> None:
+        """The next startup on the same version does not ask the store again."""
+        await store(other=True)
 
-        with caplog.at_level(logging.DEBUG), _server(ws, info=_info()) as mocks:
-            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+        with received(hass, LIST, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+            await maybe_refresh_hacs_after_update()
 
-        mocks.get_websocket_client.assert_not_awaited()
-        mocks.refresh.assert_not_awaited()
+        assert len(seen[LIST]) == 1
+        assert seen[REFRESH] == []
+
+    async def test_one_failed_refresh_does_not_cost_the_other_its_refresh(
+        self, hass: HomeAssistant, store: Store
+    ) -> None:
+        manager = await store(main=True, mirror=True)
+
+        with github_answers(manager, MAIN_ID), received(hass, LIST, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+            await maybe_refresh_hacs_after_update()
+
+        # Both were asked, and the pass counted: the second startup sent nothing.
+        assert sorted(refreshed(seen)) == sorted([MIRROR_ID, MAIN_ID])
+        assert len(seen[LIST]) == 1
+
+    async def test_every_refresh_failing_is_retried_at_the_next_startup(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An undetermined pass must not be recorded as done."""
+        monkeypatch.setattr(hacs_auto_refresh, "RETRY_DELAYS", ())
+        await store(main=True, mirror=True)
+
+        with received(hass, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+            assert len(seen[REFRESH]) == 2
+            assert markers() == []
+            await maybe_refresh_hacs_after_update()
+
+        assert len(seen[REFRESH]) == 4
+
+
+class TestWhenDue:
+    async def test_a_server_update_makes_the_pass_due(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The just-updated case: the paired component release is what the
+        store needs to surface."""
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            with monkeypatch.context() as before_the_update:
+                older_server(before_the_update)
+                await maybe_refresh_hacs_after_update()
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID, MAIN_ID]
+
+    async def test_a_release_since_the_last_pass_makes_it_due(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            newest_release(monkeypatch, CURRENT)
+            await maybe_refresh_hacs_after_update()
+            newest_release(monkeypatch, NEWER)
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID, MAIN_ID]
+
+    @pytest.mark.parametrize(
+        "latest",
+        [
+            pytest.param(NEWER, id="release-already-surfaced"),
+            pytest.param(CURRENT, id="no-newer-release"),
+            pytest.param(None, id="update-check-unanswered"),
+        ],
+    )
+    async def test_an_unchanged_picture_sends_nothing_and_logs_quietly(
+        self,
+        hass: HomeAssistant,
+        store: Store,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        latest: str | None,
+    ) -> None:
+        """The stdio hot path: a per-conversation spawn on an unchanged version
+        costs one file read, no store traffic and no log noise."""
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID):
+            await maybe_refresh_hacs_after_update()
+        newest_release(monkeypatch, latest)
+        caplog.clear()
+
+        with caplog.at_level(logging.DEBUG), received(hass, LIST, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+
+        assert seen == {LIST: [], REFRESH: []}
         assert "startup pass due" not in caplog.text
-        # The not-due DEBUG line is contract too: it is what the HAOS add-on
-        # lane greps for once an earlier completed pass makes boots not due.
-        not_due_records = [
+        # The not-due DEBUG line is what the HAOS add-on lane greps for once
+        # an earlier completed pass makes boots not due.
+        not_due = [
             record
             for record in caplog.records
             if "HACS auto-refresh: pass not due" in record.getMessage()
         ]
-        assert len(not_due_records) == 1
-        assert not_due_records[0].levelno == logging.DEBUG
+        assert [record.levelno for record in not_due] == [logging.DEBUG]
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param("{not json", id="unparseable"),
+            pytest.param('["nope"]', id="not-an-object"),
+        ],
+    )
+    async def test_an_unreadable_marker_makes_the_pass_due(
+        self, hass: HomeAssistant, store: Store, content: str
+    ) -> None:
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+            [marker] = markers()
+            marker.write_text(content, encoding="utf-8")
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID, MAIN_ID]
+
+    async def test_each_home_assistant_keeps_its_own_marker(
+        self,
+        hass: HomeAssistant,
+        store: Store,
+        monkeypatch: pytest.MonkeyPatch,
+        core_client: HomeAssistantClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Server configs sharing a data dir but targeting different instances:
+        neither suppresses the other's pass nor invalidates its marker."""
+        monkeypatch.setattr(hacs_auto_refresh, "RETRY_DELAYS", ())
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            await maybe_refresh_hacs_after_update()
+            monkeypatch.setenv("HOMEASSISTANT_URL", refused_url())
+            reset_global_settings()
+            caplog.clear()
+            with caplog.at_level(logging.INFO):
+                await maybe_refresh_hacs_after_update()
+            assert "HACS auto-refresh: startup pass due" in caplog.text
+            # Back to the first one, written with a trailing slash: the same target.
+            monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url + "/")
+            reset_global_settings()
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID]
 
 
-class TestLifespanWiring:
-    async def test_lifespan_schedules_and_cancels_the_nudge(self):
-        # Entering the lifespan starts the task; exiting cancels it, so a
-        # nudge parked in a retry sleep cannot stall shutdown.
-        started = asyncio.Event()
-        cancelled = False
+class TestSwitch:
+    async def test_a_new_install_has_it_off(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await store(main=True)
+        setting_unset(monkeypatch)
 
-        async def never_finishes():
-            nonlocal cancelled
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                cancelled = True
-                raise
+        with received(hass, LIST) as seen:
+            await maybe_refresh_hacs_after_update()
 
-        with patch(
-            "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update",
-            new=never_finishes,
+        assert seen[LIST] == []
+        reset_global_settings()
+        assert getattr(get_global_settings(), SETTING) is False
+
+    async def test_an_install_that_already_ran_it_keeps_it_on(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its marker shows the nudge ran before it became opt-in; with no
+        explicit choice the setting is saved on, so nothing changes for it."""
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
+            with monkeypatch.context() as before_the_update:
+                older_server(before_the_update)
+                await maybe_refresh_hacs_after_update()
+            setting_unset(monkeypatch)
+            await maybe_refresh_hacs_after_update()
+
+        assert refreshed(seen) == [MAIN_ID, MAIN_ID]
+        # Saved for the next start, not just switched on for this run.
+        reset_global_settings()
+        assert getattr(get_global_settings(), SETTING) is True
+
+    @pytest.mark.parametrize("where", ["variable", "settings page"])
+    async def test_an_explicit_off_is_kept_even_with_a_marker(
+        self,
+        hass: HomeAssistant,
+        store: Store,
+        monkeypatch: pytest.MonkeyPatch,
+        where: str,
+    ) -> None:
+        manager = await store(main=True)
+        with github_answers(manager, MAIN_ID), received(hass, LIST) as seen:
+            with monkeypatch.context() as before_the_update:
+                older_server(before_the_update)
+                await maybe_refresh_hacs_after_update()
+            setting_unset(monkeypatch)
+            if where == "variable":
+                monkeypatch.setenv(SETTING_ENV, "false")
+            else:
+                async with settings_http() as http:
+                    saved = await http.post(
+                        "/api/settings/advanced", json={SETTING: False}
+                    )
+                assert saved.status_code == 200
+            reset_global_settings()
+            await maybe_refresh_hacs_after_update()
+
+        assert len(seen[LIST]) == 1
+        reset_global_settings()
+        assert getattr(get_global_settings(), SETTING) is False
+
+    async def test_a_disabled_update_check_switches_it_off(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who opted out of the update phone-home gets no
+        update-driven store traffic either."""
+        await store(main=True)
+        monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
+
+        with received(hass, LIST) as seen:
+            await maybe_refresh_hacs_after_update()
+
+        assert seen[LIST] == []
+        assert markers() == []
+
+    async def test_oauth_mode_sends_nothing(
+        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-user OAuth mode holds no server-level credential; the nudge
+        would only burn its retry schedule on auth failures."""
+        await store(main=True)
+        monkeypatch.setenv("HOMEASSISTANT_TOKEN", OAUTH_MODE_TOKEN)
+        reset_global_settings()
+
+        with received(hass, LIST) as seen:
+            await maybe_refresh_hacs_after_update()
+
+        assert seen[LIST] == []
+        assert markers() == []
+
+
+class TestRetries:
+    async def test_no_store_is_recorded_only_after_the_retries(
+        self, hass: HomeAssistant, server: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unknown command is also what a still-booting Home Assistant
+        answers before the store registers its commands, so absence must
+        survive the retry schedule before it is recorded."""
+        monkeypatch.setattr(hacs_auto_refresh, "RETRY_DELAYS", (RETRY,))
+        socket = await get_websocket_client()
+        besides = timers(hass)
+
+        with sent_commands(socket) as spy:
+            task = asyncio.create_task(maybe_refresh_hacs_after_update())
+            await armed(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            assert markers() == []
+            await outwait(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            await asyncio.gather(task)
+            # The Marketplace first, then HACS, on each attempt.
+            assert command_types(spy) == [LIST, "hacs/repositories/list"] * 2
+            await maybe_refresh_hacs_after_update()
+
+        assert len(markers()) == 1
+        assert len(spy.call_args_list) == 4
+
+    async def test_an_unreachable_home_assistant_is_retried_at_the_next_startup(
+        self,
+        server: None,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Nothing was determined, so no pass is recorded; the due line is
+        still logged, as the HAOS add-on lane (no store there) needs."""
+        monkeypatch.setattr(hacs_auto_refresh, "RETRY_DELAYS", ())
+        monkeypatch.setenv("HOMEASSISTANT_URL", refused_url())
+        reset_global_settings()
+
+        with caplog.at_level(logging.DEBUG):
+            await maybe_refresh_hacs_after_update()
+
+        assert "HACS auto-refresh: startup pass due" in caplog.text
+        assert "HACS repository refresh attempt failed" in caplog.text
+        assert markers() == []
+
+    async def test_a_socket_closed_mid_send_uses_a_retry(
+        self, hass: HomeAssistant, server: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A closure mid-send reaches the nudge as the raw websocket error
+        (ambiguous-write contract); it must take a retry, not end the nudge."""
+        monkeypatch.setattr(hacs_auto_refresh, "RETRY_DELAYS", (RETRY,))
+        socket = await get_websocket_client()
+        besides = timers(hass)
+
+        with patch.object(
+            socket,
+            "send_command",
+            AsyncMock(side_effect=websockets.exceptions.WebSocketException("closed")),
         ):
-            async with hacs_auto_refresh.hacs_refresh_lifespan(object()):
-                # The lifespan hands the task to the loop; wait on the flag
-                # the fake sets rather than sleeping.
-                await started.wait()
+            task = asyncio.create_task(maybe_refresh_hacs_after_update())
+            await outwait(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            await asyncio.gather(task)
 
-        assert cancelled, "exiting the lifespan must cancel the pending nudge"
+        assert markers() == []
 
-    async def test_server_attaches_the_lifespan(self):
-        # The built server's FastMCP instance carries ``server_lifespan``,
-        # which runs this module's nudge — the pin that catches a future
-        # constructor change dropping it, the sibling of the app gap this
-        # wiring replaced.
-        from ha_mcp import server_lifespan
-        from ha_mcp.server import HomeAssistantSmartMCPServer
 
-        with (
-            patch("ha_mcp.server.get_global_settings") as get_settings,
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"),
-            patch(
-                "ha_mcp.server.HomeAssistantSmartMCPServer._build_skills_instructions",
-                return_value=None,
-            ),
-        ):
-            settings = get_settings.return_value
-            settings.mcp_server_name = "test"
-            settings.mcp_server_version = "0.0.1"
-            settings.read_only_mode = False
-            settings.custom_instructions = ""
-            server = HomeAssistantSmartMCPServer()
+class TestLifespan:
+    async def test_leaving_the_lifespan_cancels_a_nudge_waiting_to_retry(
+        self, server: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A nudge parked in a retry sleep cannot stall shutdown."""
+        monkeypatch.setenv("HOMEASSISTANT_URL", refused_url())
+        reset_global_settings()
 
-        assert server.mcp._lifespan is server_lifespan.server_lifespan
+        with logged("HACS repository refresh attempt failed") as failed:
+            async with hacs_refresh_lifespan(None):
+                await failed.wait()
+                [nudge] = [
+                    task
+                    for task in asyncio.all_tasks()
+                    if getattr(task.get_coro(), "__qualname__", None)
+                    == maybe_refresh_hacs_after_update.__qualname__
+                ]
+
+        await asyncio.wait([nudge])
+        assert nudge.cancelled()
+
+    async def test_the_server_runs_the_nudge_when_it_starts(
+        self,
+        server: None,
+        monkeypatch: pytest.MonkeyPatch,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        """Every launcher, the app's ``start.py`` included, starts the server's
+        own lifespan: dropping the nudge from it is the gap found live."""
+        setting_unset(monkeypatch)
+        mcp_server = HomeAssistantSmartMCPServer(client=core_client)
+        app = mcp_server.mcp.http_app()
+
+        with logged("HACS auto-refresh: off") as ran:
+            async with app.router.lifespan_context(app):
+                await ran.wait()

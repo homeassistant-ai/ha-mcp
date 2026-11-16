@@ -535,7 +535,7 @@ def _selector_only_parameter_message(offending_parameter: str) -> str:
 # actively unhelpful for a malformed local registry row or a corrupt local
 # visibility config file, so those causes get their own actionable text
 # instead of inheriting the connectivity defaults.
-_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[
+INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[
     InfrastructureErrorCause, tuple[str, list[str]]
 ] = {
     InfrastructureErrorCause.CONNECTIVITY: (
@@ -2317,11 +2317,9 @@ class ServiceTools(EventCallMixin):
                 exc.cause,
                 exc,
             )
-            message, suggestions = _INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
+            message, suggestions = INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
                 exc.cause,
-                _INFRASTRUCTURE_ERROR_SUGGESTIONS[
-                    InfrastructureErrorCause.CONNECTIVITY
-                ],
+                INFRASTRUCTURE_ERROR_SUGGESTIONS[InfrastructureErrorCause.CONNECTIVITY],
             )
             raise_tool_error(
                 create_connection_error(

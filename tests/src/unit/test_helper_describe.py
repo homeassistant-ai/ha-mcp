@@ -1,62 +1,103 @@
-"""ha_config_list_helpers(describe=True): helper fields read from HA (#2632)."""
+"""ha_config_list_helpers(describe=True): helper fields read from HA (#2632).
+
+Every form, menu, stored item and help text below is Core's: the server's
+client (``core_client``) talks to a real ``hass``. Where no helper of Core's
+own has the shape a test needs (a secret field, an options flow that opens
+with a menu), a helper integration registered with Core's ``mock_integration``
+provides it.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import re
+from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
+from homeassistant.components import websocket_api
+from homeassistant.components.frontend import websocket_get_translations
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    TextSelector,
+)
+from homeassistant.helpers.translation import async_get_translations
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.read_only import read_only_request
-from ha_mcp.tools import config_entry_flow_introspect
-from ha_mcp.tools.config_helpers import describe as mod
+from ha_mcp.tools.config_entry_flow_introspect import abort_probe_flow
+from ha_mcp.tools.config_helpers.describe import MAX_OPTIONS, describe_helper
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
-pytestmark = pytest.mark.usefixtures("no_flow_outline")
-
-_SCHEDULE_CORE = [
-    {"type": "string", "lengthMin": 1, "name": "name", "required": True},
-    {"name": "monday", "required": False, "optional": True},  # opaque validator
-]
+from ._core_setup import with_config_component
+from ._helper_tool_core import create_item, set_up
+from ._template_helper_core import create_template_sensor, state_template
 
 
 def _fields(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {f["name"]: f for f in result["fields"]}
 
 
-def _form(step_id: str, schema: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"type": "form", "flow_id": "f1", "step_id": step_id, "data_schema": schema}
-
-
-def _menu(options: list[str]) -> dict[str, Any]:
-    return {"type": "menu", "flow_id": "f1", "step_id": "user", "menu_options": options}
+@pytest.fixture
+def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> HelperConfigTools:
+    """The tools on an install without the component. Core's translations
+    command is registered on its own: the frontend cannot be set up here."""
+    websocket_api.async_register_command(hass, websocket_get_translations)
+    return HelperConfigTools(core_client)
 
 
 @pytest.fixture
-def client() -> AsyncMock:
-    return AsyncMock()
+async def flow_tools(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> HelperConfigTools:
+    """``tools`` on a ``hass`` whose ``config`` serves the flow and
+    config-entry endpoints."""
+    await with_config_component(hass, core_client)
+    return tools
 
 
-@pytest.fixture
-def no_component(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(mod, "fetch_helper_schemas", AsyncMock(return_value=None))
-    monkeypatch.setattr(mod, "read_helper_item", AsyncMock(return_value=None))
+async def _describe(tools: HelperConfigTools, **kwargs: Any) -> dict[str, Any]:
+    return await tools.ha_config_list_helpers(describe=True, **kwargs)
 
 
-@pytest.mark.asyncio
+# --- storage helpers ---------------------------------------------------------
+
+
 async def test_storage_helper_fields_come_from_core_when_component_present(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     """With the component, the field list is Core's; a field whose validator
     Core cannot serialize is named as untyped, not typed by hand."""
-    monkeypatch.setattr(
-        mod,
-        "fetch_helper_schemas",
-        AsyncMock(return_value={"schedule": {"create": _SCHEDULE_CORE}}),
-    )
+    await set_up(hass, "schedule")
 
-    result = await mod.describe_helper(client, "schedule")
+    result = await _describe(
+        HelperConfigTools(component_core_client), helper_type="schedule"
+    )
 
     assert result["source"] == "core_schema"
     fields = _fields(result)
@@ -66,110 +107,139 @@ async def test_storage_helper_fields_come_from_core_when_component_present(
     assert "monday" in result["untyped_fields"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
 async def test_storage_helper_without_component_gets_no_made_up_field_list(
-    client: AsyncMock,
+    hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:
     """Core has no command that lists a storage helper's fields: without the
     component the answer says so instead of offering a list that can go stale."""
-    result = await mod.describe_helper(client, "input_number")
+    await set_up(hass, "input_number")
+
+    result = await _describe(tools, helper_type="input_number")
 
     assert result["source"] == "unavailable"
     assert "fields" not in result
     assert "ha_mcp_tools component" in result["note"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
+async def _pool(hass: HomeAssistant, client: HomeAssistantClient) -> str:
+    await set_up(hass, "input_number")
+    return await create_item(client, "input_number", {"min": 0, "max": 40})
+
+
 async def test_existing_storage_helper_reports_current_values_without_component(
-    client: AsyncMock,
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
 ) -> None:
     """Editing an existing helper starts from its stored values: without a
     field list from Core, the item is returned as Core stores it."""
-    client.send_websocket_message.return_value = {
-        "result": [{"id": "pool", "name": "Pool", "min": 0, "max": 40}]
-    }
+    item_id = await _pool(hass, core_client)
 
-    result = await mod.describe_helper(client, "input_number", helper_id="pool")
+    result = await _describe(tools, helper_type="input_number", helper_id=item_id)
 
     assert result["stored"]["max"] == 40
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
 async def test_helper_named_by_entity_id_reports_current_values_without_component(
-    client: AsyncMock,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    tools: HelperConfigTools,
 ) -> None:
-    """The entity_id ha_config_set_helper returns finds the stored item too."""
-    replies = {
-        "config/entity_registry/get": {"result": {"unique_id": "pool"}},
-        "input_number/list": {"result": [{"id": "pool", "name": "Pool", "max": 40}]},
-    }
-    client.send_websocket_message.side_effect = lambda msg: replies[msg["type"]]
+    """The entity_id ha_config_set_helper returns finds the stored item too,
+    also after the entity was renamed away from the storage id."""
+    item_id = await _pool(hass, core_client)
+    entity_id = entity_registry.async_get_entity_id(
+        "input_number", "input_number", item_id
+    )
+    assert entity_id is not None
+    entity_registry.async_update_entity(
+        entity_id, new_entity_id="input_number.pool_temperature"
+    )
 
-    result = await mod.describe_helper(
-        client, "input_number", helper_id="input_number.pool_temperature"
+    result = await _describe(
+        tools, helper_type="input_number", helper_id="input_number.pool_temperature"
     )
 
     assert result["stored"]["max"] == 40
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
 async def test_existing_person_reports_current_values_without_component(
-    client: AsyncMock,
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
 ) -> None:
     """person/list nests the editable persons under "storage"."""
-    client.send_websocket_message.return_value = {
-        "result": {
-            "storage": [{"id": "pat", "name": "Pat", "device_trackers": ["a.b"]}],
-            "config": [],
-        }
-    }
+    await set_up(hass, "person")
+    item_id = await create_item(
+        core_client, "person", {"device_trackers": ["device_tracker.pat_phone"]}
+    )
 
-    result = await mod.describe_helper(client, "person", helper_id="pat")
+    result = await _describe(tools, helper_type="person", helper_id=item_id)
 
-    assert result["stored"]["device_trackers"] == ["a.b"]
+    assert result["stored"]["device_trackers"] == ["device_tracker.pat_phone"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
 async def test_unknown_storage_helper_is_an_error_not_a_field_list(
-    client: AsyncMock,
+    hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:
     """As the flow path refuses a wrong entry, a storage id that matches nothing
     is refused rather than described without current values."""
-    client.send_websocket_message.return_value = {"result": []}
+    await set_up(hass, "input_number")
 
     with pytest.raises(ToolError, match="RESOURCE_NOT_FOUND"):
-        await mod.describe_helper(client, "input_number", helper_id="gone")
+        await _describe(tools, helper_type="input_number", helper_id="gone")
 
 
-@pytest.mark.asyncio
+async def test_read_only_still_describes_a_storage_helper_type(
+    hass: HomeAssistant, tools: HelperConfigTools
+) -> None:
+    await set_up(hass, "input_number")
+
+    with read_only_request():
+        result = await _describe(tools, helper_type="input_number")
+
+    assert result["source"] == "unavailable"
+
+
+async def test_describe_only_parameters_are_refused_without_describe(
+    tools: HelperConfigTools,
+) -> None:
+    with pytest.raises(ToolError, match="apply only with describe=True"):
+        await tools.ha_config_list_helpers(helper_type="counter", helper_id="c1")
+
+
+# --- menu_choice -------------------------------------------------------------
+
+
 @pytest.mark.parametrize(
-    ("helper_type", "kwargs"),
+    ("helper_type", "existing"),
     [
-        ("input_number", {}),  # a storage helper has no menu
-        ("group", {"helper_id": "entry1"}),  # an existing helper: its options
-        ("derivative", {}),  # a flow helper that opens with a form
+        ("input_number", False),  # a storage helper has no menu
+        ("template", True),  # an existing helper: its options
+        ("derivative", False),  # a flow helper that opens with a form
     ],
 )
 async def test_menu_choice_without_a_menu_is_refused_not_ignored(
-    client: AsyncMock,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    flow_tools: HelperConfigTools,
     helper_type: str,
-    kwargs: dict[str, Any],
+    existing: bool,
 ) -> None:
-    client.start_config_flow.return_value = _form("user", [{"name": "name"}])
-    client.get_config_entry.return_value = {"domain": helper_type}
+    kwargs = {}
+    if existing:
+        kwargs["helper_id"] = (await create_template_sensor(hass, "1")).entry_id
 
-    with pytest.raises(ToolError, match="menu_choice 'sensor' does not apply"):
-        await mod.describe_helper(client, helper_type, menu_choice="sensor", **kwargs)
+    with (
+        patch.object(
+            core_client, "start_options_flow", wraps=core_client.start_options_flow
+        ) as options_flow,
+        pytest.raises(ToolError, match="menu_choice 'sensor' does not apply"),
+    ):
+        await _describe(
+            flow_tools, helper_type=helper_type, menu_choice="sensor", **kwargs
+        )
 
-    client.start_options_flow.assert_not_awaited()
+    options_flow.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("helper_type", "suggestion"),
     [
@@ -179,193 +249,27 @@ async def test_menu_choice_without_a_menu_is_refused_not_ignored(
     ids=["storage-helper", "choice-not-offered"],
 )
 async def test_a_refused_menu_choice_points_at_menu_options_only_with_a_menu(
-    client: AsyncMock, helper_type: str, suggestion: str
+    flow_tools: HelperConfigTools, helper_type: str, suggestion: str
 ) -> None:
-    client.start_config_flow.return_value = _menu(["sensor"])
-
     with pytest.raises(ToolError) as exc_info:
-        await mod.describe_helper(client, helper_type, menu_choice="sensors")
+        await _describe(flow_tools, helper_type=helper_type, menu_choice="sensors")
 
     assert json.loads(str(exc_info.value))["error"]["suggestion"] == suggestion
 
 
-@pytest.mark.asyncio
-async def test_current_values_of_a_password_field_are_redacted(
-    client: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(mod, "redaction_enabled", lambda: True)
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.send_websocket_message.return_value = {"result": {"resources": {}}}
-    client.start_options_flow.return_value = {
-        "type": "form",
-        "flow_id": "f1",
-        "step_id": "init",
-        "data_schema": [
-            {
-                "name": "api_key",
-                "selector": {"text": {"type": "password"}},
-                "description": {"suggested_value": "hunter2"},
-            },
-            {"name": "name", "description": {"suggested_value": "Hall"}},
-        ],
-    }
-
-    fields = _fields(await mod.describe_helper(client, "group", helper_id="entry1"))
-
-    assert "hunter2" not in str(fields)
-    assert fields["api_key"]["current"].startswith("<redacted")
-    assert fields["name"]["current"] == "Hall"
-
-
-@pytest.mark.asyncio
 async def test_flow_helper_menu_lists_sub_types_until_one_is_chosen(
-    client: AsyncMock,
+    hass: HomeAssistant, flow_tools: HelperConfigTools
 ) -> None:
-    """A menu-rooted helper names its sub-types instead of failing."""
-    client.start_config_flow.return_value = _menu(["sensor", "binary_sensor"])
+    """A menu-rooted helper names its sub-types instead of failing, and the
+    flow opened to read the menu is not left open."""
+    result = await _describe(flow_tools, helper_type="template")
 
-    result = await mod.describe_helper(client, "template")
-
-    assert result["menu_options"] == ["sensor", "binary_sensor"]
+    assert {"sensor", "binary_sensor"} <= set(result["menu_options"])
     assert "fields" not in result
     assert result["note"] == "Pass menu_choice to describe one of these sub-types."
-    client.abort_config_flow.assert_awaited_once_with("f1")
+    assert hass.config_entries.flow.async_progress() == []
 
 
-@pytest.mark.asyncio
-async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
-    client: AsyncMock,
-) -> None:
-    client.start_config_flow.return_value = _menu(["sensor"])
-    client.submit_config_flow_step.return_value = {
-        "type": "create_entry",
-        "flow_id": "f1",
-        "title": "Hall",
-    }
-
-    result = await mod.describe_helper(client, "template", menu_choice="sensor")
-
-    assert result["flow_type"] == "create_entry"
-    assert result["menu_choice"] == "sensor"
-    assert result["title"] == "Hall"
-    assert "fields" not in result
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("last_step", "more_forms"),
-    [(False, "yes"), (None, "depends_on_answers"), (True, None)],
-)
-async def test_flow_helper_says_when_more_forms_follow(
-    client: AsyncMock,
-    last_step: bool | None,
-    more_forms: str | None,
-) -> None:
-    """A statistics helper asks for its characteristic on a second form; the
-    agent learns that instead of taking the first form for all of it."""
-    client.start_config_flow.return_value = {
-        **_form("user", [{"name": "entity_id"}]),
-        "last_step": last_step,
-    }
-
-    client.send_websocket_message.return_value = {}
-
-    result = await mod.describe_helper(client, "statistics")
-
-    assert result.get("more_forms") == more_forms
-    assert ("note" in result) is (more_forms is not None)
-    if more_forms is not None:
-        assert ("did not say whether more forms follow" in result["note"]) is (
-            last_step is None
-        )
-        assert ("asks for more fields" in result["note"]) is (last_step is False)
-
-
-@pytest.mark.asyncio
-async def test_existing_flow_helper_with_a_later_options_form_says_so(
-    client: AsyncMock,
-) -> None:
-    client.get_config_entry.return_value = {"domain": "generic_thermostat"}
-    client.start_options_flow.return_value = {
-        "type": "form",
-        "flow_id": "f1",
-        "step_id": "init",
-        "data_schema": [{"name": "away_temp"}],
-        "last_step": False,
-    }
-    client.send_websocket_message.return_value = {}
-
-    result = await mod.describe_helper(client, "generic_thermostat", helper_id="entry1")
-
-    assert result["more_forms"] == "yes"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("menu", "expected"),
-    [(["a", 1, None], ["a"]), (None, []), ([2], []), ({"a": "Label"}, ["a"])],
-)
-async def test_options_flow_menu_lists_only_string_choices(
-    client: AsyncMock, menu: Any, expected: list[str]
-) -> None:
-    """A malformed options-flow menu reports no choices rather than a None list."""
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.start_options_flow.return_value = {
-        "type": "menu",
-        "flow_id": "f1",
-        "menu_options": menu,
-    }
-
-    result = await mod.describe_helper(client, "group", helper_id="entry1")
-
-    assert result["menu_options"] == expected
-    assert result["note"].startswith("This helper's options flow opens with a menu")
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("menu_choice", "helper_id"),
-    [("sensor", None), (None, None), (None, "entry1")],
-    ids=["setup-menu", "setup", "existing"],
-)
-async def test_read_only_still_describes_a_flow_based_helper(
-    client: AsyncMock,
-    menu_choice: str | None,
-    helper_id: str | None,
-) -> None:
-    client.get_config_entry.return_value = {"domain": "template"}
-    client.start_config_flow.return_value = _menu(["sensor"])
-    client.submit_config_flow_step.return_value = _form("sensor", [{"name": "state"}])
-    client.start_options_flow.return_value = _menu(["sensor"])
-
-    with read_only_request():
-        result = await mod.describe_helper(
-            client, "template", menu_choice=menu_choice, helper_id=helper_id
-        )
-
-    if menu_choice:
-        assert [f["name"] for f in result["fields"]] == ["state"]
-    else:
-        assert result["menu_options"] == ["sensor"]
-    if helper_id is None:
-        client.start_config_flow.assert_awaited_once_with("template")
-    else:
-        client.start_options_flow.assert_awaited_once_with("entry1")
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("no_component")
-async def test_read_only_still_describes_a_storage_helper_type(
-    client: AsyncMock,
-) -> None:
-    with read_only_request():
-        result = await mod.describe_helper(client, "input_number")
-
-    assert result["source"] == "unavailable"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("helper_type", "menu_choice", "failing", "match"),
     [
@@ -375,241 +279,415 @@ async def test_read_only_still_describes_a_storage_helper_type(
     ids=["branch-rejected", "flow-not-started"],
 )
 async def test_flow_that_cannot_be_read_is_an_error_not_an_empty_field_list(
-    client: AsyncMock,
+    core_client: HomeAssistantClient,
+    flow_tools: HelperConfigTools,
     helper_type: str,
     menu_choice: str | None,
-    failing: str | None,
+    failing: str,
     match: str,
 ) -> None:
-    """A mistyped menu_choice, or a flow HA does not open or answer, is an
-    error: the agent must not be told the helper has no fields."""
-    client.start_config_flow.return_value = _menu(["sensor"])
-    if failing:
-        getattr(client, failing).side_effect = RuntimeError("HA said no")
+    """A flow HA does not open or answer is an error: the agent must not be
+    told the helper has no fields."""
+    lost = AsyncMock(side_effect=HomeAssistantConnectionError("connection lost"))
+    with (
+        patch.object(core_client, failing, lost),
+        pytest.raises(ToolError, match=match),
+    ):
+        await _describe(flow_tools, helper_type=helper_type, menu_choice=menu_choice)
 
-    with pytest.raises(ToolError, match=match):
-        await mod.describe_helper(client, helper_type, menu_choice=menu_choice)
+
+# --- forms of Core's own helper flows -----------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_an_options_flow_abort_is_reported_with_its_reason(
-    client: AsyncMock,
+@pytest.mark.usefixtures("recorder_mock")  # filter needs the recorder
+@pytest.mark.parametrize(
+    ("helper_type", "more_forms"),
+    [
+        ("statistics", "yes"),  # Core declares the next form
+        ("filter", "depends_on_answers"),  # Core picks it from the answers
+        ("derivative", None),  # a single form
+    ],
+)
+async def test_flow_helper_says_when_more_forms_follow(
+    flow_tools: HelperConfigTools, helper_type: str, more_forms: str | None
 ) -> None:
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.start_options_flow.return_value = {
-        "type": "abort",
-        "flow_id": "f1",
-        "reason": "not_loaded",
-    }
+    """A statistics helper asks for its characteristic on a second form; the
+    agent learns that instead of taking the first form for all of it."""
+    result = await _describe(flow_tools, helper_type=helper_type)
 
-    result = await mod.describe_helper(client, "group", helper_id="entry1")
+    assert result.get("more_forms") == more_forms
+    assert ("note" in result) is (more_forms is not None)
+    if more_forms is not None:
+        assert ("did not say whether more forms follow" in result["note"]) is (
+            more_forms == "depends_on_answers"
+        )
+        assert ("asks for more fields" in result["note"]) is (more_forms == "yes")
+
+
+async def _thermostat(hass: HomeAssistant) -> str:
+    """A generic_thermostat entry, made by Core's flow."""
+    result = await hass.config_entries.flow.async_init(
+        "generic_thermostat", context={"source": "user"}
+    )
+    for answer in (
+        {
+            "name": "Office",
+            "ac_mode": False,
+            "target_sensor": "sensor.office_temperature",
+            "heater": "switch.office_heater",
+        },
+        {},
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], answer
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    return str(result["result"].entry_id)
+
+
+async def test_existing_flow_helper_with_a_later_options_form_says_so(
+    hass: HomeAssistant, flow_tools: HelperConfigTools
+) -> None:
+    entry_id = await _thermostat(hass)
+
+    result = await _describe(
+        flow_tools, helper_type="generic_thermostat", helper_id=entry_id
+    )
+
+    assert result["more_forms"] == "yes"
+
+
+@pytest.mark.parametrize(
+    ("menu_choice", "existing"),
+    [("sensor", False), (None, False), (None, True)],
+    ids=["setup-menu", "setup", "existing"],
+)
+async def test_read_only_still_describes_a_flow_based_helper(
+    hass: HomeAssistant,
+    flow_tools: HelperConfigTools,
+    menu_choice: str | None,
+    existing: bool,
+) -> None:
+    helper_id = (await create_template_sensor(hass, "1")).entry_id if existing else None
+
+    with read_only_request():
+        result = await _describe(
+            flow_tools,
+            helper_type="template",
+            menu_choice=menu_choice,
+            helper_id=helper_id,
+        )
+
+    if menu_choice or existing:
+        assert "state" in _fields(result)
+    else:
+        assert "sensor" in result["menu_options"]
+    assert result["source"] == ("options_flow" if existing else "config_flow")
+
+
+async def test_entry_of_another_helper_type_is_refused_without_opening_its_flow(
+    hass: HomeAssistant, core_client: HomeAssistantClient, flow_tools: HelperConfigTools
+) -> None:
+    """Describing a template's entry as a utility meter must not show its options."""
+    entry = await create_template_sensor(hass, "1")
+
+    with (
+        patch.object(
+            core_client, "start_options_flow", wraps=core_client.start_options_flow
+        ) as options_flow,
+        pytest.raises(ToolError, match="belongs to domain 'template'"),
+    ):
+        await _describe(
+            flow_tools, helper_type="utility_meter", helper_id=entry.entry_id
+        )
+
+    options_flow.assert_not_awaited()
+
+
+async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
+    hass: HomeAssistant, flow_tools: HelperConfigTools
+) -> None:
+    """An options flow opened only to read values is never left open."""
+    entry = await create_template_sensor(hass, "1 + 1")
+
+    result = await _describe(
+        flow_tools, helper_type="template", helper_id=entry.entry_id
+    )
+
+    assert _fields(result)["state"]["current"] == state_template("1 + 1")
+    assert hass.config_entries.options.async_progress() == []
+
+
+async def test_flow_fields_carry_ha_own_help_text_including_sections(
+    hass: HomeAssistant, flow_tools: HelperConfigTools
+) -> None:
+    """The model sees the same per-field help the HA UI shows, with no doc to
+    maintain, also for a field inside a collapsed section."""
+    result = await _describe(flow_tools, helper_type="template", menu_choice="sensor")
+    fields = _fields(result)
+
+    strings = await async_get_translations(hass, "en", "config", ["template"])
+    step = "component.template.config.step.sensor"
+    assert (result["step_id"], result["menu_choice"]) == ("sensor", "sensor")
+    assert fields["state"]["description"] == strings[f"{step}.data_description.state"]
+    (availability,) = fields["additional_options"]["fields"]
+    assert availability["name"] == "availability"
+    assert (
+        availability["description"]
+        == strings[f"{step}.sections.additional_options.data_description.availability"]
+    )
+
+
+async def test_flow_fields_still_described_when_translations_fail(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Help text is best-effort: a translations read Core refuses leaves it
+    out and says so, and the fields are still described."""
+    client = await with_config_component(hass, core_client)
+
+    result = await _describe(HelperConfigTools(client), helper_type="derivative")
+
+    assert "source" in _fields(result)
+    assert "description" not in _fields(result)["source"]
+    assert result["warnings"]
+
+
+async def test_flow_field_without_help_text_gets_its_ui_label(
+    hass: HomeAssistant, flow_tools: HelperConfigTools
+) -> None:
+    """A field HA documents only by its label still says what it is."""
+    result = await _describe(flow_tools, helper_type="derivative")
+
+    strings = await async_get_translations(hass, "en", "config", ["derivative"])
+    step = "component.derivative.config.step.user"
+    assert f"{step}.data_description.source" not in strings
+    assert _fields(result)["source"]["description"] == strings[f"{step}.data.source"]
+
+
+# --- shapes no Core helper has, from a helper integration of the test's own ----
+
+_DOMAIN = "helper_describe_probe"
+_UNITS = [f"u{i}" for i in range(175)]
+_CHARACTERISTICS = [f"characteristic_{i}" for i in range(27)]
+
+
+class _ProbeOptionsFlow(OptionsFlow):
+    """Opens with what the entry's ``opens_with`` option names."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        options = self.config_entry.options
+        if options["opens_with"] == "abort":
+            return self.async_abort(reason="not_loaded")
+        if options["opens_with"] == "menu":
+            return self.async_show_menu(step_id="init", menu_options=options["menu"])
+        if options["opens_with"] == "progress":
+            # Never finishes: Core cancels it when the flow is aborted, and
+            # Core's stop when it is not, so a flow left open fails the test.
+            waiting = self.hass.async_create_background_task(
+                asyncio.Event().wait(), "probe progress"
+            )
+            return self.async_show_progress(
+                step_id="init", progress_action="wait", progress_task=waiting
+            )
+        schema = probatio.Schema(
+            {
+                probatio.Secret("api_key"): TextSelector(),
+                probatio.Secret("password"): str,
+                probatio.Optional("name"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(schema, options),
+        )
+
+
+class _ProbeFlow(ConfigFlow):
+    """A menu whose ``finish`` saves the helper and whose ``selects`` is a
+    form with a long suggestion list and a long fixed list."""
+
+    VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="user", menu_options=["finish", "selects"])
+
+    async def async_step_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_create_entry(title="Hall", data={})
+
+    async def async_step_selects(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="selects",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Optional("unit_of_measurement"): SelectSelector(
+                        SelectSelectorConfig(options=_UNITS, custom_value=True)
+                    ),
+                    probatio.Optional("state_characteristic"): SelectSelector(
+                        SelectSelectorConfig(options=_CHARACTERISTICS)
+                    ),
+                }
+            ),
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> _ProbeOptionsFlow:
+        return _ProbeOptionsFlow()
+
+
+async def _set_up_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    return True
+
+
+@pytest.fixture
+async def probe(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> AsyncIterator[HomeAssistantClient]:
+    """``core_client`` on a ``hass`` with the probe helper integration."""
+    await with_config_component(hass, core_client)
+    mock_integration(hass, MockModule(_DOMAIN, async_setup_entry=_set_up_entry))
+    mock_platform(hass, f"{_DOMAIN}.config_flow", None)
+    with mock_config_flow(_DOMAIN, _ProbeFlow):
+        yield core_client
+        await hass.async_block_till_done()
+
+
+def _probe_entry(hass: HomeAssistant, **options: Any) -> str:
+    entry = MockConfigEntry(domain=_DOMAIN, options=options)
+    entry.add_to_hass(hass)
+    return entry.entry_id
+
+
+@pytest.fixture
+def secret_entry(hass: HomeAssistant) -> str:
+    return _probe_entry(
+        hass, opens_with="form", api_key="hunter2", password="swordfish", name="Hall"
+    )
+
+
+@pytest.mark.usefixtures("redact_on")
+async def test_current_values_of_a_password_field_are_redacted(
+    probe: HomeAssistantClient, secret_entry: str
+) -> None:
+    result = await describe_helper(probe, _DOMAIN, helper_id=secret_entry)
+    fields = _fields(result)
+
+    assert "hunter2" not in str(fields)
+    assert fields["api_key"]["current"].startswith("<redacted")
+    assert fields["name"]["current"] == "Hall"
+
+
+@pytest.mark.parametrize(
+    "name", ["password", "api_key"], ids=["serialized", "selector"]
+)
+async def test_core_secret_fields_stay_recognisable_as_secrets(
+    probe: HomeAssistantClient, secret_entry: str, name: str
+) -> None:
+    """A field Core marks secret (#3002) is shown as one, so the model knows a
+    redacted value is withheld rather than empty."""
+    result = await describe_helper(probe, _DOMAIN, helper_id=secret_entry)
+
+    assert _fields(result)[name]["secret"] is True
+
+
+async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
+    hass: HomeAssistant, probe: HomeAssistantClient
+) -> None:
+    result = await describe_helper(probe, _DOMAIN, menu_choice="finish")
+
+    assert result["flow_type"] == "create_entry"
+    assert result["menu_choice"] == "finish"
+    assert result["title"] == "Hall"
+    assert "fields" not in result
+    assert [e.title for e in hass.config_entries.async_entries(_DOMAIN)] == ["Hall"]
+
+
+@pytest.mark.parametrize(
+    "menu", [["a", "b"], {"a": "Label A", "b": "Label B"}], ids=["list", "labelled"]
+)
+async def test_options_flow_menu_lists_its_choices(
+    hass: HomeAssistant, probe: HomeAssistantClient, menu: Any
+) -> None:
+    """Core sends a menu as step ids or as ``{step_id: label}``: both list the
+    step ids, and the flow opened to read them is not left open."""
+    entry_id = _probe_entry(hass, opens_with="menu", menu=menu)
+
+    result = await describe_helper(probe, _DOMAIN, helper_id=entry_id)
+
+    assert result["menu_options"] == ["a", "b"]
+    assert result["note"].startswith("This helper's options flow opens with a menu")
+    assert hass.config_entries.options.async_progress() == []
+
+
+async def test_an_options_flow_abort_is_reported_with_its_reason(
+    hass: HomeAssistant, probe: HomeAssistantClient
+) -> None:
+    entry_id = _probe_entry(hass, opens_with="abort")
+
+    result = await describe_helper(probe, _DOMAIN, helper_id=entry_id)
 
     assert (result["flow_type"], result["aborted"]) == ("abort", "not_loaded")
     assert "fields" not in result
-    client.abort_options_flow.assert_awaited_once_with("f1")
 
 
-@pytest.mark.asyncio
-async def test_an_options_flow_without_a_form_is_an_error(client: AsyncMock) -> None:
-    client.get_config_entry.return_value = {"domain": "group"}
-    client.start_options_flow.return_value = {
-        "type": "progress",
-        "flow_id": "f1",
-        "step_id": "wait",
-    }
+async def test_an_options_flow_without_a_form_is_an_error(
+    hass: HomeAssistant, probe: HomeAssistantClient
+) -> None:
+    """A progress step has no form: the call fails, and the flow it opened is
+    aborted rather than left running."""
+    entry_id = _probe_entry(hass, opens_with="progress")
 
     with pytest.raises(ToolError, match="reached a 'progress' step"):
-        await mod.describe_helper(client, "group", helper_id="entry1")
+        await describe_helper(probe, _DOMAIN, helper_id=entry_id)
 
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-@pytest.mark.asyncio
-async def test_describe_only_parameters_are_refused_without_describe() -> None:
-    from unittest.mock import MagicMock
-
-    from ha_mcp.tools.tools_config_helpers import HelperConfigTools
-
-    tools = HelperConfigTools(MagicMock())
-    with pytest.raises(ToolError, match="apply only with describe=True"):
-        await tools.ha_config_list_helpers(helper_type="counter", helper_id="c1")
+    assert hass.config_entries.options.async_progress() == []
 
 
-@pytest.mark.asyncio
-async def test_entry_of_another_helper_type_is_refused_without_opening_its_flow(
-    client: AsyncMock,
+async def test_long_suggestion_lists_are_truncated_but_say_how_many_remain(
+    probe: HomeAssistantClient,
 ) -> None:
-    """Describing a utility meter's entry as a template must not show its options."""
-    client.get_config_entry.return_value = {"domain": "utility_meter"}
-
-    with pytest.raises(ToolError, match="belongs to domain 'utility_meter'"):
-        await mod.describe_helper(client, "template", helper_id="entry1")
-
-    client.start_options_flow.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_existing_flow_helper_reads_current_values_and_aborts_options_flow(
-    client: AsyncMock,
-) -> None:
-    """An options flow opened only to read values is never left open."""
-    client.get_config_entry.return_value = {"domain": "template"}
-    client.start_options_flow.return_value = {
-        "type": "form",
-        "flow_id": "f1",
-        "data_schema": [
-            {
-                "name": "state",
-                "required": True,
-                "selector": {"template": {}},
-                "description": {"suggested_value": "{{ 1 + 1 }}"},
-            }
-        ],
-    }
-
-    result = await mod.describe_helper(client, "template", helper_id="entry1")
-
-    assert _fields(result)["state"]["current"] == "{{ 1 + 1 }}"
-    client.abort_options_flow.assert_awaited_once_with("f1")
-
-
-def test_long_suggestion_lists_are_truncated_but_say_how_many_remain() -> None:
     """A 175-unit dropdown that also takes a custom value must not flood a
     small model's context."""
-    units = [f"u{i}" for i in range(175)]
-    field = {
-        "name": "unit_of_measurement",
-        "selector": {"select": {"options": units, "custom_value": True}},
-    }
+    result = await describe_helper(probe, _DOMAIN, menu_choice="selects")
+    options = _fields(result)["unit_of_measurement"]["options"]
 
-    options = mod.compact_field(field)["options"]
-
-    assert len(options) <= mod.MAX_OPTIONS + 1
-    assert str(175 - mod.MAX_OPTIONS) in options[-1]
+    assert len(options) <= MAX_OPTIONS + 1
+    remaining = re.fullmatch(r"\.\.\.(\d+) more", options[-1])
+    assert remaining is not None
+    assert len(options) - 1 + int(remaining.group(1)) == len(_UNITS)
 
 
-def test_a_select_that_must_be_answered_from_its_list_shows_every_choice() -> None:
+async def test_a_select_that_must_be_answered_from_its_list_shows_every_choice(
+    probe: HomeAssistantClient,
+) -> None:
     """A statistics helper's 27 characteristics were cut to 12, which hid
     ``mean`` from the agent choosing one."""
-    choices = [f"characteristic_{i}" for i in range(27)]
-    field = {
-        "name": "state_characteristic",
-        "selector": {"select": {"options": choices, "custom_value": False}},
-    }
+    result = await describe_helper(probe, _DOMAIN, menu_choice="selects")
 
-    assert mod.compact_field(field)["options"] == choices
+    assert _fields(result)["state_characteristic"]["options"] == _CHARACTERISTICS
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        {"name": "password", "type": "string", "secret": True},
-        {"name": "api_key", "selector": {"text": {}}, "secret": True},
-    ],
-    ids=["serialized", "selector"],
-)
-def test_core_secret_fields_stay_recognisable_as_secrets(field) -> None:
-    """A field Core marks secret (#3002) is shown as one, so the model knows a
-    redacted value is withheld rather than empty."""
-    assert mod.compact_field(field)["secret"] is True
+# --- the probe flow's abort ----------------------------------------------------
 
 
-def test_collapsed_sections_are_described_inline() -> None:
-    """Fields hidden in an expandable section (e.g. availability) stay visible."""
-    field = {
-        "type": "expandable",
-        "name": "additional_options",
-        "schema": [{"name": "availability", "selector": {"template": {}}}],
-    }
-
-    compact = mod.compact_field(field)
-
-    assert compact["fields"][0]["name"] == "availability"
-
-
-@pytest.mark.asyncio
-async def test_flow_fields_carry_ha_own_help_text_including_sections(
-    client: AsyncMock,
-) -> None:
-    """The model sees the same per-field help the HA UI shows, with no doc to maintain."""
-    client.start_config_flow.return_value = _menu(["sensor", "binary_sensor"])
-    client.submit_config_flow_step.return_value = _form(
-        "sensor",
-        [
-            {"name": "state", "selector": {"template": {}}},
-            {
-                "type": "expandable",
-                "name": "additional_options",
-                "schema": [{"name": "availability", "selector": {"template": {}}}],
-            },
-        ],
-    )
-    p = "component.template.config.step.sensor"
-    client.send_websocket_message.return_value = {
-        "resources": {
-            f"{p}.data_description.state": "Template for the state.",
-            f"{p}.sections.additional_options.data_description.availability": "Avail.",
-            "component.template.config.step.binary_sensor.data_description.state": "x",
-        }
-    }
-
-    result = await mod.describe_helper(client, "template", menu_choice="sensor")
-    fields = _fields(result)
-
-    client.submit_config_flow_step.assert_awaited_once_with(
-        "f1", {"next_step_id": "sensor"}
-    )
-    assert result["menu_choice"] == "sensor"
-    assert fields["state"]["description"] == "Template for the state."
-    assert fields["additional_options"]["fields"][0]["description"] == "Avail."
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "reply",
-    [RuntimeError("ws down"), {"result": ["not", "a", "dict"]}, {"resources": "x"}],
-    ids=["call-fails", "result-not-a-dict", "resources-not-a-dict"],
-)
-async def test_flow_fields_still_described_when_translations_fail(
-    client: AsyncMock, reply: Any
-) -> None:
-    """Help text is best-effort: a failed or malformed reply leaves it out."""
-    client.start_config_flow.return_value = _form("user", [{"name": "source"}])
-    if isinstance(reply, Exception):
-        client.send_websocket_message.side_effect = reply
-    else:
-        client.send_websocket_message.return_value = reply
-
-    result = await mod.describe_helper(client, "derivative")
-
-    assert [f["name"] for f in result["fields"]] == ["source"]
-
-
-@pytest.mark.asyncio
-async def test_flow_field_without_help_text_gets_its_ui_label(
-    client: AsyncMock,
-) -> None:
-    """A field HA documents only by its label still says what it is."""
-    client.start_config_flow.return_value = _form("user", [{"name": "source"}])
-    client.send_websocket_message.return_value = {
-        "resources": {
-            "component.utility_meter.config.step.user.data.source": "Input sensor"
-        }
-    }
-
-    result = await mod.describe_helper(client, "utility_meter")
-
-    assert result["fields"][0]["description"] == "Input sensor"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(("quiet", "level"), [(False, "WARNING"), (True, "DEBUG")])
 async def test_a_failed_probe_abort_logs_at_debug_when_quiet(
     quiet: bool, level: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    abort = AsyncMock(side_effect=RuntimeError("ws down"))
+    abort = AsyncMock(side_effect=HomeAssistantConnectionError("ws down"))
 
-    with caplog.at_level("DEBUG", logger="ha_mcp.tools.config_entry_flow_introspect"):
-        await config_entry_flow_introspect.abort_probe_flow(abort, "f1", quiet=quiet)
+    with caplog.at_level(
+        logging.DEBUG, logger="ha_mcp.tools.config_entry_flow_introspect"
+    ):
+        await abort_probe_flow(abort, "f1", quiet=quiet)
 
     assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [level]
