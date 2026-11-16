@@ -234,7 +234,6 @@ module = [
     "tests.src.unit.test_template_helper_backup",
     "tests.src.unit.test_tools_addons",
     "tests.src.unit.test_tools_areas",
-    "tests.src.unit.test_tools_config_scenes",
     "tests.src.unit.test_tools_config_scripts",
     "tests.src.unit.test_tools_get_states",
     "tests.src.unit.test_tools_integrations",
