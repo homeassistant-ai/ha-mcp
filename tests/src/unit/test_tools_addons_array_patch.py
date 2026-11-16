@@ -16,6 +16,10 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ._tool_errors import error_body, error_of
+from ._tools_addons_core import INGRESS_TOKEN, SLUG, Route, manage
+from ._tools_addons_core import app_route as app_route
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
 
 @pytest.fixture
@@ -845,73 +849,33 @@ class TestProxyHeaderMerge:
     framing layered on top so it always wins on collision.
     """
 
-    @pytest.mark.asyncio
-    async def test_internal_framing_overrides_caller_headers(self, _registered_tool):
+    async def test_internal_framing_overrides_caller_headers(
+        self, app_route: Route
+    ) -> None:
         """If a caller tries to override X-Ingress-Path / X-Hass-Source /
         Content-Type, the proxy's internal values must still win."""
-        from unittest.mock import MagicMock
+        app_route.supervisor.running()
 
-        addon_info = {
-            "success": True,
-            "addon": {
-                "name": "Test",
-                "slug": "test",
-                "ingress": True,
-                "ingress_entry": "/api/hassio_ingress/REAL",
-                "ingress_port": 5000,
-                "ip_address": "172.30.33.99",
-                "state": "started",
+        await manage(
+            app_route.client,
+            slug=SLUG,
+            path="/api/state",
+            method="POST",
+            body={"x": 1},
+            request_headers={
+                "X-Ingress-Path": "/api/hassio_ingress/EVIL",
+                "X-Hass-Source": "spoofed",
+                "Content-Type": "application/x-attack",
+                "X-Custom-Allowed": "kept",
             },
-        }
+        )
 
-        # Capture the headers passed to httpx.request — same mocking pattern
-        # the other proxy tests use.
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = "ok"
-        mock_response.headers = {"content-type": "text/plain"}
-        mock_response.json.return_value = {}
-
-        mock_http_client = AsyncMock()
-        mock_http_client.request.return_value = mock_response
-
-        with (
-            patch(
-                "ha_mcp.tools.tools_addons.get_addon_info",
-                new_callable=AsyncMock,
-                return_value=addon_info,
-            ),
-            patch(
-                "ha_mcp.tools.tools_addons.is_running_in_addon",
-                return_value=True,
-            ),
-            patch(
-                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
-            ) as mock_httpx,
-        ):
-            mock_httpx.return_value.__aenter__ = AsyncMock(
-                return_value=mock_http_client
-            )
-            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
-
-            await _registered_tool(
-                slug="test",
-                path="/api/state",
-                method="POST",
-                body={"x": 1},
-                request_headers={
-                    "X-Ingress-Path": "/api/hassio_ingress/EVIL",
-                    "X-Hass-Source": "spoofed",
-                    "Content-Type": "application/x-attack",
-                    "X-Custom-Allowed": "kept",
-                },
-            )
-
-        # Headers actually sent to the addon container:
-        sent = mock_http_client.request.call_args.kwargs["headers"]
+        # Headers the app received:
+        [seen] = app_route.target.requests
         # Internal framing wins
-        assert sent["X-Ingress-Path"] == "/api/hassio_ingress/REAL"
-        assert sent["X-Hass-Source"] == "core.ingress"
-        assert sent["Content-Type"] == "application/json"
+        assert seen.headers["X-Ingress-Path"] == f"/api/hassio_ingress/{INGRESS_TOKEN}"
+        assert seen.headers["X-Hass-Source"] == "core.ingress"
+        assert seen.headers["Content-Type"] == "application/json"
+        assert seen.body == {"x": 1}
         # Non-conflicting caller headers pass through
-        assert sent["X-Custom-Allowed"] == "kept"
+        assert seen.headers["X-Custom-Allowed"] == "kept"
