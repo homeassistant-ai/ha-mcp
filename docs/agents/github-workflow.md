@@ -97,7 +97,11 @@ adequate author testing solely to satisfy this requirement.
    still applies to anything not rerun. If live testing is unavailable, fails,
    or leaves required behavior unverified, report validation as incomplete and
    keep the PR unready for merge. Static review, green CI, or a checked box
-   without supporting evidence does not satisfy the requirement.
+   without supporting evidence does not satisfy the requirement. The exception
+   is behavior that needs hardware neither the dev environment nor an emulator
+   provides (a Zigbee radio, for example): a maintainer may accept tests on the
+   real Core integration for it, and the Testing section records what was not
+   live-tested and why.
 5. Clean up test resources and cancel a dev-environment run when finished.
 
 Reviewers without live access can assess live evidence supplied by the author
