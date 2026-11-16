@@ -106,6 +106,22 @@ def hold_restore(manager: bm.BackupManager) -> HeldRestore:
     return held
 
 
+def guard_attempts(
+    manager: bm.BackupManager, monkeypatch: pytest.MonkeyPatch
+) -> asyncio.Queue[str]:
+    """The entry id of each attempt to take the config-entry write guard, as it
+    is made: a restore that has asked for the guard is known to be waiting."""
+    attempts: asyncio.Queue[str] = asyncio.Queue()
+    native = manager.config_entry_write_guard
+
+    def guard(entry_id: str, **kwargs: Any) -> Any:
+        attempts.put_nowait(entry_id)
+        return native(entry_id, **kwargs)
+
+    monkeypatch.setattr(manager, "config_entry_write_guard", guard)
+    return attempts
+
+
 def edit_snapshot(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
     """Change a snapshot file in place, as a hand edit or an older release would."""
     data = yaml.safe_load(path.read_text())

@@ -387,11 +387,11 @@ class TestVerificationWithoutAnAnswer:
     ) -> None:
         change: dict[str, Any] = (
             {
-                "python_transform": "config['name'] = 'Test Scene'",
+                "python_transform": "config['name'] = 'Late Show'",
                 "config_hash": await config_hash(tools, "test_scene"),
             }
             if transform
-            else {"config": {"name": "Test Scene", "entities": TV_ON}}
+            else {"config": {"name": "Late Show", "entities": TV_ON}}
         )
 
         with patch.object(
@@ -405,6 +405,7 @@ class TestVerificationWithoutAnAnswer:
         assert result["success"] is True
         assert result["scene_id"] == "test_scene"
         assert any(verbiage in w and "forced for test" in w for w in result["warnings"])
+        assert [s["name"] for s in await stored_scenes(hass)] == ["Late Show"]
 
     async def test_remove_reports_success_with_a_warning(
         self,

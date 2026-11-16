@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
@@ -141,12 +140,15 @@ async def test_exact_redaction_leaves_are_still_refused(
 async def test_redaction_marker_inside_a_template_remains_a_recoverable_value(
     hass: HomeAssistant, manager: bm.BackupManager
 ) -> None:
+    """Only a value that IS the marker was redacted; a template that merely
+    contains it is captured whole and restores."""
     entry = await create_template_sensor(hass, "**redacted**")
-
     path = await real_snapshot(manager, entry)
+    await set_template_state(hass, entry, "edited since")
 
-    options = manager.read_snapshot(path.name)["config"]["options"]
-    assert options["state"] == state_template("**redacted**")
+    await manager.restore_snapshot(path.name)
+
+    assert entry.options["state"] == state_template("**redacted**")
 
 
 async def test_recreated_identity_readback_mismatch_is_reported(
@@ -233,20 +235,29 @@ async def test_unavailable_verification_logs_safe_local_cause(
 
 
 async def test_unknown_recreation_logs_step_and_type_without_remote_payload(
+    hass: HomeAssistant,
     deleted_template: DeletedTemplate,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(
-        component_core_client,
-        "submit_config_flow_step",
-        AsyncMock(side_effect=HomeAssistantConnectionError("private upstream payload")),
-    )
+    """The answer to the creation flow gets no reply."""
+    answered: list[tuple[str | None, Any]] = []
+
+    async def no_reply(flow_id: str, answer: Any) -> None:
+        live = {
+            flow["flow_id"]: flow["handler"]
+            for flow in hass.config_entries.flow.async_progress()
+        }
+        answered.append((live.get(flow_id), answer))
+        raise HomeAssistantConnectionError("private upstream payload")
+
+    monkeypatch.setattr(component_core_client, "submit_config_flow_step", no_reply)
 
     with caplog.at_level(logging.WARNING), pytest.raises(bm.BackupRestoreError):
         await deleted_template.manager.restore_snapshot(deleted_template.name)
 
+    assert answered == [("template", {"next_step_id": "sensor"})]
     assert "step=create_entry" in caplog.text
     assert "CreationFlowError" in caplog.text
     assert "private upstream payload" not in caplog.text

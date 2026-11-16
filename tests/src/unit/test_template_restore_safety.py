@@ -40,6 +40,7 @@ from ._template_recovery_core import (
     DOMAIN,
     DeletedTemplate,
     create_template_button,
+    guard_attempts,
     hold_restore,
     recreated_entry,
     stored_state,
@@ -232,7 +233,10 @@ async def test_active_restore_pins_source_and_safety_during_other_capture(
 
 
 async def test_serialized_restores_capture_immediate_predecessor(
-    hass: HomeAssistant, manager: bm.BackupManager, template_entry: ConfigEntry
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await set_template_state(hass, template_entry, "first")
     first = await real_snapshot(manager, template_entry)
@@ -240,13 +244,14 @@ async def test_serialized_restores_capture_immediate_predecessor(
     second = await real_snapshot(manager, template_entry)
     await set_template_state(hass, template_entry, "initial")
     held = hold_restore(manager)
+    attempts = guard_attempts(manager, monkeypatch)
 
     one = asyncio.create_task(manager.restore_snapshot(first.name))
     await asyncio.wait_for(held.entered.wait(), 2)
+    await attempts.get()
     two = asyncio.create_task(manager.restore_snapshot(second.name))
-    # The second restore runs as far as it can before it waits for the first.
-    for _ in range(20):
-        await asyncio.sleep(0)
+    # The second restore has asked for the guard the first one holds.
+    await asyncio.wait_for(attempts.get(), 2)
     held.release.set()
     _, result = await asyncio.wait_for(asyncio.gather(one, two), 5)
 
@@ -489,19 +494,23 @@ async def test_cancellation_releases_entry_for_next_restore_and_keeps_recovery(
 
 
 async def test_alias_and_stable_id_restores_share_serialization(
-    hass: HomeAssistant, manager: bm.BackupManager, template_entry: ConfigEntry
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first = await real_snapshot(manager, template_entry)
     alias = legacy_snapshot(
         manager, await real_snapshot(manager, template_entry), "sensor.reused"
     )
     held = hold_restore(manager)
+    attempts = guard_attempts(manager, monkeypatch)
 
     one = asyncio.create_task(manager.restore_snapshot(first.name))
     await asyncio.wait_for(held.entered.wait(), 2)
+    await attempts.get()
     two = asyncio.create_task(manager.restore_snapshot(alias.name))
-    for _ in range(20):
-        await asyncio.sleep(0)
+    await asyncio.wait_for(attempts.get(), 2)
     assert held.targets == [template_entry.entry_id]
     held.release.set()
     await asyncio.wait_for(asyncio.gather(one, two), 5)
