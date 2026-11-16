@@ -105,18 +105,23 @@ async def scratch_pipelines(ha_client: Any) -> AsyncIterator[Create]:
                     }
                 )
                 assert restored.get("success"), restored
+            left: list[str] = []
             with cleanup.step():
                 listed = await ha_client.send_websocket_message(
                     {"type": "assist_pipeline/pipeline/list"}
                 )
                 assert listed.get("success"), listed
-                for pipeline in listed["result"]["pipelines"]:
-                    if pipeline["id"] in before:
-                        continue
+                left = [
+                    pipeline["id"]
+                    for pipeline in listed["result"]["pipelines"]
+                    if pipeline["id"] not in before
+                ]
+            for pipeline_id in left:
+                with cleanup.step():
                     removed = await ha_client.send_websocket_message(
                         {
                             "type": "assist_pipeline/pipeline/delete",
-                            "pipeline_id": pipeline["id"],
+                            "pipeline_id": pipeline_id,
                         }
                     )
                     assert removed.get("success"), removed

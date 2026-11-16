@@ -8,6 +8,7 @@ test reads back what the server was asked and gives the server's answers.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock
@@ -431,6 +432,9 @@ async def test_every_supported_action_reaches_its_handler(
                     confirm=True,
                 )
             except ToolError as exc:
+                # A handler that raised something of its own is a bug, not a refusal.
+                code = json.loads(str(exc))["error"]["code"]
+                assert code != "INTERNAL_ERROR", f"{radio_name}/{action}: {exc}"
                 assert "unhandled" not in str(exc), f"{radio_name}/{action}"
                 assert "requires:" not in str(exc), f"{radio_name}/{action}"
 

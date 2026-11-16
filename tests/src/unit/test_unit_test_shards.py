@@ -1,5 +1,7 @@
 """The unit suite runs on several CI runners; no test may fall between them."""
 
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,29 @@ def test_the_required_check_passes_only_when_every_runner_did() -> None:
     # ``always()``: a job that waits on a failed one is skipped by default, and
     # a skipped required check counts as passed.
     assert gate["if"] == "always()"
+
+
+@pytest.mark.parametrize(
+    ("result", "passes"),
+    [("success", True), ("failure", False), ("cancelled", False), ("skipped", False)],
+)
+def test_the_gate_passes_for_no_runner_result_but_success(
+    result: str, passes: bool
+) -> None:
+    """The gate's own step decides the required check: run it as the runner
+    does, with the result it would be handed."""
+    (gate,) = [job for job in _jobs().values() if job["name"] == _REQUIRED_CHECK]
+    (step,) = gate["steps"]
+    assert step["env"] == {"RESULT": "${{ needs.unit-tests.result }}"}
+
+    ran = subprocess.run(
+        ["bash", "-ec", step["run"]],
+        env={**os.environ, "RESULT": result},
+        capture_output=True,
+        check=False,
+    )
+
+    assert (ran.returncode == 0) is passes
 
 
 @pytest.mark.parametrize("shard", ["0/2", "3/2", "2"])

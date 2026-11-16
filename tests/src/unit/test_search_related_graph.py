@@ -396,7 +396,9 @@ async def test_an_empty_graph_answer_licenses_a_scope_claim_bounded_by_visibilit
     the graph merge and can drop a record this sentence would otherwise say is
     counted, so the sentence must not vouch for concealed records.
     """
-    response = await deep_search(core_client, search_types=["automation"])
+    response = await deep_search(
+        core_client, query="climate.unreferenced", search_types=["automation"]
+    )
 
     scope = reason(response)
     assert SCOPE_CLAIM in scope
