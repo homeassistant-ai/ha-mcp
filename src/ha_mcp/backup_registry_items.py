@@ -34,8 +34,8 @@ What Core's commands take and how Core keeps a row is asked of the component
   category, area or floor leaves out ``created_at`` and ``modified_at``; the
   diff of a device reports them as differences and says so.
 
-A command that was sent and got no answer counts as a component that cannot
-be asked.
+A command that was sent and got no answer, and an answer in another shape,
+count as a component that cannot be asked.
 """
 
 from __future__ import annotations
@@ -122,13 +122,22 @@ def reordered_lists(current: dict[str, Any], stored: dict[str, Any]) -> list[str
     ]
 
 
+def _well_formed(answer: dict[str, Any]) -> bool:
+    """Whether a ``registry_fields`` answer names the fields as this module
+    reads them: ``update_fields`` in a list, the other three in a list or None."""
+    return isinstance(answer.get("update_fields"), list) and all(
+        key in answer and isinstance(answer[key], list | None)
+        for key in ("create_fields", "set_fields", "stamped_fields")
+    )
+
+
 async def _registry_fields(
     client: Any, registry: str, item_id: Any = None, scope: Any = None
 ) -> dict[str, Any] | None:
     """The component's ``registry_fields`` answer for a registry and, with
     ``item_id``, for one of its entries; None when the component cannot be asked
     (no usable component, one without the command, command not sent or left
-    without an answer) or refuses."""
+    without an answer), refuses or answers in another shape."""
     from .tools.component_api import ask_component  # import cycle, as registry_rows
 
     params = {"registry": registry}
@@ -137,11 +146,15 @@ async def _registry_fields(
     if scope:
         params["scope"] = scope
     try:
-        return await ask_component(client, "registry_fields", **params)
+        answer = await ask_component(client, "registry_fields", **params)
     except HomeAssistantConnectionError as exc:
         # A read: one left without an answer is a component that cannot be asked.
         logger.warning("registry_fields got no answer; going on without it: %r", exc)
         return None
+    if answer is not None and not _well_formed(answer):
+        logger.warning("registry_fields answered in another shape; going on without it")
+        return None
+    return answer
 
 
 def _only(row: dict[str, Any], keys: Any) -> dict[str, Any]:
@@ -253,7 +266,6 @@ def _other_id_warning(row: Any, id_key: str, item_id: str) -> str | None:
 
 async def _restore_item(
     client: Any,
-    rows: list[Any],
     id_key: str,
     item_id: str,
     stored: dict[str, Any],
@@ -294,6 +306,12 @@ async def _restore_item(
     else:
         update = _only(stored, taken["update_fields"])
         payload = _only(stored, taken["create_fields"])
+    # Read after the question, so that a row Core drops while the component is
+    # asked is neither updated nor taken.
+    if noun == "category":
+        rows = await _category_rows(client, extra_ids["scope"])
+    else:
+        rows = await registry_rows(client, noun)
     if any(r.get(id_key) == item_id for r in rows):
         row = await bm._ws_send(
             client,
@@ -362,10 +380,8 @@ async def fetch_label(client: Any, entity_id: str) -> Any:
 
 
 async def restore_label(client: Any, entity_id: str, config: Any) -> Any:
-    rows = await registry_rows(client, "label")
     return await _restore_item(
         client,
-        rows,
         "label_id",
         entity_id,
         _without(config, "label_id"),
@@ -386,10 +402,8 @@ async def fetch_category(client: Any, entity_id: str) -> Any:
 async def restore_category(client: Any, entity_id: str, config: Any) -> Any:
     scope, _, cat_id = entity_id.partition(":")
     scope = scope or config.get("scope")
-    rows = await _category_rows(client, scope)
     return await _restore_item(
         client,
-        rows,
         "category_id",
         cat_id,
         _without(config, "category_id", "scope"),
@@ -415,10 +429,8 @@ async def restore_area_or_floor(client: Any, entity_id: str, config: Any) -> Any
     # ``floor_id`` is the id of a floor but a field of an area.
     stored = _without(config, "kind", f"{kind}_id")
     async with _manager().registry_update_lock(kind, real_id):
-        rows = await registry_rows(client, kind)
         row = await _restore_item(
             client,
-            rows,
             f"{kind}_id",
             real_id,
             stored,

@@ -338,6 +338,35 @@ async def test_a_second_restore_creates_the_area_again_when_core_dropped_the_fir
     assert (area.name, area.aliases) == ("Corridor", {"entrance", "lobby"})
 
 
+async def test_a_second_restore_creates_the_floor_again_when_core_dropped_it_meanwhile(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core can drop the floor the first restore created while the restore asks
+    the component which keys Core's commands take. The floors are read after
+    that question, so the dropped one is not taken and the restore creates it
+    again."""
+    registry = fr.async_get(hass)
+    floor = registry.async_create("Ground", level=0)
+    registry.async_update(floor.floor_id, name="Base")
+    snapshot = await _snapshot(
+        backup_manager, "area_or_floor", f"floor:{floor.floor_id}"
+    )
+    registry.async_delete(floor.floor_id)
+    await backup_manager.restore_snapshot(snapshot)
+    (first,) = registry.async_list_floors()
+
+    def drop(msg: dict[str, Any]) -> None:
+        if registry.async_get_floor(first.floor_id) is not None:
+            registry.async_delete(first.floor_id)
+
+    with before_handling(hass, WS_REGISTRY_FIELDS, drop):
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert [(f.name, f.level) for f in registry.async_list_floors()] == [("Base", 0)]
+
+
 async def test_a_second_restore_without_the_component_says_it_matched_in_another_order(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
