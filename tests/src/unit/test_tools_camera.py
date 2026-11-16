@@ -22,9 +22,10 @@ from pytest_homeassistant.common import setup_test_component_platform
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
-from ha_mcp.tools import response_helpers
+from ha_mcp.tools import response_helpers, tools_camera
 from ha_mcp.tools.tools_camera import CameraTools
 
+from ._module_clock import set_module_clock
 from ._tool_errors import error_of
 
 ENTITY_ID = "camera.front_door"
@@ -202,21 +203,25 @@ async def test_unsniffable_payload_is_labelled_by_its_content_type(
     assert text.startswith(f"Camera snapshot ({expected.upper()}).")
 
 
+NOON_UTC = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def noon_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_module_clock(monkeypatch, tools_camera, NOON_UTC)
+
+
+@pytest.mark.usefixtures("noon_utc")
 async def test_retrieval_time_is_in_home_assistant_timezone(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     await hass.config.async_set_time_zone("Pacific/Kiritimati")
     await serve(hass, JPEG_MAGIC)
 
-    before = datetime.now(UTC).replace(microsecond=0)
     text, _ = await CameraTools(core_client).ha_get_camera_image(entity_id=ENTITY_ID)
-    after = datetime.now(UTC)
 
     # Kiritimati is UTC+14 year-round.
-    match = re.search(r"Retrieved: (.+ \+14:00)$", text)
-    assert match is not None, text
-    retrieved = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S %z")
-    assert before <= retrieved <= after
+    assert text.endswith("Retrieved: 2026-11-02 02:00:00 +14:00")
 
 
 async def test_timezone_fetch_without_answer_falls_back_to_utc_with_a_note(
