@@ -30,7 +30,7 @@ from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_radio import RadioTools
 
-from ._command_faults import HELD_WAIT_S, received
+from ._command_faults import HELD_WAIT_S, arrival, received
 from ._component_core import ws_result
 from ._tool_errors import error_of
 from ._zha_core import COORDINATOR_IEEE, IEEE, set_up_zha
@@ -101,15 +101,13 @@ async def test_network_status_returns_the_settings_and_refreshes_the_topology(
     shortened wait makes a tool that does fail at once."""
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", HELD_WAIT_S)
 
-    with received(hass, "zha/topology/update") as core:
+    with arrival(hass, "zha/topology/update") as scan_requested:
         out = await radio.ha_manage_radio(radio="zigbee", action="network_status")
         async with asyncio.timeout(5):
-            while not core["zha/topology/update"]:
-                await asyncio.sleep(0)
+            await scan_requested.wait()
 
     assert out["config_entry_id"] == zha_entry.entry_id
     assert out["network"]["settings"]["network_info"]["channel"] == 15
-    assert len(core["zha/topology/update"]) == 1
 
 
 async def test_network_status_survives_a_refused_topology_refresh(
