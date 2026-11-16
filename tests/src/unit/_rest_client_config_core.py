@@ -43,6 +43,8 @@ async def set_up_config_api(
     assert await async_setup_component(hass, "config", {})
     for domain in FILES:
         assert await async_setup_component(hass, domain, {})
+    # The scene platform registers ``scene.reload`` in a task of its own.
+    await hass.async_block_till_done()
 
 
 async def load(hass: HomeAssistant, domain: str, items: Any) -> None:
