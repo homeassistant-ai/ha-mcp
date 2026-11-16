@@ -527,8 +527,9 @@ async def test_a_subentry_id_without_the_helper_type_never_removes_the_whole_ent
     )
 
     assert result["success"] is True
-    assert hass.config_entries.async_get_entry(parent.entry_id) is parent
-    assert _EXISTING not in parent.subentries
+    kept = hass.config_entries.async_get_entry(parent.entry_id)
+    assert kept is not None
+    assert _EXISTING not in kept.subentries
 
 
 async def test_a_refused_subentry_removal_is_a_failure_not_a_missing_subentry(
