@@ -39,8 +39,8 @@ from pytest_homeassistant.common import (
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_entry_reload_watch import (
-    _COMMIT_VISIBLE_TIMEOUT,
-    _RELOAD_SETTLE_TIMEOUT,
+    COMMIT_VISIBLE_TIMEOUT,
+    RELOAD_SETTLE_TIMEOUT,
     watch_entry_reload,
 )
 
@@ -246,7 +246,7 @@ async def test_a_resubmit_that_changes_nothing_gives_up_at_the_commit_budget(
         await reconfigure(hass, entry, "old")
         async with reading(hass, core_client, settled) as waiting:
             assert not waiting.done()
-            await after(hass, _COMMIT_VISIBLE_TIMEOUT + 1)
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
             assert waiting.done(), "still waiting after the commit budget"
             assert waiting.result() is None
 
@@ -260,9 +260,9 @@ async def test_a_commit_with_no_reload_after_it_reads_as_unobserved_once_the_bud
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "new", reload=False)
         async with reading(hass, core_client, settled) as waiting:
-            await after(hass, _COMMIT_VISIBLE_TIMEOUT + 1)
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
             assert not waiting.done(), "gave up before the settle budget"
-            await after(hass, _RELOAD_SETTLE_TIMEOUT + 1)
+            await after(hass, RELOAD_SETTLE_TIMEOUT + 1)
             assert waiting.done(), "still waiting after the settle budget"
             assert waiting.result() is None
 
