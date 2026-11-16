@@ -72,6 +72,12 @@ class TestRunMain:
         """The socket listens before the URL is published, so a parent's retire
         POST is queued by the kernel, never refused as "no sidecar there"."""
         facts: dict[str, Any] = {}
+        published_when_listening: list[bool] = []
+        listen = socket.socket.listen
+
+        def listening(listener: socket.socket, *backlog: int) -> None:
+            published_when_listening.append((data_dir / "ui.url").exists())
+            listen(listener, *backlog)
 
         def on_serve(serving: Serving) -> None:
             [listener] = serving.sockets
@@ -81,7 +87,10 @@ class TestRunMain:
             with socket.create_connection(("127.0.0.1", facts["port"]), timeout=5):
                 pass
 
+        monkeypatch.setattr(socket.socket, "listen", listening)
         assert run_sidecar(monkeypatch, on_serve) == 0
+
+        assert published_when_listening == [False]
 
         assert re.fullmatch(
             rf"http://127\.0\.0\.1:{facts['port']}/private_[A-Za-z0-9_-]+/settings",

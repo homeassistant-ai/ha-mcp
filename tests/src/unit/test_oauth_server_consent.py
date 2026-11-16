@@ -65,14 +65,19 @@ def test_consent_form_shows_the_error_it_was_sent_back_with() -> None:
 
 
 def test_consent_form_does_not_run_values_the_client_sent() -> None:
-    html = create_consent_html(
-        client_id='<script>alert("xss")</script>',
-        redirect_uri='http://evil.example/"><script>alert(1)</script>',
-        state='"><script>alert(1)</script>',
-        txn_id='"><script>alert(1)</script>',
-    )
+    sent = {
+        "client_id": '<script>alert("client")</script>',
+        "redirect_uri": 'http://evil.example/"><script>alert("redirect")</script>',
+        "state": '"><script>alert("state")</script>',
+        "txn_id": '"><script>alert("txn")</script>',
+    }
 
-    # The page has a <script> of its own, so the escaped forms are what count.
+    html = create_consent_html(**sent)
+
+    # The page has a <script> of its own, so each value is looked for as sent.
+    for field, value in sent.items():
+        assert value not in html, field
+        assert value.removeprefix("http://evil.example/") not in html, field
     assert "&lt;script&gt;alert(" in html
     assert "&quot;&gt;&lt;script&gt;" in html
 

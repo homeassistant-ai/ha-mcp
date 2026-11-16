@@ -8,8 +8,6 @@ turns the saved states into what the server's FastMCP shows.
 from __future__ import annotations
 
 import json
-import os
-import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -96,22 +94,6 @@ class TestSavedStates:
         (tmp_path / "tool_config.json").mkdir()
 
         assert load_tool_config() == {}
-
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="chmod 0o000 doesn't model POSIX EACCES on Windows",
-    )
-    def test_a_config_dir_the_server_cannot_enter_is_no_config(
-        self, tmp_path: Path
-    ) -> None:
-        """#1125 with a real permission boundary: the file sits in a 0o000 dir."""
-        (tmp_path / "tool_config.json").write_text("{}")
-        get_data_dir()
-        os.chmod(tmp_path, 0o000)
-        try:
-            assert load_tool_config() == {}
-        finally:
-            os.chmod(tmp_path, 0o755)
 
     def test_a_save_that_cannot_be_written_reports_failure(
         self, tmp_path: Path

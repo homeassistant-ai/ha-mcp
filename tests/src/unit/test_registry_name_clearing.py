@@ -287,7 +287,7 @@ class TestSetEntityDeviceNameEcho:
                     entity_id=lamp, new_device_name="Lamp"
                 )
             )
-            await held.arrived.wait()
+            await held.reached_by(call)
             device_registry.async_remove_device(device.id)
             held.release.set()
             result = await call

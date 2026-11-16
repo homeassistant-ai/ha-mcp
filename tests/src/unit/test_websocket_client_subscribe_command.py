@@ -24,6 +24,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
 from ._client_spies import sent_commands
+from ._command_faults import received
 from ._held_command import held_command
 from ._websocket_client_core import (
     EVENT,
@@ -219,15 +220,22 @@ async def test_an_abandoned_subscribe_is_released_in_core(
     """Core may hold the subscription, and the caller never got its id.
 
     Its answers are left unread, so only the release made at once, not one
-    on a late ack, can have removed it.
+    on a late ack, can have reached Core.
     """
     short_cleanup(monkeypatch)
     async with connected_ws(core_client) as client:
         with spawned_by(client) as spawned:
-            with answers_unread(client):
+            with (
+                received(hass, "subscribe_events", "unsubscribe_events") as seen,
+                answers_unread(client),
+            ):
                 await ABANDONS[abandoned](hass, client)
 
-                await until(lambda: subscribed(hass) == 0)
+                await until(lambda: len(seen["unsubscribe_events"]) == 1)
+                [subscribe] = seen["subscribe_events"]
+                [release] = seen["unsubscribe_events"]
+                assert release["subscription"] == subscribe["id"]
+                assert subscribed(hass) == 0
             await settled(client, spawned)
 
 
