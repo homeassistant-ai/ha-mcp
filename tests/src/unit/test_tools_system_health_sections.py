@@ -291,8 +291,8 @@ async def test_a_cancelled_call_unwinds_instead_of_returning(
             async with asyncio.timeout(5):
                 await arrived.wait()
             call.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await call
+            await asyncio.wait([call])
+            assert call.cancelled()
 
 
 # --- without the health baseline ---------------------------------------------

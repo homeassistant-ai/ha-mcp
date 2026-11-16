@@ -6,6 +6,7 @@ the MCP path every connector knows (GHSA-mx64-982r-65vg).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from typing import Any
@@ -53,7 +54,7 @@ async def started_oauth_server(
 
     main_oauth()
     [run] = runs
-    await run
+    await asyncio.gather(run)
     [mcp] = served
     return mcp
 

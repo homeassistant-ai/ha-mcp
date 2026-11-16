@@ -9,6 +9,7 @@ the app does; Core's clock lets the delayed self-restart run.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -48,7 +49,7 @@ async def _self_restart(hass: HomeAssistant, body: Any = None) -> httpx.Response
     response = await _restart(body)
     [restart] = ha_mcp_tasks() - tasks_before
     await outwait(hass, 0, 1, armed_before)
-    await restart
+    await asyncio.gather(restart)
     return response
 
 
@@ -89,7 +90,7 @@ class TestSelfRestart:
         assert app.requests == []
         [restart] = ha_mcp_tasks() - tasks_before
         await outwait(hass, 0, 1, armed_before)
-        await restart
+        await asyncio.gather(restart)
         assert app.requests == [SELF_RESTART]
         assert app.headers(*SELF_RESTART)["Authorization"] == f"Bearer {APP_TOKEN}"
 
@@ -141,7 +142,7 @@ class TestSelfRestart:
 
         with caplog.at_level(logging.ERROR, logger="ha_mcp"):
             await outwait(hass, 0, 1, armed_before)
-            await restart
+            await asyncio.gather(restart)
 
         assert app.requests == []
         assert any("SUPERVISOR_TOKEN unset" in message for message in _errors(caplog))
