@@ -29,7 +29,7 @@ from ha_mcp.tools.tools_traces import TraceTools
 
 from ._deep_search_core import search_tools
 from ._hacs_marketplace import CARD_ID, MAIN, MAIN_ID, set_up_marketplace, stored
-from ._operations import operations_without_listener  # noqa: F401
+from ._operations import operations_without_listener as operations_without_listener
 from ._switched_states import SwitchedStates
 from ._trace_fixtures import automation_run, store_runs
 

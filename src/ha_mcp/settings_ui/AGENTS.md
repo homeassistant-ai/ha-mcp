@@ -57,7 +57,7 @@ Each tool row shows a capability tier badge: **read-only → writes → deletes*
 
 ## Tests
 
-- `tests/src/unit/test_settings_ui.py` — route registration, endpoints, env-pinned tools.
+- `tests/src/unit/test_settings_ui_*.py` — route registration, endpoints, env-pinned tools.
 - `tests/src/unit/test_settings_ui_i18n.py` — catalog validation, fallback, locale priority, and safe inline serialization.
 - `tests/src/unit/test_settings_ui_js_behavior.py` — JS behavior (needs jsdom: `npm install` in `tests/js/`; skipped otherwise, but runs in CI).
 - `tests/src/unit/test_settings_ui_handler_selection.py` — full-server vs sidecar handler dispatch.

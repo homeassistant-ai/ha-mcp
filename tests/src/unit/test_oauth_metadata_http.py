@@ -1,10 +1,9 @@
 """HTTP-level smoke tests for the OAuth metadata-discovery endpoints.
 
-The route-existence tests in ``test_oauth.py`` (``TestOAuthRoutes``) only assert
-that ``provider.get_routes()`` *lists* the well-known routes. They do not boot the
-assembled ASGI app or make a real request, so they cannot catch a regression where
-our metadata route is shadowed or replaced by a framework default (or a duplicate
-route is mounted for the same path), nor verify the served body.
+Listing ``provider.get_routes()`` shows only that the well-known routes exist. It
+does not boot the assembled ASGI app or make a real request, so it cannot catch a
+regression where our metadata route is shadowed or replaced by a framework default
+(or a duplicate route is mounted for the same path), nor verify the served body.
 
 These tests close that gap: they assemble an OAuth-enabled ASGI app the way the
 production server does in the ways that matter for discovery — ``mcp.auth`` set to
@@ -55,7 +54,7 @@ def oauth_app(tmp_path, monkeypatch):
 
     Constructing the provider persists an HMAC secret (and any registered
     clients) under ``get_data_dir()``, so redirect it to a temp dir to keep the
-    test hermetic — mirrors the ``isolate_data_dir`` fixture in ``test_oauth.py``.
+    test hermetic.
     """
     monkeypatch.setattr("ha_mcp.auth.provider.get_data_dir", lambda: tmp_path)
 

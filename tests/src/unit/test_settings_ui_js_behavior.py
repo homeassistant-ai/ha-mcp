@@ -5658,7 +5658,7 @@ class TestTablistAndStatusBehavior:
     """Behavioural coverage for the #1596 a11y JS — the ARIA tablist
     (aria-selected + roving tabindex sync, keyboard navigation) and the
     failure-path role=alert toggling. The static-markup tests in
-    test_settings_ui.py only assert the affordances exist; these drive the
+    test_settings_ui_page.py only assert the affordances exist; these drive the
     handlers and assert they actually behave.
     """
 

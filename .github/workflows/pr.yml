@@ -611,12 +611,6 @@ jobs:
           exit 1
         fi
 
-  # The unit and app (add-on) suites against the current beta Core, the same
-  # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
-  # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
-  # so a beta Core change reports here without blocking a merge. While beta
-  # equals the dev group's Core pin, which Unit Tests just ran, every step
-  # after the resolver is skipped (a manual dispatch always runs).
   unit-tests-gate:
     # The required "Unit Tests" check. The suite runs as a matrix, whose runners
     # report as "Unit Tests (1/2)" and "Unit Tests (2/2)", so this job carries
@@ -634,6 +628,12 @@ jobs:
           echo "unit-tests result: $RESULT"
           [ "$RESULT" = "success" ]
 
+  # The unit and app (add-on) suites against the current beta Core, the same
+  # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
+  # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
+  # so a beta Core change reports here without blocking a merge. While beta
+  # equals the dev group's Core pin, which Unit Tests just ran, every step
+  # after the resolver is skipped (a manual dispatch always runs).
   unit-tests-beta:
     name: Unit Tests (beta Core, ${{ matrix.shard }})
     runs-on: ubuntu-latest
