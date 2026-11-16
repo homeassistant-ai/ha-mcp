@@ -15,6 +15,7 @@ from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
+from ..component_registries import registry_list_reply
 from ..entity_registry_reads import GET_ENTRIES_CHUNK_SIZE
 from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
@@ -321,6 +322,9 @@ class EntitySearchMixin(_SearchBase):
             )
             fetch_slots.append("registry")
         if need_device:
+            # Core's own list, not the component's: a device the registry holds in two
+            # copies that disagree arrives in both, which the visibility resolver
+            # reports.
             fetch_coros.append(
                 self.client.send_websocket_message(
                     {"type": "config/device_registry/list"}
@@ -467,18 +471,17 @@ class EntitySearchMixin(_SearchBase):
             # Fetch all registries and states in parallel
             results = await asyncio.gather(
                 self.client.get_states(),
-                self.client.send_websocket_message(
-                    {"type": "config/area_registry/list"}
-                ),
+                registry_list_reply(self.client, "area"),
                 self.client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
                 ),
+                # Core's own list, not the component's: a device the registry holds in
+                # two copies that disagree arrives in both, which the visibility
+                # resolver reports.
                 self.client.send_websocket_message(
                     {"type": "config/device_registry/list"}
                 ),
-                self.client.send_websocket_message(
-                    {"type": "config/floor_registry/list"}
-                ),
+                registry_list_reply(self.client, "floor"),
                 return_exceptions=True,
             )
 

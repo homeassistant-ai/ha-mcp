@@ -151,3 +151,33 @@ async def fetch_registries_via_component(
         )
         return None
     return result
+
+
+async def registry_list_reply(client: Any, kind: str) -> dict[str, Any]:
+    """What Core answers for ``config/<kind>_registry/list``, the component asked first.
+
+    ``kind`` is ``area``, ``floor`` or ``label``. The component's rows come in
+    the envelope ``send_websocket_message`` returns for the list command, so a
+    caller reads either answer the same way. Without the component's answer
+    Core's command is sent, and its reply or its exception is the caller's.
+    """
+    via_component = await fetch_registries_via_component(client, [kind])
+    if via_component is not None:
+        return {"success": True, "result": via_component[_LIST_SLICES[kind]]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": f"config/{kind}_registry/list"}
+    )
+    return reply
+
+
+async def category_list_reply(client: Any, scope: str) -> dict[str, Any]:
+    """:func:`registry_list_reply` for the categories of ``scope``."""
+    via_component = await fetch_registries_via_component(
+        client, ["category"], category_scopes=[scope]
+    )
+    if via_component is not None:
+        return {"success": True, "result": via_component["categories"][scope]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/category_registry/list", "scope": scope}
+    )
+    return reply

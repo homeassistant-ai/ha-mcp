@@ -331,6 +331,9 @@ class EntityModesMixin(EntityEnrichmentMixin):
             ),
         ]
         if need_device:
+            # Core's own list, not the component's: a device the registry holds in two
+            # copies that disagree arrives in both, which the visibility resolver
+            # reports.
             fetch_coros.append(
                 self._client.send_websocket_message(
                     {"type": "config/device_registry/list"}

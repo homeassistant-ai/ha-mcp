@@ -207,3 +207,25 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         )
         return None
     return result
+
+
+async def device_list_reply(client: Any) -> dict[str, Any]:
+    """What Core answers for ``config/device_registry/list``, the component asked first.
+
+    The component's rows come in the envelope ``send_websocket_message``
+    returns for the list command, so a caller reads either answer the same way.
+    Without the component's answer Core's command is sent, and its reply or its
+    exception is the caller's.
+
+    Not for rows a visibility rule or the bulk selector judges: the component
+    leaves a device the registry holds in two copies that disagree out of its
+    list, and those callers report or refuse such a device, which takes both
+    copies from Core's list.
+    """
+    via_component = await fetch_device_list_via_component(client)
+    if via_component is not None:
+        return {"success": True, "result": via_component["devices"]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    return reply

@@ -809,6 +809,8 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> _HiddenM
         client.send_websocket_message({"type": "config/entity_registry/list"}),
     ]
     if need_device:
+        # Core's own list, not the component's: a device the registry holds in two
+        # copies that disagree arrives in both, and the hidden set is then refused.
         coros.append(
             client.send_websocket_message({"type": "config/device_registry/list"})
         )
