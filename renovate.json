@@ -220,7 +220,7 @@
       "prConcurrentLimit": 0
     },
     {
-      "description": "Re-lock when the dev group's Core pins move: uv lock takes the new Core's requirement pins, and --sync-lock moves the runtime packages Core pins only in package_constraints.txt (pydantic, httpx), in the same update.",
+      "description": "When the dev group's Core pins move, in the same update: sync_dev_integration_pins.py rewrites the dev group's integration pins and their Dependabot ignores from the new Core's manifests, uv lock takes the new Core's requirement pins, and --sync-lock moves the runtime packages Core pins only in package_constraints.txt (pydantic, httpx).",
       "matchManagers": [
         "custom.regex"
       ],
@@ -235,10 +235,13 @@
       },
       "postUpgradeTasks": {
         "commands": [
+          "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py",
           "uv lock",
           "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
         ],
         "fileFilters": [
+          "pyproject.toml",
+          ".github/dependabot.yml",
           "uv.lock"
         ],
         "executionMode": "branch",
