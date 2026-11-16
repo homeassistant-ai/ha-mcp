@@ -32,7 +32,6 @@ files:
   - "tests/src/unit/**"
   - "tests/addon/**"
 ignores:
-  - "tests/src/unit/test_tools_addons.py"
   - "tests/src/unit/test_tools_camera.py"
   - "tests/src/unit/test_tools_config_automations.py"
   - "tests/src/unit/test_tools_config_scripts.py"
