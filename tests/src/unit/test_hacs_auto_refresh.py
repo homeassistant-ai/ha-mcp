@@ -7,8 +7,8 @@ component update instead of waiting out the store's cache.
 
 The server's settings point at the real ``hass``, and every store command and
 its reply is Core's (``_hacs_marketplace``: GitHub is unreachable, so a
-refresh fails as Core fails it offline). Only the newest ha-mcp release, which
-PyPI answers, is the test's own.
+refresh fails as Core fails it offline). The update check asks the test's own
+PyPI on loopback (``_update_check_sources``) for the newest ha-mcp release.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from ha_mcp.hacs_auto_refresh import (
 )
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
-from ha_mcp.update_check import UpdateInfo
+from ha_mcp.update_check import get_update_info
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ._client_spies import sent_commands
@@ -50,6 +50,8 @@ from ._hacs_marketplace import command_types, set_up_marketplace, stored
 from ._marketplace_records import REPOSITORY_IDS, own_records, unload_marketplace
 from ._settings_ui_app import settings_http
 from ._tools_addons_core import armed, outwait, timers
+from ._update_check_sources import PyPI
+from ._update_check_sources import pypi as pypi
 
 MIRROR, MAIN = hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES
 MIRROR_ID, MAIN_ID = REPOSITORY_IDS[MIRROR], REPOSITORY_IDS[MAIN]
@@ -66,16 +68,14 @@ RETRY = hacs_auto_refresh.RETRY_DELAYS[-1]
 Store = Callable[..., Awaitable[MarketplaceManager]]
 
 
-def newest_release(monkeypatch: pytest.MonkeyPatch, latest: str | None) -> None:
-    """PyPI names ``latest`` as the newest ha-mcp (``None``: no answer)."""
-    info = (
-        None
-        if latest is None
-        else UpdateInfo(
-            current=CURRENT, latest=latest, update_available=latest != CURRENT
-        )
-    )
-    monkeypatch.setattr(hacs_auto_refresh, "get_update_info", lambda: info)
+def newest_release(pypi: PyPI, latest: str | None) -> None:
+    """PyPI names ``latest`` as the newest ha-mcp of either channel (``None``:
+    it knows no release), and the next start asks it again."""
+    pypi.releases.clear()
+    if latest is not None:
+        pypi.publish("ha-mcp", latest)
+        pypi.publish("ha-mcp-dev", latest)
+    get_update_info.cache_clear()
 
 
 def older_server(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,14 +84,17 @@ def older_server(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def server(monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient) -> None:
+def server(
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient, pypi: PyPI
+) -> None:
     """The server's settings point at the real ``hass``, its update check is
-    on, the nudge is switched on and a newer release is out."""
+    on and asks PyPI, the nudge is switched on and a newer release is out."""
     monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url)
     monkeypatch.setenv("HOMEASSISTANT_TOKEN", core_client.token)
     monkeypatch.delenv("HA_MCP_DISABLE_UPDATE_CHECK")
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.setenv(SETTING_ENV, "true")
-    newest_release(monkeypatch, NEWER)
+    newest_release(pypi, NEWER)
     reset_global_settings()
 
 
@@ -279,13 +282,13 @@ class TestWhenDue:
         assert refreshed(seen) == [MAIN_ID, MAIN_ID]
 
     async def test_a_release_since_the_last_pass_makes_it_due(
-        self, hass: HomeAssistant, store: Store, monkeypatch: pytest.MonkeyPatch
+        self, hass: HomeAssistant, store: Store, pypi: PyPI
     ) -> None:
         manager = await store(main=True)
         with github_answers(manager, MAIN_ID), received(hass, REFRESH) as seen:
-            newest_release(monkeypatch, CURRENT)
+            newest_release(pypi, CURRENT)
             await maybe_refresh_hacs_after_update()
-            newest_release(monkeypatch, NEWER)
+            newest_release(pypi, NEWER)
             await maybe_refresh_hacs_after_update()
 
         assert refreshed(seen) == [MAIN_ID, MAIN_ID]
@@ -302,7 +305,7 @@ class TestWhenDue:
         self,
         hass: HomeAssistant,
         store: Store,
-        monkeypatch: pytest.MonkeyPatch,
+        pypi: PyPI,
         caplog: pytest.LogCaptureFixture,
         latest: str | None,
     ) -> None:
@@ -311,7 +314,7 @@ class TestWhenDue:
         manager = await store(main=True)
         with github_answers(manager, MAIN_ID):
             await maybe_refresh_hacs_after_update()
-        newest_release(monkeypatch, latest)
+        newest_release(pypi, latest)
         caplog.clear()
 
         with caplog.at_level(logging.DEBUG), received(hass, LIST, REFRESH) as seen:
