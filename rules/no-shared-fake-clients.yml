@@ -37,7 +37,6 @@ ignores:
   - "tests/src/unit/test_tools_config_scripts.py"
   - "tests/src/unit/test_tools_todo_bridge.py"
   - "tests/src/unit/test_wait_helpers.py"
-  - "tests/src/unit/test_wait_parameter.py"
   - "tests/src/unit/test_yaml_find_key.py"
 message: |
   Do not import from another test module or from the old fake-client helpers,
