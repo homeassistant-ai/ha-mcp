@@ -355,14 +355,19 @@ def start_worker() -> None:
         _harness_worker()
 
 
-def _stop_worker() -> None:
+def current_worker() -> _HarnessWorker | None:
+    """The process's harness worker, if one is running."""
+    return _worker
+
+
+def stop_worker() -> None:
     global _worker
     if _worker is not None:
         _worker.close()
         _worker = None
 
 
-atexit.register(_stop_worker)
+atexit.register(stop_worker)
 
 
 def _run_bundle_script(request: dict[str, Any], label: str) -> str:

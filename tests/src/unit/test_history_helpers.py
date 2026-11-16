@@ -2,8 +2,8 @@
 
 import json
 import re
-from datetime import UTC, datetime, timedelta, tzinfo
-from typing import Any, Self
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,23 +16,15 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_history
 from ha_mcp.tools.tools_history import RELATIVE_TIME_UNIT_SECONDS, parse_relative_time
 
+from ._module_clock import set_module_clock
+
 NOW = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
 
 
 @pytest.fixture
 def frozen_now(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the history module's current time NOW.
-
-    Only the module's own clock: Core's ``freezer`` would also stop the event
-    loop the client runs on.
-    """
-
-    class FrozenDateTime(datetime):
-        @classmethod
-        def now(cls, tz: tzinfo | None = None) -> Self:
-            return cls.fromtimestamp(NOW.timestamp(), tz)
-
-    monkeypatch.setattr(tools_history, "datetime", FrozenDateTime)
+    """Make the history module's current time NOW."""
+    set_module_clock(monkeypatch, tools_history, NOW)
 
 
 async def _window_sent_to_core(

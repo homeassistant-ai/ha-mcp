@@ -1,647 +1,518 @@
-"""Unit tests for the Zigbee (ZHA) handler behind ``ha_manage_radio``.
+"""``ha_manage_radio``'s Zigbee (ZHA) actions on real Home Assistant Core.
 
-Mirrors ``test_radio_management.py``'s ``TestManageRadioDispatcher`` style: tools
-are registered onto a mock MCP via ``register_radio_tools`` and a mock client
-routes WebSocket commands by message ``type`` (and records service calls). Tests
-assert the success envelopes plus the destructive-confirm / required-param gates
-the dispatcher enforces against the handler's ``SUPPORTED`` specs.
+Core's own ``zha`` integration answers every ``zha/*`` command and runs every
+``zha.*`` service, on a zigpy radio that keeps the packets it sends and a light
+that answers them (``_zha_radio_core.py``). A test asserts on what reached Core,
+on what went out on the air, and on Core's own registries.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
+
+import asyncio
+from typing import Any
 
 import pytest
+import zigpy.application
+import zigpy.types as t
+import zigpy.zdo.types as zdo_t
+from homeassistant.components import websocket_api
+from homeassistant.const import EVENT_CALL_SERVICE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry, async_capture_events
+from pytest_homeassistant.typing import WebSocketGenerator
+from zigpy.zcl import foundation
+from zigpy.zcl.clusters.general import Groups, LevelControl, OnOff
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_radio import register_radio_tools
+from ha_mcp.client import websocket_client
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_radio import RadioTools
 
-_IEEE = "00:11:22:33:44:55:66:77"
+from ._command_faults import HELD_WAIT_S, arrival, received
+from ._component_core import ws_result
+from ._tool_errors import error_of
+from ._zha_core import COORDINATOR_IEEE, IEEE, set_up_zha
+from ._zha_radio_core import ENDPOINT, LightNetworkRadio, light_network
 
-
-def _capture(register, mock_client):
-    """Register tools onto a mock MCP and return {tool_name: bound_method}."""
-    mock_mcp = MagicMock()
-    captured: dict = {}
-
-    def capture_add_tool(method):
-        fmcp = getattr(method, "__fastmcp__", None)
-        name = (fmcp.name if fmcp else None) or method.__name__
-        captured[name] = method
-
-    mock_mcp.add_tool = capture_add_tool
-    register(mock_mcp, mock_client)
-    return captured
+LIGHT_MEMBER = {"ieee": IEEE, "endpoint_id": ENDPOINT}
 
 
-def _client(
-    routes: dict,
-    *,
-    record: list | None = None,
-    service_result=None,
-    service_calls: list | None = None,
-):
-    """Mock client: ``send_websocket_message`` routes by ``type``; ``call_service``
-    records (domain, service, data) and returns ``service_result`` (default [])."""
-    mock_client = MagicMock()
-
-    async def mock_ws(msg, **kwargs):
-        msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-        if record is not None:
-            record.append(msg)
-        handler = routes.get(msg_type)
-        if callable(handler):
-            return handler(msg)
-        if handler is not None:
-            return handler
-        return {"success": False, "error": f"Unknown type: {msg_type}"}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
-
-    async def mock_service(domain, service, data=None, return_response=False):
-        if service_calls is not None:
-            service_calls.append(
-                {"domain": domain, "service": service, "data": data or {}}
-            )
-        return service_result if service_result is not None else []
-
-    mock_client.call_service = AsyncMock(side_effect=mock_service)
-    return mock_client
+@pytest.fixture
+def radio(core_client: HomeAssistantClient) -> RadioTools:
+    return RadioTools(core_client)
 
 
-def _zha_device(device_id: str = "z1", ieee: str = _IEEE):
-    return {
-        "id": device_id,
-        "name": "Zigbee Bulb",
-        "identifiers": [["zha", ieee]],
-        "connections": [],
-    }
+@pytest.fixture
+def network() -> LightNetworkRadio:
+    return light_network()
 
 
-def _device_registry(*devices):
-    return {"success": True, "result": list(devices)}
+@pytest.fixture
+async def zha_entry(hass: HomeAssistant, network: LightNetworkRadio) -> MockConfigEntry:
+    """Core's ``zha`` integration running ``network``, with Core's ``config``."""
+    assert await async_setup_component(hass, "config", {})
+    entry = await set_up_zha(hass, network)
+    network.sent.clear()
+    return entry
 
 
-def _radio(client):
-    return _capture(register_radio_tools, client)["ha_manage_radio"]
+def _device_id(hass: HomeAssistant, entry: MockConfigEntry, ieee: str) -> str:
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        ("zha", ieee), entry.entry_id
+    )
+    assert device is not None
+    return device.id
 
 
-# --------------------------------------------------------------------------- #
-# Read actions
-# --------------------------------------------------------------------------- #
+@pytest.fixture
+def light_id(hass: HomeAssistant, zha_entry: MockConfigEntry) -> str:
+    return _device_id(hass, zha_entry, IEEE)
 
 
-class TestZigbeeReads:
-    @pytest.mark.asyncio
-    async def test_diagnostics_resolves_ieee_and_returns_metrics(self):
-        record: list = []
-        client = _client(
-            {
-                "config/device_registry/list": _device_registry(_zha_device()),
-                "zha/device": {
-                    "success": True,
-                    "result": {
-                        "ieee": _IEEE,
-                        "lqi": 200,
-                        "rssi": -55,
-                        "available": True,
-                    },
-                },
-            },
-            record=record,
-        )
-        out = await _radio(client)(radio="zigbee", action="diagnostics", device_id="z1")
-        assert out["success"] is True
-        assert out["radio"] == "zigbee"
-        assert out["ieee"] == _IEEE
-        assert out["diagnostics"]["lqi"] == 200
-        # zha/device keyed on the resolved IEEE, not the device_id.
-        dev = [m for m in record if m["type"] == "zha/device"]
-        assert dev and dev[0]["ieee"] == _IEEE
-
-    @pytest.mark.asyncio
-    async def test_network_status_returns_settings_and_kicks_topology(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": {
-                    "success": True,
-                    "result": [{"domain": "zha", "entry_id": "e1"}],
-                },
-                "zha/network/settings": {
-                    "success": True,
-                    "result": {"network": {"channel": 15, "pan_id": 4660}},
-                },
-                "zha/topology/update": {"success": True, "result": None},
-            },
-            record=record,
-        )
-        out = await _radio(client)(radio="zigbee", action="network_status")
-        assert out["config_entry_id"] == "e1"
-        assert out["network"]["network"]["channel"] == 15
-        assert any(m["type"] == "zha/topology/update" for m in record)
-
-    @pytest.mark.asyncio
-    async def test_network_status_topology_failure_is_swallowed(self):
-        client = _client(
-            {
-                "config_entries/get": {
-                    "success": True,
-                    "result": [{"domain": "zha", "entry_id": "e1"}],
-                },
-                "zha/network/settings": {"success": True, "result": {"channel": 20}},
-                "zha/topology/update": {"success": False, "error": "scan busy"},
-            }
-        )
-        out = await _radio(client)(radio="zigbee", action="network_status")
-        assert out["success"] is True
-        assert out["network"]["channel"] == 20
-
-    @pytest.mark.asyncio
-    async def test_network_status_not_configured_is_degraded(self):
-        client = _client({"config_entries/get": {"success": True, "result": []}})
-        out = await _radio(client)(radio="zigbee", action="network_status")
-        assert out["available"] is False
-        assert out["warnings"]
-
-    @pytest.mark.asyncio
-    async def test_cluster_read_defaults_cluster_type_in(self):
-        record: list = []
-        client = _client(
-            {
-                "config/device_registry/list": _device_registry(_zha_device()),
-                "zha/devices/clusters/attributes/value": {
-                    "success": True,
-                    "result": {"value": True},
-                },
-            },
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="cluster_read",
-            device_id="z1",
-            params={"endpoint_id": 1, "cluster_id": 6, "attribute": "on_off"},
-        )
-        assert out["value"]["value"] is True
-        reads = [
-            m for m in record if m["type"] == "zha/devices/clusters/attributes/value"
-        ]
-        assert reads and reads[0]["cluster_type"] == "in"
-        assert reads[0]["ieee"] == _IEEE
+def _general(
+    network: LightNetworkRadio, cluster_id: int, command: foundation.GeneralCommand
+) -> list[Any]:
+    return [
+        request
+        for header, request in network.requests_to(cluster_id)
+        if header.frame_control.is_general and header.command_id == command
+    ]
 
 
-# --------------------------------------------------------------------------- #
-# Node management (WS + service)
-# --------------------------------------------------------------------------- #
+def _cluster_commands(network: LightNetworkRadio, cluster_id: int) -> list[Any]:
+    return [
+        request
+        for header, request in network.requests_to(cluster_id)
+        if header.frame_control.is_cluster
+    ]
 
 
-class TestZigbeeNodeManagement:
-    @pytest.mark.asyncio
-    async def test_permit_join_defaults_duration_no_ieee(self):
-        record: list = []
-        client = _client(
-            {"zha/devices/permit": {"success": True, "result": None}}, record=record
-        )
-        out = await _radio(client)(radio="zigbee", action="permit_join")
-        assert out["duration"] == 60
-        assert out["ieee"] is None
-        permits = [m for m in record if m["type"] == "zha/devices/permit"]
-        assert permits and permits[0]["duration"] == 60
-        # ws_call drops None fields — no per-device ieee on a network-wide permit.
-        assert "ieee" not in permits[0]
+async def test_network_status_returns_the_settings_and_refreshes_the_topology(
+    hass: HomeAssistant,
+    radio: RadioTools,
+    zha_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ZHA network's settings come back, and a topology scan is started so
+    the next read shows current routes. Core starts the scan without answering
+    ``zha/topology/update``, so the tool must not wait for a reply: the
+    shortened wait makes a tool that does fail at once."""
+    monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", HELD_WAIT_S)
 
-    @pytest.mark.asyncio
-    async def test_permit_join_with_device_resolves_ieee(self):
-        record: list = []
-        client = _client(
-            {
-                "config/device_registry/list": _device_registry(_zha_device()),
-                "zha/devices/permit": {"success": True, "result": None},
-            },
-            record=record,
-        )
-        out = await _radio(client)(
+    with arrival(hass, "zha/topology/update") as scan_requested:
+        out = await radio.ha_manage_radio(radio="zigbee", action="network_status")
+        async with asyncio.timeout(5):
+            await scan_requested.wait()
+
+    assert out["config_entry_id"] == zha_entry.entry_id
+    assert out["network"]["settings"]["network_info"]["channel"] == 15
+
+
+async def test_network_status_survives_a_refused_topology_refresh(
+    hass: HomeAssistant, radio: RadioTools, zha_entry: MockConfigEntry
+) -> None:
+    """The topology refresh is best effort: a Core that refuses it (here one
+    without the command) still gets the network settings back."""
+    hass.data[websocket_api.DOMAIN].pop("zha/topology/update")
+
+    out = await radio.ha_manage_radio(radio="zigbee", action="network_status")
+
+    assert out["success"] is True
+    assert out["config_entry_id"] == zha_entry.entry_id
+    assert out["network"]["settings"]["network_info"]["channel"] == 15
+
+
+async def test_network_status_without_zha_reports_it_unavailable(
+    hass: HomeAssistant, radio: RadioTools
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+
+    out = await radio.ha_manage_radio(radio="zigbee", action="network_status")
+
+    assert out["success"] is True
+    assert out["available"] is False
+    assert out["warnings"]
+
+
+async def test_cluster_read_reads_the_lights_server_cluster(
+    radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    """Without a cluster_type the read goes to the light's own (server) On/Off
+    cluster, and the light's answer comes back."""
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="cluster_read",
+        device_id=light_id,
+        params={
+            "endpoint_id": ENDPOINT,
+            "cluster_id": OnOff.cluster_id,
+            "attribute": OnOff.AttributeDefs.on_off.id,
+        },
+    )
+
+    assert out["ieee"] == IEEE
+    assert out["value"] == str(t.Bool.true)
+    # The first read is the tool's; ZHA reads more once the light answers.
+    reads = _general(
+        network, OnOff.cluster_id, foundation.GeneralCommand.Read_Attributes
+    )
+    assert reads[0].attribute_ids == [OnOff.AttributeDefs.on_off.id]
+
+
+async def test_permit_join_opens_the_whole_network_for_a_minute(
+    hass: HomeAssistant,
+    radio: RadioTools,
+    network: LightNetworkRadio,
+    zha_entry: MockConfigEntry,
+) -> None:
+    with received(hass, "zha/devices/permit") as core:
+        out = await radio.ha_manage_radio(radio="zigbee", action="permit_join")
+
+    assert (out["duration"], out["ieee"]) == (60, None)
+    assert [
+        (msg["duration"], msg.get("ieee")) for msg in core["zha/devices/permit"]
+    ] == [(60, None)]
+    permits = [
+        packet
+        for packet in network.sent
+        if packet.cluster_id == zdo_t.ZDOCmd.Mgmt_Permit_Joining_req
+    ]
+    assert permits
+    assert all(
+        packet.dst is not None and packet.dst.addr_mode == t.AddrMode.Broadcast
+        for packet in permits
+    )
+
+
+async def test_permit_join_through_a_device_names_its_address(
+    hass: HomeAssistant, radio: RadioTools, zha_entry: MockConfigEntry
+) -> None:
+    """A device_id opens the network through that device: Core gets its IEEE
+    address (here the coordinator's, which opens joining on itself)."""
+    coordinator_id = _device_id(hass, zha_entry, COORDINATOR_IEEE)
+
+    with received(hass, "zha/devices/permit") as core:
+        out = await radio.ha_manage_radio(
             radio="zigbee",
             action="permit_join",
-            device_id="z1",
+            device_id=coordinator_id,
             params={"duration": 30},
         )
-        assert out["duration"] == 30
-        assert out["ieee"] == _IEEE
-        permits = [m for m in record if m["type"] == "zha/devices/permit"]
-        assert permits and permits[0]["ieee"] == _IEEE
 
-    @pytest.mark.asyncio
-    async def test_remove_device_calls_service_with_ieee(self):
-        calls: list = []
-        client = _client(
-            {"config/device_registry/list": _device_registry(_zha_device())},
-            service_calls=calls,
+    assert (out["duration"], out["ieee"]) == (30, COORDINATOR_IEEE)
+    assert [
+        (msg["duration"], str(msg["ieee"])) for msg in core["zha/devices/permit"]
+    ] == [(30, COORDINATOR_IEEE)]
+
+
+async def test_remove_device_removes_the_light_from_home_assistant(
+    hass: HomeAssistant, radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    """ZHA asks the light to leave and drops it, so Core's device registry no
+    longer holds it."""
+    out = await radio.ha_manage_radio(
+        radio="zigbee", action="remove_device", device_id=light_id, confirm=True
+    )
+    await hass.async_block_till_done()
+
+    assert out["ieee"] == IEEE
+    assert dr.async_get(hass).async_get(light_id) is None
+    assert any(
+        packet.cluster_id == zdo_t.ZDOCmd.Mgmt_Leave_req for packet in network.sent
+    )
+
+
+async def test_reconfigure_reinterviews_the_light(
+    hass: HomeAssistant, radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    with received(hass, "zha/devices/reconfigure") as core:
+        out = await radio.ha_manage_radio(
+            radio="zigbee", action="reconfigure", device_id=light_id
         )
-        out = await _radio(client)(
-            radio="zigbee", action="remove_device", device_id="z1", confirm=True
+    await hass.async_block_till_done()
+
+    assert out["ieee"] == IEEE
+    assert [str(msg["ieee"]) for msg in core["zha/devices/reconfigure"]] == [IEEE]
+    assert any(
+        packet.cluster_id == zdo_t.ZDOCmd.Node_Desc_req for packet in network.sent
+    )
+
+
+async def test_a_device_of_another_integration_is_not_a_zigbee_device(
+    hass: HomeAssistant, radio: RadioTools, zha_entry: MockConfigEntry
+) -> None:
+    hue = MockConfigEntry(domain="hue")
+    hue.add_to_hass(hass)
+    lamp = dr.async_get(hass).async_get_or_create(
+        config_entry_id=hue.entry_id, identifiers={("hue", "abc")}
+    )
+
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="zigbee", action="diagnostics", device_id=lamp.id
         )
-        assert out["ieee"] == _IEEE
-        assert calls == [
-            {"domain": "zha", "service": "remove", "data": {"ieee": _IEEE}}
-        ]
 
-    @pytest.mark.asyncio
-    async def test_remove_device_requires_confirm(self):
-        client = _client(
-            {"config/device_registry/list": _device_registry(_zha_device())}
-        )
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zigbee", action="remove_device", device_id="z1")
-        assert "confirm" in str(exc.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_reconfigure_uses_websocket(self):
-        record: list = []
-        client = _client(
-            {
-                "config/device_registry/list": _device_registry(_zha_device()),
-                "zha/devices/reconfigure": {"success": True, "result": None},
-            },
-            record=record,
-        )
-        out = await _radio(client)(radio="zigbee", action="reconfigure", device_id="z1")
-        assert out["ieee"] == _IEEE
-        assert any(m["type"] == "zha/devices/reconfigure" for m in record)
-
-    @pytest.mark.asyncio
-    async def test_non_zha_device_raises(self):
-        client = _client(
-            {
-                "config/device_registry/list": _device_registry(
-                    {"id": "z1", "identifiers": [["hue", "abc"]], "connections": []}
-                )
-            }
-        )
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zigbee", action="diagnostics", device_id="z1")
-        assert "ZHA" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_firmware_update_installs_update_entity(self):
-        calls: list = []
-        client = _client(
-            {
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "sensor.z1_lqi",
-                            "device_id": "z1",
-                            "platform": "zha",
-                        },
-                        {
-                            "entity_id": "update.z1_firmware",
-                            "device_id": "z1",
-                            "platform": "zha",
-                        },
-                    ],
-                }
-            },
-            service_calls=calls,
-        )
-        out = await _radio(client)(
-            radio="zigbee", action="firmware_update", device_id="z1", confirm=True
-        )
-        assert out["entity_id"] == "update.z1_firmware"
-        assert out["long_running"] is True
-        assert calls == [
-            {
-                "domain": "update",
-                "service": "install",
-                "data": {"entity_id": "update.z1_firmware"},
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_firmware_update_no_update_entity(self):
-        client = _client(
-            {
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "sensor.z1_lqi",
-                            "device_id": "z1",
-                            "platform": "zha",
-                        }
-                    ],
-                }
-            }
-        )
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="firmware_update",
-                device_id="z1",
-                confirm=True,
-            )
-        assert "update entity" in str(exc.value).lower()
+    assert "not a ZHA Zigbee device" in error_of(exc)["message"]
 
 
-# --------------------------------------------------------------------------- #
-# Groups / bindings
-# --------------------------------------------------------------------------- #
+async def test_firmware_update_installs_the_lights_update_entity(
+    hass: HomeAssistant, radio: RadioTools, light_id: str
+) -> None:
+    calls = async_capture_events(hass, EVENT_CALL_SERVICE)
+
+    out = await radio.ha_manage_radio(
+        radio="zigbee", action="firmware_update", device_id=light_id
+    )
+
+    assert out["long_running"] is True
+    installs = [
+        call.data["service_data"]
+        for call in calls
+        if (call.data["domain"], call.data["service"]) == ("update", "install")
+    ]
+    assert installs == [{"entity_id": out["entity_id"]}]
+    assert out["entity_id"].startswith("update.")
 
 
-class TestZigbeeGroupsAndBindings:
-    @pytest.mark.asyncio
-    async def test_group_add(self):
-        client = _client(
-            {"zha/group/add": {"success": True, "result": {"group_id": 1}}}
-        )
-        out = await _radio(client)(
-            radio="zigbee", action="group_add", params={"group_name": "Kitchen"}
-        )
-        assert out["group"]["group_id"] == 1
+async def _zha_groups(hass: HomeAssistant, ws: WebSocketGenerator) -> dict[int, str]:
+    groups = await ws_result(await ws(hass), "zha/groups")
+    return {group["group_id"]: group["name"] for group in groups}
 
-    @pytest.mark.asyncio
-    async def test_group_add_missing_name_raises(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zigbee", action="group_add")
-        assert "group_name" in str(exc.value)
 
-    @pytest.mark.asyncio
-    async def test_group_remove_requires_confirm(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee", action="group_remove", params={"group_ids": [1]}
-            )
-        assert "confirm" in str(exc.value).lower()
+async def test_group_add_creates_the_group(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    radio: RadioTools,
+    zha_entry: MockConfigEntry,
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zigbee", action="group_add", params={"group_name": "Kitchen"}
+    )
 
-    @pytest.mark.asyncio
-    async def test_bind_sends_both_ieees(self):
-        record: list = []
-        client = _client(
-            {"zha/devices/bind": {"success": True, "result": None}}, record=record
-        )
-        out = await _radio(client)(
+    groups = await _zha_groups(hass, hass_ws_client)
+    assert groups == {out["group"]["group_id"]: "Kitchen"}
+
+
+async def test_group_remove_deletes_the_group(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    radio: RadioTools,
+    zha_entry: MockConfigEntry,
+) -> None:
+    group = await radio.ha_manage_radio(
+        radio="zigbee", action="group_add", params={"group_name": "Kitchen"}
+    )
+    group_id = group["group"]["group_id"]
+
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="group_remove",
+        params={"group_ids": [group_id]},
+        confirm=True,
+    )
+
+    assert out["success"] is True
+    assert await _zha_groups(hass, hass_ws_client) == {}
+
+
+async def test_group_members_add_joins_the_light_to_the_group(
+    radio: RadioTools, network: LightNetworkRadio, zha_entry: MockConfigEntry
+) -> None:
+    group = await radio.ha_manage_radio(
+        radio="zigbee", action="group_add", params={"group_name": "Kitchen"}
+    )
+    group_id = group["group"]["group_id"]
+
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="group_members_add",
+        params={"group_id": group_id, "members": [LIGHT_MEMBER]},
+    )
+
+    assert [
+        (member["device"]["ieee"], member["endpoint_id"])
+        for member in out["group"]["members"]
+    ] == [(IEEE, ENDPOINT)]
+    joins = _cluster_commands(network, Groups.cluster_id)
+    assert [(join.command.name, join.group_id) for join in joins] == [("add", group_id)]
+
+
+async def test_group_members_remove_takes_the_light_out_of_the_group(
+    radio: RadioTools, network: LightNetworkRadio, zha_entry: MockConfigEntry
+) -> None:
+    group = await radio.ha_manage_radio(
+        radio="zigbee", action="group_add", params={"group_name": "Kitchen"}
+    )
+    group_id = group["group"]["group_id"]
+    await radio.ha_manage_radio(
+        radio="zigbee",
+        action="group_members_add",
+        params={"group_id": group_id, "members": [LIGHT_MEMBER]},
+    )
+
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="group_members_remove",
+        params={"group_id": group_id, "members": [LIGHT_MEMBER]},
+    )
+
+    assert out["group"]["members"] == []
+    leaves = _cluster_commands(network, Groups.cluster_id)
+    assert (leaves[-1].command.name, leaves[-1].group_id) == ("remove", group_id)
+
+
+@pytest.mark.parametrize(("action", "confirm"), [("bind", False), ("unbind", True)])
+async def test_bind_and_unbind_send_both_addresses(
+    hass: HomeAssistant,
+    radio: RadioTools,
+    zha_entry: MockConfigEntry,
+    action: str,
+    confirm: bool,
+) -> None:
+    command = f"zha/devices/{action}"
+
+    with received(hass, command) as core:
+        out = await radio.ha_manage_radio(
             radio="zigbee",
-            action="bind",
-            params={"source_ieee": "aa", "target_ieee": "bb"},
+            action=action,
+            params={"source_ieee": IEEE, "target_ieee": COORDINATOR_IEEE},
+            confirm=confirm,
         )
-        assert out["success"] is True
-        binds = [m for m in record if m["type"] == "zha/devices/bind"]
-        assert binds and binds[0]["source_ieee"] == "aa"
-        assert binds[0]["target_ieee"] == "bb"
 
-    @pytest.mark.asyncio
-    async def test_unbind_requires_confirm(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="unbind",
-                params={"source_ieee": "aa", "target_ieee": "bb"},
-            )
-        assert "confirm" in str(exc.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_unbind_with_confirm(self):
-        record: list = []
-        client = _client(
-            {"zha/devices/unbind": {"success": True, "result": None}}, record=record
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="unbind",
-            params={"source_ieee": "aa", "target_ieee": "bb"},
-            confirm=True,
-        )
-        assert out["success"] is True
-        sent = next(m for m in record if m["type"] == "zha/devices/unbind")
-        assert sent["source_ieee"] == "aa"
-        assert sent["target_ieee"] == "bb"
-
-    @pytest.mark.asyncio
-    async def test_group_remove_with_confirm(self):
-        record: list = []
-        client = _client(
-            {"zha/group/remove": {"success": True, "result": {"removed": [1]}}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="group_remove",
-            params={"group_ids": [1]},
-            confirm=True,
-        )
-        assert out["success"] is True
-        sent = next(m for m in record if m["type"] == "zha/group/remove")
-        assert sent["group_ids"] == [1]
-
-    @pytest.mark.asyncio
-    async def test_group_members_add(self):
-        record: list = []
-        client = _client(
-            {"zha/group/members/add": {"success": True, "result": {"group_id": 5}}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="group_members_add",
-            params={"group_id": 5, "members": [{"ieee": "aa", "endpoint_id": 1}]},
-        )
-        assert out["group"]["group_id"] == 5
-        sent = next(m for m in record if m["type"] == "zha/group/members/add")
-        assert sent["group_id"] == 5
-        assert sent["members"] == [{"ieee": "aa", "endpoint_id": 1}]
-
-    @pytest.mark.asyncio
-    async def test_group_members_remove(self):
-        record: list = []
-        client = _client(
-            {"zha/group/members/remove": {"success": True, "result": {"group_id": 5}}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="group_members_remove",
-            params={"group_id": 5, "members": [{"ieee": "aa", "endpoint_id": 1}]},
-        )
-        assert out["group"]["group_id"] == 5
-        sent = next(m for m in record if m["type"] == "zha/group/members/remove")
-        assert sent["group_id"] == 5
+    assert out["success"] is True
+    assert [
+        (str(msg["source_ieee"]), str(msg["target_ieee"])) for msg in core[command]
+    ] == [(IEEE, COORDINATOR_IEEE)]
 
 
-# --------------------------------------------------------------------------- #
-# Cluster writes / network ops (service + destructive WS)
-# --------------------------------------------------------------------------- #
+async def test_cluster_write_writes_the_lights_server_cluster(
+    radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    """The write goes to the light's own Level Control cluster, and a level of
+    0 is written, not dropped as empty."""
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="cluster_write",
+        device_id=light_id,
+        params={
+            "endpoint_id": ENDPOINT,
+            "cluster_id": LevelControl.cluster_id,
+            "attribute": LevelControl.AttributeDefs.current_level.id,
+            "value": 0,
+        },
+        confirm=True,
+    )
+
+    assert out["ieee"] == IEEE
+    writes = _general(
+        network, LevelControl.cluster_id, foundation.GeneralCommand.Write_Attributes
+    )
+    assert [
+        [(record.attrid, record.value.value) for record in write.attributes]
+        for write in writes
+    ] == [[(LevelControl.AttributeDefs.current_level.id, 0)]]
 
 
-class TestZigbeeClusterAndNetwork:
-    @pytest.mark.asyncio
-    async def test_cluster_write_calls_service(self):
-        calls: list = []
-        client = _client(
-            {"config/device_registry/list": _device_registry(_zha_device())},
-            service_calls=calls,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="cluster_write",
-            device_id="z1",
-            params={
-                "endpoint_id": 1,
-                "cluster_id": 8,
-                "attribute": "current_level",
-                "value": 0,
-            },
-            confirm=True,
-        )
-        assert out["ieee"] == _IEEE
-        data = calls[0]["data"]
-        assert calls[0]["service"] == "set_zigbee_cluster_attribute"
-        assert data["cluster_type"] == "in"
-        assert data["value"] == 0  # falsy value is preserved
-        assert data["ieee"] == _IEEE
+async def test_cluster_command_sends_the_command_to_the_light(
+    radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="cluster_command",
+        device_id=light_id,
+        params={
+            "endpoint_id": ENDPOINT,
+            "cluster_id": OnOff.cluster_id,
+            "command": OnOff.ServerCommandDefs.off.id,
+            "command_type": "server",
+            "params": {},
+        },
+        confirm=True,
+    )
 
-    @pytest.mark.asyncio
-    async def test_cluster_write_requires_confirm(self):
-        # cluster_write is destructive: all required params present, no confirm.
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="cluster_write",
-                device_id="z1",
-                params={
-                    "endpoint_id": 1,
-                    "cluster_id": 8,
-                    "attribute": "current_level",
-                    "value": 0,
-                },
-            )
-        assert "confirm" in str(exc.value).lower()
+    assert out["success"] is True
+    commands = _cluster_commands(network, OnOff.cluster_id)
+    assert [command.command.name for command in commands] == ["off"]
 
-    @pytest.mark.asyncio
-    async def test_cluster_command_requires_confirm(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="cluster_command",
-                device_id="z1",
-                params={
-                    "endpoint_id": 1,
-                    "cluster_id": 6,
-                    "command": 0,
-                    "command_type": "server",
-                },
-            )
-        assert "confirm" in str(exc.value).lower()
 
-    @pytest.mark.asyncio
-    async def test_cluster_write_missing_value_raises(self):
-        client = _client(
-            {"config/device_registry/list": _device_registry(_zha_device())}
-        )
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="cluster_write",
-                device_id="z1",
-                params={
-                    "endpoint_id": 1,
-                    "cluster_id": 8,
-                    "attribute": "current_level",
-                },
-                confirm=True,
-            )
-        assert "value" in str(exc.value)
+async def test_cluster_command_without_arguments_reaches_the_light(
+    radio: RadioTools, network: LightNetworkRadio, light_id: str
+) -> None:
+    """A command that takes no arguments needs none passed: only the parameters
+    the action lists as required are given."""
+    await radio.ha_manage_radio(
+        radio="zigbee",
+        action="cluster_command",
+        device_id=light_id,
+        params={
+            "endpoint_id": ENDPOINT,
+            "cluster_id": OnOff.cluster_id,
+            "command": OnOff.ServerCommandDefs.off.id,
+            "command_type": "server",
+        },
+        confirm=True,
+    )
 
-    @pytest.mark.asyncio
-    async def test_cluster_command_calls_service(self):
-        calls: list = []
-        client = _client(
-            {"config/device_registry/list": _device_registry(_zha_device())},
-            service_calls=calls,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="cluster_command",
-            device_id="z1",
-            params={
-                "endpoint_id": 1,
-                "cluster_id": 6,
-                "command": 0,
-                "command_type": "server",
-            },
-            confirm=True,
-        )
-        assert out["success"] is True
-        assert calls[0]["service"] == "issue_zigbee_cluster_command"
-        assert calls[0]["data"]["command_type"] == "server"
+    commands = _cluster_commands(network, OnOff.cluster_id)
+    assert [command.command.name for command in commands] == ["off"]
 
-    @pytest.mark.asyncio
-    async def test_network_backup(self):
-        client = _client(
-            {
-                "zha/network/backups/create": {
-                    "success": True,
-                    "result": {"backup_time": "now"},
-                }
-            }
-        )
-        out = await _radio(client)(radio="zigbee", action="network_backup")
-        assert out["backup"]["backup_time"] == "now"
 
-    @pytest.mark.asyncio
-    async def test_change_channel_requires_confirm(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee", action="change_channel", params={"new_channel": 25}
-            )
-        assert "confirm" in str(exc.value).lower()
+async def test_network_backup_returns_the_networks_backup(
+    radio: RadioTools, zha_entry: MockConfigEntry
+) -> None:
+    out = await radio.ha_manage_radio(radio="zigbee", action="network_backup")
 
-    @pytest.mark.asyncio
-    async def test_change_channel_with_confirm(self):
-        record: list = []
-        client = _client(
-            {"zha/network/change_channel": {"success": True, "result": None}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zigbee",
-            action="change_channel",
-            params={"new_channel": 25},
-            confirm=True,
-        )
-        assert out["new_channel"] == 25
-        changes = [m for m in record if m["type"] == "zha/network/change_channel"]
-        assert changes and changes[0]["new_channel"] == 25
+    network_info = out["backup"]["backup"]["network_info"]
+    assert (network_info["channel"], network_info["pan_id"]) == (15, "1234")
+    assert out["backup"]["is_complete"] is True
 
-    @pytest.mark.asyncio
-    async def test_network_restore_requires_confirm(self):
-        client = _client({})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zigbee",
-                action="network_restore",
-                params={"backup": {"some": "backup"}},
-            )
-        assert "confirm" in str(exc.value).lower()
 
-    @pytest.mark.asyncio
-    async def test_network_restore_with_confirm(self):
-        record: list = []
-        client = _client(
-            {"zha/network/backups/restore": {"success": True, "result": {"ok": True}}},
-            record=record,
-        )
-        out = await _radio(client)(
+async def test_network_restore_restores_a_backup(
+    hass: HomeAssistant, radio: RadioTools, zha_entry: MockConfigEntry
+) -> None:
+    backup = (await radio.ha_manage_radio(radio="zigbee", action="network_backup"))[
+        "backup"
+    ]["backup"]
+
+    with received(hass, "zha/network/backups/restore") as core:
+        out = await radio.ha_manage_radio(
             radio="zigbee",
             action="network_restore",
-            params={"backup": {"some": "backup"}},
+            params={"backup": backup},
             confirm=True,
         )
-        assert out["success"] is True
-        sent = next(m for m in record if m["type"] == "zha/network/backups/restore")
-        assert sent["backup"] == {"some": "backup"}
+
+    assert out["success"] is True
+    restored = core["zha/network/backups/restore"]
+    assert [msg["backup"].as_dict()["network_info"] for msg in restored] == [
+        backup["network_info"]
+    ]
+
+
+async def test_change_channel_moves_the_network(
+    radio: RadioTools,
+    network: LightNetworkRadio,
+    zha_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The network is told to move and the coordinator moves with it. zigpy's
+    pause between its announcements is cut so the test does not wait."""
+    monkeypatch.setattr(zigpy.application, "CHANNEL_CHANGE_BROADCAST_DELAY_S", 0)
+
+    out = await radio.ha_manage_radio(
+        radio="zigbee",
+        action="change_channel",
+        params={"new_channel": 25},
+        confirm=True,
+    )
+
+    assert out["new_channel"] == 25
+    assert network.state.network_info.channel == 25
+    assert any(
+        packet.cluster_id == zdo_t.ZDOCmd.Mgmt_NWK_Update_req
+        and packet.dst is not None
+        and packet.dst.addr_mode == t.AddrMode.Broadcast
+        for packet in network.sent
+    )

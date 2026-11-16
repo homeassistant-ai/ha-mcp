@@ -11,13 +11,10 @@ from __future__ import annotations
 
 import pytest
 
+from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import HarnessResult, run_script
-from .test_settings_ui_js_behavior import (
-    DEFAULT_FETCHES,
-    _assert_clean_init,
-    _policy_panel_dom,
-    _probe,
-)
+from ._settings_ui_dom import DEFAULT_FETCHES
+from ._settings_ui_js_helpers import policy_panel_dom, probe
 
 # The decision-PIN endpoint answers from ``pinSet``, which DELETE and POST
 # change, so each test states the server's PIN without counting init GETs.
@@ -100,7 +97,7 @@ def _run(
     }
     result = run_script(
         settings_script,
-        initial_html=_policy_panel_dom(),
+        initial_html=policy_panel_dom(),
         fetch_map=fetches,
         invoke=f"""
           await new Promise(r => setTimeout(r, 250));
@@ -118,8 +115,8 @@ def _run(
 
 
 def _held_read_landed_after(result: HarnessResult, name: str) -> bool:
-    held = _probe(result, "held-order")
-    fresh = _probe(result, f"{name}-order")
+    held = probe(result, "held-order")
+    fresh = probe(result, f"{name}-order")
     assert held is not None and fresh is not None, (held, fresh)
     return int(held) > int(fresh)
 
@@ -157,11 +154,11 @@ def test_a_stale_pin_status_does_not_lock_the_switch(settings_script: str) -> No
     )
     # The race: the newer read unlocked the switch, then the held read
     # answered "no PIN".
-    assert _probe(result, "fresh-disabled") == "false"
-    assert _probe(result, "held-answer") == "false"
+    assert probe(result, "fresh-disabled") == "false"
+    assert probe(result, "held-answer") == "false"
     assert _held_read_landed_after(result, "fresh")
-    assert _probe(result, "after-disabled") == "false"
-    assert _probe(result, "after-status") == "A PIN is set."
+    assert probe(result, "after-disabled") == "false"
+    assert probe(result, "after-status") == "A PIN is set."
 
 
 def test_a_stale_failed_pin_status_does_not_overwrite_a_newer_one(
@@ -184,7 +181,7 @@ def test_a_stale_failed_pin_status_does_not_overwrite_a_newer_one(
         """,
     )
     assert _held_read_landed_after(result, "fresh")
-    assert _probe(result, "after-status") == "A PIN is set."
+    assert probe(result, "after-status") == "A PIN is set."
 
 
 def test_a_new_pin_shows_the_stored_switch_after_a_partial_removal(
@@ -199,12 +196,12 @@ def test_a_new_pin_shows_the_stored_switch_after_a_partial_removal(
         pin_set=True,
         body=REPLACE_AFTER_PARTIAL_REMOVAL,
     )
-    assert _probe(result, "removed-checked") == "false"
-    assert _probe(result, "removed-disabled") == "true"
-    assert _probe(result, "replaced-checked") == "true"
-    assert _probe(result, "replaced-disabled") == "false"
+    assert probe(result, "removed-checked") == "false"
+    assert probe(result, "removed-disabled") == "true"
+    assert probe(result, "replaced-checked") == "true"
+    assert probe(result, "replaced-disabled") == "false"
     # The re-read worked, so no "could not be read" warning.
-    assert _probe(result, "replaced-toast-msg") == "PIN saved."
+    assert probe(result, "replaced-toast-msg") == "PIN saved."
 
 
 @pytest.mark.parametrize("failure", ["network", "500"])
@@ -221,9 +218,9 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
         pin_set=True,
         body=f"failConfig = '{failure}';\n" + REPLACE_AFTER_PARTIAL_REMOVAL,
     )
-    assert _probe(result, "removed-disabled") == "true"
-    toast = _probe(result, "replaced-toast-msg") or ""
-    assert _probe(result, "replaced-toast-error") == "true"
+    assert probe(result, "removed-disabled") == "true"
+    toast = probe(result, "replaced-toast-msg") or ""
+    assert probe(result, "replaced-toast-error") == "true"
     assert toast.startswith("PIN saved, but")
     assert "could not be read" in toast
     # The toast is generic; the console keeps which of the reads failed.
@@ -231,10 +228,10 @@ def test_a_failed_policy_read_does_not_report_the_saved_pin_as_failed(
         " ".join(entry["args"]) for entry in result.console if entry["level"] == "warn"
     ]
     assert any("event-decisions" in w for w in warnings), warnings
-    assert _probe(result, "replaced-status") == "A PIN is set."
-    assert _probe(result, "replaced-disabled") == "false"
+    assert probe(result, "replaced-status") == "A PIN is set."
+    assert probe(result, "replaced-disabled") == "false"
     # Nothing could be read, so the switch keeps what the page showed.
-    assert _probe(result, "replaced-checked") == "false"
+    assert probe(result, "replaced-checked") == "false"
 
 
 def test_a_refused_pin_leaves_the_switch_locked(settings_script: str) -> None:
@@ -248,10 +245,10 @@ def test_a_refused_pin_leaves_the_switch_locked(settings_script: str) -> None:
     )
     # The removal before it leaves an error toast too; the message tells
     # the two apart.
-    assert _probe(result, "replaced-toast-error") == "true"
-    assert _probe(result, "replaced-toast-msg") == "Set PIN failed: not stored"
-    assert _probe(result, "replaced-checked") == "false"
-    assert _probe(result, "replaced-disabled") == "true"
+    assert probe(result, "replaced-toast-error") == "true"
+    assert probe(result, "replaced-toast-msg") == "Set PIN failed: not stored"
+    assert probe(result, "replaced-checked") == "false"
+    assert probe(result, "replaced-disabled") == "true"
 
 
 def test_replacing_a_pin_keeps_an_unsaved_tick(settings_script: str) -> None:
@@ -270,5 +267,5 @@ def test_replacing_a_pin_keeps_an_unsaved_tick(settings_script: str) -> None:
           stamp('replaced');
         """,
     )
-    assert _probe(result, "ticked-disabled") == "false"
-    assert _probe(result, "replaced-checked") == "true"
+    assert probe(result, "ticked-disabled") == "false"
+    assert probe(result, "replaced-checked") == "true"

@@ -14,6 +14,13 @@ _ROOT = Path(__file__).resolve().parents[3]
 _BUILDER = _ROOT / "tests/haos_image_build/build_image.py"
 
 
+def _run_builder(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Run the builder as ``python3 tests/haos_image_build/build_image.py`` does,
+    with its directory on the import path for the modules beside it."""
+    monkeypatch.syspath_prepend(str(_BUILDER.parent))
+    return runpy.run_path(str(_BUILDER))
+
+
 @pytest.mark.parametrize("beta", [False, True])
 def test_image_builder_uses_stable_defaults_or_explicit_beta(
     monkeypatch: pytest.MonkeyPatch, beta: bool
@@ -30,7 +37,7 @@ def test_image_builder_uses_stable_defaults_or_explicit_beta(
         monkeypatch.setenv("HAOS_BUILD_SUPERVISOR_CHANNEL", "beta")
         monkeypatch.setenv("HAOS_BUILD_SUPERVISOR_MIN_VERSION", "2026.09.0")
         monkeypatch.setenv("HAOS_BUILD_CORE_VERSION", "2026.10.0b1")
-    builder = runpy.run_path(str(_BUILDER))
+    builder = _run_builder(monkeypatch)
     os_version = "18.3.rc1" if beta else builder["STABLE_HAOS_VERSION"]
     assert builder["HAOS_QCOW2_URL"] == (
         "https://github.com/home-assistant/operating-system/releases/download/"
@@ -51,7 +58,7 @@ def test_image_builder_rejects_invalid_os_override(
 ) -> None:
     monkeypatch.setenv("HAOS_BUILD_OS_VERSION", version)
     with pytest.raises(ValueError, match="Invalid HAOS version"):
-        runpy.run_path(str(_BUILDER))
+        _run_builder(monkeypatch)
 
 
 def _run_beta_step(

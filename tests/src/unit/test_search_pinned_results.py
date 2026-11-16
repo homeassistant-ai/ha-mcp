@@ -18,24 +18,13 @@ import pytest
 import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
-from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.config import reset_global_settings
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
+from ._search_noop_tools import noop_tool
+
 # These tests exercise the search tools a search-mode connection gets.
 pytestmark = pytest.mark.usefixtures("tool_search_default")
-
-
-def _tool(name: str, description: str) -> Tool:
-    async def noop() -> str:
-        return "ok"
-
-    return Tool.from_function(
-        fn=noop,
-        name=name,
-        description=description,
-        annotations=ToolAnnotations(read_only_hint=True),
-    )
 
 
 async def _search(
@@ -56,12 +45,12 @@ async def _search(
 @pytest.mark.parametrize("reverse_catalog", [False, True])
 async def test_cached_search_uses_current_tool_schema(reverse_catalog: bool) -> None:
     """A schema-only update must reach search even when ranking is cached."""
-    original = _tool("ha_lookup", "look up an entity")
+    original = noop_tool("ha_lookup", "look up an entity")
     original.parameters = {
         "type": "object",
         "properties": {"entity_id": {"type": "string"}},
     }
-    other = _tool("ha_unrelated", "unrelated operation")
+    other = noop_tool("ha_unrelated", "unrelated operation")
     transform = CategorizedSearchTransform()
     await transform._search([original, other], "look up an entity")
 
@@ -90,8 +79,8 @@ async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema
     stub repeats no schema because the client already lists the tool."""
     results = await _search(
         [
-            _tool("ha_get_state", "get entity state"),
-            _tool("ha_config_set_scene", "create scene"),
+            noop_tool("ha_get_state", "get entity state"),
+            noop_tool("ha_config_set_scene", "create scene"),
         ],
         pinned=["ha_get_state"],
         query="entity state",
@@ -112,8 +101,8 @@ async def test_hidden_hit_is_compact_next_to_a_stub() -> None:
     the schema comes from the ``tools=`` second hop."""
     results = await _search(
         [
-            _tool("ha_get_state", "get entity state"),
-            _tool("ha_get_entity", "get entity details"),
+            noop_tool("ha_get_state", "get entity state"),
+            noop_tool("ha_get_entity", "get entity details"),
         ],
         pinned=["ha_get_state"],
         query="get entity",
@@ -132,10 +121,10 @@ async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools() -> No
     """``max_results`` counts hidden tools only; a stub rides along."""
     results = await _search(
         [
-            _tool("pinned_tool", "alpha beta alpha beta"),
-            _tool("hidden_one", "alpha beta"),
-            _tool("hidden_two", "alpha beta"),
-            _tool("hidden_three", "alpha beta"),
+            noop_tool("pinned_tool", "alpha beta alpha beta"),
+            noop_tool("hidden_one", "alpha beta"),
+            noop_tool("hidden_two", "alpha beta"),
+            noop_tool("hidden_three", "alpha beta"),
         ],
         pinned=["pinned_tool"],
         query="alpha beta",
@@ -152,9 +141,9 @@ async def test_pinned_tool_ranked_below_the_page_adds_no_stub() -> None:
     """A weak match on a pinned tool must not stub every page."""
     results = await _search(
         [
-            _tool("pinned_tool", "beta only"),
-            _tool("hidden_one", "alpha beta"),
-            _tool("hidden_two", "alpha beta"),
+            noop_tool("pinned_tool", "beta only"),
+            noop_tool("hidden_one", "alpha beta"),
+            noop_tool("hidden_two", "alpha beta"),
         ],
         pinned=["pinned_tool"],
         query="alpha beta",
@@ -167,7 +156,7 @@ async def test_pinned_tool_ranked_below_the_page_adds_no_stub() -> None:
 @pytest.mark.anyio
 async def test_unmatched_query_returns_nothing_even_with_pinned_tools() -> None:
     results = await _search(
-        [_tool("ha_get_state", "get entity state")],
+        [noop_tool("ha_get_state", "get entity state")],
         pinned=["ha_get_state"],
         query="zzzznothing",
     )

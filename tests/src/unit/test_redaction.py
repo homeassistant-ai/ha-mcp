@@ -14,7 +14,6 @@ from ha_mcp.redaction import (
     REDACTED_KNOWN,
     REDACTED_SET,
     RedactSecretsMiddleware,
-    _clear_known_secret_values,
     collect_addon_secret_values,
     is_password_flow_field,
     is_sentinel,
@@ -36,13 +35,7 @@ from ha_mcp.tools.integration_schema import (
     redact_options_by_form,
 )
 
-
-@pytest.fixture(autouse=True)
-def _clean_registry():
-    """Isolate the module-level known-secrets set per test."""
-    _clear_known_secret_values()
-    yield
-    _clear_known_secret_values()
+from ._redaction_registry import clean_registry as clean_registry
 
 
 @pytest.fixture

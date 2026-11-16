@@ -1,218 +1,263 @@
-"""Review regressions for Template snapshot validation and recovery diagnostics."""
+"""Review regressions for Template snapshot validation and recovery diagnostics.
+
+The helper is a Template sensor that Core's own config flow made; snapshots
+are captured from it over the server's own client, and a test edits the
+stored file to get a snapshot an older release or a hand edit left behind.
+"""
+
+from __future__ import annotations
 
 import logging
-from copy import deepcopy
-from functools import partial
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-import yaml
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from ha_mcp import backup_manager as bm
-from ha_mcp.tools.config_entry_flow import OptionsFlowError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import config_entry_flow
 
+from ._command_faults import received
+from ._template_backup_core import degrade_secret_scrub, real_snapshot
 from ._template_backup_core import manager as manager
 from ._template_backup_core import settings as settings
-from .test_template_deleted_recovery import ENTITY, OPTIONS
-from .test_template_deleted_recovery import recovery as recovery
+from ._template_backup_core import template_entry as template_entry
+from ._template_helper_core import (
+    create_template_sensor,
+    set_template_state,
+    state_template,
+)
+from ._template_recovery_core import (
+    RENAMED,
+    DeletedTemplate,
+    edit_snapshot,
+    recreated_entry,
+    then_after,
+)
+from ._template_recovery_core import deleted_template as deleted_template
+
+HELPERS_LIST = "ha_mcp_tools/helpers_list"
+
+
+def _with_options(path: Path, options: Any) -> None:
+    def change(data: dict[str, Any]) -> None:
+        data["config"]["options"] = options
+
+    edit_snapshot(path, change)
 
 
 @pytest.mark.parametrize("field", ["domain", "entity_id", "config"])
-async def test_diff_rejects_missing_snapshot_envelope_field(manager, field):
-    fetch = AsyncMock(return_value={})
-    manager.register(bm.DomainHandler("automation", fetch, AsyncMock()))
-    path = manager._write_snapshot("automation", "example", {}, "test")
-    snapshot = manager.read_snapshot(path.name)
-    snapshot.pop(field)
-    path.write_text(yaml.safe_dump(snapshot))
-    with pytest.raises(ValueError, match="Snapshot.*missing.*" + field):
+async def test_diff_rejects_missing_snapshot_envelope_field(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    field: str,
+) -> None:
+    path = await real_snapshot(manager, template_entry)
+    edit_snapshot(path, lambda data: data.pop(field))
+
+    with (
+        received(hass, HELPERS_LIST) as reads,
+        pytest.raises(ValueError, match="Snapshot.*missing.*" + field),
+    ):
         await manager.snapshot_comparison(path.name)
-    fetch.assert_not_awaited()
+
+    assert reads[HELPERS_LIST] == []
 
 
 @pytest.mark.parametrize("field", ["domain", "entity_id"])
-async def test_diff_rejects_non_string_snapshot_identity(manager, field):
-    fetch = AsyncMock(return_value={})
-    manager.register(bm.DomainHandler("automation", fetch, AsyncMock()))
-    path = manager._write_snapshot("automation", "example", {}, "test")
-    snapshot = manager.read_snapshot(path.name)
-    snapshot[field] = None
-    path.write_text(yaml.safe_dump(snapshot))
-    with pytest.raises(ValueError, match="Snapshot.*invalid.*" + field):
-        await manager.snapshot_comparison(path.name)
-    fetch.assert_not_awaited()
+async def test_diff_rejects_non_string_snapshot_identity(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    field: str,
+) -> None:
+    path = await real_snapshot(manager, template_entry)
+    edit_snapshot(path, lambda data: data.update({field: None}))
 
-
-@pytest.mark.parametrize("config", [{"entry_id": "old-entry"}, {"options": OPTIONS}])
-async def test_diff_rejects_invalid_snapshot_before_live_fetch(manager, config):
-    path = manager._write_snapshot("helper_template", "old-entry", config, "test")
-    fetch = AsyncMock(return_value={"entry_id": "old-entry", "options": OPTIONS})
-    manager.register(bm.DomainHandler("helper_template", fetch, AsyncMock()))
-    with pytest.raises(ValueError, match="Template helper snapshot") as caught:
-        await manager.snapshot_comparison(path.name)
-    assert type(caught.value).__name__ == "InvalidBackupSnapshotError"
-    fetch.assert_not_awaited()
-
-
-@pytest.mark.parametrize("options", [None, {}, ["name"]])
-async def test_malformed_snapshot_is_permanent_refusal_before_live_read(
-    recovery, options, caplog
-):
-    recovery.config["options"] = options
-    path = recovery.manager._write_snapshot(
-        "helper_template", "old-entry", recovery.config, "test"
-    )
     with (
-        caplog.at_level(logging.WARNING),
+        received(hass, HELPERS_LIST) as reads,
+        pytest.raises(ValueError, match="Snapshot.*invalid.*" + field),
+    ):
+        await manager.snapshot_comparison(path.name)
+
+    assert reads[HELPERS_LIST] == []
+
+
+async def _refused_before_reading_home_assistant(
+    hass: HomeAssistant, manager: bm.BackupManager, path: Path
+) -> bm.BackupRestoreError:
+    """Restore ``path``; it must be refused before anything is read from Core."""
+    with (
+        received(hass, HELPERS_LIST) as reads,
         pytest.raises(bm.BackupRestoreError) as caught,
     ):
-        await recovery.manager.restore_snapshot(path.name)
+        await manager.restore_snapshot(path.name)
+    assert reads[HELPERS_LIST] == []
     assert caught.value.outcome["reason"] == "invalid_snapshot"
     assert caught.value.outcome["apply_status"] == "not_applied"
-    assert caught.value.outcome["verification_status"] == "not_run"
-    recovery.create.assert_not_awaited()
-    recovery.manager._client._request.assert_not_awaited()
-    assert "snapshot_validation" in caplog.text
+    return caught.value
 
 
-async def test_recreated_identity_readback_mismatch_is_reported(recovery, monkeypatch):
-    send = bm._ws_send.side_effect
+@pytest.mark.parametrize("options", [None, {}], ids=["not-a-mapping", "empty"])
+async def test_malformed_snapshot_is_permanent_refusal_before_live_read(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+    options: Any,
+) -> None:
+    path = await real_snapshot(manager, template_entry)
+    _with_options(path, options)
 
-    async def ignore_rename(client, message):
-        if message["type"] == "config/entity_registry/update":
-            return {}  # HA acknowledges without the requested identity taking effect.
-        return await send(client, message)
-
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=ignore_rename))
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert caught.value.outcome["apply_status"] == "applied"
-    assert caught.value.outcome["verification_status"] == "mismatched"
-    assert caught.value.outcome["reason"] == "entity_identity_mismatch"
-    assert caught.value.outcome["entity_id"] == "new-entry"
-
-
-@pytest.mark.parametrize("entities", [{}, [None], [ENTITY, ENTITY]])
-async def test_invalid_entity_metadata_is_a_snapshot_refusal(recovery, entities):
-    recovery.config["entities"] = entities
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._recreate_flow_helper(
-            recovery.manager._client, "old-entry", recovery.config, "template"
-        )
-    assert caught.value.outcome["reason"] == "invalid_snapshot"
-    recovery.manager._client._request.assert_not_awaited()
-    recovery.create.assert_not_awaited()
-
-
-async def test_recreated_identity_read_failure_is_unavailable(recovery, monkeypatch):
-    monkeypatch.setattr(
-        "ha_mcp.backup_entity_ids.created_entity",
-        AsyncMock(side_effect=bm.HomeAssistantError("private upstream payload")),
-    )
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert caught.value.outcome["apply_status"] == "applied"
-    assert caught.value.outcome["verification_status"] == "unavailable"
-
-
-async def test_applied_options_refusal_preserves_safe_details(monkeypatch):
-    from ha_mcp.tools import config_entry_flow
-
-    snapshot = {"entry_id": "old-entry", "options": OPTIONS}
-    monkeypatch.setattr(bm, "_fetch_flow_helper", AsyncMock(return_value=snapshot))
-    failure = OptionsFlowError(
-        "private upstream payload",
-        apply_status="applied",
-        entry_id="old-entry",
-        reason="unsupported_fields",
-        fields=("availability",),
-    )
-    monkeypatch.setattr(
-        config_entry_flow,
-        "restore_config_entry_options",
-        AsyncMock(side_effect=failure),
-    )
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await bm._restore_flow_helper(object(), "old-entry", snapshot, "template")
-    assert caught.value.outcome["apply_status"] == "applied"
-    assert caught.value.outcome["verification_status"] == "matched"
-    assert caught.value.outcome["reason"] == "unsupported_fields"
-    assert caught.value.outcome["fields"] == ["availability"]
-    assert "private upstream payload" not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    "response,reason",
-    [
-        ({"secret_scrub_degraded": True}, "secret_scrub_degraded"),
-        ({"covered_types": []}, "template_read_unsupported"),
-        (
-            {
-                "covered_types": ["template"],
-                "helpers": [{"kind": "flow", "helper_type": "template"}],
-            },
-            "ambiguous_entry_identity",
-        ),
-    ],
-)
-async def test_unavailable_verification_logs_safe_local_cause(
-    monkeypatch, caplog, response, reason
-):
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=response))
     with caplog.at_level(logging.WARNING):
-        result = await bm._verify_readback(
-            partial(bm._fetch_flow_helper, object(), "old-entry", "template"),
-            {},
-            ("entry_id", "options"),
-        )
-    assert result == "unavailable"
-    assert "step=readback" in caplog.text
-    assert reason in caplog.text
+        error = await _refused_before_reading_home_assistant(hass, manager, path)
 
-
-async def test_unknown_recreation_logs_step_and_type_without_remote_payload(
-    recovery, caplog
-):
-    recovery.create.side_effect = bm.HomeAssistantError("private upstream payload")
-    with caplog.at_level(logging.WARNING), pytest.raises(bm.BackupRestoreError):
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert "create_entry" in caplog.text
-    assert "HomeAssistantError" in caplog.text
-    assert "private upstream payload" not in caplog.text
-
-
-def test_redaction_marker_inside_a_template_remains_a_recoverable_value():
-    options = {**OPTIONS, "state": '{{ "**redacted**" }}'}
-    assert bm._flow_options(options, "template") == options
+    assert error.outcome["verification_status"] == "not_run"
+    assert "snapshot_validation" in caplog.text
 
 
 @pytest.mark.parametrize(
     "value", ["**redacted**", {"nested": "**redacted**"}, ["**redacted**"]]
 )
-def test_exact_redaction_leaves_are_still_refused(value):
-    with pytest.raises(bm.HomeAssistantError, match="redacted"):
-        bm._flow_options({**OPTIONS, "state": value}, "template")
+async def test_exact_redaction_leaves_are_still_refused(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    value: Any,
+) -> None:
+    path = await real_snapshot(manager, template_entry)
+    edit_snapshot(path, lambda data: data["config"]["options"].update(state=value))
+
+    error = await _refused_before_reading_home_assistant(hass, manager, path)
+
+    assert "redacted" in str(error)
+
+
+async def test_redaction_marker_inside_a_template_remains_a_recoverable_value(
+    hass: HomeAssistant, manager: bm.BackupManager
+) -> None:
+    """Only a value that IS the marker was redacted; a template that merely
+    contains it is captured whole and restores."""
+    entry = await create_template_sensor(hass, "**redacted**")
+    path = await real_snapshot(manager, entry)
+    await set_template_state(hass, entry, "edited since")
+
+    await manager.restore_snapshot(path.name)
+
+    assert entry.options["state"] == state_template("**redacted**")
+
+
+async def test_recreated_identity_readback_mismatch_is_reported(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+) -> None:
+    """Core renames the recreated entity, then another edit changes its name
+    before the restore reads it back: the restore says so."""
+
+    def rename_again() -> None:
+        entity_registry.async_update_entity(RENAMED, name="Renamed meanwhile")
+
+    with (
+        then_after(hass, "config/entity_registry/update", rename_again),
+        pytest.raises(bm.BackupRestoreError) as caught,
+    ):
+        await deleted_template.manager.restore_snapshot(deleted_template.name)
+
+    assert caught.value.outcome["apply_status"] == "applied"
+    assert caught.value.outcome["verification_status"] == "mismatched"
+    assert caught.value.outcome["reason"] == "entity_identity_mismatch"
+    assert caught.value.outcome["entity_id"] == recreated_entry(hass).entry_id
 
 
 @pytest.mark.parametrize(
-    "registry",
-    [None, [None], [{}], [{"entity_id": "no_domain"}], [ENTITY, ENTITY]],
+    "entities",
+    ["not-a-list", "not-a-row", "duplicate"],
 )
-async def test_malformed_registry_refuses_capture_without_writing(
-    recovery, monkeypatch, registry
-):
-    recovery.state.records = [
-        {
-            "entry_id": "old-entry",
-            "kind": "flow",
-            "helper_type": "template",
-            "options": deepcopy(OPTIONS),
-        }
-    ]
-    recovery.state.registry = registry
-    before = set(recovery.manager.backup_dir.glob("*.yaml"))
-    with pytest.raises(bm.MandatoryBackupError):
-        await recovery.manager.maybe_snapshot(
-            "helper_template", "old-entry", mandatory=True, force=True
-        )
-    assert set(recovery.manager.backup_dir.glob("*.yaml")) == before
+async def test_invalid_entity_metadata_is_a_snapshot_refusal(
+    hass: HomeAssistant, deleted_template: DeletedTemplate, entities: str
+) -> None:
+    path = deleted_template.manager.backup_dir / deleted_template.name
+
+    def change(data: dict[str, Any]) -> None:
+        saved = data["config"]["entities"]
+        data["config"]["entities"] = {
+            "not-a-list": {},
+            "not-a-row": [None],
+            "duplicate": [*saved, *saved],
+        }[entities]
+
+    edit_snapshot(path, change)
+
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await deleted_template.manager.restore_snapshot(deleted_template.name)
+
+    assert caught.value.outcome["reason"] == "invalid_snapshot"
+    assert caught.value.outcome["apply_status"] == "not_applied"
+    assert not hass.config_entries.async_entries("template")
+
+
+async def test_unavailable_verification_logs_safe_local_cause(
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """secrets.yaml breaks after the options flow ran: the readback refuses to
+    read unscrubbed options, and the log names that local cause."""
+    source = await real_snapshot(manager, template_entry)
+    await set_template_state(hass, template_entry, "before")
+    native = config_entry_flow.restore_config_entry_options
+
+    async def apply_then_break_secrets(*args: Any, **kwargs: Any) -> Any:
+        result = await native(*args, **kwargs)
+        degrade_secret_scrub(hass)
+        return result
+
+    monkeypatch.setattr(
+        config_entry_flow, "restore_config_entry_options", apply_then_break_secrets
+    )
+
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(bm.BackupRestoreError) as caught,
+    ):
+        await manager.restore_snapshot(source.name)
+
+    assert caught.value.outcome["verification_status"] == "unavailable"
+    assert "step=readback" in caplog.text
+    assert "secret_scrub_degraded" in caplog.text
+
+
+async def test_unknown_recreation_logs_step_and_type_without_remote_payload(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The answer to the creation flow's menu gets no reply."""
+    monkeypatch.setattr(
+        component_core_client,
+        "submit_config_flow_step",
+        submit := AsyncMock(
+            side_effect=HomeAssistantConnectionError("private upstream payload")
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(bm.BackupRestoreError):
+        await deleted_template.manager.restore_snapshot(deleted_template.name)
+
+    # The one flow Core has open is the creation flow, and it got the answer.
+    (flow,) = hass.config_entries.flow.async_progress()
+    assert flow["handler"] == "template"
+    submit.assert_awaited_once_with(flow["flow_id"], {"next_step_id": "sensor"})
+    assert "step=create_entry" in caplog.text
+    assert "CreationFlowError" in caplog.text
+    assert "private upstream payload" not in caplog.text

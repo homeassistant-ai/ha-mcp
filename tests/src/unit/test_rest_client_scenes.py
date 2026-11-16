@@ -1,507 +1,324 @@
-"""Unit tests for REST client scene-related methods.
+"""The client's scene config reads, writes and removals, on a real ``hass``.
 
-These tests verify error handling for scene configuration operations,
-especially the 405 Method Not Allowed error for YAML-defined scenes,
-and scene ID resolution via entity registry. Mirror the script test
-shape (test_rest_client_scripts.py) so the parity is auditable.
+Core's config API keeps only the scenes in scenes.yaml, under their id. A scene
+renamed in the UI keeps its id under a new entity_id, so the client resolves an
+id through Core's entity registry first; the registry also tells a scene of
+another integration, which the config API cannot edit, from a missing one
+(#1971).
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantConnectionError,
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 
+from ._command_faults import dropped_on, pooled_socket
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
+from ._rest_client_config_core import (
+    config_client as config_client,
+)
+from ._rest_client_config_core import error_status, load, write_config_file
 
-def _make_mock_client() -> HomeAssistantClient:
-    """Create a mock HomeAssistantClient with WebSocket fallback.
-
-    The send_websocket_message mock raises so resolve_scene_id falls back to
-    the bare id, keeping tests independent of the registry resolver.
-    """
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.httpx_client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WebSocket not available in tests")
-        )
-        return client
-
-
-class TestDeleteSceneConfig:
-    """Tests for delete_scene_config error handling."""
-
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_success(self, mock_client):
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        result = await mock_client.delete_scene_config("movie_night")
-
-        assert result["success"] is True
-        assert result["scene_id"] == "movie_night"
-        assert result["operation"] == "deleted"
-        mock_client._request.assert_called_once_with(
-            "DELETE", "config/scene/config/movie_night"
-        )
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_not_found_404(self, mock_client):
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_scene_config("nonexistent_scene")
-
-        assert exc_info.value.status_code == 404
-        assert "not found" in str(exc_info.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_405_addon_proxy_limitation(self, mock_client):
-        """405 should surface a helpful workaround-bearing error message."""
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 405 - Method Not Allowed", status_code=405
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_scene_config("test_scene")
-
-        error = exc_info.value
-        assert error.status_code == 405
-
-        msg = str(error).lower()
-        assert "cannot delete" in msg
-        assert "add-on" in msg
-        assert "supervisor" in msg
-        assert "yaml" in msg
-        assert "workaround" in msg
-        assert "delete_" in msg  # The DELETE_-prefix fallback suggestion
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_other_error_propagates(self, mock_client):
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 500 - Internal Server Error", status_code=500
-            )
-        )
+ENTITIES = {"light.kitchen": {"state": "on", "brightness": 200}}
+MOVIE_NIGHT = {"id": "movie_night", "name": "Movie night", "entities": ENTITIES}
+# Created as "Renamed scene" under another id: entity_id and id differ.
+RENAMED = {"id": "original_storage_key", "name": "Renamed scene", "entities": ENTITIES}
 
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_scene_config("test_scene")
 
-        assert exc_info.value.status_code == 500
+async def _stored(client: HomeAssistantClient, storage_key: str) -> dict[str, Any]:
+    result = await client.get_scene_config(storage_key, _resolved=True)
+    config: dict[str, Any] = result["config"]
+    return config
 
-    @pytest.mark.asyncio
-    async def test_delete_scene_generic_exception_propagates(self, mock_client):
-        mock_client._request = AsyncMock(side_effect=RuntimeError("Unexpected"))
 
-        with pytest.raises(RuntimeError) as exc_info:
-            await mock_client.delete_scene_config("test_scene")
-
-        assert "Unexpected" in str(exc_info.value)
-
+def _hue_scene(entity_registry: er.EntityRegistry) -> None:
+    """``scene.bedroom_sleepy``, a scene of the Hue integration."""
+    entity_registry.async_get_or_create(
+        "scene", "hue", "hue-uuid-123", suggested_object_id="bedroom_sleepy"
+    )
 
-class TestGetSceneConfig:
-    """Tests for get_scene_config."""
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+# --- removal ----------------------------------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_get_scene_success(self, mock_client):
-        mock_config = {
-            "name": "Movie Night",
-            "entities": {
-                "light.living_room": {"state": "on", "brightness": 50},
-            },
-            "icon": "mdi:movie",
-        }
-        mock_client._request = AsyncMock(return_value=mock_config)
 
-        result = await mock_client.get_scene_config("movie_night")
+async def test_removing_a_scene_removes_its_config(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await load(hass, "scene", [MOVIE_NIGHT])
 
-        assert result["success"] is True
-        assert result["scene_id"] == "movie_night"
-        assert result["config"] == mock_config
+    result = await config_client.delete_scene_config("movie_night")
 
-    @pytest.mark.asyncio
-    async def test_get_scene_not_found_404(self, mock_client):
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
+    assert result["success"] is True
+    assert (result["scene_id"], result["operation"]) == ("movie_night", "deleted")
+    assert await error_status(_stored(config_client, "movie_night")) == 404
 
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.get_scene_config("nonexistent_scene")
 
-        assert exc_info.value.status_code == 404
+async def test_removing_a_missing_scene_reports_not_found(
+    config_client: HomeAssistantClient,
+) -> None:
+    """Core answers a removal of a missing id with a 400; passed on as one,
+    the tool reports a failed request instead of a missing scene."""
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.delete_scene_config("nonexistent_scene")
 
+    assert exc_info.value.status_code == 404
+    assert "not found" in str(exc_info.value).lower()
 
-class TestUpsertSceneConfig:
-    """Tests for upsert_scene_config validation."""
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+async def test_removing_another_integrations_scene_says_it_is_not_editable(
+    config_client: HomeAssistantClient, entity_registry: er.EntityRegistry
+) -> None:
+    """A Hue scene exists; reported as a failed request, the caller cannot
+    tell it from a broken one."""
+    _hue_scene(entity_registry)
 
-    @pytest.mark.asyncio
-    async def test_upsert_scene_with_entities_dict(self, mock_client):
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
+    with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
+        await config_client.delete_scene_config("bedroom_sleepy")
 
-        config = {
-            "name": "Test Scene",
-            "entities": {"light.kitchen": {"state": "on", "brightness": 200}},
-        }
+    assert (exc_info.value.platform, exc_info.value.scene_id) == (
+        "hue",
+        "bedroom_sleepy",
+    )
 
-        result = await mock_client.upsert_scene_config(config, "test_scene")
 
-        assert result["success"] is True
-        assert result["scene_id"] == "test_scene"
+async def test_a_proxy_refusing_removal_explains_the_way_around_it(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    gateway: Gateway,
+    gateway_client: HomeAssistantClient,
+) -> None:
+    """Supervisor's ingress proxy answers DELETE with 405."""
+    await load(hass, "scene", [MOVIE_NIGHT])
+    gateway.outages.append(405)
 
-    @pytest.mark.asyncio
-    async def test_upsert_scene_missing_entities_field(self, mock_client):
-        """A scene without 'entities' is rejected at the client layer."""
-        config = {"name": "Empty Scene"}
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await gateway_client.delete_scene_config("movie_night")
 
-        with pytest.raises(ValueError) as exc_info:
-            await mock_client.upsert_scene_config(config, "test_scene")
+    assert exc_info.value.status_code == 405
+    message = str(exc_info.value).lower()
+    for hint in ("cannot delete", "add-on", "supervisor", "yaml", "workaround"):
+        assert hint in message
+    assert "delete_movie_night" in message
+    assert gateway.requests == ["DELETE /api/config/scene/config/movie_night"]
 
-        assert "entities" in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_upsert_scene_adds_name_if_missing(self, mock_client):
-        """Scenes without 'name' default to scene_id (mirrors script alias default)."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
+async def test_a_server_error_on_removal_is_not_reported_as_not_found(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await write_config_file(hass, "scenes.yaml", "- [unclosed\n")
 
-        config = {"entities": {"light.kitchen": {"state": "on"}}}
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.delete_scene_config("movie_night")
 
-        await mock_client.upsert_scene_config(config, "test_scene")
+    assert exc_info.value.status_code == 500
 
-        call_args = mock_client._request.call_args
-        json_arg = call_args[1]["json"]
-        assert json_arg["name"] == "test_scene"
 
+async def test_a_renamed_scene_is_removed_under_its_storage_key(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await load(hass, "scene", [RENAMED])
 
-class TestResolveSceneId:
-    """Tests for resolve_scene_id entity registry resolution."""
+    result = await config_client.delete_scene_config("renamed_scene")
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+    assert result["scene_id"] == "original_storage_key"
+    assert await error_status(_stored(config_client, "original_storage_key")) == 404
 
-    @pytest.mark.asyncio
-    async def test_resolve_bare_id_matching_unique_id(self, mock_client):
-        """Unique_id matches bare id → returned unchanged."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "movie_night"}}
-        )
 
-        result = await mock_client.resolve_scene_id("movie_night")
+async def test_a_resolution_given_by_the_caller_is_removed_without_a_lookup(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    sent: AsyncMock,
+) -> None:
+    await load(hass, "scene", [MOVIE_NIGHT])
+    entry = entity_registry.async_get("scene.movie_night")
+    assert entry is not None
+    resolution = SceneResolution(
+        storage_key=entry.unique_id, registry_hit=True, platform=entry.platform
+    )
 
-        assert result == "movie_night"
-        mock_client.send_websocket_message.assert_called_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "scene.movie_night"}
-        )
+    result = await config_client.delete_scene_config(
+        "movie_night", resolution=resolution
+    )
 
-    @pytest.mark.asyncio
-    async def test_resolve_renamed_scene(self, mock_client):
-        """Renamed scene → return the registry's unique_id, not the entity_id slug."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "original_storage_key"}}
-        )
+    assert result["scene_id"] == "movie_night"
+    sent.assert_not_awaited()
+    assert await error_status(_stored(config_client, "movie_night")) == 404
 
-        result = await mock_client.resolve_scene_id("renamed_scene")
 
-        assert result == "original_storage_key"
+# --- reading ------------------------------------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_resolve_strips_scene_prefix(self, mock_client):
-        """Caller may pass 'scene.<id>'; the resolver strips it before lookup."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "movie_night"}}
-        )
 
-        result = await mock_client.resolve_scene_id("scene.movie_night")
+async def test_reading_a_scene_returns_cores_config(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await load(hass, "scene", [MOVIE_NIGHT])
 
-        assert result == "movie_night"
-        mock_client.send_websocket_message.assert_called_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "scene.movie_night"}
-        )
+    result = await config_client.get_scene_config("movie_night")
 
-    @pytest.mark.asyncio
-    async def test_resolve_falls_back_on_websocket_failure(self, mock_client):
-        """WebSocket exceptions fall back to the bare id (no hard failure)."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WS unavailable")
-        )
+    assert (result["success"], result["scene_id"]) == (True, "movie_night")
+    assert result["config"]["entities"] == ENTITIES
 
-        result = await mock_client.resolve_scene_id("test_scene")
 
-        assert result == "test_scene"
+async def test_reading_a_missing_scene_is_plainly_not_found(
+    config_client: HomeAssistantClient,
+) -> None:
+    """Not the not-editable case: no entity of that id exists anywhere."""
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.get_scene_config("truly_missing")
 
-    @pytest.mark.asyncio
-    async def test_resolve_falls_back_on_unsuccessful_response(self, mock_client):
-        """An entity-registry response with success=False falls back to bare id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"code": "not_found"}}
-        )
+    assert not isinstance(exc_info.value, SceneStorageConfigNotFoundError)
+    assert exc_info.value.status_code == 404
 
-        result = await mock_client.resolve_scene_id("test_scene")
 
-        assert result == "test_scene"
+async def test_reading_another_integrations_scene_says_it_is_not_editable(
+    config_client: HomeAssistantClient, entity_registry: er.EntityRegistry
+) -> None:
+    _hue_scene(entity_registry)
 
+    with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
+        await config_client.get_scene_config("bedroom_sleepy")
 
-class TestSceneResolvedShortCircuit:
-    """Skipping the redundant ``resolve_scene_id`` lookup on get/upsert/delete
-    scene methods (issue #1813 P5 item 3). ``get`` takes ``_resolved=True``;
-    ``delete`` takes a pre-computed ``resolution``; ``upsert`` takes a separate
-    ``resolved_id`` write-target (so ``scene_id`` stays the caller's id for the
-    missing-``name`` default, #1935). ``_make_mock_client`` makes
-    ``send_websocket_message`` raise, so ``assert_not_called`` proves the resolver
-    was skipped rather than merely falling back."""
+    error = exc_info.value
+    assert error.status_code == 404
+    assert (error.platform, error.scene_id, error.storage_key) == (
+        "hue",
+        "bedroom_sleepy",
+        "hue-uuid-123",
+    )
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
 
-    @pytest.mark.asyncio
-    async def test_get_scene_resolved_skips_lookup(self, mock_client):
-        mock_client._request = AsyncMock(return_value={"name": "S", "entities": {}})
+async def test_reading_a_yaml_scene_without_an_id_says_it_is_not_editable(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    """A YAML scene with no ``id`` has no registry row but has a state."""
+    hass.states.async_set("scene.yaml_only", "unknown")
 
-        result = await mock_client.get_scene_config("storage_key", _resolved=True)
+    with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
+        await config_client.get_scene_config("yaml_only")
 
-        assert result["scene_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        mock_client._request.assert_called_once_with(
-            "GET", "config/scene/config/storage_key"
-        )
+    assert (exc_info.value.platform, exc_info.value.scene_id) == (None, "yaml_only")
 
-    @pytest.mark.asyncio
-    async def test_upsert_scene_resolved_id_skips_lookup(self, mock_client):
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
 
-        result = await mock_client.upsert_scene_config(
-            {"name": "S", "entities": {"light.k": {"state": "on"}}},
-            "renamed_scene",
-            resolved_id="storage_key",
-        )
+async def test_a_resolved_storage_key_is_read_without_a_lookup(
+    hass: HomeAssistant, config_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    await load(hass, "scene", [RENAMED])
 
-        assert result["scene_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        assert mock_client._request.call_args[0][1] == "config/scene/config/storage_key"
+    result = await config_client.get_scene_config(
+        "original_storage_key", _resolved=True
+    )
 
-    @pytest.mark.asyncio
-    async def test_upsert_scene_resolved_id_name_defaults_to_caller_scene_id(
-        self, mock_client
+    assert result["config"]["name"] == RENAMED["name"]
+    sent.assert_not_awaited()
+
+
+# --- writing ------------------------------------------------------------------------
+
+
+async def test_a_scene_with_entities_is_written(
+    config_client: HomeAssistantClient,
+) -> None:
+    result = await config_client.upsert_scene_config(
+        {"name": "Test scene", "entities": ENTITIES}, "test_scene"
+    )
+
+    assert (result["success"], result["scene_id"]) == (True, "test_scene")
+    assert (await _stored(config_client, "test_scene"))["entities"] == ENTITIES
+
+
+async def test_a_scene_without_entities_is_refused(
+    config_client: HomeAssistantClient,
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        await config_client.upsert_scene_config({"name": "Empty"}, "test_scene")
+
+    assert "entities" in str(exc_info.value)
+    assert await error_status(_stored(config_client, "test_scene")) == 404
+
+
+async def test_a_scene_without_a_name_is_named_after_its_id(
+    config_client: HomeAssistantClient,
+) -> None:
+    await config_client.upsert_scene_config({"entities": ENTITIES}, "test_scene")
+
+    assert (await _stored(config_client, "test_scene"))["name"] == "test_scene"
+
+
+async def test_a_resolved_storage_key_is_written_without_a_lookup(
+    config_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    result = await config_client.upsert_scene_config(
+        {"name": "S", "entities": ENTITIES}, "renamed_scene", resolved_id="storage_key"
+    )
+
+    assert result["scene_id"] == "storage_key"
+    sent.assert_not_awaited()
+    assert (await _stored(config_client, "storage_key"))["name"] == "S"
+
+
+@pytest.mark.parametrize(
+    ("scene_id", "resolved_id", "name"),
+    [
+        ("new_slug", "old_storage_key", "new_slug"),
+        ("scene.movie_night", "movie_night", "movie_night"),
+    ],
+    ids=["renamed-scene", "entity-id-form"],
+)
+async def test_a_scene_without_a_name_keeps_the_callers_slug(
+    config_client: HomeAssistantClient, scene_id: str, resolved_id: str, name: str
+) -> None:
+    """Core makes the entity_id from the name: named after the storage key
+    or the ``scene.`` form, the update would rename the scene (#1935)."""
+    await config_client.upsert_scene_config(
+        {"entities": ENTITIES}, scene_id, resolved_id=resolved_id
+    )
+
+    assert (await _stored(config_client, resolved_id))["name"] == name
+
+
+# --- resolving an id ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("identifier", ["renamed_scene", "scene.renamed_scene"])
+async def test_a_renamed_scene_resolves_to_its_storage_key(
+    hass: HomeAssistant, config_client: HomeAssistantClient, identifier: str
+) -> None:
+    await load(hass, "scene", [RENAMED])
+
+    assert await config_client.resolve_scene_id(identifier) == "original_storage_key"
+
+
+async def test_an_id_the_registry_does_not_know_resolves_to_itself(
+    config_client: HomeAssistantClient,
+) -> None:
+    assert await config_client.resolve_scene_id("ghost_scene") == "ghost_scene"
+
+
+async def test_no_answer_to_the_registry_lookup_is_not_guessed_past(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    """Guessing the storage key from the slug writes a renamed scene's update
+    to a new scene (#1947)."""
+    await load(hass, "scene", [RENAMED])
+    socket = await pooled_socket(config_client)
+
+    with (
+        dropped_on(hass, "config/entity_registry/get", socket),
+        pytest.raises(HomeAssistantConnectionError),
     ):
-        """#1935 regression: with ``resolved_id`` provided (renamed scene), a
-        missing ``name`` defaults to the CALLER's ``scene_id`` — NOT the storage
-        key — while the write still targets the resolved key with no re-resolve."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"entities": {"light.k": {"state": "on"}}}  # no name
-        result = await mock_client.upsert_scene_config(
-            config, "new_slug", resolved_id="old_storage_key"
-        )
-
-        # Write targets the resolved storage key; resolver never consulted.
-        assert result["scene_id"] == "old_storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        method, endpoint = mock_client._request.call_args.args
-        assert endpoint == "config/scene/config/old_storage_key"
-        # Name defaulted from the caller's id, not the stale storage key.
-        assert mock_client._request.call_args.kwargs["json"]["name"] == "new_slug"
-
-    @pytest.mark.asyncio
-    async def test_upsert_scene_name_default_strips_entity_prefix(self, mock_client):
-        """A caller-facing ``scene.<slug>`` id must NOT become the scene name
-        verbatim — HA derives the entity_id from the name slug, so a prefixed
-        default would rename the scene and change its entity_id on a plain update."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"entities": {"light.k": {"state": "on"}}}  # no name
-        await mock_client.upsert_scene_config(
-            config, "scene.movie_night", resolved_id="movie_night"
-        )
-
-        assert mock_client._request.call_args.kwargs["json"]["name"] == "movie_night"
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_resolution_skips_lookup(self, mock_client):
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        result = await mock_client.delete_scene_config(
-            "storage_key",
-            resolution=SceneResolution(
-                storage_key="storage_key", registry_hit=False, platform=None
-            ),
-        )
-
-        assert result["scene_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        mock_client._request.assert_called_once_with(
-            "DELETE", "config/scene/config/storage_key"
-        )
-
-
-class TestSceneStorageConfigNotFound:
-    """Issue #1971: a scene entity that resolves in the registry but 404s on the
-    scenes.yaml-backed config API (a Hue/vendor scene, or a raw-YAML scene) must
-    surface as the not-storage-scene case, not a bare missing-entity 404.
-
-    ``config/scene/config/{id}`` is backed ONLY by the managed ``scenes.yaml``
-    (verified against HA-core), so it 404s for any scene not in that file even
-    though the entity exists - the registry resolve is what tells the two apart.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_resolve_scene_returns_platform_and_hit(self, mock_client):
-        """``_resolve_scene`` threads out the registry ``platform`` and a
-        ``registry_hit`` flag - the two signals a bare storage key drops."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "hue-uuid-123", "platform": "hue"}}
-        )
-
-        resolution = await mock_client._resolve_scene("bedroom_sleepy")
-
-        assert resolution == SceneResolution(
-            storage_key="hue-uuid-123", registry_hit=True, platform="hue"
-        )
-
-    @pytest.mark.asyncio
-    async def test_resolve_scene_miss_reports_no_hit(self, mock_client):
-        """A failed registry lookup falls back to the bare id with
-        ``registry_hit=False`` - a write path must not treat the guess as real."""
-        # _make_mock_client's send_websocket_message raises → lookup miss.
-        resolution = await mock_client._resolve_scene("ghost_scene")
-
-        assert resolution == SceneResolution(
-            storage_key="ghost_scene", registry_hit=False, platform=None
-        )
-
-    @pytest.mark.asyncio
-    async def test_get_scene_404_after_registry_hit_raises_storage_config_error(
-        self, mock_client
-    ):
-        """Entity resolves (Hue) but the config API 404s → the distinct
-        SceneStorageConfigNotFoundError carrying the platform, NOT a bare 404."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "hue-uuid-123", "platform": "hue"}}
-        )
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
-
-        with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
-            await mock_client.get_scene_config("bedroom_sleepy")
-
-        err = exc_info.value
-        assert err.status_code == 404
-        assert err.platform == "hue"
-        assert err.scene_id == "bedroom_sleepy"
-        assert err.storage_key == "hue-uuid-123"
-
-    @pytest.mark.asyncio
-    async def test_get_scene_404_registry_miss_stays_generic(self, mock_client):
-        """No registry hit → a genuinely missing entity → the historic bare
-        404, NOT the not-storage-scene subclass."""
-        # send_websocket_message raises (miss) via _make_mock_client.
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.get_scene_config("truly_missing")
-
-        assert not isinstance(exc_info.value, SceneStorageConfigNotFoundError)
-        assert exc_info.value.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_get_scene_404_registry_miss_but_state_exists_maps_to_config_not_found(
-        self, mock_client
-    ):
-        """An ``id``-less YAML scene has no registry ``unique_id`` (registry miss)
-        yet still exists in the state machine. A config-API 404 there upgrades to
-        the not-storage-scene case with ``platform=None`` (#1971), not the generic
-        missing-entity 404."""
-
-        # send_websocket_message raises (registry miss) via _make_mock_client.
-        async def _req(method, endpoint, **kwargs):
-            if endpoint.startswith("/states/"):
-                return {"entity_id": "scene.yaml_only", "state": "unknown"}
-            raise HomeAssistantAPIError("API error: 404 - Not found", status_code=404)
-
-        mock_client._request = AsyncMock(side_effect=_req)
-
-        with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
-            await mock_client.get_scene_config("yaml_only")
-
-        err = exc_info.value
-        assert err.status_code == 404
-        assert err.platform is None
-        assert err.scene_id == "yaml_only"
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_404_after_registry_hit_raises_storage_config_error(
-        self, mock_client
-    ):
-        """The delete read-path 404 classifies identically when the caller
-        threads a registry-hit resolution through (#1971 delete parity)."""
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
-        resolution = SceneResolution(
-            storage_key="hue-uuid-123", registry_hit=True, platform="hue"
-        )
-
-        with pytest.raises(SceneStorageConfigNotFoundError) as exc_info:
-            await mock_client.delete_scene_config(
-                "bedroom_sleepy", resolution=resolution
-            )
-
-        assert exc_info.value.platform == "hue"
-        assert exc_info.value.scene_id == "bedroom_sleepy"
-        # Endpoint used the resolved storage key, not the caller slug.
-        mock_client._request.assert_called_once_with(
-            "DELETE", "config/scene/config/hue-uuid-123"
-        )
-
-    @pytest.mark.asyncio
-    async def test_delete_scene_default_still_resolves(self, mock_client):
-        """Contrast: without ``_resolved`` the registry resolver is consulted."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "storage_key"}}
-        )
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        result = await mock_client.delete_scene_config("movie_night")
-
-        assert result["scene_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_called_once()
+        await config_client.resolve_scene_id("renamed_scene")

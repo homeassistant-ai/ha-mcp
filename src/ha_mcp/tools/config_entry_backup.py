@@ -28,10 +28,27 @@ def helper_backup_id(kwargs: dict[str, Any]) -> str:
     return str(kwargs.get("helper_id") or kwargs.get("entry_id") or "")
 
 
+def removal_helper_type(kwargs: dict[str, Any]) -> str | None:
+    """The helper type of a removal. A ``subentry_id`` names one subentry, also
+    when the caller left ``helper_type`` out: never its whole parent entry."""
+    helper_type: str | None = kwargs.get("helper_type")
+    if helper_type is None and kwargs.get("subentry_id") is not None:
+        return "config_subentry"
+    return helper_type
+
+
+def removal_backup_domain(kwargs: dict[str, Any]) -> str:
+    """Snapshot under ``helper_<type>``, the handler ha_config_set_helper uses;
+    an untyped target is a config entry."""
+    helper_type = removal_helper_type(kwargs)
+    return f"helper_{helper_type}" if helper_type else "integration"
+
+
 def removal_backup_id(kwargs: dict[str, Any]) -> str:
     """The id ha_remove_helpers_integrations snapshots before deleting."""
-    if kwargs.get("helper_type") == "config_subentry":
-        return helper_backup_id({**kwargs, "entry_id": kwargs.get("target")})
+    if removal_helper_type(kwargs) == "config_subentry":
+        subentry = {**kwargs, "helper_type": "config_subentry"}
+        return helper_backup_id({**subentry, "entry_id": kwargs.get("target")})
     return str(kwargs.get("target") or "")
 
 

@@ -14,18 +14,15 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.settings_ui import _SETTINGS_HTML
-from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
+from ha_mcp.settings_ui import render_settings_html
 
+from ._astro_setup_wizard import _assert_clean_init
 from ._js_harness import run_script
-from .test_settings_ui_js_behavior import (
-    DEFAULT_FETCHES,
-    _assert_clean_init,
-    _localized_policy_dom,
-    _probe,
-)
+from ._locale_catalogs import catalog_messages
+from ._settings_ui_dom import DEFAULT_FETCHES
+from ._settings_ui_js_helpers import localized_policy_dom, probe
 
-_MESSAGES = CATALOGS[DEFAULT_LOCALE]["messages"]
+_MESSAGES = catalog_messages("en")
 _EMPTY = _MESSAGES["policies.pending.empty"]
 _DISABLED = _MESSAGES["policies.pending.disabled"]
 _OFFLINE = _MESSAGES["policies.pending.offline"].replace("{message}", "connection lost")
@@ -65,7 +62,7 @@ def _fetches(pending: dict[str, Any], *, enabled: bool = True) -> dict[str, Any]
 def _run(settings_script: str, fetches: dict[str, Any], invoke: str) -> Any:
     result = run_script(
         settings_script,
-        initial_html=_localized_policy_dom(DEFAULT_LOCALE),
+        initial_html=localized_policy_dom("en"),
         fetch_map=fetches,
         invoke=f"""
           const list = document.getElementById('policy-pending-list');
@@ -116,12 +113,12 @@ def test_pending_cards_leave_the_centered_empty_state_box(
         """,
     )
 
-    assert _probe(result, "card-count") == "1"
-    assert "backup-empty" not in (_probe(result, "class-with-cards") or "")
-    assert "backup-empty" in (_probe(result, "class-after-cards") or "")
-    assert expected_text in (_probe(result, "text-after-cards") or "")
-    assert _probe(result, "role-after-cards") == expected_role
-    assert _probe(result, "live-after-cards") == expected_live
+    assert probe(result, "card-count") == "1"
+    assert "backup-empty" not in (probe(result, "class-with-cards") or "")
+    assert "backup-empty" in (probe(result, "class-after-cards") or "")
+    assert expected_text in (probe(result, "text-after-cards") or "")
+    assert probe(result, "role-after-cards") == expected_role
+    assert probe(result, "live-after-cards") == expected_live
 
 
 def test_status_changes_are_announced_once_with_failures_assertive(
@@ -162,14 +159,14 @@ def test_status_changes_are_announced_once_with_failures_assertive(
         """,
     )
 
-    assert _probe(result, "outage-writes") == "1"
-    assert _probe(result, "outage-role") == "alert"
-    assert _probe(result, "outage-live") == "assertive"
-    assert _probe(result, "outage-text") == "queue down"
-    assert _probe(result, "empty-role") == "status"
-    assert _probe(result, "empty-live") == "polite"
-    assert _probe(result, "empty-text") == _EMPTY
-    assert _probe(result, "text-with-cards") == _ONE_PENDING
+    assert probe(result, "outage-writes") == "1"
+    assert probe(result, "outage-role") == "alert"
+    assert probe(result, "outage-live") == "assertive"
+    assert probe(result, "outage-text") == "queue down"
+    assert probe(result, "empty-role") == "status"
+    assert probe(result, "empty-live") == "polite"
+    assert probe(result, "empty-text") == _EMPTY
+    assert probe(result, "text-with-cards") == _ONE_PENDING
 
 
 def test_pending_list_shows_off_message_when_feature_disabled(
@@ -195,11 +192,11 @@ def test_pending_list_shows_off_message_when_feature_disabled(
         """,
     )
 
-    assert _probe(result, "off-text") == _DISABLED
-    assert "backup-empty" in (_probe(result, "off-class") or "")
-    assert _probe(result, "off-region-text") == _DISABLED
-    assert _probe(result, "off-role") == "status"
-    assert _probe(result, "off-live") == "polite"
+    assert probe(result, "off-text") == _DISABLED
+    assert "backup-empty" in (probe(result, "off-class") or "")
+    assert probe(result, "off-region-text") == _DISABLED
+    assert probe(result, "off-role") == "status"
+    assert probe(result, "off-live") == "polite"
 
 
 def test_a_poll_of_the_same_queue_keeps_focus_on_the_decision_button(
@@ -221,8 +218,8 @@ def test_a_poll_of_the_same_queue_keeps_focus_on_the_decision_button(
         """,
     )
 
-    assert _probe(result, "focus-before-poll") == "true"
-    assert _probe(result, "focus-after-poll") == "true"
+    assert probe(result, "focus-before-poll") == "true"
+    assert probe(result, "focus-after-poll") == "true"
 
 
 def test_a_replaced_approval_is_announced_though_the_count_is_unchanged(
@@ -257,9 +254,9 @@ def test_a_replaced_approval_is_announced_though_the_count_is_unchanged(
         """,
     )
 
-    assert _probe(result, "writes-same-queue") == "1"
-    assert _probe(result, "writes-new-queue") == "2"
-    assert _probe(result, "rendered-token") == "tok-2"
+    assert probe(result, "writes-same-queue") == "1"
+    assert probe(result, "writes-new-queue") == "2"
+    assert probe(result, "rendered-token") == "tok-2"
 
 
 def test_a_shortened_deadline_is_shown_and_announced_without_taking_focus(
@@ -295,10 +292,10 @@ def test_a_shortened_deadline_is_shown_and_announced_without_taking_focus(
     )
 
     expiry = _MESSAGES["policies.pending.expires"].replace("{time}", shortened)
-    assert _probe(result, "shown-expiry") == expiry
-    assert _probe(result, "focus-kept") == "true"
-    assert _probe(result, "announced-expiry") == f"ha_call_service: {expiry}"
-    assert _probe(result, "expiry-live") == "polite"
+    assert probe(result, "shown-expiry") == expiry
+    assert probe(result, "focus-kept") == "true"
+    assert probe(result, "announced-expiry") == f"ha_call_service: {expiry}"
+    assert probe(result, "expiry-live") == "polite"
 
 
 def test_every_shortened_deadline_is_announced(settings_script: str) -> None:
@@ -340,9 +337,9 @@ def test_every_shortened_deadline_is_announced(settings_script: str) -> None:
     )
 
     expiry = _MESSAGES["policies.pending.expires"].replace("{time}", second_cut)
-    assert _probe(result, "writes-for-identical-text") == "2"
+    assert probe(result, "writes-for-identical-text") == "2"
     assert (
-        _probe(result, "both-announced")
+        probe(result, "both-announced")
         == f"ha_call_service: {expiry} ha_call_service: {expiry}"
     )
 
@@ -368,10 +365,10 @@ def test_cards_return_after_an_outage_with_the_same_queue(
         """,
     )
 
-    assert _probe(result, "card-count") == "1"
-    assert "backup-empty" not in (_probe(result, "class-after-outage") or "")
-    assert _probe(result, "announced-after-outage") == _ONE_PENDING
-    assert _probe(result, "live-after-outage") == "polite"
+    assert probe(result, "card-count") == "1"
+    assert "backup-empty" not in (probe(result, "class-after-outage") or "")
+    assert probe(result, "announced-after-outage") == _ONE_PENDING
+    assert probe(result, "live-after-outage") == "polite"
 
 
 def test_agent_supplied_approval_fields_stay_inert_text(
@@ -406,9 +403,9 @@ def test_agent_supplied_approval_fields_stay_inert_text(
         """,
     )
 
-    assert _probe(result, "injected") == "0"
-    assert _probe(result, "buttons") == "2"
-    assert _probe(result, "token-intact") == "true"
+    assert probe(result, "injected") == "0"
+    assert probe(result, "buttons") == "2"
+    assert probe(result, "token-intact") == "true"
 
 
 def test_page_ships_a_polite_region_and_the_centered_empty_list() -> None:
@@ -416,8 +413,9 @@ def test_page_ships_a_polite_region_and_the_centered_empty_list() -> None:
     markup a browser receives: without the live-region attributes the first
     message is lost, without the hiding class every announcement shows on the
     page, and without its class the empty list starts unstyled."""
-    region = re.search(r'<div id="policy-pending-announcement"[^>]*>', _SETTINGS_HTML)
-    empty_list = re.search(r'<div id="policy-pending-list"[^>]*>', _SETTINGS_HTML)
+    page = render_settings_html()
+    region = re.search(r'<div id="policy-pending-announcement"[^>]*>', page)
+    empty_list = re.search(r'<div id="policy-pending-list"[^>]*>', page)
 
     assert region is not None
     assert 'class="visually-hidden"' in region.group(0)

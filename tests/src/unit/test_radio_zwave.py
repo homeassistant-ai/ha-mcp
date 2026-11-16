@@ -1,472 +1,547 @@
-"""Unit tests for the Z-Wave JS handler behind ``ha_manage_radio``.
+"""``ha_manage_radio``'s Z-Wave actions on real Home Assistant Core.
 
-Mirrors ``test_radio_management.py``'s ``TestManageRadioDispatcher`` style: tools
-are registered onto a mock MCP via ``register_radio_tools`` and the mock client
-routes ``send_websocket_message`` by message ``type`` (and ``call_service`` for
-the service-backed actions: ``ping`` and ``firmware_update``). Tests assert the
-success envelopes and that the destructive/required/conditional gates raise
-``ToolError``.
+Core's own ``zwave_js`` integration answers every ``zwave_js/*`` command and
+runs the ``zwave_js.ping`` service. Only the Z-Wave JS server below
+zwave-js-server-python is replaced (``_zwave_js``): its driver, controller and
+nodes are the library's real models built from the state the server sends, and
+``SERVER_ANSWERS`` is what the server answers each command the library sends.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
+
+from collections.abc import Iterator
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
+from zwave_js_server.const import (
+    CommandClass,
+    InclusionState,
+    InclusionStrategy,
+    NodeStatus,
+    QRCodeVersion,
+    SecurityClass,
+)
+from zwave_js_server.model.driver import Driver
+from zwave_js_server.model.version import VersionInfo
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_radio import register_radio_tools
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_radio import RadioTools
 
+from ._command_faults import received
+from ._tool_errors import error_body, error_of
+from ._zwave_js import (
+    HOME_ID,
+    NODE_ID,
+    node_state,
+    set_up_zwave_js,
+    zwave_js_server_connection,
+)
 
-def _capture(register, mock_client):
-    """Register tools onto a mock MCP and return {tool_name: bound_method}."""
-    mock_mcp = MagicMock()
-    captured: dict = {}
-
-    def capture_add_tool(method):
-        fmcp = getattr(method, "__fastmcp__", None)
-        name = (fmcp.name if fmcp else None) or method.__name__
-        captured[name] = method
-
-    mock_mcp.add_tool = capture_add_tool
-    register(mock_mcp, mock_client)
-    return captured
-
-
-def _client(routes: dict, *, record: list | None = None, service_result=None):
-    """Mock client routing ``send_websocket_message`` by ``type``.
-
-    ``routes`` maps a ``type`` string to a response dict or a callable. ``record``
-    (if given) collects every outgoing WS message. ``call_service`` is an
-    AsyncMock returning ``service_result`` (default ``[]``).
-    """
-    mock_client = MagicMock()
-
-    async def mock_ws(msg, **kwargs):
-        msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-        if record is not None:
-            record.append(msg)
-        handler = routes.get(msg_type)
-        if callable(handler):
-            return handler(msg)
-        if handler is not None:
-            return handler
-        return {"success": False, "error": f"Unknown type: {msg_type}"}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
-    mock_client.call_service = AsyncMock(
-        return_value=[] if service_result is None else service_result
-    )
-    return mock_client
-
-
-def _radio(client):
-    return _capture(register_radio_tools, client)["ha_manage_radio"]
-
-
-def _entries(present: bool = True):
-    """A ``config_entries/get`` response (resolve_entry_id source)."""
-    result = [{"domain": "zwave_js", "entry_id": "e1"}] if present else []
-    return {"success": True, "result": result}
-
-
-_NODE = {
-    "node_id": 7,
-    "status": "alive",
-    "is_routing": True,
-    "is_secure": True,
-    "highest_security_class": 1,
-    "zwave_plus_version": 2,
-    "is_controller_node": False,
+# A SmartStart QR code's text, as a scanner reads it.
+QR_CODE = "90" + "0" * 50 + "1" * 40
+CONTROLLER_STATE = {
+    "homeId": HOME_ID,
+    "ownNodeId": 1,
+    "inclusionState": InclusionState.IDLE,
+    "status": 0,
 }
+SERVER_ANSWERS: dict[str, Any] = {
+    "controller.get_state": {"state": CONTROLLER_STATE},
+    "controller.begin_inclusion": {"success": True},
+    "controller.begin_exclusion": {"success": True},
+    "controller.rebuild_node_routes": {"success": True},
+    "controller.begin_rebuilding_routes": {"success": True},
+    "node.ping": {"responded": True},
+    "node.set_value": {"result": {"status": 255}},
+}
+RAMP_RATE = 5
 
 
-class TestZwaveRadio:
-    # ---- diagnostics -------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_diagnostics_projects_node_status(self):
-        client = _client({"zwave_js/node_status": {"success": True, "result": _NODE}})
-        out = await _radio(client)(radio="zwave", action="diagnostics", device_id="z1")
-        assert out["success"] is True
-        assert out["radio"] == "zwave"
-        assert out["node_status"]["node_id"] == 7
-        assert out["node_status"]["highest_security_class"] == 1
-        assert out["node_status"]["is_controller_node"] is False
+def ramp_rate_parameter() -> dict[str, Any]:
+    """Configuration parameter 5 as the Z-Wave JS server reports it."""
+    return {
+        "commandClass": CommandClass.CONFIGURATION,
+        "commandClassName": "Configuration",
+        "endpoint": 0,
+        "property": RAMP_RATE,
+        "propertyName": "Ramp rate",
+        "ccVersion": 1,
+        "metadata": {
+            "type": "number",
+            "readable": True,
+            "writeable": True,
+            "label": "Ramp rate",
+            "min": 0,
+            "max": 99,
+            "valueSize": 1,
+            "format": 0,
+            "allowManualEntry": True,
+            "isFromConfig": True,
+        },
+        "value": 8,
+    }
 
-    @pytest.mark.asyncio
-    async def test_diagnostics_requires_device_id(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(radio="zwave", action="diagnostics")
-        assert "device_id" in str(exc.value)
 
-    # ---- network_status ----------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_network_status_summary(self):
-        net = {
-            "success": True,
-            "result": {
-                "controller": {
-                    "home_id": 1234,
-                    "is_primary": True,
-                    "nodes": [_NODE, {**_NODE, "node_id": 8}],
-                }
-            },
-        }
-        client = _client(
-            {"config_entries/get": _entries(), "zwave_js/network_status": net}
+@pytest.fixture
+def nodes() -> list[dict[str, Any]]:
+    """The network's nodes; a test overrides it by parametrizing."""
+    return [node_state([ramp_rate_parameter()])]
+
+
+@pytest.fixture
+def server(nodes: list[dict[str, Any]]) -> Iterator[MagicMock]:
+    """The Z-Wave JS server, holding ``nodes`` and answering ``SERVER_ANSWERS``."""
+    with zwave_js_server_connection(nodes[0]) as client:
+        client.driver = Driver(
+            client,
+            {"controller": CONTROLLER_STATE, "nodes": nodes},
+            {"enabled": True, "level": "info", "logToFile": False},
         )
-        out = await _radio(client)(radio="zwave", action="network_status")
-        assert out["config_entry_id"] == "e1"
-        assert out["count"] == 2
-        assert out["total_count"] == 2
-        assert out["nodes"][1]["node_id"] == 8
-        # The heavy embedded node list is dropped from the controller view.
-        assert "nodes" not in out["controller"]
-        assert out["controller"]["home_id"] == 1234
-        assert "truncated" not in out
-
-    @pytest.mark.asyncio
-    async def test_network_status_caps_and_truncates(self):
-        nodes = [{**_NODE, "node_id": i} for i in range(60)]
-        net = {"success": True, "result": {"controller": {"nodes": nodes}}}
-        client = _client(
-            {"config_entries/get": _entries(), "zwave_js/network_status": net}
+        client.version = VersionInfo(
+            driver_version="15.0.0",
+            server_version="3.0.0",
+            home_id=HOME_ID,
+            min_schema_version=0,
+            max_schema_version=44,
         )
-        out = await _radio(client)(radio="zwave", action="network_status")
-        assert out["count"] == 50
-        assert out["total_count"] == 60
-        assert out["truncated"] is True
+        client.ws_server_url = "ws://test.org"
+        client.server_logging_enabled = False
 
-    @pytest.mark.asyncio
-    async def test_network_status_integration_absent(self):
-        client = _client({"config_entries/get": _entries(present=False)})
-        out = await _radio(client)(radio="zwave", action="network_status")
-        assert out["available"] is False
-        assert out["warnings"]
+        async def answer(message: dict[str, Any], *_: Any, **__: Any) -> Any:
+            return SERVER_ANSWERS.get(message["command"], {})
 
-    # ---- ping --------------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_ping_calls_service(self):
-        client = _client({})
-        out = await _radio(client)(radio="zwave", action="ping", device_id="z1")
-        assert out["success"] is True
-        client.call_service.assert_awaited_once_with(
-            "zwave_js", "ping", {"device_id": "z1"}
+        client.async_send_command.side_effect = answer
+        yield client
+
+
+@pytest.fixture
+async def entry(hass: HomeAssistant, server: MagicMock) -> MockConfigEntry:
+    assert await async_setup_component(hass, "config", {})
+    zwave_entry = await set_up_zwave_js(hass)
+    server.async_send_command.reset_mock()
+    return zwave_entry
+
+
+@pytest.fixture
+def device_id(hass: HomeAssistant, entry: MockConfigEntry) -> str:
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        ("zwave_js", f"{HOME_ID}-{NODE_ID}"), entry.entry_id
+    )
+    assert device is not None
+    return device.id
+
+
+@pytest.fixture
+async def without_zwave(hass: HomeAssistant) -> None:
+    """Core with its ``config`` commands and no Z-Wave JS entry."""
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+def radio(core_client: HomeAssistantClient) -> RadioTools:
+    return RadioTools(core_client)
+
+
+def sent_to_server(server: MagicMock) -> list[dict[str, Any]]:
+    return [call.args[0] for call in server.async_send_command.call_args_list]
+
+
+async def test_diagnostics_reports_the_nodes_status(
+    radio: RadioTools, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zwave", action="diagnostics", device_id=device_id
+    )
+
+    assert out["node_status"] == {
+        "node_id": NODE_ID,
+        "status": NodeStatus.ALIVE,
+        "is_routing": True,
+        "is_secure": True,
+        "highest_security_class": SecurityClass.S2_AUTHENTICATED,
+        "zwave_plus_version": 2,
+        "is_controller_node": False,
+    }
+
+
+async def test_diagnostics_of_a_device_core_does_not_know_is_not_found(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    """Core's not-found verdict comes back as such, with the step to find the
+    device's id."""
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="zwave", action="diagnostics", device_id="no-such-device"
         )
 
-    # ---- add ---------------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_add_node_requires_a_credential(self):
-        client = _client({"config_entries/get": _entries()})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zwave", action="add")
-        assert "qr_provisioning_information" in str(exc.value)
+    body = error_body(exc)
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["ha_error_code"] == "not_found"
+    assert (body["ws_type"], body["device_id"]) == (
+        "zwave_js/node_status",
+        "no-such-device",
+    )
+    assert "ha_get_device" in body["error"]["suggestion"]
 
-    @pytest.mark.asyncio
-    async def test_add_node_with_qr_code_string(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/add_node": {"success": True, "result": {}},
-            },
-            record=record,
+
+async def test_network_status_summarizes_the_controller_and_nodes(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    out = await radio.ha_manage_radio(radio="zwave", action="network_status")
+
+    assert out["config_entry_id"] == entry.entry_id
+    assert out["controller"]["home_id"] == HOME_ID
+    assert "nodes" not in out["controller"]
+    assert [node["node_id"] for node in out["nodes"]] == [NODE_ID]
+    assert (out["count"], out["total_count"]) == (1, 1)
+    assert "truncated" not in out
+
+
+@pytest.mark.parametrize(
+    "nodes",
+    [[{**node_state([]), "nodeId": node_id} for node_id in range(2, 53)]],
+)
+async def test_network_status_caps_a_large_network_and_says_so(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    out = await radio.ha_manage_radio(radio="zwave", action="network_status")
+
+    assert (out["count"], out["total_count"], out["truncated"]) == (50, 51, True)
+
+
+async def test_network_status_of_an_unloaded_entry_says_so(
+    hass: HomeAssistant, radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    """A Z-Wave JS entry that is not loaded gets Core's not-loaded verdict and
+    the step to load the integration."""
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(radio="zwave", action="network_status")
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["ha_error_code"] == "not_loaded"
+    assert body["error"]["message"].startswith("The zwave_js integration is not loaded")
+    assert "integration" in body["error"]["suggestion"]
+
+
+async def test_network_status_without_zwave_reports_it_unavailable(
+    radio: RadioTools, without_zwave: None
+) -> None:
+    out = await radio.ha_manage_radio(radio="zwave", action="network_status")
+
+    assert out["success"] is True
+    assert out["available"] is False
+    assert out["warnings"]
+
+
+async def test_ping_pings_the_node(
+    radio: RadioTools, server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(radio="zwave", action="ping", device_id=device_id)
+
+    assert out["success"] is True
+    assert {"command": "node.ping", "nodeId": NODE_ID} in sent_to_server(server)
+
+
+async def test_add_without_a_credential_names_the_accepted_ones(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(radio="zwave", action="add")
+
+    assert "qr_provisioning_information" in error_of(exc)["message"]
+
+
+async def test_add_with_a_qr_code_starts_secure_inclusion(
+    radio: RadioTools, server: MagicMock, entry: MockConfigEntry
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zwave",
+        action="add",
+        params={
+            "qr_code_string": QR_CODE,
+            "inclusion_strategy": InclusionStrategy.SECURITY_S2,
+        },
+    )
+
+    assert (out["mode"], out["result"]) == ("add_node", True)
+    inclusion = {
+        "command": "controller.begin_inclusion",
+        "options": {"strategy": InclusionStrategy.SECURITY_S2, "provisioning": QR_CODE},
+    }
+    assert inclusion in sent_to_server(server)
+
+
+async def test_add_with_only_a_qr_code_starts_inclusion(
+    radio: RadioTools, server: MagicMock, entry: MockConfigEntry
+) -> None:
+    """The QR code alone is enough: the action asks for nothing more, and
+    Z-Wave JS includes a device from its QR code only with S2 security."""
+    out = await radio.ha_manage_radio(
+        radio="zwave", action="add", params={"qr_code_string": QR_CODE}
+    )
+
+    assert out["mode"] == "add_node"
+    assert any(
+        message["command"] == "controller.begin_inclusion"
+        for message in sent_to_server(server)
+    )
+
+
+async def test_add_with_smart_start_needs_the_provisioning_information(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="zwave", action="add", params={"smart_start": True}
         )
-        out = await _radio(client)(
+
+    assert "qr_provisioning_information" in error_of(exc)["message"]
+
+
+async def test_add_with_smart_start_provisions_the_node(
+    radio: RadioTools, server: MagicMock, entry: MockConfigEntry
+) -> None:
+    dsk = "11111-22222-33333-44444-55555-66666-77777-88888"
+    provisioning = {
+        "version": QRCodeVersion.SMART_START,
+        "securityClasses": [SecurityClass.S2_AUTHENTICATED],
+        "dsk": dsk,
+        "genericDeviceClass": 1,
+        "specificDeviceClass": 1,
+        "installerIconType": 1,
+        "manufacturerId": 1,
+        "productType": 1,
+        "productId": 1,
+        "applicationVersion": "1.0",
+    }
+
+    out = await radio.ha_manage_radio(
+        radio="zwave",
+        action="add",
+        params={"smart_start": True, "qr_provisioning_information": provisioning},
+    )
+
+    assert out["mode"] == "smart_start"
+    provisioned = [
+        message["entry"]["dsk"]
+        for message in sent_to_server(server)
+        if message["command"] == "controller.provision_smart_start_node"
+    ]
+    assert provisioned == [dsk]
+
+
+async def test_add_with_two_credentials_refuses_before_reaching_core(
+    hass: HomeAssistant, radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    """Z-Wave JS takes one inclusion credential; two are refused here, and Core
+    is never asked to include."""
+    with received(hass, "zwave_js/add_node") as core, pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
             radio="zwave",
             action="add",
-            params={"qr_code_string": "90010...", "inclusion_strategy": 2},
+            params={"qr_code_string": QR_CODE, "dsk": "11111-22222"},
         )
-        assert out["mode"] == "add_node"
-        sent = next(m for m in record if m["type"] == "zwave_js/add_node")
-        assert sent["entry_id"] == "e1"
-        assert sent["qr_code_string"] == "90010..."
-        assert sent["inclusion_strategy"] == 2
-        assert "dsk" not in sent  # None fields filtered out
 
-    @pytest.mark.asyncio
-    async def test_add_smart_start_requires_qr(self):
-        client = _client({"config_entries/get": _entries()})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zwave", action="add", params={"smart_start": True}
-            )
-        assert "qr_provisioning_information" in str(exc.value)
+    message = error_of(exc)["message"]
+    assert "qr_code_string" in message
+    assert "dsk" in message
+    assert "mutually exclusive" in message.lower()
+    assert core["zwave_js/add_node"] == []
 
-    @pytest.mark.asyncio
-    async def test_add_smart_start_success(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/provision_smart_start_node": {"success": True, "result": {}},
-            },
-            record=record,
+
+@pytest.mark.parametrize(
+    ("action", "params"),
+    [
+        ("add", {"qr_code_string": QR_CODE}),
+        ("remove_device", None),
+        ("rebuild_routes", {"scope": "network"}),
+        ("hard_reset", None),
+    ],
+)
+async def test_a_controller_action_without_zwave_fails(
+    radio: RadioTools,
+    without_zwave: None,
+    action: str,
+    params: dict[str, Any] | None,
+) -> None:
+    """A controller action on a Home Assistant without Z-Wave JS fails instead of
+    reporting a no-op as done."""
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="zwave", action=action, params=params, confirm=True
         )
-        out = await _radio(client)(
-            radio="zwave",
-            action="add",
-            params={"smart_start": True, "qr_provisioning_information": {"dsk": "x"}},
-        )
-        assert out["mode"] == "smart_start"
-        assert any(m["type"] == "zwave_js/provision_smart_start_node" for m in record)
 
-    @pytest.mark.asyncio
-    async def test_add_rejects_multiple_credentials(self):
-        # HA's add_node schema marks the inclusion credentials as vol.Exclusive;
-        # passing more than one must raise (the single-credential path is fine).
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/add_node": {"success": True, "result": {}},
-            },
-            record=record,
-        )
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zwave",
-                action="add",
-                params={"qr_code_string": "90010...", "dsk": "11111-22222"},
-            )
-        msg = str(exc.value)
-        assert "qr_code_string" in msg
-        assert "dsk" in msg
-        assert "mutually exclusive" in msg.lower()
-        # The conflicting call must never reach add_node.
-        assert not any(m["type"] == "zwave_js/add_node" for m in record)
+    assert "zwave_js integration is not configured" in error_of(exc)["message"]
 
-    @pytest.mark.asyncio
-    async def test_add_integration_absent_raises(self):
-        # add is a write action: an absent zwave_js config entry must raise
-        # (integration_required) before the credential check is reached.
-        client = _client({"config_entries/get": _entries(present=False)})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zwave", action="add")
-        assert "zwave_js" in str(exc.value)
 
-    # ---- remove_device ------------------------------------------------------ #
-    @pytest.mark.asyncio
-    async def test_remove_device_requires_confirm(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(
-                radio="zwave", action="remove_device", device_id="z1"
-            )
-        assert "confirm" in str(exc.value).lower()
+async def test_remove_device_of_a_failed_node_removes_it(
+    radio: RadioTools, server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zwave",
+        action="remove_device",
+        device_id=device_id,
+        params={"failed": True},
+        confirm=True,
+    )
 
-    @pytest.mark.asyncio
-    async def test_remove_failed_node(self):
-        record: list = []
-        client = _client(
-            {"zwave_js/remove_failed_node": {"success": True, "result": {}}},
-            record=record,
-        )
-        out = await _radio(client)(
+    assert out["mode"] == "failed"
+    assert {"command": "controller.remove_failed_node", "nodeId": NODE_ID} in (
+        sent_to_server(server)
+    )
+
+
+async def test_remove_device_of_a_failed_node_needs_the_device(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
             radio="zwave",
             action="remove_device",
-            device_id="z1",
             params={"failed": True},
             confirm=True,
         )
-        assert out["mode"] == "failed"
-        sent = next(m for m in record if m["type"] == "zwave_js/remove_failed_node")
-        assert sent["device_id"] == "z1"
 
-    @pytest.mark.asyncio
-    async def test_remove_failed_requires_device_id(self):
-        client = _client({"config_entries/get": _entries()})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zwave",
-                action="remove_device",
-                params={"failed": True},
-                confirm=True,
-            )
-        assert "device_id" in str(exc.value)
+    assert "device_id" in error_of(exc)["message"]
 
-    @pytest.mark.asyncio
-    async def test_remove_device_exclusion(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/remove_node": {"success": True, "result": {}},
-            },
-            record=record,
+
+async def test_remove_device_opens_exclusion_on_the_controller(
+    hass: HomeAssistant,
+    radio: RadioTools,
+    server: MagicMock,
+    entry: MockConfigEntry,
+) -> None:
+    with received(hass, "zwave_js/remove_node") as core:
+        out = await radio.ha_manage_radio(
+            radio="zwave", action="remove_device", confirm=True
         )
-        out = await _radio(client)(radio="zwave", action="remove_device", confirm=True)
-        assert out["mode"] == "exclusion"
-        sent = next(m for m in record if m["type"] == "zwave_js/remove_node")
-        assert sent["entry_id"] == "e1"
 
-    @pytest.mark.asyncio
-    async def test_remove_device_exclusion_integration_absent_raises(self):
-        # The exclusion path (no params.failed) opens a controller window, so an
-        # absent zwave_js config entry must raise rather than no-op.
-        client = _client({"config_entries/get": _entries(present=False)})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zwave", action="remove_device", confirm=True)
-        assert "zwave_js" in str(exc.value)
+    assert (out["mode"], out["result"]) == ("exclusion", True)
+    assert [msg["entry_id"] for msg in core["zwave_js/remove_node"]] == [entry.entry_id]
+    assert any(
+        message["command"] == "controller.begin_exclusion"
+        for message in sent_to_server(server)
+    )
 
-    # ---- reinterview -------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_reinterview(self):
-        record: list = []
-        client = _client(
-            {"zwave_js/refresh_node_info": {"success": True, "result": {}}},
-            record=record,
-        )
-        out = await _radio(client)(radio="zwave", action="reinterview", device_id="z1")
-        assert out["success"] is True
-        assert any(m["type"] == "zwave_js/refresh_node_info" for m in record)
 
-    # ---- rebuild_routes ----------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_rebuild_routes_node(self):
-        record: list = []
-        client = _client(
-            {"zwave_js/rebuild_node_routes": {"success": True, "result": {}}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zwave", action="rebuild_routes", device_id="z1"
-        )
-        assert out["scope"] == "node"
-        assert any(m["type"] == "zwave_js/rebuild_node_routes" for m in record)
+async def test_reinterview_reinterviews_the_node(
+    radio: RadioTools, server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zwave", action="reinterview", device_id=device_id
+    )
 
-    @pytest.mark.asyncio
-    async def test_rebuild_routes_network(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/begin_rebuilding_routes": {"success": True, "result": {}},
-            },
-            record=record,
-        )
-        out = await _radio(client)(
+    assert out["success"] is True
+    reinterviews = [
+        call.args[0] for call in server.async_send_command_no_wait.call_args_list
+    ]
+    assert {"command": "node.refresh_info", "nodeId": NODE_ID} in reinterviews
+
+
+async def test_rebuild_routes_rebuilds_the_nodes_routes(
+    radio: RadioTools, server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="zwave", action="rebuild_routes", device_id=device_id
+    )
+
+    assert (out["scope"], out["result"]) == ("node", True)
+    assert {"command": "controller.rebuild_node_routes", "nodeId": NODE_ID} in (
+        sent_to_server(server)
+    )
+
+
+async def test_rebuild_routes_of_the_network_starts_on_the_controller(
+    hass: HomeAssistant,
+    radio: RadioTools,
+    server: MagicMock,
+    entry: MockConfigEntry,
+) -> None:
+    with received(hass, "zwave_js/begin_rebuilding_routes") as core:
+        out = await radio.ha_manage_radio(
             radio="zwave", action="rebuild_routes", params={"scope": "network"}
         )
-        assert out["scope"] == "network"
-        sent = next(
-            m for m in record if m["type"] == "zwave_js/begin_rebuilding_routes"
+
+    assert (out["scope"], out["result"]) == ("network", True)
+    assert [msg["entry_id"] for msg in core["zwave_js/begin_rebuilding_routes"]] == [
+        entry.entry_id
+    ]
+    assert {"command": "controller.begin_rebuilding_routes"} in sent_to_server(server)
+
+
+async def test_rebuild_routes_of_a_node_needs_the_device(
+    radio: RadioTools, entry: MockConfigEntry
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(radio="zwave", action="rebuild_routes")
+
+    assert "device_id" in error_of(exc)["message"]
+
+
+async def test_set_config_param_writes_a_zero(
+    radio: RadioTools, server: MagicMock, device_id: str
+) -> None:
+    """A value of 0 is written to the node's parameter, on the root endpoint."""
+    out = await radio.ha_manage_radio(
+        radio="zwave",
+        action="set_config_param",
+        device_id=device_id,
+        params={"property": RAMP_RATE, "value": 0},
+    )
+
+    assert out["success"] is True
+    writes = [
+        (
+            message["valueId"]["property"],
+            message["valueId"]["endpoint"],
+            message["value"],
         )
-        assert sent["entry_id"] == "e1"
+        for message in sent_to_server(server)
+        if message["command"] == "node.set_value"
+    ]
+    assert writes == [(RAMP_RATE, 0, 0)]
 
-    @pytest.mark.asyncio
-    async def test_rebuild_routes_node_requires_device_id(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(radio="zwave", action="rebuild_routes")
-        assert "device_id" in str(exc.value)
 
-    @pytest.mark.asyncio
-    async def test_rebuild_routes_network_integration_absent_raises(self):
-        # The network scope rebuilds via the controller, so an absent zwave_js
-        # config entry must raise (integration_required), not silently no-op.
-        client = _client({"config_entries/get": _entries(present=False)})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zwave",
-                action="rebuild_routes",
-                params={"scope": "network"},
+async def test_firmware_update_of_a_node_without_an_update_entity_says_none(
+    radio: RadioTools, device_id: str
+) -> None:
+    """A node Core offers no firmware update entity for gets the not-found
+    answer, not a failed install."""
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="zwave", action="firmware_update", device_id=device_id
+        )
+
+    error = error_of(exc)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert "no firmware update is available" in error["message"]
+
+
+async def test_hard_reset_resets_the_controller(
+    radio: RadioTools, server: MagicMock, entry: MockConfigEntry
+) -> None:
+    """The controller is reset; Core answers once the reset controller is back,
+    which the server announces with ``driver ready``."""
+
+    async def answer(message: dict[str, Any], *_: Any, **__: Any) -> Any:
+        if message["command"] == "driver.hard_reset":
+            server.driver.emit(
+                "driver ready", {"event": "driver ready", "source": "driver"}
             )
-        assert "zwave_js" in str(exc.value)
+        return SERVER_ANSWERS.get(message["command"], {})
 
-    # ---- set_config_param --------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_set_config_param_requires_value(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(
-                radio="zwave",
-                action="set_config_param",
-                device_id="z1",
-                params={"property": 5},
-            )
-        assert "value" in str(exc.value)
+    server.async_send_command.side_effect = answer
 
-    @pytest.mark.asyncio
-    async def test_set_config_param_accepts_zero_value(self):
-        record: list = []
-        client = _client(
-            {"zwave_js/set_config_parameter": {"success": True, "result": {}}},
-            record=record,
-        )
-        out = await _radio(client)(
-            radio="zwave",
-            action="set_config_param",
-            device_id="z1",
-            params={"property": 5, "value": 0},
-        )
-        assert out["success"] is True
-        sent = next(m for m in record if m["type"] == "zwave_js/set_config_parameter")
-        assert sent["property"] == 5
-        assert sent["value"] == 0
-        assert sent["endpoint"] == 0  # default applied
+    out = await radio.ha_manage_radio(radio="zwave", action="hard_reset", confirm=True)
 
-    # ---- firmware_update ---------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_firmware_update_installs_via_update_entity(self):
-        registry = {
-            "success": True,
-            "result": [
-                {"entity_id": "sensor.node_temp", "device_id": "z1"},
-                {"entity_id": "update.node_fw", "device_id": "z1"},
-            ],
-        }
-        client = _client({"config/entity_registry/list": registry})
-        out = await _radio(client)(
-            radio="zwave", action="firmware_update", device_id="z1"
-        )
-        assert out["entity_id"] == "update.node_fw"
-        client.call_service.assert_awaited_once_with(
-            "update", "install", {"entity_id": "update.node_fw"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_firmware_update_no_update_entity(self):
-        registry = {
-            "success": True,
-            "result": [{"entity_id": "sensor.node_temp", "device_id": "z1"}],
-        }
-        client = _client({"config/entity_registry/list": registry})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(
-                radio="zwave", action="firmware_update", device_id="z1"
-            )
-        assert "update entity" in str(exc.value).lower()
-
-    # ---- hard_reset --------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_hard_reset_requires_confirm(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(radio="zwave", action="hard_reset")
-        assert "confirm" in str(exc.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_hard_reset_success(self):
-        record: list = []
-        client = _client(
-            {
-                "config_entries/get": _entries(),
-                "zwave_js/hard_reset_controller": {"success": True, "result": {}},
-            },
-            record=record,
-        )
-        out = await _radio(client)(radio="zwave", action="hard_reset", confirm=True)
-        assert out["success"] is True
-        sent = next(m for m in record if m["type"] == "zwave_js/hard_reset_controller")
-        assert sent["entry_id"] == "e1"
-
-    @pytest.mark.asyncio
-    async def test_hard_reset_integration_absent_raises(self):
-        # hard_reset wipes the controller, so an absent zwave_js config entry
-        # must raise (integration_required) rather than no-op.
-        client = _client({"config_entries/get": _entries(present=False)})
-        with pytest.raises(ToolError) as exc:
-            await _radio(client)(radio="zwave", action="hard_reset", confirm=True)
-        assert "zwave_js" in str(exc.value)
-
-    # ---- unknown action ----------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_unknown_action_lists_supported(self):
-        with pytest.raises(ToolError) as exc:
-            await _radio(_client({}))(radio="zwave", action="nope")
-        assert "diagnostics" in str(exc.value)
+    assert out["success"] is True
+    assert {"command": "driver.hard_reset"} in sent_to_server(server)

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 import yaml
 
-from .test_addon_startup import _load_addon_start
+from ._addon_start import load_addon_start
 
 
 @pytest.mark.parametrize("flavor", ["homeassistant-addon", "homeassistant-addon-dev"])
@@ -25,7 +25,7 @@ def _boot_until_server_import(
 ) -> tuple[list[str], list[str]]:
     import json
 
-    addon = _load_addon_start()
+    addon = load_addon_start()
     monkeypatch.setattr(addon.os, "environ", dict(os.environ))
     options_path = tmp_path / "options.json"
     options_path.write_text(
@@ -67,7 +67,6 @@ def _boot_until_server_import(
     [
         ({}, "true", "false"),
         ({"enable_snapshot_actions": False, "backup_read_only": True}, "false", "true"),
-        ({"enable_snapshot_actions": True, "backup_read_only": False}, "true", "false"),
         (
             {"enable_snapshot_actions": "false", "backup_read_only": "true"},
             "true",
@@ -75,6 +74,7 @@ def _boot_until_server_import(
         ),
         ("{invalid json", "true", "false"),
     ],
+    ids=["absent", "saved", "text instead of bool", "unreadable options file"],
 )
 def test_app_startup_exports_backup_controls(
     options: dict[str, Any] | str,

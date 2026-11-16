@@ -39,7 +39,13 @@ from pytest_homeassistant.typing import MockHAClientWebSocket
 from custom_components.ha_mcp_tools.websocket_api.constants import WS_CONFIG_ENTRIES
 from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.config_entry_backup import helper_backup_id, removal_backup_id
+from ha_mcp.tools import auto_backup
+from ha_mcp.tools.config_entry_backup import (
+    helper_backup_id,
+    removal_backup_domain,
+    removal_backup_id,
+)
+from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_core import ws_result
 from ._component_frames import older_component
@@ -147,19 +153,20 @@ def _planes(hass: HomeAssistant) -> dict[str, tuple[str, dict[str, Any]]]:
     return {sid: (sub.title, dict(sub.data)) for sid, sub in entry.subentries.items()}
 
 
-def _manager(client: HomeAssistantClient, tmp_path: Path, **settings: Any) -> Any:
-    return bm.get_backup_manager(
-        client,
-        SimpleNamespace(
-            **{
-                "enable_auto_backup": True,
-                "auto_backup_throttle_minutes": 0,
-                "auto_backup_retain_per_entity": 5,
-                "auto_backup_dir": str(tmp_path),
-                **settings,
-            }
-        ),
+def _settings(tmp_path: Path, **settings: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        **{
+            "enable_auto_backup": True,
+            "auto_backup_throttle_minutes": 0,
+            "auto_backup_retain_per_entity": 5,
+            "auto_backup_dir": str(tmp_path),
+            **settings,
+        }
     )
+
+
+def _manager(client: HomeAssistantClient, tmp_path: Path, **settings: Any) -> Any:
+    return bm.get_backup_manager(client, _settings(tmp_path, **settings))
 
 
 async def _capture(manager: Any) -> str:
@@ -227,8 +234,14 @@ def test_subentry_edits_are_keyed_by_entry_and_subentry(
     assert helper_backup_id({"helper_type": "config_subentry", **kwargs}) == expected
 
 
-def test_subentry_deletion_is_keyed_by_entry_and_subentry() -> None:
-    kwargs = {"helper_type": "config_subentry", "target": "e1", "subentry_id": "s1"}
+@pytest.mark.parametrize("named", [{"helper_type": "config_subentry"}, {}])
+def test_subentry_deletion_is_keyed_by_entry_and_subentry(
+    named: dict[str, str],
+) -> None:
+    """Also when the caller names only the subentry: the tool removes that
+    subentry, so the backup must be the subentry's, not its parent entry's."""
+    kwargs = {**named, "target": "e1", "subentry_id": "s1"}
+    assert removal_backup_domain(kwargs) == DOMAIN_KEY
     assert removal_backup_id(kwargs) == "e1/s1"
 
 
@@ -347,6 +360,35 @@ async def test_a_deleted_subentry_is_created_again_with_its_title(
         f"e1/{new_id}",
         "s1",
     )
+
+
+@pytest.mark.usefixtures("planes")
+@pytest.mark.parametrize("named", [{"helper_type": "config_subentry"}, {}])
+async def test_a_subentry_the_tool_removed_comes_back_from_its_backup(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    named: dict[str, str],
+) -> None:
+    """The removal's own backup is the subentry's, also when the caller names
+    only the subentry: an entry backup holds no subentry to bring back."""
+    _entry(hass, s1=("Kitchen", PLANE))
+    monkeypatch.setattr(auto_backup, "get_global_settings", lambda: _settings(tmp_path))
+    manager = _manager(component_core_client, tmp_path)
+
+    removed = await IntegrationTools(
+        component_core_client
+    ).ha_remove_helpers_integrations(
+        target="e1", subentry_id="s1", confirm=True, **named
+    )
+    assert _planes(hass) == {}
+
+    (snapshot,) = manager.backup_dir.glob("*.yaml")
+    await manager.restore_snapshot(snapshot.name)
+
+    assert removed["success"] is True
+    assert list(_planes(hass).values()) == [("Kitchen", PLANE)]
 
 
 @pytest.mark.usefixtures("planes")

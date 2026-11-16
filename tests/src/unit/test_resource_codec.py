@@ -1,6 +1,5 @@
 """Unit tests for the inline dashboard-resource codec."""
 
-import base64
 import json
 
 import pytest
@@ -17,11 +16,7 @@ from ha_mcp.tools.resource_codec import (
     _is_data_url,
 )
 
-
-def _legacy_url(content: str, resource_type: str = "module") -> str:
-    """Build a legacy worker inline URL the way the retired writer did."""
-    encoded = base64.urlsafe_b64encode(content.encode()).decode()
-    return f"{LEGACY_WORKER_BASE_URL}/{encoded}?type={resource_type}"
+from ._legacy_resource_urls import legacy_url
 
 
 class TestHelperFunctions:
@@ -116,7 +111,7 @@ class TestHelperFunctions:
     def test_decode_inline_content_legacy_worker(self):
         """Legacy worker URLs decode and are flagged as legacy."""
         content = "export const legacy = 1;"
-        assert _decode_inline_content(_legacy_url(content)) == (content, True)
+        assert _decode_inline_content(legacy_url(content)) == (content, True)
 
     def test_decode_inline_content_non_inline(self):
         """Foreign and undecodable URLs yield no content.
@@ -204,14 +199,14 @@ class TestHelperFunctions:
     def test_decode_legacy_worker_url_case_insensitive_origin(self):
         """Scheme/host case does not lose a legacy resource its migration path."""
         content = "export const legacy = 1;"
-        url = _legacy_url(content)
+        url = legacy_url(content)
         shouty = url.replace("https://", "HTTPS://", 1)
         assert _decode_legacy_worker_url(shouty) == content
 
     def test_decode_legacy_worker_url(self):
         """Test decoding legacy worker URL (pure local base64)."""
         content = "export const x = 1;"
-        assert _decode_legacy_worker_url(_legacy_url(content)) == content
+        assert _decode_legacy_worker_url(legacy_url(content)) == content
 
     def test_decode_legacy_worker_url_non_worker(self):
         """Test decoding non-worker URL returns None."""

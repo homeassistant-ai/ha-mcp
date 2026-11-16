@@ -1,0 +1,12 @@
+{
+  "name": "ha-mcp-zwave-mock",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A Z-Wave JS server on zwave-js's mock controller, for the radio E2E tests. Not shipped; started by tests/src/e2e/utilities/zwave_mock.py.",
+  "type": "module",
+  "dependencies": {
+    "@zwave-js/server": "3.12.0",
+    "@zwave-js/testing": "15.32.3",
+    "zwave-js": "15.32.3"
+  }
+}

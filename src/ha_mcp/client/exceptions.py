@@ -68,6 +68,15 @@ class HomeAssistantAPIError(HomeAssistantError):
         self.status_code = status_code
         self.response_data = response_data
 
+    @property
+    def config_not_found(self) -> bool:
+        """Whether Core's config API says the id does not exist: 404 on a read,
+        400 "Resource not found" on a delete."""
+        return self.status_code == 404 or (
+            self.status_code == 400
+            and (self.response_data or {}).get("message") == "Resource not found"
+        )
+
 
 class HomeAssistantCommandError(HomeAssistantError):
     """WebSocket command returned success=False.
