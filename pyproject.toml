@@ -596,7 +596,7 @@ dev = [
     "zha-quirks==2.4.1",
     "aiousbwatcher==1.1.2",
     "serialx==1.15.1",
-    "aiohasupervisor==0.8.1",
+    "aiohasupervisor==0.10.0",
     "universal-silabs-flasher==1.3.0",
     "ha-silabs-firmware-client==0.4.0",
     "pygbl==1.2.0",
