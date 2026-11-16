@@ -635,8 +635,13 @@ jobs:
           [ "$RESULT" = "success" ]
 
   unit-tests-beta:
-    name: Unit Tests (beta Core)
+    name: Unit Tests (beta Core, ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same split as the stable unit job above.
+        shard: ["1/2", "2/2"]
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
       image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
@@ -728,10 +733,12 @@ jobs:
     # would quietly test the stable Core again.
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
+      env:
+        UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 
     - name: Run app tests on the beta Core
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.shard == '1/2' }}
       run: >-
         uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py

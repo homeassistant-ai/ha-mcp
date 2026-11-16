@@ -72,7 +72,7 @@ tests take more than 25 minutes serial, so run them in parallel as shown.
 CI runs them on two runners: each
 takes its share by test id from `UNIT_TEST_SHARD` (`1/2`, `2/2`;
 `tests/src/unit/_shards.py`), and the required `Unit Tests` check passes when
-both did.
+both did. The beta Core unit job is split the same way.
 The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.

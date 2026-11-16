@@ -45,14 +45,35 @@ def test_the_runners_take_similar_shares() -> None:
     assert max(shares) <= 1.2 * min(shares)
 
 
-def test_each_runner_is_told_its_own_shard() -> None:
+# The stable job and its mirror on the beta Core.
+_UNIT_JOBS = ["unit-tests", "unit-tests-beta"]
+
+
+@pytest.mark.parametrize("job", _UNIT_JOBS)
+def test_each_runner_is_told_its_own_shard(job: str) -> None:
     """Without the variable every runner would run the whole suite."""
     (run,) = [
         step
-        for step in _jobs()["unit-tests"]["steps"]
+        for step in _jobs()[job]["steps"]
         if "pytest tests/src/unit/" in step.get("run", "")
     ]
     assert run["env"]["UNIT_TEST_SHARD"] == "${{ matrix.shard }}"
+
+
+def test_the_beta_job_is_split_like_the_stable_one() -> None:
+    """A beta matrix with its own shard list could skip tests the stable job runs."""
+    assert _jobs()["unit-tests-beta"]["strategy"]["matrix"]["shard"] == _shards()
+
+
+@pytest.mark.parametrize("job", _UNIT_JOBS)
+def test_the_app_tests_run_on_one_runner_only(job: str) -> None:
+    """They are not split by shard, so every other runner would repeat them."""
+    (run,) = [
+        step
+        for step in _jobs()[job]["steps"]
+        if "pytest tests/addon/" in step.get("run", "")
+    ]
+    assert "matrix.shard == '1/2'" in run["if"]
 
 
 def test_the_required_check_passes_only_when_every_runner_did() -> None:

@@ -543,5 +543,6 @@ def test_pr_unit_beta_lane_runs_the_suites_on_the_beta_core() -> None:
         assert step["run"].startswith("uv run --no-sync pytest "), step["name"]
         assert step["if"] in (
             skip_guard,
-            "${{ !cancelled() && steps.install.outcome == 'success' }}",
+            "${{ !cancelled() && steps.install.outcome == 'success' "
+            "&& matrix.shard == '1/2' }}",
         ), step["name"]
