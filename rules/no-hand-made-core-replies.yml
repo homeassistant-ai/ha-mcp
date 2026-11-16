@@ -64,7 +64,6 @@ ignores:
   - "tests/src/unit/test_bm25_search.py"
   - "tests/src/unit/test_bulk_device_control.py"
   - "tests/src/unit/test_bulk_selector.py"
-  - "tests/src/unit/test_call_service_ws_command.py"
   - "tests/src/unit/test_component_api.py"
   - "tests/src/unit/test_component_todo_items.py"
   - "tests/src/unit/test_context_injection.py"
