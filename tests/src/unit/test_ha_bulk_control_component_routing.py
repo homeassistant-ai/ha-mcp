@@ -6,8 +6,8 @@ operation ids to poll. Without it, or whenever the frame provably never
 reached the component, each op is one REST POST. A batch frame that was sent
 but never answered is reported partial and never dispatched again.
 
-The services are handlers in Core's ``hass.services`` that switch entity
-states as a device would (``_switched_states``); the states, events and
+The light and the switch are devices below Core's own ``light`` and ``switch``
+integrations (``_switched_states``); the services, states, events and
 transitions are Core's.
 """
 
@@ -34,7 +34,7 @@ from ha_mcp.tools.device_control import DeviceControlTools
 
 from ._command_faults import dropped_on, pooled_socket, received
 from ._operations import operations_without_listener  # noqa: F401
-from ._switched_states import SwitchedStates
+from ._switched_states import Devices, set_up_devices
 
 BULK = "ha_mcp_tools/bulk_call_service"
 TWO_OPS = [
@@ -44,10 +44,8 @@ TWO_OPS = [
 
 
 @pytest.fixture
-def devices(hass: HomeAssistant) -> SwitchedStates:
-    hass.states.async_set("light.a", "off")
-    hass.states.async_set("switch.b", "off")
-    return SwitchedStates(hass)
+async def devices(hass: HomeAssistant) -> Devices:
+    return await set_up_devices(hass, {"light.a": "off", "switch.b": "off"})
 
 
 def _posts(client: HomeAssistantClient) -> Any:
@@ -166,7 +164,7 @@ async def test_without_validate_first_a_missing_target_is_an_unconfirmed_command
 
 
 async def test_an_op_that_never_confirms_is_partial_and_not_sent_again(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     devices.behaviour["switch.b"] = "stay"
     ops = [{**op, "timeout_seconds": 0.5} for op in TWO_OPS]
@@ -181,7 +179,7 @@ async def test_an_op_that_never_confirms_is_partial_and_not_sent_again(
 
 
 async def test_an_op_core_refused_in_the_batch_is_reported_not_sent_again(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     devices.behaviour["switch.b"] = "fail_once"
 
@@ -237,7 +235,7 @@ async def test_a_batch_the_component_cannot_take_never_reaches_it(
 async def test_a_downgraded_component_is_dropped_and_each_op_posted(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
@@ -256,12 +254,11 @@ async def test_a_downgraded_component_is_dropped_and_each_op_posted(
 async def test_a_batch_core_refuses_before_any_dispatch_is_posted_per_op(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """Core has no ``switch.turn_on``: the component refuses the whole batch
-    before it fires anything, so each op is posted once."""
-    hass.states.async_set("light.a", "off")
+    """Core has no ``switch.turn_on`` (no switch integration, only the state):
+    the component refuses the whole batch before it fires anything, so each
+    op is posted once."""
+    devices = await set_up_devices(hass, {"light.a": "off"})
     hass.states.async_set("switch.b", "off")
-    devices = SwitchedStates(hass)
-    hass.services.async_remove("switch", "turn_on")
 
     with _posts(component_core_client) as post:
         await _bulk(component_core_client, TWO_OPS)
@@ -271,7 +268,7 @@ async def test_a_batch_core_refuses_before_any_dispatch_is_posted_per_op(
 
 
 async def test_a_socket_that_cannot_connect_posts_each_op(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
     await websocket_manager.disconnect()
@@ -291,7 +288,7 @@ async def test_a_socket_that_cannot_connect_posts_each_op(
 
 
 async def test_a_frame_never_sent_posts_each_op(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
     socket = await pooled_socket(component_core_client)
@@ -316,7 +313,7 @@ async def test_a_frame_never_sent_posts_each_op(
 async def test_a_socket_that_drops_after_the_send_is_partial_and_never_posted(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
 ) -> None:
     """Re-dispatching a batch that may have landed would fire every op twice."""
     assert await get_component_caps(component_core_client) is not None

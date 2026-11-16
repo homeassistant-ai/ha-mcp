@@ -1,21 +1,22 @@
 """``ha_mcp_tools/bulk_call_service`` on a real Home Assistant.
 
 One frame fires a batch of service calls and reports each one's real state
-transition. Each test registers the services its batch calls on the real
-``hass.services``; the handlers change states through ``hass.states``, so the
-``state_changed`` events the component waits on come from Core's own bus.
+transition. Lights, the switch and the lock are devices below Core's own
+integrations (``_switched_states``) and ``automation.trigger`` is Core's
+automation integration; only the ``probe.*`` services that show the dispatch
+order are the test's own. Either way the ``state_changed`` events the
+component waits on come from Core's own bus.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
-from homeassistant.exceptions import HomeAssistantError
+from pytest_homeassistant.common import async_capture_events
 
 from custom_components.ha_mcp_tools.websocket_api.constants import (
     CALL_SERVICE_MAX_TIMEOUT,
@@ -23,7 +24,13 @@ from custom_components.ha_mcp_tools.websocket_api.constants import (
 )
 
 from ._component_core import ws_call, ws_result
-from ._switched_states import set_later
+from ._switched_states import (
+    RANG,
+    Devices,
+    Received,
+    set_up_devices,
+    set_up_ringing_automation,
+)
 
 # Long enough for a handler's state change to arrive, short enough that a test
 # expecting the shared wait to lapse stays fast.
@@ -46,34 +53,35 @@ def _state_listeners(hass: HomeAssistant) -> int:
     return hass.bus.async_listeners().get(EVENT_STATE_CHANGED, 0)
 
 
-def _register(
-    hass: HomeAssistant,
-    domain: str,
-    service: str,
-    effect: Callable[[ServiceCall], ServiceResponse] | None = None,
-) -> list[dict[str, Any]]:
-    """Register a service; return the calls it receives.
-
-    Each call records its data and how many ``state_changed`` listeners were
-    on the bus while it ran.
-    """
-    calls: list[dict[str, Any]] = []
+def _register(hass: HomeAssistant, domain: str, service: str) -> list[ServiceCall]:
+    """Register a service that does nothing; return the calls it receives."""
+    calls: list[ServiceCall] = []
 
     async def _handler(call: ServiceCall) -> ServiceResponse:
-        calls.append({"data": dict(call.data), "listeners": _state_listeners(hass)})
-        return effect(call) if effect is not None else None
+        calls.append(call)
+        return None
 
     hass.services.async_register(domain, service, _handler)
     return calls
 
 
-def _to_state(
-    hass: HomeAssistant, entity_id: str, state: str
-) -> Callable[[ServiceCall], None]:
-    def _effect(call: ServiceCall) -> None:
-        hass.states.async_set(entity_id, state, dict(call.data))
+def _turn_on(entity_id: str, service: str = "turn_on", **extra: Any) -> dict[str, Any]:
+    """An op as the server sends it: Core's target in ``service_data``, the
+    confirmation target in ``entity_ids``."""
+    return {
+        "domain": entity_id.split(".", 1)[0],
+        "service": service,
+        "service_data": {"entity_id": entity_id},
+        "entity_ids": [entity_id],
+        **extra,
+    }
 
-    return _effect
+
+def _listeners_at_call(hass: HomeAssistant, devices: Devices) -> list[int]:
+    """How many ``state_changed`` listeners were on the bus at each command."""
+    seen: list[int] = []
+    devices.on_call = lambda: seen.append(_state_listeners(hass))
+    return seen
 
 
 def _overlap_probe(hass: HomeAssistant) -> list[str]:
@@ -118,8 +126,7 @@ class TestRefusedBeforeDispatch:
         """A batch can never smuggle a call to the component's own admin
         services: one such op, in any spelling, refuses the frame before even
         the valid op ahead of it runs."""
-        hass.states.async_set("light.a", "off")
-        light_calls = _register(hass, "light", "turn_on")
+        devices = await set_up_devices(hass, {"light.a": "off"})
         token_calls = _register(hass, "ha_mcp_tools", "get_caller_token")
         before = _state_listeners(hass)
 
@@ -127,7 +134,7 @@ class TestRefusedBeforeDispatch:
             component_ws,
             WS_BULK_CALL_SERVICE,
             operations=[
-                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
+                _turn_on("light.a"),
                 {"domain": bad_domain, "service": "get_caller_token"},
             ],
         )
@@ -135,7 +142,7 @@ class TestRefusedBeforeDispatch:
         assert not reply["success"]
         # Refused as the reserved domain, not answered as an unknown service.
         assert reply["error"].get("translation_key") != "service_not_found"
-        assert light_calls == []
+        assert devices.calls == []
         assert token_calls == []
         assert _state_listeners(hass) == before
 
@@ -144,22 +151,21 @@ class TestRefusedBeforeDispatch:
     ) -> None:
         """An unknown service anywhere in the batch is reported as not found
         and nothing in the batch runs."""
-        hass.states.async_set("light.a", "off")
-        light_calls = _register(hass, "light", "turn_on")
+        devices = await set_up_devices(hass, {"light.a": "off"})
         before = _state_listeners(hass)
 
         reply = await ws_call(
             component_ws,
             WS_BULK_CALL_SERVICE,
             operations=[
-                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
+                _turn_on("light.a"),
                 {"domain": "light", "service": "does_not_exist"},
             ],
         )
 
         assert not reply["success"]
         assert reply["error"]["translation_key"] == "service_not_found"
-        assert light_calls == []
+        assert devices.calls == []
         assert _state_listeners(hass) == before
 
 
@@ -168,27 +174,18 @@ class TestConfirmedBatch:
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
         """Every op is confirmed with its own transition, in the order the
-        caller sent them, and each service gets its own data once."""
-        hass.states.async_set("light.a", "off", {"brightness": 100})
-        hass.states.async_set("switch.b", "off")
-        light_calls = _register(
-            hass, "light", "turn_on", _to_state(hass, "light.a", "on")
-        )
-        switch_calls = _register(
-            hass, "switch", "turn_on", _to_state(hass, "switch.b", "on")
-        )
+        caller sent them, and each device gets its own data once."""
+        devices = await set_up_devices(hass, {"light.a": "off", "switch.b": "off"})
         before = _state_listeners(hass)
 
         res = await _bulk(
             component_ws,
             operations=[
-                {
-                    "domain": "light",
-                    "service": "turn_on",
-                    "entity_ids": ["light.a"],
-                    "service_data": {"brightness": 255},
-                },
-                {"domain": "switch", "service": "turn_on", "entity_ids": ["switch.b"]},
+                _turn_on(
+                    "light.a",
+                    service_data={"entity_id": "light.a", "brightness": 255},
+                ),
+                _turn_on("switch.b"),
             ],
             parallel=True,
         )
@@ -208,9 +205,13 @@ class TestConfirmedBatch:
         assert transition["old_state"]["state"] == "off"
         assert transition["new_state"]["state"] == "on"
         assert transition["changed"] is True
-        assert transition["attributes_changed"] == ["brightness"]
-        assert [c["data"] for c in light_calls] == [{"brightness": 255}]
-        assert [c["data"] for c in switch_calls] == [{}]
+        # A light reports its brightness and color mode only while on.
+        assert transition["attributes_changed"] == ["brightness", "color_mode"]
+        # Parallel ops reach their devices in either order.
+        assert sorted(devices.calls, key=lambda call: call.entity_id) == [
+            Received("light.a", "turn_on", {"brightness": 255}),
+            Received("switch.b", "turn_on", {}),
+        ]
         assert _state_listeners(hass) == before
 
     async def test_each_op_confirms_on_its_own_expected_state(
@@ -218,36 +219,17 @@ class TestConfirmedBatch:
     ) -> None:
         """A lock op waits past ``locking`` for its expected ``locked`` while a
         light op in the same batch confirms on its own ``on``."""
-        hass.states.async_set("lock.front", "unlocked")
-        hass.states.async_set("light.a", "off")
-        later: list[asyncio.Task[None]] = []
-
-        def _lock(call: ServiceCall) -> None:
-            hass.states.async_set("lock.front", "locking")
-            later.append(set_later(hass, "lock.front", "locked"))
-
-        _register(hass, "lock", "lock", _lock)
-        _register(hass, "light", "turn_on", _to_state(hass, "light.a", "on"))
+        await set_up_devices(hass, {"lock.front": "unlocked", "light.a": "off"})
 
         res = await _bulk(
             component_ws,
             operations=[
-                {
-                    "domain": "lock",
-                    "service": "lock",
-                    "entity_ids": ["lock.front"],
-                    "expected_state": "locked",
-                },
-                {
-                    "domain": "light",
-                    "service": "turn_on",
-                    "entity_ids": ["light.a"],
-                    "expected_state": "on",
-                },
+                _turn_on("lock.front", "lock", expected_state="locked"),
+                _turn_on("light.a", expected_state="on"),
             ],
             parallel=True,
         )
-        await asyncio.gather(*later)
+        await hass.async_block_till_done()
 
         lock_op, light_op = res["operations"]
         assert lock_op["confirmed"] is True
@@ -261,21 +243,13 @@ class TestConfirmedBatch:
     ) -> None:
         """Core emits no event for a no-op, so a light already at its expected
         state confirms at once instead of stalling the batch to the timeout."""
-        hass.states.async_set("light.a", "on")
-        _register(hass, "light", "turn_on")
+        await set_up_devices(hass, {"light.a": "on"})
 
         # A stall would run to the batch's 30 s timeout; the test allows 5 s.
         async with asyncio.timeout(5):
             res = await _bulk(
                 component_ws,
-                operations=[
-                    {
-                        "domain": "light",
-                        "service": "turn_on",
-                        "entity_ids": ["light.a"],
-                        "expected_state": "on",
-                    }
-                ],
+                operations=[_turn_on("light.a", expected_state="on")],
                 timeout=30,
             )
 
@@ -338,21 +312,15 @@ class TestDispatchOrder:
     ) -> None:
         """A service that raises marks only its own op failed (not dispatched,
         neither confirmed nor partial); the other op still lands and confirms."""
-        hass.states.async_set("light.a", "off")
-        hass.states.async_set("switch.b", "off")
-
-        def _fail(call: ServiceCall) -> None:
-            raise HomeAssistantError("boom")
-
-        _register(hass, "light", "turn_on", _fail)
-        _register(hass, "switch", "turn_on", _to_state(hass, "switch.b", "on"))
+        devices = await set_up_devices(hass, {"light.a": "off", "switch.b": "off"})
+        devices.behaviour["light.a"] = "fail_once"
         before = _state_listeners(hass)
 
         res = await _bulk(
             component_ws,
             operations=[
-                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
-                {"domain": "switch", "service": "turn_on", "entity_ids": ["switch.b"]},
+                _turn_on("light.a"),
+                _turn_on("switch.b"),
             ],
             parallel=True,
         )
@@ -365,7 +333,7 @@ class TestDispatchOrder:
         assert failed["dispatched"] is False
         assert failed["confirmed"] is False
         assert failed["partial"] is False
-        assert "boom" in failed["error"]
+        assert "light.a did not answer" in failed["error"]
         assert ok["domain"] == "switch"
         assert ok["dispatched"] is True
         assert ok["confirmed"] is True
@@ -379,18 +347,16 @@ class TestUnconfirmedBatch:
     ) -> None:
         """Ops that landed but never reported are ``partial`` once the shared
         wait lapses, never failures the server would retry."""
-        hass.states.async_set("light.a", "off")
-        hass.states.async_set("lock.front", "unlocked")
-        _register(hass, "light", "turn_on")
-        _register(hass, "lock", "lock")
+        devices = await set_up_devices(
+            hass, {"light.a": "off", "lock.front": "unlocked"}
+        )
+        devices.behaviour["light.a"] = "stay"
+        devices.behaviour["lock.front"] = "stay"
         before = _state_listeners(hass)
 
         res = await _bulk(
             component_ws,
-            operations=[
-                {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
-                {"domain": "lock", "service": "lock", "entity_ids": ["lock.front"]},
-            ],
+            operations=[_turn_on("light.a"), _turn_on("lock.front", "lock")],
             timeout=_LAPSE,
         )
 
@@ -408,27 +374,29 @@ class TestUnconfirmedBatch:
         """An op with entities listens for its confirmation from before the
         calls start; an op without entities adds no listener and is not
         ``partial``; nothing stays on the bus afterwards."""
-        hass.states.async_set("light.a", "off")
-        light_calls = _register(
-            hass, "light", "turn_on", _to_state(hass, "light.a", "on")
-        )
-        _register(hass, "automation", "trigger")
+        devices = await set_up_devices(hass, {"light.a": "off"})
+        listeners = _listeners_at_call(hass, devices)
+        automation = await set_up_ringing_automation(hass)
+        rang = async_capture_events(hass, RANG)
         before = _state_listeners(hass)
 
         res = await _bulk(
             component_ws,
             operations=[
+                _turn_on("light.a", expected_state="on"),
                 {
-                    "domain": "light",
-                    "service": "turn_on",
-                    "entity_ids": ["light.a"],
-                    "expected_state": "on",
+                    "domain": "automation",
+                    "service": "trigger",
+                    "service_data": {"entity_id": automation},
+                    "entity_ids": [],
                 },
-                {"domain": "automation", "service": "trigger", "entity_ids": []},
             ],
         )
+        await hass.async_block_till_done()
 
-        assert light_calls[0]["listeners"] == before + 1
+        assert len(rang) == 1
+
+        assert listeners == [before + 1]
         assert _state_listeners(hass) == before
         light_op, automation_op = res["operations"]
         assert light_op["confirmed"] is True
@@ -445,7 +413,7 @@ class TestFrame:
             {},
             {"operations": []},
             {
-                "operations": [{"domain": "light", "service": "turn_on"}],
+                "operations": [_turn_on("light.a")],
                 "timeout": CALL_SERVICE_MAX_TIMEOUT + 1,
             },
             {"operations": [{"domain": "light"}]},
@@ -456,10 +424,10 @@ class TestFrame:
         self, hass: HomeAssistant, component_ws: Any, frame: dict[str, Any]
     ) -> None:
         """A malformed frame is answered ``invalid_format`` and fires nothing."""
-        calls = _register(hass, "light", "turn_on")
+        devices = await set_up_devices(hass, {"light.a": "off"})
 
         reply = await ws_call(component_ws, WS_BULK_CALL_SERVICE, **frame)
 
         assert not reply["success"]
         assert reply["error"]["code"] == "invalid_format"
-        assert calls == []
+        assert devices.calls == []

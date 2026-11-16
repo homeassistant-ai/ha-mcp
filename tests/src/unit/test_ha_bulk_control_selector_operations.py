@@ -4,7 +4,8 @@ An operations batch that targets a group/aggregate together with one of its
 own members fails closed: Home Assistant fans a call on the group out to every
 member, whatever else the batch lists. The groups are Core states whose
 ``entity_id`` attribute lists their members, read back through the server's
-own client; ``SwitchedStates`` serves the light services as a device would.
+own client; the lights are devices below Core's own ``light`` integration
+(``_switched_states``).
 """
 
 from __future__ import annotations
@@ -22,19 +23,23 @@ from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.tools_service import BulkControlOperation, ServiceTools
 
 from ._ha_bulk_control_selector_core import SALON, bulk_tools, switched
-from ._switched_states import SwitchedStates
+from ._switched_states import Devices, set_up_devices
 
 
-@pytest.fixture
-def devices(hass: HomeAssistant) -> SwitchedStates:
-    return SwitchedStates(hass)
-
-
-def furnish(hass: HomeAssistant, entities: dict[str, list[str] | None]) -> None:
-    """Each entity ``on``; one with a member list is a group of them."""
+async def furnish(
+    hass: HomeAssistant, entities: dict[str, list[str] | None]
+) -> Devices:
+    """Each entity ``on``; one with a member list is a group of them. Lights
+    are devices; a scene is its state alone, as nothing here calls it."""
+    lights = {e: m for e, m in entities.items() if e.startswith("light.")}
     for entity_id, members in entities.items():
-        attributes = {} if members is None else {"entity_id": members}
-        hass.states.async_set(entity_id, "on", attributes)
+        if entity_id not in lights:
+            hass.states.async_set(entity_id, "on", {"entity_id": members})
+    return await set_up_devices(
+        hass,
+        dict.fromkeys(lights, "on"),
+        {e: m for e, m in lights.items() if m is not None},
+    )
 
 
 def off(*entity_ids: str) -> list[BulkControlOperation]:
@@ -131,9 +136,9 @@ async def test_the_timeout_example_row_shows_a_number(
 
 
 async def test_positional_operations_and_parallel_still_dispatch(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    furnish(hass, {"light.one": None})
+    devices = await furnish(hass, {"light.one": None})
     device_tools = DeviceControlTools(core_client)
     operations = off("light.one")
 
@@ -156,12 +161,11 @@ async def test_positional_operations_and_parallel_still_dispatch(
 async def test_the_group_check_reads_states_only_for_two_or_more_entities(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
     entity_ids: tuple[str, ...],
     states_reads: int,
 ) -> None:
     """One entity cannot conflict with itself, so it costs no states read."""
-    furnish(hass, {"light.one": None, "light.two": None})
+    devices = await furnish(hass, {"light.one": None, "light.two": None})
 
     with patch.object(
         core_client, "get_states", AsyncMock(wraps=core_client.get_states)
@@ -211,11 +215,10 @@ async def test_the_group_check_reads_states_only_for_two_or_more_entities(
 async def test_a_batch_without_a_group_member_conflict_dispatches(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
     entities: dict[str, list[str] | None],
     targets: tuple[str, ...],
 ) -> None:
-    furnish(hass, entities)
+    devices = await furnish(hass, entities)
 
     await bulk_tools(core_client).ha_bulk_control(off(*targets), False)
 
@@ -226,14 +229,14 @@ async def test_a_batch_without_a_group_member_conflict_dispatches(
 
 
 async def test_a_group_with_most_of_its_members_names_the_one_left_out(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Confirmed live: a Hue room plus 4 of its 5 spots, the 5th left out to
     spare it, still switched the 5th through the room's own fan-out. The
     message names it and shows selector mode with ``exclude_entity_ids``
     inside ``selector``, the call the model got wrong when retrying."""
     spots = [f"light.spot_{index}" for index in range(1, 5)]
-    furnish(hass, {"light.room": [*spots, "light.stairs"]})
+    devices = await furnish(hass, {"light.room": [*spots, "light.stairs"]})
 
     message = await rejection(core_client, off("light.room", *spots))
 
@@ -247,12 +250,12 @@ async def test_a_group_with_most_of_its_members_names_the_one_left_out(
 
 
 async def test_a_large_group_lists_ten_members_and_counts_the_rest(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """The visibility check refuses an error naming a hidden entity, so a
     large group must not list every member."""
     members = [f"light.member_{index:02d}" for index in range(20)]
-    furnish(hass, {"light.group": members})
+    devices = await furnish(hass, {"light.group": members})
 
     message = await rejection(core_client, off("light.group", "light.member_00"))
 
@@ -262,12 +265,12 @@ async def test_a_large_group_lists_ten_members_and_counts_the_rest(
 
 
 async def test_a_scene_with_an_entity_it_sets_is_refused_without_the_selector_remedy(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """``scene.turn_on`` sets every entity the scene configures, the same race
     as a group; selector mode cannot exclude part of a scene, so it is not
     offered."""
-    furnish(hass, {"scene.movie_night": ["light.living_room"]})
+    devices = await furnish(hass, {"scene.movie_night": ["light.living_room"]})
 
     message = await rejection(
         core_client,
@@ -315,12 +318,11 @@ async def test_a_scene_with_an_entity_it_sets_is_refused_without_the_selector_re
 async def test_a_group_with_one_of_its_transitive_members_is_refused(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
     entities: dict[str, list[str] | None],
     operations: list[dict[str, Any]],
 ) -> None:
     """An opposing action races the fan-out as much as the same one does."""
-    furnish(hass, entities)
+    devices = await furnish(hass, entities)
 
     message = await rejection(core_client, operations)
 
@@ -329,10 +331,10 @@ async def test_a_group_with_one_of_its_transitive_members_is_refused(
 
 
 async def test_a_batch_whose_groups_cannot_be_checked_is_not_dispatched(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """An unverifiable batch is not a verified-safe one."""
-    furnish(hass, {"light.one": None, "light.two": None})
+    devices = await furnish(hass, {"light.one": None, "light.two": None})
 
     with (
         patch.object(

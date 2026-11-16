@@ -7,14 +7,14 @@ finds a matching pending operation instead of being silently dropped. A dispatch
 that then RAISES must flip the just-registered operation to FAILED so a later,
 unrelated event for the same entity cannot spuriously complete it.
 
-The service call goes through the server's own client to a real ``hass``; the
-service handler stands in for the entity, and the ``state_changed`` the listener
-would deliver is applied from inside it, while the dispatch is in flight.
+The service call goes through the server's own client to a real ``hass`` and
+Core's ``light`` integration to a light device (``_switched_states``); the
+``state_changed`` the listener would deliver is applied as the device receives
+the command, while the dispatch is in flight.
 """
 
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -25,7 +25,8 @@ from ha_mcp.utils.operation_manager import (
     update_pending_operations,
 )
 
-from ._operations import operations_without_listener  # noqa: F401
+from ._operations import operations_without_listener as operations_without_listener
+from ._switched_states import set_up_devices
 
 
 @pytest.mark.asyncio
@@ -36,8 +37,9 @@ async def test_state_change_arriving_during_dispatch_is_not_dropped(
     the operation — proving the op was registered before the dispatch."""
     manager = get_operation_manager()
     seen: dict[str, list[str]] = {"completed": []}
+    devices = await set_up_devices(hass, {"light.kitchen": "off"})
 
-    async def _fire_event_then_return(call: ServiceCall) -> None:
+    def _report_on() -> None:
         # The real race: the entity's state_changed lands (and the listener
         # processes it) WHILE the dispatch call is in flight, before it returns
         # to control_device_smart. Pre-fix, no op exists yet → dropped.
@@ -45,7 +47,7 @@ async def test_state_change_arriving_during_dispatch_is_not_dropped(
             "light.kitchen", {"state": "on", "attributes": {}}
         )
 
-    hass.services.async_register("light", "turn_on", _fire_event_then_return)
+    devices.on_call = _report_on
 
     tools = DeviceControlTools(client=core_client)
     result = await tools.control_device_smart(
@@ -94,14 +96,13 @@ async def test_landed_write_completed_mid_dispatch_is_not_downgraded(
     for an unrelated reason, ``fail_pending_operation`` must NOT downgrade the terminal
     COMPLETED status to FAILED and misreport a landed write."""
     manager = get_operation_manager()
-
-    async def _complete_then_raise(call: ServiceCall) -> None:
-        # The confirming event lands and completes the op WHILE the dispatch is in
-        # flight (the write reached HA); THEN the call raises for an unrelated reason.
-        update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
-        raise HomeAssistantError("post-landing failure")
-
-    hass.services.async_register("light", "turn_on", _complete_then_raise)
+    devices = await set_up_devices(hass, {"light.kitchen": "off"})
+    # The confirming event lands and completes the op WHILE the dispatch is in
+    # flight (the write reached HA); THEN the device fails the call.
+    devices.on_call = lambda: update_pending_operations(
+        "light.kitchen", {"state": "on", "attributes": {}}
+    )
+    devices.behaviour["light.kitchen"] = "fail_once"
 
     tools = DeviceControlTools(client=core_client)
     with pytest.raises(ToolError):

@@ -1,10 +1,10 @@
 """``ha_bulk_control`` operations mode: which rows run, which are skipped, and
 what each one reports.
 
-The tool runs on the server's own client against a real ``hass``; the
-services are handlers in Core's ``hass.services`` that switch entity states
-as a device would (``_switched_states``), so every call and state is Core's.
-Without the component every valid row is its own service call.
+The tool runs on the server's own client against a real ``hass``; the lights
+are devices below Core's own ``light`` integration (``_switched_states``), so
+every call and state is Core's. Without the component every valid row is its
+own service call.
 """
 
 from __future__ import annotations
@@ -24,18 +24,13 @@ from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.tools_service import register_service_tools
 
 from ._operations import operations_without_listener as operations_without_listener
-from ._switched_states import SwitchedStates
+from ._switched_states import Devices, Received, set_up_devices
 
 
 @pytest.fixture
-def devices(hass: HomeAssistant) -> SwitchedStates:
-    for entity_id in ("light.valid", "light.kitchen", "light.ok", "light.also_ok"):
-        hass.states.async_set(entity_id, "off")
-    return SwitchedStates(hass)
-
-
-def _targets(devices: SwitchedStates) -> list[str]:
-    return [call.data["entity_id"] for call in devices.calls]
+async def devices(hass: HomeAssistant) -> Devices:
+    lights = ("light.valid", "light.kitchen", "light.ok", "light.also_ok")
+    return await set_up_devices(hass, dict.fromkeys(lights, "off"))
 
 
 async def _rejected_batch(
@@ -80,7 +75,7 @@ async def test_an_empty_batch_is_refused(core_client: HomeAssistantClient) -> No
 )
 async def test_an_all_invalid_batch_dispatches_nothing_and_names_the_missing_fields(
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
     operation: dict[str, Any],
     named: list[str],
 ) -> None:
@@ -130,7 +125,7 @@ async def test_a_skipped_row_is_echoed_back_as_sent(
 
 
 async def test_invalid_rows_are_skipped_while_the_valid_row_runs(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     result = await DeviceControlTools(core_client).bulk_device_control(
         [
@@ -143,11 +138,11 @@ async def test_invalid_rows_are_skipped_while_the_valid_row_runs(
     assert (result["total_operations"], result["successful_commands"]) == (3, 1)
     assert result["skipped_operations"] == 2
     assert [d["index"] for d in result["skipped_details"]] == [1, 2]
-    assert _targets(devices) == ["light.valid"]
+    assert devices.targets() == ["light.valid"]
 
 
 async def test_a_service_style_row_is_skipped_without_rejecting_the_batch(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     result = await DeviceControlTools(core_client).bulk_device_control(
         [
@@ -160,14 +155,14 @@ async def test_a_service_style_row_is_skipped_without_rejecting_the_batch(
     (detail,) = result["skipped_details"]
     assert detail["index"] == 0
     assert "service" in detail["error"]["message"]
-    assert _targets(devices) == ["light.valid"]
+    assert devices.targets() == ["light.valid"]
 
 
 # --- the registered tool: schema failures stay per row ------------------------
 
 
 async def test_a_service_style_row_sent_to_the_tool_is_skipped_and_the_rest_run(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     data = await _run_tool(
         core_client,
@@ -179,12 +174,12 @@ async def test_a_service_style_row_sent_to_the_tool_is_skipped_and_the_rest_run(
 
     assert (data["successful_commands"], data["skipped_operations"]) == (1, 1)
     assert "service" in data["skipped_details"][0]["error"]["message"]
-    assert _targets(devices) == ["light.valid"]
+    assert devices.targets() == ["light.valid"]
 
 
 async def test_a_malformed_row_never_writes_its_values_to_the_log(
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING):
@@ -205,7 +200,7 @@ async def test_a_malformed_row_never_writes_its_values_to_the_log(
 
 
 async def test_every_malformed_row_is_reported_without_aborting_the_batch(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     data = await _run_tool(
         core_client,
@@ -293,11 +288,11 @@ async def test_every_malformed_row_is_reported_without_aborting_the_batch(
     assert sum("must be a JSON object" in m for m in messages) == 2
     assert any("nested too deeply" in m for m in messages)
     assert any("unsupported key(s): 1" in m for m in messages)
-    assert _targets(devices) == ["light.valid"]
+    assert devices.targets() == ["light.valid"]
 
 
 async def test_a_numeric_entity_id_and_list_parameters_are_skipped(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     """A numeric ``entity_id`` passes the missing-field check and a JSON list
     passes the decoder; each still needs its own skip."""
@@ -319,11 +314,11 @@ async def test_a_numeric_entity_id_and_list_parameters_are_skipped(
     messages = [d["error"]["message"] for d in data["skipped_details"]]
     assert "requires string entity_id and action" in messages[0]
     assert "parameters must be a JSON object" in messages[1]
-    assert _targets(devices) == ["light.valid"]
+    assert devices.targets() == ["light.valid"]
 
 
 async def test_light_parameters_sent_as_json_reach_the_light_service(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     await _run_tool(
         core_client,
@@ -336,16 +331,17 @@ async def test_light_parameters_sent_as_json_reach_the_light_service(
         ],
     )
 
-    (call,) = devices.calls
-    assert (call.domain, call.service) == ("light", "turn_on")
-    assert call.data == {"entity_id": "light.kitchen", "brightness_pct": 42}
+    # Core's light service turns the percentage into its 0-255 brightness.
+    assert devices.calls == [
+        Received("light.kitchen", "turn_on", {"brightness": round(42 * 255 / 100)})
+    ]
 
 
 # --- a failing row keeps its own error, the others still run ------------------
 
 
 async def test_a_missing_entity_does_not_stop_the_sequential_batch(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     result = await DeviceControlTools(core_client).bulk_device_control(
         [
@@ -359,11 +355,11 @@ async def test_a_missing_entity_does_not_stop_the_sequential_batch(
     assert (result["total_operations"], result["successful_commands"]) == (3, 2)
     assert len(result["results"]) == 3
     assert result["results"][1]["error"]["code"] == ErrorCode.ENTITY_NOT_FOUND
-    assert _targets(devices) == ["light.ok", "light.also_ok"]
+    assert devices.targets() == ["light.ok", "light.also_ok"]
 
 
 async def test_a_parallel_row_keeps_its_own_error_code(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     """Not flattened into SERVICE_CALL_FAILED."""
     result = await DeviceControlTools(core_client).bulk_device_control(
@@ -376,4 +372,4 @@ async def test_a_parallel_row_keeps_its_own_error_code(
 
     assert (result["total_operations"], result["successful_commands"]) == (2, 1)
     assert result["results"][1]["error"]["code"] == ErrorCode.SERVICE_INVALID_ACTION
-    assert _targets(devices) == ["light.ok"]
+    assert devices.targets() == ["light.ok"]

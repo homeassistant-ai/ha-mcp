@@ -3,44 +3,26 @@
 The server's own client runs against a real ``hass`` with the ``ha_mcp_tools/*``
 commands registered, so the batch frame the server builds is validated and run
 by the component and the per-op results it maps come from Core's own service
-calls and state machine. Each test registers the services it targets; a
-service's handler changes the state the way the device would. The legacy
-per-op dispatch is spied on and must never run when the component serves the
-batch.
+calls and state machine. The lights and the switch are devices below Core's own
+``light`` and ``switch`` integrations (``_switched_states``). The legacy per-op
+dispatch is spied on and must never run when the component serves the batch.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.device_control import DeviceControlTools
 
 from ._component_core import ws_call
-
-
-def _service(
-    hass: HomeAssistant,
-    domain: str,
-    service: str,
-    effect: Callable[[], object] | None = None,
-) -> list[ServiceCall]:
-    """Register ``domain.service``; each call is recorded, then ``effect`` runs."""
-    calls: list[ServiceCall] = []
-
-    async def handle(call: ServiceCall) -> None:
-        calls.append(call)
-        if effect is not None:
-            effect()
-
-    hass.services.async_register(domain, service, handle)
-    return calls
+from ._switched_states import UNAVAILABLE, set_up_devices
 
 
 @contextmanager
@@ -69,17 +51,16 @@ async def _bulk(
     return result
 
 
+async def _unavailable_lamp(hass: HomeAssistant, behaviour: str) -> None:
+    """``light.b`` out of Core's reach, doing ``behaviour`` when a call names it."""
+    devices = await set_up_devices(hass, {"light.b": UNAVAILABLE})
+    devices.behaviour["light.b"] = behaviour
+
+
 async def test_a_confirmed_batch_maps_to_the_legacy_bulk_shape(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    hass.states.async_set("light.a", "off")
-    hass.states.async_set("switch.b", "off")
-    lights = _service(
-        hass, "light", "turn_on", lambda: hass.states.async_set("light.a", "on")
-    )
-    switches = _service(
-        hass, "switch", "turn_on", lambda: hass.states.async_set("switch.b", "on")
-    )
+    devices = await set_up_devices(hass, {"light.a": "off", "switch.b": "off"})
 
     resp = await _bulk(
         component_core_client,
@@ -105,7 +86,7 @@ async def test_a_confirmed_batch_maps_to_the_legacy_bulk_shape(
         "data": {"entity_id": "light.a"},
     }
     assert switch_res["confirmed"] is True
-    assert (len(lights), len(switches)) == (1, 1)
+    assert sorted(devices.targets()) == ["light.a", "switch.b"]
 
 
 async def test_a_nonexistent_entity_in_a_batch_fails_without_waiting_for_it(
@@ -113,10 +94,7 @@ async def test_a_nonexistent_entity_in_a_batch_fails_without_waiting_for_it(
 ) -> None:
     """The missing target is left out of the shared wait: the batch returns at
     once instead of running the missing op's 10 s wait to its end."""
-    hass.states.async_set("light.a", "off")
-    calls = _service(
-        hass, "light", "turn_on", lambda: hass.states.async_set("light.a", "on")
-    )
+    devices = await set_up_devices(hass, {"light.a": "off"})
 
     async with asyncio.timeout(5):
         resp = await _bulk(
@@ -135,15 +113,15 @@ async def test_a_nonexistent_entity_in_a_batch_fails_without_waiting_for_it(
     assert valid_res["confirmed"] is True
     assert missing_res["entity_id"] == "light.missing"
     assert missing_res["error"]["code"] == "ENTITY_NOT_FOUND"
-    # Both ops are dispatched; Core ignores the unmatched target.
-    assert len(calls) == 2
+    # Both ops are dispatched; Core's light service hands the unmatched
+    # target to no device.
+    assert devices.targets() == ["light.a"]
 
 
 async def test_an_unavailable_entity_that_never_reconnects_is_reported_unavailable(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    hass.states.async_set("light.b", "unavailable")
-    calls = _service(hass, "light", "turn_on")
+    devices = await set_up_devices(hass, {"light.b": UNAVAILABLE})
 
     resp = await _bulk(
         component_core_client,
@@ -153,9 +131,10 @@ async def test_an_unavailable_entity_that_never_reconnects_is_reported_unavailab
     assert resp["failed_commands"] == 1
     (result,) = resp["results"]
     assert result["error"]["code"] == "ENTITY_UNAVAILABLE"
-    # The caller can tell this apart from an op that never dispatched.
+    # The caller can tell this apart from an op that never dispatched; Core
+    # skipped the unavailable light itself.
     assert result.get("dispatched") is True
-    assert len(calls) == 1
+    assert devices.calls == []
 
 
 async def test_a_comma_separated_target_is_not_reported_missing(
@@ -163,7 +142,7 @@ async def test_a_comma_separated_target_is_not_reported_missing(
 ) -> None:
     """``light.a,light.b`` is no literal entity, so its empty pre-state is no
     proof that an entity is missing."""
-    calls = _service(hass, "light", "turn_off")
+    devices = await set_up_devices(hass, {"light.a": "on", "light.b": "on"})
 
     resp = await _bulk(
         component_core_client, [{"entity_id": "light.a,light.b", "action": "off"}]
@@ -172,14 +151,13 @@ async def test_a_comma_separated_target_is_not_reported_missing(
     assert resp["failed_commands"] == 0
     (result,) = resp["results"]
     assert "error" not in result
-    assert len(calls) == 1
+    assert sorted(devices.targets()) == ["light.a", "light.b"]
 
 
 async def test_an_unavailable_target_removed_during_the_call_is_reported_not_found(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    hass.states.async_set("light.b", "unavailable")
-    _service(hass, "light", "turn_on", lambda: hass.states.async_remove("light.b"))
+    await _unavailable_lamp(hass, "remove")
 
     resp = await _bulk(
         component_core_client,
@@ -196,8 +174,7 @@ async def test_an_unavailable_target_back_in_another_state_is_not_unavailable(
 ) -> None:
     """It reconnected to ``off``, not the ``on`` the call asked for: the op is
     dispatched but unconfirmed, not a false ENTITY_UNAVAILABLE."""
-    hass.states.async_set("light.b", "unavailable")
-    _service(hass, "light", "turn_on", lambda: hass.states.async_set("light.b", "off"))
+    await _unavailable_lamp(hass, "off")
 
     resp = await _bulk(
         component_core_client,
@@ -214,8 +191,7 @@ async def test_an_unavailable_target_back_in_another_state_is_not_unavailable(
 async def test_an_unavailable_target_that_reconnects_and_turns_on_is_confirmed(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    hass.states.async_set("light.b", "unavailable")
-    _service(hass, "light", "turn_on", lambda: hass.states.async_set("light.b", "on"))
+    await _unavailable_lamp(hass, "on")
 
     resp = await _bulk(
         component_core_client, [{"entity_id": "light.b", "action": "on"}]
@@ -233,20 +209,24 @@ async def test_a_batch_with_an_ha_mcp_tools_op_dispatches_nothing(
 ) -> None:
     """Every op is checked before any runs: the valid op ahead of the refused
     one never fires, and no confirmation listener is left on the bus."""
-    hass.states.async_set("light.a", "off")
-    calls = _service(hass, "light", "turn_on")
+    devices = await set_up_devices(hass, {"light.a": "off"})
     listeners = hass.bus.async_listeners()
 
     reply = await ws_call(
         component_ws,
         "ha_mcp_tools/bulk_call_service",
         operations=[
-            {"domain": "light", "service": "turn_on", "entity_ids": ["light.a"]},
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "service_data": {"entity_id": "light.a"},
+                "entity_ids": ["light.a"],
+            },
             {"domain": "ha_mcp_tools", "service": "get_caller_token"},
         ],
     )
 
     assert reply["success"] is False
     assert "not callable" in reply["error"]["message"]
-    assert calls == []
+    assert devices.calls == []
     assert hass.bus.async_listeners() == listeners

@@ -31,7 +31,7 @@ from ._ha_bulk_control_selector_core import (
     furnish_salon,
     switched,
 )
-from ._switched_states import SwitchedStates
+from ._switched_states import Devices
 
 
 @pytest.fixture
@@ -39,12 +39,12 @@ async def salon(
     hass: HomeAssistant,
     area_registry: ar.AreaRegistry,
     entity_registry: er.EntityRegistry,
-) -> SwitchedStates:
+) -> Devices:
     return await furnish_salon(hass, area_registry, entity_registry)
 
 
 async def test_a_dry_run_previews_the_resolved_lights_without_switching_any(
-    core_client: HomeAssistantClient, salon: SwitchedStates
+    core_client: HomeAssistantClient, salon: Devices
 ) -> None:
     result = await bulk_tools(core_client).ha_bulk_control(
         selector=SALON_BUT_VITRINE, action="off", dry_run=True
@@ -56,7 +56,7 @@ async def test_a_dry_run_previews_the_resolved_lights_without_switching_any(
 
 
 async def test_a_hidden_light_is_reported_in_the_top_level_warnings(
-    core_client: HomeAssistantClient, salon: SwitchedStates
+    core_client: HomeAssistantClient, salon: Devices
 ) -> None:
     """``warnings`` is top-level (.gemini/styleguide.md): a caller reading only
     that key must still learn a matching light was left out."""
@@ -72,7 +72,7 @@ async def test_a_hidden_light_is_reported_in_the_top_level_warnings(
 async def test_dispatch_warnings_are_kept_beside_the_resolution_warnings(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    salon: SwitchedStates,
+    salon: Devices,
 ) -> None:
     """The socket drops once the component has the batch: the dispatch's own
     warning and the hidden-light one both reach the caller."""
@@ -91,7 +91,7 @@ async def test_dispatch_warnings_are_kept_beside_the_resolution_warnings(
 
 
 async def test_only_the_resolved_leaves_are_switched(
-    core_client: HomeAssistantClient, salon: SwitchedStates
+    core_client: HomeAssistantClient, salon: Devices
 ) -> None:
     """The group, the excluded light and the hidden one are never switched."""
     device_tools = DeviceControlTools(core_client)
@@ -116,7 +116,7 @@ async def test_only_the_resolved_leaves_are_switched(
 
 
 async def test_a_batch_the_device_tools_refuse_keeps_their_own_error(
-    core_client: HomeAssistantClient, salon: SwitchedStates
+    core_client: HomeAssistantClient, salon: Devices
 ) -> None:
     """A negative timeout (the tool schema refuses it; a Python caller can pass
     it) fails every row: the device tools' error is not re-classified into a
@@ -175,7 +175,7 @@ async def test_registries_core_cannot_serve_do_not_blame_the_selector(
 
 
 async def test_a_corrupt_visibility_config_points_at_the_settings_not_the_network(
-    core_client: HomeAssistantClient, salon: SwitchedStates
+    core_client: HomeAssistantClient, salon: Devices
 ) -> None:
     (get_data_dir() / "entity_visibility.json").write_text("{", encoding="utf-8")
 
