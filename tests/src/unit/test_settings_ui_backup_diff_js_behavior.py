@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from ._js_harness import _assert_clean_init, _probe, run_script
+from ._js_harness import _assert_clean_init, run_script
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
+from ._settings_ui_js_helpers import probe
 
 
 def test_a_diff_shows_its_warnings_above_the_diff(settings_script: str) -> None:
@@ -34,7 +35,7 @@ def test_a_diff_shows_its_warnings_above_the_diff(settings_script: str) -> None:
         ),
     )
     _assert_clean_init(result)
-    text = _probe(result, "text") or ""
+    text = probe(result, "text") or ""
     assert text.index(warning) < text.index("-a")
-    assert _probe(result, "injected") == "0"
-    assert _probe(result, "icons") == "1"
+    assert probe(result, "injected") == "0"
+    assert probe(result, "icons") == "1"

@@ -1,8 +1,14 @@
 """Deadline regression tests for the HAOS app-state polling helper."""
 
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+
+# The E2E modules import ``haos_runtime`` by its bare name; the E2E conftest
+# puts ``tests/src`` on the import path for them, and no unit conftest does.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tests.src.e2e.haos_only.test_manage_addon_modes import _wait_addon_state
 

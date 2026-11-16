@@ -87,6 +87,7 @@ from .helpers import (
     extract_tool_error_message,
     log_tool_usage,
     raise_core_refusal,
+    raise_entity_refusal,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
@@ -453,9 +454,7 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                raise_core_refusal(
-                    "Failed to update entity", result, {"entity_id": entity_id}
-                )
+                raise_entity_refusal("Failed to update entity", result, entity_id)
 
             core_result = dict(result.get("result") or {})
 

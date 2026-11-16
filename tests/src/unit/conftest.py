@@ -9,7 +9,8 @@ variables every unit test starts with.
 
 from __future__ import annotations
 
-import asyncio
+import concurrent.futures
+import importlib
 import logging
 import os
 import shutil
@@ -19,7 +20,7 @@ import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -43,7 +44,7 @@ pytest_plugins = [
 
 # quickjs starts its shared worker thread on import; importing it here starts
 # that thread before any test, so Core's leftover-thread check never sees it.
-import quickjs  # noqa: E402
+importlib.import_module("quickjs")
 
 
 @pytest.fixture
@@ -94,13 +95,30 @@ def pytest_collection_finish(session: pytest.Session) -> None:
             os.environ[name] = value
 
 
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Keep this runner's share of the suite (``UNIT_TEST_SHARD``, set in CI)."""
+    shard = os.environ.get("UNIT_TEST_SHARD")
+    if not shard:
+        return
+    from ._shards import in_shard
+
+    kept: list[pytest.Item] = []
+    dropped: list[pytest.Item] = []
+    for item in items:
+        (kept if in_shard(item.nodeid, shard) else dropped).append(item)
+    config.hook.pytest_deselected(items=dropped)
+    items[:] = kept
+
+
 def pytest_unconfigure(config: pytest.Config) -> None:
     if _SESSION_DATA_DIR:
         shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
-def _unit_test_env(tmp_path_factory, monkeypatch):
+def _unit_test_env(monkeypatch):
     """Set the environment every unit test starts from.
 
     - An empty ``HA_MCP_CONFIG_DIR`` per test. Without it, tests write tool
@@ -123,9 +141,9 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     tests from other trees in the same session keep their own environment.
     A test that needs another value sets it with ``monkeypatch``.
     """
-    monkeypatch.setenv(
-        "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
-    )
+    # Not ``tmp_path_factory.mktemp``: pytest numbers a directory by listing
+    # every one it made so far, which gets slower with each test of the suite.
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", tempfile.mkdtemp(dir=_SESSION_DATA_DIR))
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
     monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
@@ -178,7 +196,7 @@ def _js_harness_started_before_tests(request: pytest.FixtureRequest) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_threads_left_by_the_test() -> Iterator[None]:
+def _no_threads_left_by_the_test(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Stop what a test started on its own, before Core's plugin checks threads.
 
     That is a replacement JS harness worker (when the test killed the shared
@@ -189,26 +207,26 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
     """
     from . import _js_harness
 
-    worker = _js_harness._worker
+    worker = _js_harness.current_worker()
     threads_before = set(threading.enumerate())
-    engines: list[Any] = []
-    real_function = quickjs.Function
+    pools: list[concurrent.futures.ThreadPoolExecutor] = []
 
-    def recording_function(*args: Any, **kwargs: Any) -> Any:
-        engine = real_function(*args, **kwargs)
-        if kwargs.get("own_executor"):
-            engines.append(engine)
-        return engine
+    class RecordedPool(concurrent.futures.ThreadPoolExecutor):
+        """Remembers the pool quickjs makes for an engine of its own."""
 
-    quickjs.Function = recording_function
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            if str(kwargs.get("thread_name_prefix", "")).startswith("quickjs-worker"):
+                pools.append(self)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", RecordedPool)
     try:
         yield
     finally:
-        quickjs.Function = real_function
-        for engine in engines:
-            engine._threadpool.shutdown(wait=True)
-        if _js_harness._worker is not worker:
-            _js_harness._stop_worker()
+        for pool in pools:
+            pool.shutdown(wait=True)
+        if _js_harness.current_worker() is not worker:
+            _js_harness.stop_worker()
         from ha_mcp.utils.usage_logger import shutdown_usage_logger
 
         shutdown_usage_logger()
@@ -227,10 +245,14 @@ def _logging_put_back() -> Iterator[None]:
     levels = {name: logging.getLogger(name).level for name in names}
     root_level, root_handlers = root.level, root.handlers[:]
     yield
-    root.setLevel(root_level)
-    root.handlers[:] = root_handlers
+    # Only what a test changed: ``setLevel`` clears every logger's level cache.
+    if root.level != root_level:
+        root.setLevel(root_level)
+    if root.handlers != root_handlers:
+        root.handlers[:] = root_handlers
     for name, level in levels.items():
-        logging.getLogger(name).setLevel(level)
+        if logging.getLogger(name).level != level:
+            logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(autouse=True)
@@ -335,7 +357,7 @@ def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=CORE_HELPER_FLOWS),
         raising=False,
     )
-    helper_flows._CACHE.clear()
+    monkeypatch.setattr(helper_flows, "_CACHE", {})
     getattr(helper_flows, "_CORE_CACHE", {}).clear()
 
 
@@ -345,36 +367,6 @@ def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from ha_mcp.config import get_global_settings
 
     monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
-
-
-@pytest.fixture
-def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network.
-
-    Mirror every instance attribute the real ``__init__`` sets, so a
-    `getattr` fallback in production code isn't needed to paper over a
-    test-fixture omission (and so future `__init__` attribute additions
-    that this fixture forgets to mirror fail loudly here instead of
-    silently no-op-ing).
-    """
-    # Imported here rather than at module scope: conftest imports run before
-    # ``pytest_configure`` redirects the config directory, so importing ha_mcp
-    # during collection creates ~/.ha-mcp and the CI "no local state" gate
-    # fails.
-    from ha_mcp.client.rest_client import HomeAssistantClient
-
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.verify_ssl = True
-        client.httpx_client = MagicMock()
-        client._supervised_detected = None
-        client._is_admin = True
-        client._admin_route_refused = False
-        client._admin_route_lock = asyncio.Lock()
-        return client
 
 
 @pytest.fixture

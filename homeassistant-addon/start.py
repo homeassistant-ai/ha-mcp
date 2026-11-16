@@ -451,7 +451,7 @@ def _ipv6_lan_guard() -> dict[str, Any]:
     return {"middleware": [Middleware(IPv6LanGuard, allowed_networks=allowed)]}
 
 
-def _run_mcp_server(
+def run_mcp_server(
     mcp: Any,
     bind_host: str,
     port: int,
@@ -694,11 +694,11 @@ def main() -> int:
 
     # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
     # reach it inside the container, widened to IPv6 as well by
-    # _run_mcp_server (#2915); MCP_HOST override is provided for
+    # run_mcp_server (#2915); MCP_HOST override is provided for
     # parity with the standard CLI entry points (see issue #1434).
     bind_host = os.getenv("MCP_HOST", "0.0.0.0")
 
-    return _run_mcp_server(
+    return run_mcp_server(
         mcp,
         bind_host,
         port,

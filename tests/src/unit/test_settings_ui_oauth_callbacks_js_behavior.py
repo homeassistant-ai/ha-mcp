@@ -10,7 +10,7 @@ import json
 import re
 
 from ._js_harness import HarnessResult, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES, MIN_DOM
+from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 # The rendered settings script, shared with the page's behaviour suite.
 

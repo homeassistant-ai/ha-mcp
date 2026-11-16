@@ -97,7 +97,11 @@ adequate author testing solely to satisfy this requirement.
    still applies to anything not rerun. If live testing is unavailable, fails,
    or leaves required behavior unverified, report validation as incomplete and
    keep the PR unready for merge. Static review, green CI, or a checked box
-   without supporting evidence does not satisfy the requirement.
+   without supporting evidence does not satisfy the requirement. The exception
+   is behavior that needs hardware neither the dev environment nor an emulator
+   provides (a Zigbee radio, for example): a maintainer may accept tests on the
+   real Core integration for it, and the Testing section records what was not
+   live-tested and why.
 5. Clean up test resources and cancel a dev-environment run when finished.
 
 Reviewers without live access can assess live evidence supplied by the author
@@ -324,13 +328,16 @@ pinned Renovate executor for both generators.
 The dev group pins `homeassistant` and `pytest-homeassistant` to the e2e
 image's Core version (`tests/test_constants.py`). Both carry the image's
 `# renovate:` annotation, so the Core image update changes all three in one
-pull request. Its post-upgrade tasks run `uv lock`, which takes the new Core's
-requirement pins, then `scripts/check_ha_constraint_alignment.py --sync-lock`,
-which moves the runtime packages Core pins only in `package_constraints.txt`
-(pydantic, httpx). Fast Checks compare the lock with that file on every pull
-request (they warn instead when the file is unreachable). Dependabot ignores
-the runtime dependencies Core pins exactly, since a bump of one would only
-fail that check.
+pull request. Its post-upgrade tasks run
+`scripts/sync_dev_integration_pins.py`, which rewrites the dev group's Core
+integration pins and their Dependabot ignore entries from the new Core's
+manifests, then `uv lock`, which takes the new Core's requirement pins, then
+`scripts/check_ha_constraint_alignment.py --sync-lock`, which moves the
+runtime packages Core pins only in `package_constraints.txt` (pydantic,
+httpx). Fast Checks compare the lock with that file on every pull request
+(they warn instead when the file is unreachable). Dependabot ignores the
+runtime dependencies Core pins exactly and the integration pins, since a bump
+of one would only fail that check or the unit tests.
 
 Renovate moves those pins only to stable releases. `pr.yml`'s
 `Unit Tests (beta Core)` job covers the beta: it reads the current beta Core

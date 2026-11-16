@@ -125,7 +125,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   (`entity_registry`, `device_registry`, `area_registry`, ...),
   `hass.states.async_set`, `async_setup_component`, and `hass_ws_client`
   (`component_ws` in `src/unit/conftest.py` registers the `ha_mcp_tools/*`
-  commands on it).
+  commands on it). An entity of an entity integration (`camera`, `todo`, ...)
+  is a subclass of that integration's entity class registered with Core's
+  `setup_test_component_platform`, as Core's own tests do: the integration
+  under test is still Core's, and the platform is the device below it.
 - No stand-in module: nothing but the imported module in `sys.modules` for
   `homeassistant.*`, `aiohttp`, `voluptuous` or `yarl`.
 - Config entries are set up by Core (`hass.config_entries.async_setup`), which
@@ -164,10 +167,13 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   (`AsyncMock(wraps=client.get_states)`): it calls through, so the reply is
   still Core's.
 - An integration a test runs gets its requirements in the dev group at the
-  pins of Core's manifest (`src/unit/test_dev_integration_pins.py` keeps them
-  equal). One whose requirements are not installed with Core (`cloud`,
-  `camera`, `conversation`) cannot be imported here; the component reaches it
-  through a small function of its own that the test replaces.
+  pins of Core's manifest (`src/unit/test_sync_dev_integration_pins.py` keeps
+  them equal). Add its domain to `INTEGRATIONS` in
+  `scripts/sync_dev_integration_pins.py`, run that script, then `uv lock`. The
+  script writes the pins and their Dependabot ignore entries, and Renovate
+  reruns it on every Core bump. One whose requirements are not installed with
+  Core (`cloud`) cannot be imported here; the component reaches it through a
+  small function of its own that the test replaces.
 
 Nine ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
@@ -202,9 +208,9 @@ swaps and computed names; it cannot see a swap the test has already undone,
 which is why the third rule exists.
 
 Test files written before a check are listed with it, in the rule's `ignores`.
-Only the reply and shared-client rules still have a list; the hand-made
-`hass`, fake Core object, suppression and fixture-annotation rules and the
-`sys.modules` guard have none, so every test complies with them. Converting a
+Only the reply rule still has a list; the hand-made `hass`, fake Core object,
+shared-client, suppression and fixture-annotation rules and the `sys.modules`
+guard have none, so every test complies with them. Converting a
 file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
 the mypy list below. A file taken off one list and left on another fails the
 ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
@@ -375,6 +381,8 @@ data = await wait_for_tool_result(
 Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wait_for_state_change()`. See `wait_helpers.py` for the full set.
 
 **Exception handling in polling helpers.** `wait_helpers.py` catches a narrow `_POLLING_TRANSIENT_ERRORS` tuple inside retry loops; bugs like `TypeError` / `AttributeError` / `KeyError` / `AssertionError` propagate immediately. Don't broaden to `except Exception`.
+
+**Z-Wave without a radio.** `start_zwave_mock()` (`src/e2e/utilities/zwave_mock.py`) runs `tests/zwave_mock` in a Node container: a Z-Wave JS server whose driver talks to zwave-js's mock controller in the same process, with one switch node. The `zwave_network` fixture in `src/e2e/tools/test_radio_management.py` adds Core's `zwave_js` entry for it and removes the entry after the class, so every other test still runs without a radio. Tests that use it are `container_only`: the Home Assistant container reaches the server over Docker's bridge. A test that starts inclusion or exclusion stops it in its `finally`. The mock has no firmware update service and does not finish a hard reset. To move the pinned versions, edit `tests/zwave_mock/package.json` and run `npm install --package-lock-only` in that directory.
 
 ## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
 

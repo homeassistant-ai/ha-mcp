@@ -20,9 +20,9 @@ skip_if_unsupported()
 @pytest.fixture(autouse=True)
 def _own_worker():
     """Start and end each test without a harness worker."""
-    _js_harness._stop_worker()
+    _js_harness.stop_worker()
     yield
-    _js_harness._stop_worker()
+    _js_harness.stop_worker()
 
 
 def _logged(result: _js_harness.HarnessResult) -> list[str]:
@@ -70,7 +70,7 @@ def test_node_dying_between_runs_is_reported_not_hidden():
     hide that failure; the next run must report it, and the one after must
     work."""
     run_script("console.log('before');")
-    worker = _js_harness._worker
+    worker = _js_harness.current_worker()
     assert worker is not None
     worker._proc.kill()
     worker._proc.wait()

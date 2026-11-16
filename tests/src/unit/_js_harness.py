@@ -150,17 +150,6 @@ def _assert_clean_init(result: HarnessResult) -> None:
     assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
-def _probe(result: HarnessResult, attr: str) -> str | None:
-    """Read a ``data-<attr>`` value stamped onto an element in result.dom.
-
-    The JS behaviour tests stash assertion data into data-* attributes
-    (live, before the fake clock advances past toast auto-dismiss). This
-    pulls the value back out without depending on attribute order.
-    """
-    m = re.search(rf'data-{attr}="([^"]*)"', result.dom)
-    return m.group(1) if m else None
-
-
 def run_script(
     script: str,
     *,
@@ -384,14 +373,19 @@ def start_worker() -> None:
         _harness_worker()
 
 
-def _stop_worker() -> None:
+def current_worker() -> _HarnessWorker | None:
+    """The process's harness worker, if one is running."""
+    return _worker
+
+
+def stop_worker() -> None:
     global _worker
     if _worker is not None:
         _worker.close()
         _worker = None
 
 
-atexit.register(_stop_worker)
+atexit.register(stop_worker)
 
 
 def _run_bundle_script(request: dict[str, Any], label: str) -> str:

@@ -30,6 +30,7 @@ from ._config import (
 )
 from ._deep import DeepSearchMixin
 from ._entities import EntitySearchMixin
+from ._fetch import record_first_failure, summarize_fetch_error
 from ._overview import SystemOverviewMixin
 
 logger = logging.getLogger(__name__)

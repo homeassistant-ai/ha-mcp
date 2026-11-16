@@ -236,7 +236,7 @@ def _decode_legacy_worker_url(url: str) -> str | None:
         return None
 
 
-def _summarize_resources(
+def summarize_resources(
     resources: list[Any],
     keep_start: int,
     keep_stop: int,

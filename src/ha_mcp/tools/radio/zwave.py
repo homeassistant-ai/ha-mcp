@@ -39,6 +39,9 @@ _NODE_LIMIT = 50
 # Pre-shared credential forms that make active inclusion non-interactive (no S2
 # read-the-PIN handshake). One of these is required for action='add' unless
 # SmartStart provisioning is used.
+# zwave_js_server's ``InclusionStrategy.SECURITY_S2``: the only strategy the
+# driver accepts a pre-shared credential with.
+_SECURITY_S2 = 4
 _ADD_CREDENTIALS = (
     "qr_provisioning_information",
     "qr_code_string",
@@ -265,11 +268,13 @@ async def _handle_zwave_inclusion(
                     ],
                 )
             )
+        # Core's own default strategy refuses the credential required above.
+        strategy = args.get("inclusion_strategy")
         result = await ws_call(
             client,
             "zwave_js/add_node",
             entry_id=entry_id,
-            inclusion_strategy=args.get("inclusion_strategy"),
+            inclusion_strategy=_SECURITY_S2 if strategy is None else strategy,
             qr_provisioning_information=args.get("qr_provisioning_information"),
             qr_code_string=args.get("qr_code_string"),
             planned_provisioning_entry=args.get("planned_provisioning_entry"),

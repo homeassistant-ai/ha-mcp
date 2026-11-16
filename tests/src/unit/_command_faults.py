@@ -69,6 +69,23 @@ def received(hass: HomeAssistant, *commands: str) -> Iterator[dict[str, list[Any
 
 
 @contextmanager
+def arrival(hass: HomeAssistant, command: str) -> Iterator[asyncio.Event]:
+    """Set once Core has ``command``: for one the client does not wait on."""
+    arrived = asyncio.Event()
+    core_handler, schema = _handler(hass, command)
+
+    def observe(core: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+        arrived.set()
+        core_handler(core, connection, msg)
+
+    websocket_api.async_register_command(hass, command, observe, schema)
+    try:
+        yield arrived
+    finally:
+        websocket_api.async_register_command(hass, command, core_handler, schema)
+
+
+@contextmanager
 def before_handling(
     hass: HomeAssistant, command: str, change: Callable[[dict[str, Any]], None]
 ) -> Iterator[None]:

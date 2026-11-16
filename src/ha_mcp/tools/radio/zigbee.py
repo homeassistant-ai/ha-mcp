@@ -13,11 +13,13 @@ network- and group-scoped actions act on the coordinator.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ...client.exceptions import HomeAssistantConnectionError
 from ...errors import ErrorCode, create_error_response
 from ..component_devices import fetch_device_via_component
 from ..helpers import raise_tool_error
@@ -209,15 +211,11 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         if not entry_id:
             return integration_not_found("zigbee", "zha")
         network = await ws_call(client, "zha/network/settings")
-        try:
-            await ws_call(client, "zha/topology/update")
-        except ToolError as exc:
-            # Topology refresh is best-effort: a command-level failure (the
-            # ToolError ws_call raises on success=False) leaves routes stale but
-            # must not fail an otherwise-successful network_status read. Transport
-            # errors are normalized to that ToolError by send_websocket_message;
-            # anything unexpected (a real bug) still propagates.
-            logger.debug("zha/topology/update refresh failed (non-fatal): %s", exc)
+        # Core starts the topology scan and sends no reply to this command, so
+        # it is sent without waiting for one. The refresh is best-effort: a
+        # refusal leaves the routes stale and does not fail the read.
+        with contextlib.suppress(ToolError, HomeAssistantConnectionError):
+            await ws_call(client, "zha/topology/update", _wait_timeout=0)
         return ok("zigbee", "network_status", config_entry_id=entry_id, network=network)
 
     if action == "cluster_read":
@@ -374,6 +372,10 @@ async def _handle_zigbee_clusters(
 
     if action == "cluster_command":
         ieee = await _resolve_ieee(client, device_id)
+        params = args.get("params")
+        if params is None and args.get("args") is None:
+            # Core requires one of the two, also for a command that takes none.
+            params = {}
         result = await _call_service(
             client,
             "zha",
@@ -386,7 +388,7 @@ async def _handle_zigbee_clusters(
             command_type=args.get("command_type"),
             # HA deprecated 'args' in favor of 'params' (both still accepted);
             # forward both for back-compat — callers should prefer params.
-            params=args.get("params"),
+            params=params,
             args=args.get("args"),
             manufacturer=args.get("manufacturer"),
         )

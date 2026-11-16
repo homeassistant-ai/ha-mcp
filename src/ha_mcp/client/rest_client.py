@@ -1488,11 +1488,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            # Core's DELETE answers a missing id with 400, not 404.
-            if (
-                e.status_code == 400
-                and (e.response_data or {}).get("message") == "Resource not found"
-            ):
+            if e.config_not_found:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -1839,7 +1835,9 @@ class HomeAssistantClient:
             # decides the policy. ``send_command`` re-raises the original
             # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
             # at-most-once, so those arrive untranslated.
-            logger.error(f"WebSocket transport failed ({message.get('type')}): {e}")
+            # A caller that waits zero seconds sent a command Core never answers.
+            log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
+            log(f"WebSocket transport failed ({message.get('type')}): {e}")
             if isinstance(e, HomeAssistantConnectionError):
                 # Re-raised unchanged so subtypes and the traceback survive.
                 raise
@@ -2086,7 +2084,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 msg = f"Script not found: {script_id}"
                 if resolved_id != script_id:
                     msg += f" (resolved storage key: {resolved_id})"
@@ -2365,7 +2363,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 await self._raise_scene_config_404(scene_id, resolved_id, resolution)
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(

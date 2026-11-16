@@ -1,8 +1,9 @@
 # A test module is not a library. Importing from another test module, or
 # taking the old `mock_client` fixture, brings in that file's hand-written
 # Home Assistant client without the stand-in rules seeing it in the importing
-# file. The three old fake-client helper modules, and the removed
-# `_logbook_fallback`, are refused for the same reason. A shared helper that builds no stand-in goes in a `_*.py` module.
+# file. The old fake-client helper modules are gone; importing one by name is
+# still refused, so none comes back. A shared helper that builds no stand-in
+# goes in a `_*.py` module. Every test complies: the rule has no list.
 id: no-shared-fake-clients
 language: python
 rule:
@@ -31,64 +32,6 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-ignores:
-  - "tests/addon/test_backup_controls.py"
-  - "tests/src/unit/test_action_discriminator.py"
-  - "tests/src/unit/test_backup_snapshot.py"
-  - "tests/src/unit/test_backup_snapshot_restore.py"
-  - "tests/src/unit/test_config_subentries_folded.py"
-  - "tests/src/unit/test_deep_search_tier3_parallel.py"
-  - "tests/src/unit/test_error_code_consistency_1297.py"
-  - "tests/src/unit/test_helper_icon_core_contract.py"
-  - "tests/src/unit/test_helper_input_validation.py"
-  - "tests/src/unit/test_helper_registry_id_validation.py"
-  - "tests/src/unit/test_helper_update_persistence.py"
-  - "tests/src/unit/test_history_pagination.py"
-  - "tests/src/unit/test_identifier_validation_family.py"
-  - "tests/src/unit/test_label_area_assignment.py"
-  - "tests/src/unit/test_listen_sockets.py"
-  - "tests/src/unit/test_overview_system_info.py"
-  - "tests/src/unit/test_radio_management.py"
-  - "tests/src/unit/test_radio_zigbee.py"
-  - "tests/src/unit/test_radio_zwave.py"
-  - "tests/src/unit/test_redaction_app_option_keys.py"
-  - "tests/src/unit/test_rest_client_automations.py"
-  - "tests/src/unit/test_rest_client_get_error_log.py"
-  - "tests/src/unit/test_rest_client_scenes.py"
-  - "tests/src/unit/test_rest_client_scripts.py"
-  - "tests/src/unit/test_search_compact_results.py"
-  - "tests/src/unit/test_search_fields_projection.py"
-  - "tests/src/unit/test_search_related_graph.py"
-  - "tests/src/unit/test_set_dashboard_metadata.py"
-  - "tests/src/unit/test_settings_row_facts.py"
-  - "tests/src/unit/test_settings_ui_backups_js_behavior.py"
-  - "tests/src/unit/test_settings_ui_decision_pin.py"
-  - "tests/src/unit/test_settings_ui_oauth_callbacks_js_behavior.py"
-  - "tests/src/unit/test_settings_ui_pending_approvals_js_behavior.py"
-  - "tests/src/unit/test_settings_ui_policy_and_conditions.py"
-  - "tests/src/unit/test_settings_ui_policy_write_queue.py"
-  - "tests/src/unit/test_smart_search_scene_phase25.py"
-  - "tests/src/unit/test_template_recreation_coordination.py"
-  - "tests/src/unit/test_template_restore_safety.py"
-  - "tests/src/unit/test_template_review_outcomes.py"
-  - "tests/src/unit/test_tools_addons.py"
-  - "tests/src/unit/test_tools_assist_pipeline.py"
-  - "tests/src/unit/test_tools_bug_report.py"
-  - "tests/src/unit/test_tools_camera.py"
-  - "tests/src/unit/test_tools_config_automations.py"
-  - "tests/src/unit/test_tools_config_scenes.py"
-  - "tests/src/unit/test_tools_config_scripts.py"
-  - "tests/src/unit/test_tools_entities.py"
-  - "tests/src/unit/test_tools_get_states.py"
-  - "tests/src/unit/test_tools_history.py"
-  - "tests/src/unit/test_tools_integrations.py"
-  - "tests/src/unit/test_tools_resources.py"
-  - "tests/src/unit/test_tools_todo_bridge.py"
-  - "tests/src/unit/test_tools_utility_error_log_records.py"
-  - "tests/src/unit/test_wait_helpers.py"
-  - "tests/src/unit/test_wait_parameter.py"
-  - "tests/src/unit/test_yaml_find_key.py"
-  - "tests/src/unit/test_zone_backup.py"
 message: |
   Do not import from another test module or from the old fake-client helpers,
   and do not take the `mock_client` fixture: each hands this file a hand-written

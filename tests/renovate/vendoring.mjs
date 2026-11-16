@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -166,4 +166,67 @@ await exercise({
   },
 });
 
-console.log('Pinned Renovate executor regenerated the websockets and FastMCP/MCP SDK trees, licenses and manifests; collected additions/deletions; rejected unauthorized commands and surfaced generator failures.');
+// The Core rule: a copy of this repository whose integration pin blocks are
+// empty must come back with both blocks rewritten from Core's manifests, then
+// lock, through the same executor and allowlist.
+async function exerciseCorePins() {
+  const core = 'ghcr.io/home-assistant/home-assistant';
+  const matched = await applyPackageRules({
+    ...getConfig(), ...repository, depName: core, packageName: core, datasource: 'docker',
+    manager: 'custom.regex', packageFile: 'pyproject.toml',
+  });
+  const tasks = matched.postUpgradeTasks;
+  assert.equal(tasks.executionMode, 'branch');
+  assert.ok(tasks.commands.some((command) => command.endsWith('scripts/sync_dev_integration_pins.py')));
+
+  const scratch = mkdtempSync(join(tmpdir(), 'renovate-core-pins-'));
+  const seed = join(scratch, 'seed');
+  const localDir = join(scratch, 'checkout');
+  cpSync('/source', seed, {
+    recursive: true, filter: (path) => !/\/(\.git|node_modules)$/.test(path),
+  });
+  mkdirSync(localDir);
+  const written = ['pyproject.toml', '.github/dependabot.yml'];
+  const emptied = (path) => readFileSync(join('/source', path), 'utf8').replace(
+    /(# core-integration-pins:start\n)[\s\S]*?(\n[ \t]*# core-integration-pins:end)/, '$1$2'
+  );
+  for (const path of written) {
+    assert.notEqual(emptied(path), readFileSync(join('/source', path), 'utf8'));
+    writeFileSync(join(seed, path), emptied(path));
+  }
+  git(seed, 'init', '-b', 'master');
+  git(seed, 'add', '.');
+  git(seed, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture');
+
+  GlobalConfig.set({
+    ...getConfig(), localDir, baseDir: scratch, cacheDir: join(scratch, 'cache'),
+    containerbaseDir: join(scratch, 'containerbase'), binarySource: 'install',
+    allowedCommands,
+    allowShellExecutorForPostUpgradeCommands:
+      scannerEnv.RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS === 'true',
+  });
+  await initRepo({ url: seed, defaultBranch: 'master', currentBranch: 'master', fullClone: true });
+  await syncGit();
+
+  assert.ok(pythonVersioning.matches(fixturePython, matched.constraints.python));
+  const result = await executePostUpgradeCommands({
+    ...matched, constraints: { ...matched.constraints, python: fixturePython },
+    branchName: 'renovate/core', baseBranch: 'master', upgrades: [{ ...matched }],
+    // Renovate's own edit of the Core pin; the version stays, so the manifests
+    // are the ones the committed blocks were written from.
+    updatedPackageFiles: [{ type: 'addition', path: 'pyproject.toml', contents: emptied('pyproject.toml') }],
+    updatedArtifacts: [], artifactErrors: [],
+  });
+  assert.deepEqual(result.artifactErrors, [], 'The pin sync, uv lock and the lock sync must succeed');
+  const artifacts = new Map(result.updatedArtifacts.map((file) => [file.path, file]));
+  for (const path of written) {
+    assert.equal(String(artifacts.get(path)?.contents), readFileSync(join('/source', path), 'utf8'),
+      `${path} must be committed with its block rewritten`);
+  }
+  assert.ok([...artifacts.keys()].every((path) => tasks.fileFilters.includes(path)),
+    'Only the files the Core rule names belong in the generated artifacts');
+}
+
+await exerciseCorePins();
+
+console.log('Pinned Renovate executor regenerated the websockets and FastMCP/MCP SDK trees, licenses and manifests; collected additions/deletions; rejected unauthorized commands and surfaced generator failures; rewrote the Core integration pins and their Dependabot ignores and re-locked.');

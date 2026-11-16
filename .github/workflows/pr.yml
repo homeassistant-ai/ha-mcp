@@ -493,8 +493,14 @@ jobs:
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each runner takes its share of the unit suite, chosen by test id
+        # (tests/src/unit/_shards.py). The required check is the gate below.
+        shard: ["1/2", "2/2"]
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
       image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
@@ -549,9 +555,12 @@ jobs:
     - name: Run unit tests
       # xdist's `auto` counts physical cores (2 on the hosted runner);
       # `logical` uses all 4 CPUs.
+      env:
+        UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run pytest tests/src/unit/ -n logical --tb=short -v
 
     - name: Run BAT runner tests
+      if: matrix.shard == '1/2'
       # The tests of the UAT/BAT tooling need no Docker and no model.
       # test_stories.py runs the stories themselves against a live Home
       # Assistant and an AI agent, so it stays out.
@@ -584,6 +593,7 @@ jobs:
         fi
 
     - name: Run add-on structure tests
+      if: matrix.shard == '1/2'
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
       # the backup-filename-safe name guard, #1707) — previously these ran
       # nowhere in CI. Excludes test_addon_startup.py, which spins up real
@@ -593,6 +603,7 @@ jobs:
         --ignore=tests/addon/test_addon_startup.py
 
     - name: Check app tests left no local state
+      if: matrix.shard == '1/2'
       run: |
         if [ -e tests/testing_config ]; then
           find tests/testing_config
@@ -606,6 +617,23 @@ jobs:
   # so a beta Core change reports here without blocking a merge. While beta
   # equals the dev group's Core pin, which Unit Tests just ran, every step
   # after the resolver is skipped (a manual dispatch always runs).
+  unit-tests-gate:
+    # The required "Unit Tests" check. The suite runs as a matrix, whose runners
+    # report as "Unit Tests (1/2)" and "Unit Tests (2/2)", so this job carries
+    # the name branch protection requires and passes only when every runner did.
+    name: Unit Tests
+    needs: unit-tests
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every unit test runner to pass
+        env:
+          RESULT: ${{ needs.unit-tests.result }}
+        run: |
+          echo "unit-tests result: $RESULT"
+          [ "$RESULT" = "success" ]
+
   unit-tests-beta:
     name: Unit Tests (beta Core)
     runs-on: ubuntu-latest

@@ -1115,27 +1115,15 @@ class ConfigSceneTools:
                 )
             )
 
-        # Issue #1168 R5 blocker 10: a transform that mutates
-        # ``config['id']`` produces a duplicate scene at the new
-        # storage key AND orphans the original (state goes
-        # ``unavailable``, registry row left behind). HA itself
-        # accepts the mismatched-id upsert silently. Reject the
-        # rename here — renaming a scene means delete-old +
-        # create-new through the explicit tools, not an in-place
-        # ``id`` rebind. R6 blocker 18: only reject an explicit
-        # mismatched id; a transform that ``del config['id']`` is
-        # legitimate (HA treats ``id`` as optional) and should pass
-        # through. R7 blocker 24: ``transformed_config["id"] = None``
-        # is the in-place equivalent of ``del`` — normalise both
-        # by checking against ``(None, original_id)``, so only an
-        # explicit non-None mismatch triggers the reject. Compare against
-        # the scene's own captured ``id`` (not ``resolved_id``, which may
-        # be None on the structural-invariant path) — in production the
-        # two are equal.
-        if "id" in transformed_config and transformed_config["id"] not in (
-            None,
-            original_id,
-        ):
+        # A transform that changes ``config['id']`` would leave a duplicate
+        # scene under the new key and orphan the original (#1168): Core accepts
+        # the upsert. Renaming is remove + create through the tools. Dropping
+        # the id is no rename: ``id`` is optional, and ``None`` means the same
+        # as ``del`` but Core refuses it, so it is removed. Compared with the
+        # scene's own ``id``; ``resolved_id`` can be None.
+        if transformed_config.get("id", original_id) is None:
+            del transformed_config["id"]
+        if "id" in transformed_config and transformed_config["id"] != original_id:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_FAILED,

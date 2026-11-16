@@ -1,478 +1,297 @@
-"""Unit tests for REST client script-related methods.
+"""The client's script config reads, writes and removals, on a real ``hass``.
 
-These tests verify error handling for script configuration operations,
-especially the 405 Method Not Allowed error for YAML-defined scripts,
-and script ID resolution via entity registry (#463).
+Core's config API keeps the scripts in scripts.yaml under their storage key. A
+script renamed in the UI keeps its key under a new entity_id, so the client
+resolves an id through Core's entity registry first (#463).
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantConnectionError,
 )
 
+from ._command_faults import dropped_on, pooled_socket
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
+from ._rest_client_config_core import (
+    config_client as config_client,
+)
+from ._rest_client_config_core import error_status, load, write_config_file
 
-def _make_mock_client() -> HomeAssistantClient:
-    """Create a mock HomeAssistantClient with WebSocket fallback.
-
-    The send_websocket_message mock raises an exception so that
-    _resolve_script_id falls back to using the bare id. This keeps
-    existing tests backward-compatible.
-    """
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.httpx_client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WebSocket not available in tests")
-        )
-        return client
-
-
-class TestDeleteScriptConfig:
-    """Tests for delete_script_config error handling."""
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock HomeAssistantClient for testing."""
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_delete_script_success(self, mock_client):
-        """Successful script deletion should return success response."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        result = await mock_client.delete_script_config("test_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "test_script"
-        assert result["operation"] == "deleted"
-        mock_client._request.assert_called_once_with(
-            "DELETE", "config/script/config/test_script"
-        )
-
-    @pytest.mark.asyncio
-    async def test_delete_script_not_found_404(self, mock_client):
-        """404 error should raise HomeAssistantAPIError with 'not found' message."""
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found",
-                status_code=404,
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_script_config("nonexistent_script")
-
-        assert exc_info.value.status_code == 404
-        assert "not found" in str(exc_info.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_delete_script_405_addon_proxy_limitation(self, mock_client):
-        """405 error should raise HomeAssistantAPIError with helpful message.
-
-        This tests the fix for issues #261 and #414 where scripts cannot be
-        deleted via the API due to:
-        1. HA Supervisor addon proxy blocking DELETE method
-        2. YAML-mode scripts that cannot be deleted via API
-        """
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 405 - Method Not Allowed",
-                status_code=405,
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_script_config("test_script")
-
-        error = exc_info.value
-        assert error.status_code == 405
-
-        # Verify the error message is helpful
-        error_message = str(error)
-        assert "cannot delete" in error_message.lower()
-
-        # Verify it mentions the addon proxy limitation
-        assert "add-on" in error_message.lower()
-        assert "supervisor" in error_message.lower()
-
-        # Verify it mentions YAML as a possible cause
-        assert "yaml" in error_message.lower()
-
-        # Verify it provides workarounds
-        assert "workaround" in error_message.lower()
-        assert "pip" in error_message.lower() or "docker" in error_message.lower()
-        assert "delete_" in error_message.lower()  # Prefix suggestion
-
-    @pytest.mark.asyncio
-    async def test_delete_script_other_error_propagates(self, mock_client):
-        """Other API errors should propagate unchanged."""
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 500 - Internal Server Error",
-                status_code=500,
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.delete_script_config("test_script")
-
-        assert exc_info.value.status_code == 500
-
-    @pytest.mark.asyncio
-    async def test_delete_script_generic_exception_propagates(self, mock_client):
-        """Non-API exceptions should propagate."""
-        mock_client._request = AsyncMock(side_effect=RuntimeError("Unexpected error"))
-
-        with pytest.raises(RuntimeError) as exc_info:
-            await mock_client.delete_script_config("test_script")
-
-        assert "Unexpected error" in str(exc_info.value)
-
-
-class TestGetScriptConfig:
-    """Tests for get_script_config error handling."""
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock HomeAssistantClient for testing."""
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_get_script_success(self, mock_client):
-        """Successful script retrieval should return config."""
-        mock_config = {
-            "alias": "Test Script",
-            "sequence": [{"delay": {"seconds": 1}}],
-            "mode": "single",
-        }
-        mock_client._request = AsyncMock(return_value=mock_config)
+SEQUENCE = [{"delay": {"seconds": 1}}]
+SCRIPT = {"alias": "Test script", "sequence": SEQUENCE}
 
-        result = await mock_client.get_script_config("test_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "test_script"
-        assert result["config"] == mock_config
-
-    @pytest.mark.asyncio
-    async def test_get_script_not_found_404(self, mock_client):
-        """404 error should raise HomeAssistantAPIError."""
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found",
-                status_code=404,
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.get_script_config("nonexistent_script")
-
-        assert exc_info.value.status_code == 404
-
-
-class TestUpsertScriptConfig:
-    """Tests for upsert_script_config validation."""
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock HomeAssistantClient for testing."""
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_upsert_script_with_sequence(self, mock_client):
-        """Regular script with sequence should succeed."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {
-            "alias": "Test Script",
-            "sequence": [{"delay": {"seconds": 1}}],
-        }
-
-        result = await mock_client.upsert_script_config(config, "test_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "test_script"
-
-    @pytest.mark.asyncio
-    async def test_upsert_script_with_blueprint(self, mock_client):
-        """Blueprint-based script should succeed."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {
-            "alias": "Blueprint Script",
-            "use_blueprint": {
-                "path": "test.yaml",
-                "input": {},
-            },
-        }
-
-        result = await mock_client.upsert_script_config(config, "test_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "test_script"
-
-    @pytest.mark.asyncio
-    async def test_upsert_script_missing_both_sequence_and_blueprint(self, mock_client):
-        """Script without sequence or use_blueprint should fail."""
-        config = {
-            "alias": "Incomplete Script",
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            await mock_client.upsert_script_config(config, "test_script")
-
-        assert "sequence" in str(exc_info.value) and "use_blueprint" in str(
-            exc_info.value
-        )
-
-    @pytest.mark.asyncio
-    async def test_upsert_script_adds_alias_if_missing(self, mock_client):
-        """Script without alias should get alias from script_id."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {
-            "sequence": [{"delay": {"seconds": 1}}],
-        }
-
-        await mock_client.upsert_script_config(config, "test_script")
-
-        # Verify alias was added
-        call_args = mock_client._request.call_args
-        json_arg = call_args[1]["json"]
-        assert json_arg["alias"] == "test_script"
-
-
-class TestResolveScriptId:
-    """Tests for _resolve_script_id entity registry resolution (#463).
-
-    When a script is renamed in the HA UI, the entity_id changes but the
-    storage key (unique_id) stays the same. _resolve_script_id looks up
-    the entity registry via WebSocket to find the actual storage key.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock HomeAssistantClient for testing."""
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_resolve_bare_id_matching_unique_id(self, mock_client):
-        """When unique_id matches bare_id, return it unchanged."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "my_script"}}
-        )
-
-        result = await mock_client._resolve_script_id("my_script")
-
-        assert result == "my_script"
-        mock_client.send_websocket_message.assert_called_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "script.my_script"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_resolve_renamed_script(self, mock_client):
-        """When script was renamed, return the original storage key."""
-        # User renamed script.old_name → script.new_name in the UI
-        # The storage key is still "old_name"
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "old_name"}}
-        )
-
-        result = await mock_client._resolve_script_id("new_name")
-
-        assert result == "old_name"
-
-    @pytest.mark.asyncio
-    async def test_resolve_strips_script_prefix(self, mock_client):
-        """Input with 'script.' prefix should be handled correctly."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "storage_key"}}
-        )
-
-        result = await mock_client._resolve_script_id("script.some_script")
-
-        assert result == "storage_key"
-        mock_client.send_websocket_message.assert_called_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "script.some_script"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_resolve_fallback_on_registry_failure(self, mock_client):
-        """WebSocket failure should fall back to bare id."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WebSocket connection failed")
-        )
-
-        result = await mock_client._resolve_script_id("my_script")
-
-        assert result == "my_script"
-
-    @pytest.mark.asyncio
-    async def test_resolve_fallback_on_unsuccessful_response(self, mock_client):
-        """Registry returning success=False should fall back to bare id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": {"code": "not_found"}}
-        )
-
-        result = await mock_client._resolve_script_id("my_script")
-
-        assert result == "my_script"
-
-    @pytest.mark.asyncio
-    async def test_resolve_fallback_on_missing_unique_id(self, mock_client):
-        """Registry response without unique_id should fall back to bare id."""
-        mock_client.send_websocket_message = AsyncMock(return_value={"result": {}})
-
-        result = await mock_client._resolve_script_id("my_script")
-
-        assert result == "my_script"
-
-    @pytest.mark.asyncio
-    async def test_get_script_config_uses_resolved_id(self, mock_client):
-        """get_script_config should use the resolved storage key."""
-        # Simulate a renamed script
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "original_storage_key"}}
-        )
-        mock_config = {"alias": "My Script", "sequence": []}
-        mock_client._request = AsyncMock(return_value=mock_config)
-
-        result = await mock_client.get_script_config("renamed_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "original_storage_key"
-        mock_client._request.assert_called_once_with(
-            "GET", "config/script/config/original_storage_key"
-        )
-
-    @pytest.mark.asyncio
-    async def test_delete_script_config_uses_resolved_id(self, mock_client):
-        """delete_script_config should use the resolved storage key."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "original_storage_key"}}
-        )
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        result = await mock_client.delete_script_config("renamed_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "original_storage_key"
-        mock_client._request.assert_called_once_with(
-            "DELETE", "config/script/config/original_storage_key"
-        )
-
-    @pytest.mark.asyncio
-    async def test_upsert_script_config_uses_resolved_id(self, mock_client):
-        """upsert_script_config should use the resolved storage key."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "original_storage_key"}}
-        )
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"alias": "Updated Script", "sequence": [{"delay": {"seconds": 1}}]}
-        result = await mock_client.upsert_script_config(config, "renamed_script")
-
-        assert result["success"] is True
-        assert result["script_id"] == "original_storage_key"
-        mock_client._request.assert_called_once_with(
-            "POST", "config/script/config/original_storage_key", json=config
-        )
-
-    @pytest.mark.asyncio
-    async def test_get_script_404_shows_both_ids(self, mock_client):
-        """404 error should mention both the input and resolved id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "original_key"}}
-        )
-        mock_client._request = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "API error: 404 - Not found", status_code=404
-            )
-        )
-
-        with pytest.raises(HomeAssistantAPIError) as exc_info:
-            await mock_client.get_script_config("renamed_script")
-
-        error_msg = str(exc_info.value)
-        assert "renamed_script" in error_msg
-        assert "original_key" in error_msg
-
-
-class TestUpsertScriptResolvedShortCircuit:
-    """``resolved_id`` skips the redundant ``_resolve_script_id`` registry lookup
-    on ``upsert_script_config`` (issue #1813 Phase 0 item #6) — while ``script_id``
-    stays the caller's identifier for alias-defaulting (#1935).
-
-    ``_make_mock_client`` makes ``send_websocket_message`` raise, so
-    ``assert_not_called`` proves the resolver was genuinely skipped rather than
-    merely falling back to the bare id after a failed lookup.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
-
-    @pytest.mark.asyncio
-    async def test_resolved_id_skips_lookup(self, mock_client):
-        """``resolved_id`` is used directly as the write target and no
-        entity-registry lookup is issued."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"alias": "x", "sequence": [{"delay": {"seconds": 1}}]}
-        result = await mock_client.upsert_script_config(
-            config, "renamed_script", resolved_id="storage_key"
-        )
-
-        assert result["success"] is True
-        assert result["script_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        mock_client._request.assert_called_once_with(
-            "POST", "config/script/config/storage_key", json=config
-        )
-
-    @pytest.mark.asyncio
-    async def test_resolved_id_alias_defaults_to_caller_script_id(self, mock_client):
-        """#1935 regression: with ``resolved_id`` provided (renamed script), a
-        missing alias defaults to the CALLER's ``script_id`` — NOT the storage
-        key — while the write still targets the resolved key with no re-resolve."""
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"sequence": [{"delay": {"seconds": 1}}]}  # no alias
-        result = await mock_client.upsert_script_config(
-            config, "new_name", resolved_id="old_storage_key"
-        )
-
-        # Write targets the resolved storage key; resolver never consulted.
-        assert result["script_id"] == "old_storage_key"
-        mock_client.send_websocket_message.assert_not_called()
-        method, endpoint = mock_client._request.call_args.args
-        assert endpoint == "config/script/config/old_storage_key"
-        # Alias defaulted from the caller's id, not the stale storage key.
-        assert mock_client._request.call_args.kwargs["json"]["alias"] == "new_name"
-
-    @pytest.mark.asyncio
-    async def test_default_still_resolves(self, mock_client):
-        """Contrast: without ``resolved_id`` the registry resolver is consulted,
-        the resolved storage key is the write target, and a missing alias
-        defaults to the caller's id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {"unique_id": "storage_key"}}
-        )
-        mock_client._request = AsyncMock(return_value={"result": "ok"})
-
-        config = {"alias": "x", "sequence": [{"delay": {"seconds": 1}}]}
-        result = await mock_client.upsert_script_config(config, "renamed_script")
-
-        assert result["script_id"] == "storage_key"
-        mock_client.send_websocket_message.assert_called_once_with(
-            {"type": "config/entity_registry/get", "entity_id": "script.renamed_script"}
-        )
-        mock_client._request.assert_called_once_with(
-            "POST", "config/script/config/storage_key", json=config
-        )
+
+async def _stored(client: HomeAssistantClient, storage_key: str) -> dict[str, Any]:
+    result: dict[str, Any] = (await client.get_script_config(storage_key))["config"]
+    return result
+
+
+async def _renamed(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, key: str, new: str
+) -> None:
+    """Script ``key`` in Core, renamed in the UI to ``script.<new>``."""
+    await load(hass, "script", {key: SCRIPT})
+    entity_registry.async_update_entity(f"script.{key}", new_entity_id=f"script.{new}")
+    await hass.async_block_till_done()
+
+
+# --- removal ----------------------------------------------------------------------
+
+
+async def test_removing_a_script_removes_its_config(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await load(hass, "script", {"test_script": SCRIPT})
+
+    result = await config_client.delete_script_config("test_script")
+
+    assert result["success"] is True
+    assert (result["script_id"], result["operation"]) == ("test_script", "deleted")
+    assert await error_status(config_client.get_script_config("test_script")) == 404
+
+
+async def test_removing_a_missing_script_reports_not_found(
+    config_client: HomeAssistantClient,
+) -> None:
+    """Core answers a removal of a missing key with a 400; passed on as one,
+    the tool reports a failed request instead of a missing script."""
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.delete_script_config("nonexistent_script")
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in str(exc_info.value).lower()
+
+
+async def test_a_proxy_refusing_removal_explains_the_way_around_it(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    gateway: Gateway,
+    gateway_client: HomeAssistantClient,
+) -> None:
+    """Supervisor's ingress proxy answers DELETE with 405 (#261, #414)."""
+    await load(hass, "script", {"test_script": SCRIPT})
+    gateway.outages.append(405)
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await gateway_client.delete_script_config("test_script")
+
+    assert exc_info.value.status_code == 405
+    message = str(exc_info.value).lower()
+    for hint in ("cannot delete", "add-on", "supervisor", "yaml", "workaround"):
+        assert hint in message
+    assert "delete_test_script" in message
+    assert gateway.requests == ["DELETE /api/config/script/config/test_script"]
+
+
+async def test_a_server_error_on_removal_is_not_reported_as_not_found(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await write_config_file(hass, "scripts.yaml", "test_script: [unclosed\n")
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.delete_script_config("test_script")
+
+    assert exc_info.value.status_code == 500
+
+
+# --- reading and writing ------------------------------------------------------------
+
+
+async def test_reading_a_script_returns_cores_config(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await load(hass, "script", {"test_script": SCRIPT})
+
+    result = await config_client.get_script_config("test_script")
+
+    assert (result["success"], result["script_id"]) == (True, "test_script")
+    assert result["config"]["sequence"] == SEQUENCE
+
+
+async def test_reading_a_missing_script_is_not_found(
+    config_client: HomeAssistantClient,
+) -> None:
+    assert await error_status(config_client.get_script_config("nonexistent")) == 404
+
+
+async def test_a_script_with_a_sequence_is_written(
+    config_client: HomeAssistantClient,
+) -> None:
+    result = await config_client.upsert_script_config(dict(SCRIPT), "test_script")
+
+    assert (result["success"], result["script_id"]) == (True, "test_script")
+    assert (await _stored(config_client, "test_script"))["sequence"] == SEQUENCE
+
+
+async def test_a_script_from_a_blueprint_is_written_without_a_sequence(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    blueprint = (
+        "blueprint:\n  name: Pause\n  domain: script\n  input: {}\n"
+        "sequence:\n  - delay: 0\n"
+    )
+    await write_config_file(hass, "blueprints/script/pause.yaml", blueprint)
+    use = {"path": "pause.yaml", "input": {}}
+
+    result = await config_client.upsert_script_config(
+        {"alias": "Paused", "use_blueprint": use}, "test_script"
+    )
+
+    assert result["script_id"] == "test_script"
+    assert (await _stored(config_client, "test_script"))["use_blueprint"] == use
+
+
+async def test_a_script_with_neither_sequence_nor_blueprint_is_refused(
+    config_client: HomeAssistantClient,
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        await config_client.upsert_script_config({"alias": "x"}, "test_script")
+
+    assert "sequence" in str(exc_info.value)
+    assert "use_blueprint" in str(exc_info.value)
+    assert await error_status(config_client.get_script_config("test_script")) == 404
+
+
+async def test_a_script_without_an_alias_is_named_after_its_id(
+    config_client: HomeAssistantClient,
+) -> None:
+    await config_client.upsert_script_config({"sequence": SEQUENCE}, "test_script")
+
+    assert (await _stored(config_client, "test_script"))["alias"] == "test_script"
+
+
+# --- a script renamed in the UI (#463) ----------------------------------------------
+
+
+@pytest.mark.parametrize("identifier", ["new_name", "script.new_name"])
+async def test_a_renamed_script_is_read_under_its_storage_key(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    identifier: str,
+) -> None:
+    await _renamed(hass, entity_registry, "old_name", "new_name")
+
+    result = await config_client.get_script_config(identifier)
+
+    assert result["script_id"] == "old_name"
+    assert result["config"]["alias"] == SCRIPT["alias"]
+
+
+async def test_a_renamed_script_is_removed_under_its_storage_key(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    await _renamed(hass, entity_registry, "old_name", "new_name")
+
+    result = await config_client.delete_script_config("new_name")
+
+    assert result["script_id"] == "old_name"
+    assert await error_status(config_client.get_script_config("old_name")) == 404
+
+
+async def test_a_renamed_script_is_written_under_its_storage_key(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Written under the entity_id's slug, it would be a second script."""
+    await _renamed(hass, entity_registry, "old_name", "new_name")
+
+    result = await config_client.upsert_script_config(
+        {"alias": "Edited", "sequence": SEQUENCE}, "new_name"
+    )
+
+    assert result["script_id"] == "old_name"
+    assert (await _stored(config_client, "old_name"))["alias"] == "Edited"
+
+
+async def test_a_missing_renamed_script_names_both_ids(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    await _renamed(hass, entity_registry, "original_key", "renamed_script")
+    await write_config_file(hass, "scripts.yaml", {})
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.get_script_config("renamed_script")
+
+    assert exc_info.value.status_code == 404
+    assert "renamed_script" in str(exc_info.value)
+    assert "original_key" in str(exc_info.value)
+
+
+async def test_a_script_the_registry_does_not_know_is_read_by_its_id(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    await write_config_file(hass, "scripts.yaml", {"unloaded": SCRIPT})
+
+    result = await config_client.get_script_config("unloaded")
+
+    assert result["config"]["alias"] == SCRIPT["alias"]
+
+
+async def test_no_answer_to_the_registry_lookup_is_not_guessed_past(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Guessing the storage key from the slug writes a renamed script's
+    update to a new script (#1947)."""
+    await _renamed(hass, entity_registry, "old_name", "new_name")
+    socket = await pooled_socket(config_client)
+
+    with (
+        dropped_on(hass, "config/entity_registry/get", socket),
+        pytest.raises(HomeAssistantConnectionError),
+    ):
+        await config_client.upsert_script_config(dict(SCRIPT), "new_name")
+
+
+# --- a caller that resolved the storage key already (#1813, #1935) ------------------
+
+
+async def test_a_resolved_storage_key_is_written_without_a_lookup(
+    config_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    result = await config_client.upsert_script_config(
+        dict(SCRIPT), "renamed_script", resolved_id="storage_key"
+    )
+
+    assert result["script_id"] == "storage_key"
+    sent.assert_not_awaited()
+    assert (await _stored(config_client, "storage_key"))["alias"] == SCRIPT["alias"]
+
+
+async def test_a_lookup_is_sent_when_no_storage_key_is_given(
+    config_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    await config_client.upsert_script_config(dict(SCRIPT), "renamed_script")
+
+    sent.assert_awaited_once()
+
+
+async def test_a_renamed_script_keeps_the_callers_name_as_alias(
+    config_client: HomeAssistantClient,
+) -> None:
+    """Named after the storage key, the script would lose its new name."""
+    result = await config_client.upsert_script_config(
+        {"sequence": SEQUENCE}, "new_name", resolved_id="old_storage_key"
+    )
+
+    assert result["script_id"] == "old_storage_key"
+    assert (await _stored(config_client, "old_storage_key"))["alias"] == "new_name"
