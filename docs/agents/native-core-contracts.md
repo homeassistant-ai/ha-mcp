@@ -311,8 +311,8 @@ from Core on every call.
   entry, the diff of a label, category, area or floor leaves out `created_at`
   and `modified_at`, and the diff of a device reports them with a warning.
 
-A command that was sent and got no answer, and an answer in another shape,
-count as a component that cannot be asked: the
+A command that was sent and got no answer, and an answer that is not in the
+shape the command documents, count as a component that cannot be asked: the
 [component guide](custom-component.md#compatibility) treats a read the
 component fails as a missing component.
 

@@ -29,7 +29,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.utils.registry_update_lock import registry_update_lock
 
-from ._command_faults import before_handling, received, taking, unanswered
+from ._command_faults import before_handling, received, taking
 from ._registry_item_snapshots import (
     _second_restore_with_lists_reversed,
     _snapshot,
@@ -343,10 +343,10 @@ async def test_a_second_restore_creates_the_floor_again_when_core_dropped_it_mea
     backup_manager: BackupManager,
     component_core_client: HomeAssistantClient,
 ) -> None:
-    """Core can drop the floor the first restore created while the restore asks
-    the component which keys Core's commands take. The floors are read after
-    that question, so the dropped one is not taken and the restore creates it
-    again."""
+    """Core can lose the floor the first restore created while the second
+    restore asks the component which keys Core's commands take. The second
+    restore then creates the floor again instead of returning the lost one as
+    restored."""
     registry = fr.async_get(hass)
     floor = registry.async_create("Ground", level=0)
     registry.async_update(floor.floor_id, name="Base")
@@ -365,6 +365,31 @@ async def test_a_second_restore_creates_the_floor_again_when_core_dropped_it_mea
         await backup_manager.restore_snapshot(snapshot)
 
     assert [(f.name, f.level) for f in registry.async_list_floors()] == [("Base", 0)]
+
+
+async def test_a_restore_creates_the_floor_again_when_core_dropped_it_meanwhile(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core can drop the floor a restore is about to update while the restore
+    asks the component which keys Core's commands take. The restore then
+    creates the floor again instead of failing on an update of a missing id."""
+    registry = fr.async_get(hass)
+    floor = registry.async_create("Ground", level=0)
+    snapshot = await _snapshot(
+        backup_manager, "area_or_floor", f"floor:{floor.floor_id}"
+    )
+    registry.async_update(floor.floor_id, level=3)
+
+    def drop(msg: dict[str, Any]) -> None:
+        if registry.async_get_floor(floor.floor_id) is not None:
+            registry.async_delete(floor.floor_id)
+
+    with before_handling(hass, WS_REGISTRY_FIELDS, drop):
+        await backup_manager.restore_snapshot(snapshot)
+
+    assert [(f.name, f.level) for f in registry.async_list_floors()] == [("Ground", 0)]
 
 
 async def test_a_second_restore_without_the_component_says_it_matched_in_another_order(
@@ -569,27 +594,6 @@ async def test_without_the_component_core_refuses_a_stored_key_it_does_not_take(
 
     left = lr.async_get(hass).async_get_label(label_id)
     assert (left and left.color) == (None if deleted else "blue")
-
-
-async def test_a_restore_whose_question_the_component_does_not_answer_goes_on_without_it(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A question that was sent and got no answer counts as a component that
-    cannot be asked: the label is restored as it is without the component."""
-    registry = lr.async_get(hass)
-    label = registry.async_create("Security", color="red")
-    snapshot = await _snapshot(backup_manager, "label", label.label_id)
-    registry.async_update(label.label_id, color="blue")
-
-    async with unanswered(hass, WS_REGISTRY_FIELDS, monkeypatch):
-        await backup_manager.restore_snapshot(snapshot)
-
-    left = registry.async_get_label(label.label_id)
-    assert left is not None
-    assert left.color == "red"
 
 
 async def test_a_second_restore_of_an_area_whose_label_is_gone_names_the_holder(

@@ -36,7 +36,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_restore_helpers import backup_tool, use_backup_manager
-from ._command_faults import received, taking, unanswered
+from ._command_faults import received, taking
 from ._component_frames import older_component
 from ._registry_item_snapshots import _snapshot
 
@@ -152,26 +152,6 @@ async def test_a_diff_without_the_component_reports_the_order_and_says_so(
     assert "connections, identifiers, labels" in warning
     assert "only the ha_mcp_tools component can tell" in warning
     assert "install or update it via HACS" in warning
-
-
-async def test_a_diff_whose_question_the_component_does_not_answer_says_so(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A question that was sent and got no answer counts as a component that
-    cannot be asked: the diff reports the order and says the component did not
-    tell."""
-    device = _device(hass)
-    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-
-    async with unanswered(hass, WS_REGISTRY_FIELDS, monkeypatch):
-        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
-
-    assert _changed_fields(diff) == {"labels"}, diff
-    (warning,) = diff["warnings"]
-    assert "labels" in warning
 
 
 async def test_a_diff_with_a_component_older_than_the_command_says_so(

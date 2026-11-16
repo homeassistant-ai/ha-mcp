@@ -12,6 +12,7 @@ from ...utils.device_registry_semantics import (
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
+    core_device_list_reply,
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
@@ -322,14 +323,7 @@ class EntitySearchMixin(_SearchBase):
             )
             fetch_slots.append("registry")
         if need_device:
-            # Core's own list, not the component's: a device the registry holds in two
-            # copies that disagree arrives in both, which the visibility resolver
-            # reports.
-            fetch_coros.append(
-                self.client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                )
-            )
+            fetch_coros.append(core_device_list_reply(self.client))
             fetch_slots.append("device")
         fetched = (
             await asyncio.gather(*fetch_coros, return_exceptions=True)
@@ -475,12 +469,7 @@ class EntitySearchMixin(_SearchBase):
                 self.client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
                 ),
-                # Core's own list, not the component's: a device the registry holds in
-                # two copies that disagree arrives in both, which the visibility
-                # resolver reports.
-                self.client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                ),
+                core_device_list_reply(self.client),
                 registry_list_reply(self.client, "floor"),
                 return_exceptions=True,
             )

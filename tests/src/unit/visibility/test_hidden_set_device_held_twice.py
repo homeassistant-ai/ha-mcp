@@ -2,10 +2,9 @@
 component installed too.
 
 A device the registry holds in two copies that disagree arrives from Core in
-both, and a call is refused rather than checked against a set built on one of
-them. The
-component's device list leaves such a device out: a set read from it would be
-built without the area the device gives its entities, and nothing would say so.
+both, and the call is refused. The component's device list leaves such a
+device out: a set read from it would be built without the area the device
+gives its entities, and the call would go through.
 """
 
 from __future__ import annotations

@@ -17,6 +17,7 @@ from ...utils.device_registry_semantics import (
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import apply_hidden_penalty
 from ...visibility.resolver import (
+    core_device_list_reply,
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
@@ -525,11 +526,7 @@ async def _exact_match_search(
         )
         fetch_slots.append("registry")
     if need_device:
-        # Core's own list, not the component's: a device the registry holds in two
-        # copies that disagree arrives in both, which the visibility resolver reports.
-        fetch_coros.append(
-            client.send_websocket_message({"type": "config/device_registry/list"})
-        )
+        fetch_coros.append(core_device_list_reply(client))
         fetch_slots.append("device")
     fetched = (
         await asyncio.gather(*fetch_coros, return_exceptions=True)

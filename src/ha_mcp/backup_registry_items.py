@@ -34,8 +34,8 @@ What Core's commands take and how Core keeps a row is asked of the component
   category, area or floor leaves out ``created_at`` and ``modified_at``; the
   diff of a device reports them as differences and says so.
 
-A command that was sent and got no answer, and an answer in another shape,
-count as a component that cannot be asked.
+A command that was sent and got no answer, and an answer that is not in the
+shape the command documents, count as a component that cannot be asked.
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def reordered_lists(current: dict[str, Any], stored: dict[str, Any]) -> list[str
 
 def _well_formed(answer: dict[str, Any]) -> bool:
     """Whether a ``registry_fields`` answer names the fields as this module
-    reads them: ``update_fields`` in a list, the other three in a list or None."""
+    reads them."""
     return isinstance(answer.get("update_fields"), list) and all(
         key in answer and isinstance(answer[key], list | None)
         for key in ("create_fields", "set_fields", "stamped_fields")
@@ -148,7 +148,6 @@ async def _registry_fields(
     try:
         answer = await ask_component(client, "registry_fields", **params)
     except HomeAssistantConnectionError as exc:
-        # A read: one left without an answer is a component that cannot be asked.
         logger.warning("registry_fields got no answer; going on without it: %r", exc)
         return None
     if answer is not None and not _well_formed(answer):
@@ -306,8 +305,8 @@ async def _restore_item(
     else:
         update = _only(stored, taken["update_fields"])
         payload = _only(stored, taken["create_fields"])
-    # Read after the question, so that a row Core drops while the component is
-    # asked is neither updated nor taken.
+    # Read after the component was asked for the registry's fields, so that a
+    # row removed from Core during that question is neither updated nor taken.
     if noun == "category":
         rows = await _category_rows(client, extra_ids["scope"])
     else:

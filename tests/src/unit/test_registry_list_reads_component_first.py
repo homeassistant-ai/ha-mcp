@@ -2,13 +2,15 @@
 
 A read of the area, floor, label or category registry asks the component
 first: with a component that serves the registry, Core's own list command for
-it is not sent. The device registry is read the same way where its rows only
-name things. Where a visibility rule or the bulk selector judges the rows,
-Core's own list is read: a device the registry holds in two copies that
-disagree arrives in both, and the component's list leaves such a device out.
+it is not sent. The device registry is read the same way for the names a
+search adds to its results (``result_fields``). A read whose rows go to the
+visibility resolver or the bulk selector takes Core's own list:
+``core_device_list_reply`` says why.
 
-Each test runs a tool or a search on the server's own client against a real
-``hass`` with the component, and reads on Core's side which commands arrived.
+Each test runs a tool, a search or a helper a tool calls on the server's own
+client against a real ``hass`` with the component. The routing tests read on
+Core's side which commands arrived; the others hold a device in two copies
+that disagree.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.bulk_selector import (
     BulkSelectorInfrastructureError,
+    BulkSelectorResolution,
     resolve_bulk_selector,
 )
 from ha_mcp.tools.component_devices import WS_DEVICE_LIST
@@ -43,10 +46,10 @@ from ha_mcp.tools.tools_categories import CategoryTools
 from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._command_faults import received
 from ._component_frames import older_component
+from ._search_tool import _visibility
 
 _AREAS = "config/area_registry/list"
 _FLOORS = "config/floor_registry/list"
@@ -84,13 +87,6 @@ async def client(
     )
     hass.states.async_set(light.entity_id, "on", {"friendly_name": "Lamp"})
     return component_core_client
-
-
-def _visibility(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: VisibilityConfig
-) -> None:
-    save_visibility_config(tmp_path, config)
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
 
 
 @pytest.fixture
@@ -131,22 +127,27 @@ def _core_lists(seen: dict[str, list[Any]]) -> list[str]:
     ]
 
 
+async def _select_ground_lights(client: HomeAssistantClient) -> BulkSelectorResolution:
+    """``ha_bulk_control``'s selector for the lights on the Ground floor."""
+    return await resolve_bulk_selector(
+        client,
+        {"domain": "light", "floor_ids": ["ground"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=False,
+    )
+
+
 async def test_a_bulk_selector_reads_areas_and_floors_from_the_component(
     hass: HomeAssistant, client: HomeAssistantClient, unfiltered: None
 ) -> None:
     with _reads(hass) as seen:
-        resolution = await resolve_bulk_selector(
-            client,
-            {"domain": "light", "floor_ids": ["ground"]},
-            action="off",
-            parameters=None,
-            timeout_seconds=None,
-            validate_first=False,
-        )
+        resolution = await _select_ground_lights(client)
 
     assert resolution.resolved_entity_ids == ("light.lamp",)
     assert resolution.selected_area_ids == ("kitchen",)
-    assert _core_lists(seen) == [_DEVICES]
+    assert not (seen[_AREAS] or seen[_FLOORS])
     assert _asked(seen) == ["area", "floor"]
 
 
@@ -157,7 +158,7 @@ async def test_an_area_search_reads_areas_and_floors_from_the_component(
         found = await SmartSearchTools(client=client).get_entities_by_area("Ground")
 
     assert list(found["areas"]) == ["kitchen"]
-    assert _core_lists(seen) == [_DEVICES]
+    assert not (seen[_AREAS] or seen[_FLOORS])
     assert _asked(seen) == ["area", "floor"]
 
 
@@ -166,7 +167,8 @@ async def without_overview(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A component from before its ``overview`` command: ``ha_get_overview``
-    reads the states and registries itself."""
+    reads the states and registries itself, next to the notifications and
+    repairs it reports."""
     older_component(monkeypatch, "overview")
     for domain in ("persistent_notification", "repairs"):
         assert await async_setup_component(hass, domain, {})
@@ -185,7 +187,7 @@ async def test_the_overview_of_a_component_without_its_overview_command_reads_ar
 
     assert overview["success"] is True
     assert overview["area_analysis"] == {"kitchen": {"count": 1}}
-    assert _core_lists(seen) == [_DEVICES]
+    assert not seen[_AREAS]
     assert _asked(seen) == ["area"]
 
 
@@ -196,37 +198,34 @@ def without_search(monkeypatch: pytest.MonkeyPatch) -> None:
     older_component(monkeypatch, "search")
 
 
-async def test_a_search_for_names_reads_areas_floors_labels_and_devices_from_the_component(
-    hass: HomeAssistant,
-    client: HomeAssistantClient,
-    unfiltered: None,
-    without_search: None,
-) -> None:
-    tools = SearchTools(client, SmartSearchTools(client=client))
-
-    with _reads(hass) as seen:
-        found = await tools.ha_search(
-            query="lamp", result_fields=["area", "floor", "labels"]
-        )
-
-    (row,) = found["entities"]
-    assert (row["area"], row["floor"], row["labels"]) == (
-        "Kitchen",
-        "Ground",
-        ["Bright"],
-    )
-    assert _core_lists(seen) == []
-    assert _asked(seen) == ["area", "device", "floor", "label"]
-
-
-async def test_a_search_for_names_reads_devices_from_core_when_the_component_offers_no_device_list(
+@pytest.mark.parametrize(
+    ("device_list", "core_lists", "asked"),
+    [
+        pytest.param(
+            True, [], ["area", "device", "floor", "label"], id="all_from_component"
+        ),
+        pytest.param(
+            False,
+            [_DEVICES],
+            ["area", "floor", "label"],
+            id="devices_from_core_without_device_list",
+        ),
+    ],
+)
+async def test_a_search_for_names_reads_the_registries_from_the_component(
     hass: HomeAssistant,
     client: HomeAssistantClient,
     unfiltered: None,
     without_search: None,
     monkeypatch: pytest.MonkeyPatch,
+    device_list: bool,
+    core_lists: list[str],
+    asked: list[str],
 ) -> None:
-    older_component(monkeypatch, "device_list")
+    """The names come from the component; devices from Core only when the
+    component does not offer its device list."""
+    if not device_list:
+        older_component(monkeypatch, "device_list")
     tools = SearchTools(client, SmartSearchTools(client=client))
 
     with _reads(hass) as seen:
@@ -240,8 +239,8 @@ async def test_a_search_for_names_reads_devices_from_core_when_the_component_off
         "Ground",
         ["Bright"],
     )
-    assert _core_lists(seen) == [_DEVICES]
-    assert _asked(seen) == ["area", "floor", "label"]
+    assert _core_lists(seen) == core_lists
+    assert _asked(seen) == asked
 
 
 @pytest.fixture
@@ -264,14 +263,7 @@ async def test_a_bulk_selector_refuses_a_device_held_twice(
     with pytest.raises(
         BulkSelectorInfrastructureError, match="conflicting device identity"
     ):
-        await resolve_bulk_selector(
-            client,
-            {"domain": "light", "floor_ids": ["ground"]},
-            action="off",
-            parameters=None,
-            timeout_seconds=None,
-            validate_first=False,
-        )
+        await _select_ground_lights(client)
 
 
 async def test_an_area_search_reports_a_device_held_twice(
@@ -331,7 +323,6 @@ async def test_a_domain_listing_reports_a_device_held_twice(
 
 @pytest.fixture
 def lighting(category_registry: cr.CategoryRegistry) -> cr.CategoryEntry:
-    """A category of the automation scope."""
     return category_registry.async_create(scope="automation", name="Lighting")
 
 

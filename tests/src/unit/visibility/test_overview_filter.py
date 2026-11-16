@@ -137,7 +137,7 @@ async def test_overview_reads_states_first_then_optional_slices_together(
     before Core serves the services request, so they overlap."""
     set_config(enabled=False)
     # As in ``ha_get_overview``, which asks for the component before these
-    # reads: the area and device reads then go to Core without a wait.
+    # reads: the area read then goes to Core without waiting for that answer.
     assert await get_component_caps(core_client) is None
     order = Mock()
     with (

@@ -11,6 +11,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utils.fuzzy_search import apply_hidden_penalty
 from ...visibility.resolver import (
+    core_device_list_reply,
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
@@ -331,14 +332,7 @@ class EntityModesMixin(EntityEnrichmentMixin):
             ),
         ]
         if need_device:
-            # Core's own list, not the component's: a device the registry holds in two
-            # copies that disagree arrives in both, which the visibility resolver
-            # reports.
-            fetch_coros.append(
-                self._client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                )
-            )
+            fetch_coros.append(core_device_list_reply(self._client))
         gather_results = await asyncio.gather(*fetch_coros, return_exceptions=True)
         states_result: Any = gather_results[0]
         registry_result: Any = gather_results[1]

@@ -37,9 +37,9 @@ from homeassistant.setup import async_setup_component
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
-from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import save_visibility_config
+
+from ._search_tool import _visibility
 
 
 @dataclass
@@ -74,13 +74,6 @@ def _spies(client: HomeAssistantClient) -> Iterator[_Sent]:
         ) as websocket,
     ):
         yield _Sent(states, config, websocket)
-
-
-def _visibility(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: VisibilityConfig
-) -> None:
-    save_visibility_config(tmp_path, config)
-    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
 
 
 @pytest.fixture

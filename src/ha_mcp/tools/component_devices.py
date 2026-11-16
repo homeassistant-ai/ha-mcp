@@ -210,17 +210,11 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
 
 
 async def device_list_reply(client: Any) -> dict[str, Any]:
-    """What Core answers for ``config/device_registry/list``, the component asked first.
+    """The device registry as a ``config/device_registry/list`` reply, the
+    component asked first; without its answer Core's command is sent.
 
-    The component's rows come in the envelope ``send_websocket_message``
-    returns for the list command, so a caller reads either answer the same way.
-    Without the component's answer Core's command is sent, and its reply or its
-    exception is the caller's.
-
-    Not for rows a visibility rule or the bulk selector judges: the component
-    leaves a device the registry holds in two copies that disagree out of its
-    list, and those callers report or refuse such a device, which takes both
-    copies from Core's list.
+    Not for rows the visibility resolver or the bulk selector judges: those
+    read :func:`~ha_mcp.visibility.resolver.core_device_list_reply`.
     """
     via_component = await fetch_device_list_via_component(client)
     if via_component is not None:

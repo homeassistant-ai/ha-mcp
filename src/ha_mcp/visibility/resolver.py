@@ -837,6 +837,21 @@ async def device_registry_needed_for_visibility() -> bool:
     return config_needs_device_registry(config)
 
 
+async def core_device_list_reply(client: Any) -> dict[str, Any]:
+    """Core's own ``config/device_registry/list``, never the component's.
+
+    For rows the visibility resolver or the bulk selector judges. A device the
+    registry holds in two copies that disagree arrives in both: the bulk
+    selector refuses it, and the resolver, when an area or label rule is
+    active, reports it or in strict mode refuses it. The component's device
+    list leaves such a device out.
+    """
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    return reply
+
+
 async def load_hidden_set(
     registry_result: object,
     states_result: object | None = None,

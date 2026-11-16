@@ -10,7 +10,7 @@ from ...utils.device_registry_semantics import (
     build_device_registry_snapshot,
     effective_entity_area_id,
 )
-from ...visibility.resolver import load_hidden_set
+from ...visibility.resolver import core_device_list_reply, load_hidden_set
 from ..component_registries import registry_list_reply
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
@@ -29,10 +29,7 @@ class SystemOverviewMixin(_SearchBase):
             self.client.get_services(),
             registry_list_reply(self.client, "area"),
             self.client.send_websocket_message({"type": "config/entity_registry/list"}),
-            # Core's own list, not the component's: a device the registry holds in two
-            # copies that disagree arrives in both, which the visibility resolver
-            # reports.
-            self.client.send_websocket_message({"type": "config/device_registry/list"}),
+            core_device_list_reply(self.client),
             return_exceptions=True,
         )
         return [states, *optional_results]

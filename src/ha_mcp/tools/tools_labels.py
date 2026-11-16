@@ -22,7 +22,7 @@ from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
-from .component_registries import fetch_registries_via_component
+from .component_registries import registry_list_reply
 from .helpers import (
     clearable_value,
     core_error_message,
@@ -80,13 +80,7 @@ class LabelTools:
         to an empty registry, or callers would confidently report a real label
         as missing (mirrors ``backup_manager._require_list``).
         """
-        via_component = await fetch_registries_via_component(self._client, ["label"])
-        if via_component is not None:
-            rows: list[dict[str, Any]] = via_component["labels"]
-            return rows
-        result = await self._client.send_websocket_message(
-            {"type": "config/label_registry/list"}
-        )
+        result = await registry_list_reply(self._client, "label")
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
@@ -146,13 +140,7 @@ class LabelTools:
     ) -> list[dict[str, Any]]:
         """Return the area registry: the ha_mcp_tools component's rows, or
         without its answer Core's list, failing closed on a degraded envelope."""
-        via_component = await fetch_registries_via_component(self._client, ["area"])
-        if via_component is not None:
-            rows: list[dict[str, Any]] = via_component["areas"]
-            return rows
-        list_result = await self._client.send_websocket_message(
-            {"type": "config/area_registry/list"}
-        )
+        list_result = await registry_list_reply(self._client, "area")
         areas = list_result.get("result") if list_result.get("success") else None
         if not isinstance(areas, list):
             # An auth rejection, a protocol error and a malformed payload all
