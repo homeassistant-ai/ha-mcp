@@ -1087,31 +1087,36 @@ class BackupManager:
 
     def _publish_snapshot(self, source: str, domain: str, safe: str, ts: str) -> Path:
         stem = f"{domain}.{safe}.{ts}"
-        for seq in range(_MAX_SAME_SECOND):
-            suffix = f"_{seq:02d}" if seq else ""
-            target = self._dir / f"{stem}{suffix}.yaml"
-            try:
-                if os.name == "nt":
-                    os.rename(source, target)
-                else:
-                    os.link(source, target)
-            except FileExistsError:
-                continue
-            except OSError as exc:
-                if os.name == "nt" or exc.errno not in {
-                    errno.ENOSYS,
-                    errno.EOPNOTSUPP,
-                    errno.EPERM,
-                    errno.EXDEV,
-                }:
-                    raise
-                with file_write_lock(
-                    self._dir / ".snapshot-publication.lock", required=True
-                ):
+        windows = os.name == "nt"
+        with (
+            nullcontext()
+            if windows
+            else file_write_lock(
+                self._dir / ".snapshot-publication.lock", required=True
+            )
+        ):
+            for seq in range(_MAX_SAME_SECOND):
+                suffix = f"_{seq:02d}" if seq else ""
+                target = self._dir / f"{stem}{suffix}.yaml"
+                try:
+                    if windows:
+                        os.rename(source, target)
+                    else:
+                        os.link(source, target)
+                except FileExistsError:
+                    continue
+                except OSError as exc:
+                    if windows or exc.errno not in {
+                        errno.ENOSYS,
+                        errno.EOPNOTSUPP,
+                        errno.EPERM,
+                        errno.EXDEV,
+                    }:
+                        raise
                     if os.path.lexists(target):
                         continue
                     os.replace(source, target)
-            return target
+                return target
         raise OSError(
             f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
         )

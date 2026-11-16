@@ -7,7 +7,7 @@ import os
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -19,6 +19,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp.backup_manager import BackupManager, get_backup_manager
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.utils.config_write_lock import file_write_lock
 
 
 @pytest.fixture
@@ -136,6 +137,51 @@ async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
     assert first.name != second.name
     assert manager.read_snapshot(first.name)["entity_id"] == longer
     assert manager.read_snapshot(second.name)["entity_id"] == shorter
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses rename without replacement")
+async def test_parallel_publication_with_mixed_hard_link_permissions(
+    hass: HomeAssistant, manager: BackupManager
+) -> None:
+    longer = "a" * 113
+    digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
+    shorter = f"{longer[:103]}-{digest}"
+    fallback_checked = Event()
+    other_attempted = Event()
+
+    def check_target(target):
+        exists = os.path.lexists(target)
+        fallback_checked.set()
+        assert other_attempted.wait(10)
+        return exists
+
+    def link(source, target):
+        if not fallback_checked.is_set():
+            raise PermissionError(errno.EPERM, "hard links denied for this writer")
+        os.link(source, target)
+        other_attempted.set()
+
+    def observe_lock(*args, **kwargs):
+        if fallback_checked.is_set():
+            other_attempted.set()
+        return file_write_lock(*args, **kwargs)
+
+    with (
+        patch("ha_mcp.backup_manager._now_ts", return_value="20260101_000000"),
+        patch("ha_mcp.backup_manager.file_write_lock", side_effect=observe_lock),
+        patch("ha_mcp.backup_manager.os", wraps=os) as backup_os,
+    ):
+        backup_os.name = os.name
+        backup_os.path = SimpleNamespace(lexists=check_target)
+        backup_os.link.side_effect = link
+        async with asyncio.TaskGroup() as tasks:
+            first = tasks.create_task(capture(hass, manager, longer))
+            assert await asyncio.to_thread(fallback_checked.wait, 10)
+            second = tasks.create_task(capture(hass, manager, shorter))
+
+    assert first.result() != second.result()
+    assert manager.read_snapshot(first.result().name)["entity_id"] == longer
+    assert manager.read_snapshot(second.result().name)["entity_id"] == shorter
 
 
 async def test_publication_preserves_a_snapshot_created_at_the_selected_name(
