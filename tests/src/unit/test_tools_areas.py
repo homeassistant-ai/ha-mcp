@@ -1,334 +1,151 @@
-"""Unit tests for AreaTools — orphaned partition branch + malformed-WS-response guard.
+"""``ha_list_floors_areas``, ``ha_set_area_or_floor`` and ``ha_remove_area_or_floor`` on real Core.
 
-Both paths are untriggerable from E2E: the orphaned branch needs .storage drift
-between the two sequential WS reads, and the SERVICE_CALL_FAILED guard needs a
-malformed WS response with success=True but no "result" key. Mocking the client
-covers both cheaply.
+Every area, floor, label and sensor lives in Core's registries and state
+machine; every reply and refusal the tools act on is Core's. The listing runs
+without the ``ha_mcp_tools`` component, so it takes the two-call path that
+``test_ha_floors_areas_component_routing.py`` compares with the component's.
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_areas import AreaTools
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_areas import AreaTools, register_area_tools
+from ha_mcp.utils.usage_logger import get_recent_logs
+
+from ._command_faults import dropped_on, pooled_socket, received
+from ._core_setup import with_config_component
+from ._held_command import held_command
+from ._tool_errors import rejected_call_body
+
+AREA_CREATE = "config/area_registry/create"
+AREA_LIST = "config/area_registry/list"
+
+_CLEARABLE = (
+    "floor_id",
+    "icon",
+    "picture",
+    "temperature_entity_id",
+    "humidity_entity_id",
+)
 
 
-class TestHomeTopologyPartition:
-    """Covers the orphaned partition branch that E2E cannot reach."""
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` with Core's registry commands (``config``)."""
+    return await with_config_component(hass, core_client)
 
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return AreaTools(client)
 
-    async def test_orphaned_area_partition(self, tools):
-        """An area whose floor_id points to a non-existent floor lands in orphaned_areas."""
-        tools._client.send_websocket_message.side_effect = [
-            # areas: one nested, one orphaned, one unassigned
-            {
-                "success": True,
-                "result": [
-                    {"area_id": "kitchen", "floor_id": "ground"},
-                    {"area_id": "ghost", "floor_id": "deleted_floor_id"},
-                    {"area_id": "loose", "floor_id": None},
-                ],
-            },
-            # floors: only "ground" exists — "deleted_floor_id" is not present
-            {
-                "success": True,
-                "result": [
-                    {"floor_id": "ground", "name": "Ground", "level": 0},
-                ],
-            },
-        ]
+@pytest.fixture
+def tools(client: HomeAssistantClient) -> AreaTools:
+    return AreaTools(client)
 
+
+@pytest.fixture
+def home(area_registry: ar.AreaRegistry, floor_registry: fr.FloorRegistry) -> None:
+    """Kitchen on the Ground floor, Garage on no floor, and Ghost on a floor
+    that does not exist: Core stores a floor_id without checking it."""
+    ground = floor_registry.async_create("Ground", level=0)
+    area_registry.async_create(
+        "Kitchen", floor_id=ground.floor_id, icon="mdi:silverware"
+    )
+    area_registry.async_create("Garage")
+    area_registry.async_create("Ghost", floor_id="deleted_floor")
+
+
+@pytest.fixture
+def sensors(hass: HomeAssistant) -> None:
+    """Two temperature sensors and a humidity sensor Core accepts on an area."""
+    hass.states.async_set("sensor.kitchen_temp", "21", {"device_class": "temperature"})
+    hass.states.async_set(
+        "sensor.kitchen_temp_2", "22", {"device_class": "temperature"}
+    )
+    hass.states.async_set("sensor.kitchen_hum", "40", {"device_class": "humidity"})
+
+
+@pytest.fixture
+def furnished_kitchen(
+    sensors: None, area_registry: ar.AreaRegistry, floor_registry: fr.FloorRegistry
+) -> str:
+    """A Kitchen with every clearable field set; returns its area_id."""
+    ground = floor_registry.async_create("Ground")
+    kitchen = area_registry.async_create(
+        "Kitchen",
+        floor_id=ground.floor_id,
+        icon="mdi:silverware",
+        picture="/local/kitchen.png",
+        temperature_entity_id="sensor.kitchen_temp",
+        humidity_entity_id="sensor.kitchen_hum",
+    )
+    return kitchen.id
+
+
+def _stored(area_registry: ar.AreaRegistry, area_id: str) -> ar.AreaEntry:
+    entry = area_registry.async_get_area(area_id)
+    assert entry is not None, f"Core holds no area {area_id!r}"
+    return entry
+
+
+def _clearables(entry: ar.AreaEntry) -> dict[str, Any]:
+    return {name: getattr(entry, name) for name in _CLEARABLE}
+
+
+# --- listing --------------------------------------------------------------------
+
+
+async def test_areas_are_nested_unassigned_or_orphaned(
+    tools: AreaTools, home: None
+) -> None:
+    """An area on a floor Core no longer has must not vanish from the listing
+    or pass as unassigned: it is reported apart, as orphaned."""
+    result = await tools.ha_list_floors_areas()
+
+    counts = (
+        result["area_count"],
+        result["unassigned_count"],
+        result["orphaned_count"],
+    )
+    assert counts == (3, 1, 1)
+    (ground,) = result["floors"]
+    assert [a["area_id"] for a in ground["areas"]] == ["kitchen"]
+    assert [a["area_id"] for a in result["unassigned_areas"]] == ["garage"]
+    assert [a["area_id"] for a in result["orphaned_areas"]] == ["ghost"]
+
+
+async def test_listing_fails_when_core_refuses_the_registry_reads(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Without Core's ``config`` commands both reads are refused: an empty
+    home in reply would tell the caller there are no areas at all."""
+    body = await rejected_call_body(AreaTools(core_client).ha_list_floors_areas())
+
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["error"]["message"] == "Failed to retrieve area or floor registry"
+    assert body["areas_success"] is False
+
+
+class TestListFieldsProjection:
+    """``fields`` keeps only the named top-level keys, plus ``success``."""
+
+    async def test_no_fields_returns_the_full_response(
+        self, tools: AreaTools, home: None
+    ) -> None:
         result = await tools.ha_list_floors_areas()
 
-        assert result["success"] is True
-        assert result["orphaned_count"] == 1
-        assert result["unassigned_count"] == 1
-        assert [a["area_id"] for a in result["orphaned_areas"]] == ["ghost"]
-        assert [a["area_id"] for a in result["unassigned_areas"]] == ["loose"]
-
-        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
-        assert [a["area_id"] for a in ground["areas"]] == ["kitchen"]
-
-
-class TestHomeTopologyMalformedResponseGuard:
-    """Covers the SERVICE_CALL_FAILED guard for malformed WS responses."""
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return AreaTools(client)
-
-    async def test_malformed_ws_response_triggers_guard(self, tools):
-        """success=True without a "result" key must raise SERVICE_CALL_FAILED, not silently return empty counts."""
-        tools._client.send_websocket_message.side_effect = [
-            {"success": True},  # malformed — no "result" key
-            {"success": True, "result": []},
-        ]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_list_floors_areas()
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-
-
-class TestRemoveAreaOrFloorRouting:
-    """Confirms ha_remove_area_or_floor routes to the correct registry by kind.
-
-    E2E covers both kinds via testcontainer roundtrips, but a swapped ternary
-    (e.g., area → floor_registry) would only surface as a generic 'Failed to
-    delete' message in E2E. Mocking the WS call here pins the message shape.
-    """
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": None}
-        )
-        return AreaTools(client)
-
-    async def test_area_kind_routes_to_area_registry(self, tools):
-        result = await tools.ha_remove_area_or_floor(kind="area", id="garage")
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent == {"type": "config/area_registry/delete", "area_id": "garage"}
-        assert result["success"] is True
-        assert result["area_id"] == "garage"
-        assert result["kind"] == "area"
-
-    async def test_floor_kind_routes_to_floor_registry(self, tools):
-        result = await tools.ha_remove_area_or_floor(kind="floor", id="ground")
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent == {"type": "config/floor_registry/delete", "floor_id": "ground"}
-        assert result["success"] is True
-        assert result["floor_id"] == "ground"
-        assert result["kind"] == "floor"
-
-
-class TestSetAreaOrFloorRouting:
-    """Confirms ha_set_area_or_floor routes to the correct WS message type by kind.
-
-    Asserts the high-level routing (area_registry vs floor_registry, create vs
-    update) without re-testing the message-builder helpers themselves.
-    """
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"area_id": "x", "floor_id": "x", "name": "X"},
-            }
-        )
-        return AreaTools(client)
-
-    async def test_area_create_routes_to_area_registry_create(self, tools):
-        await tools.ha_set_area_or_floor(kind="area", name="Kitchen")
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent["type"] == "config/area_registry/create"
-        assert sent["name"] == "Kitchen"
-
-    async def test_area_update_routes_to_area_registry_update(self, tools):
-        await tools.ha_set_area_or_floor(kind="area", id="kitchen", name="K2")
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent["type"] == "config/area_registry/update"
-        assert sent["area_id"] == "kitchen"
-
-    async def test_floor_create_routes_to_floor_registry_create(self, tools):
-        await tools.ha_set_area_or_floor(kind="floor", name="Ground", level=0)
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent["type"] == "config/floor_registry/create"
-        assert sent["name"] == "Ground"
-        assert sent["level"] == 0
-
-    async def test_floor_update_routes_to_floor_registry_update(self, tools):
-        await tools.ha_set_area_or_floor(kind="floor", id="ground", level=2)
-        sent = tools._client.send_websocket_message.call_args.args[0]
-        assert sent["type"] == "config/floor_registry/update"
-        assert sent["floor_id"] == "ground"
-        assert sent["level"] == 2
-
-
-class TestSetAreaOrFloorCrossKindRejection:
-    """Cross-kind parameters (e.g., picture under kind='floor') must be rejected
-    with VALIDATION_INVALID_PARAMETER rather than silently dropped."""
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return AreaTools(client)
-
-    async def test_level_rejected_for_area(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(kind="area", name="Kitchen", level=1)
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "level" in error_data["error"]["message"]
-        # No WS call should have been made
-        tools._client.send_websocket_message.assert_not_called()
-
-    async def test_floor_id_rejected_for_floor(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="floor", name="Ground", floor_id="ground"
-            )
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "floor_id" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
-
-    async def test_picture_rejected_for_floor(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="floor", name="Ground", picture="http://x"
-            )
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "picture" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
-
-    async def test_empty_id_rejected(self, tools):
-        """id='' must not silently route to create — it indicates a malformed call."""
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(kind="area", id="", name="K")
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "non-empty" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
-
-
-class TestSetAreaFloorReferenceValidation:
-    """An area may not be created or updated onto a floor that does not exist.
-
-    HA's area registry stores whatever floor_id it is handed, so the orphan is
-    only visible later as an entry in ``orphaned_areas`` (issue #2159).
-    """
-
-    @staticmethod
-    def _ws_handler(*floor_ids):
-        """Answer the floor-registry preflight, then ack the area write."""
-
-        async def handler(msg):
-            if msg.get("type") == "config/floor_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"floor_id": fid} for fid in floor_ids],
-                }
-            return {
-                "success": True,
-                "result": {"area_id": "kitchen", "name": "Kitchen"},
-            }
-
-        return handler
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return AreaTools(client)
-
-    @staticmethod
-    def _sent_types(tools):
-        return [
-            call.args[0]["type"]
-            for call in tools._client.send_websocket_message.call_args_list
-        ]
-
-    async def test_unknown_floor_rejected_on_create(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="area", name="Kitchen", floor_id="ghost_floor"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["floor_id"] == "ghost_floor"
-        assert self._sent_types(tools) == ["config/floor_registry/list"]
-
-    async def test_unknown_floor_rejected_on_update(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="area", id="kitchen", floor_id="ghost_floor"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert self._sent_types(tools) == ["config/floor_registry/list"]
-
-    async def test_empty_floor_id_clears_without_lookup(self, tools):
-        """floor_id='' is the documented clear sentinel — no floor to validate."""
-        tools._client.send_websocket_message.side_effect = self._ws_handler()
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", id="kitchen", floor_id=""
-        )
-
-        assert result["success"] is True
-        assert self._sent_types(tools) == ["config/area_registry/update"]
-
-    async def test_existing_floor_accepted(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", name="Kitchen", floor_id="ground"
-        )
-
-        assert result["success"] is True
-        assert self._sent_types(tools) == [
-            "config/floor_registry/list",
-            "config/area_registry/create",
-        ]
-
-
-class TestListFloorsAreasFieldsProjection:
-    """Unit tests for fields= top-level projection in ha_list_floors_areas."""
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-
-        def _route(msg):
-            return {
-                "config/area_registry/list": {
-                    "success": True,
-                    "result": [
-                        {"area_id": "kitchen", "name": "Kitchen", "floor_id": "ground"},
-                        {"area_id": "garage", "name": "Garage", "floor_id": None},
-                        {
-                            "area_id": "ghost",
-                            "name": "Ghost",
-                            "floor_id": "deleted_floor_id",
-                        },
-                    ],
-                },
-                "config/floor_registry/list": {
-                    "success": True,
-                    "result": [{"floor_id": "ground", "name": "Ground", "level": 0}],
-                },
-            }[msg["type"]]
-
-        client.send_websocket_message = AsyncMock(side_effect=_route)
-        return AreaTools(client)
-
-    async def test_no_fields_returns_full_response(self, tools):
-        result = await tools.ha_list_floors_areas()
-        assert set(result.keys()) == {
+        assert set(result) == {
             "success",
             "floor_count",
             "area_count",
@@ -340,557 +157,552 @@ class TestListFloorsAreasFieldsProjection:
             "message",
         }
 
-    async def test_fields_projects_top_level(self, tools):
+    async def test_fields_keep_only_the_named_keys_and_success(
+        self, tools: AreaTools, home: None
+    ) -> None:
         result = await tools.ha_list_floors_areas(fields=["floors"])
-        assert set(result.keys()) == {"success", "floors"}
 
-    async def test_multiple_fields_projects_correctly(self, tools):
-        result = await tools.ha_list_floors_areas(fields=["floor_count", "area_count"])
-        assert set(result.keys()) == {"success", "floor_count", "area_count"}
-
-    async def test_success_always_retained(self, tools):
-        result = await tools.ha_list_floors_areas(fields=["floor_count"])
+        assert set(result) == {"success", "floors"}
         assert result["success"] is True
 
-    async def test_unknown_field_emits_warning(self, tools):
+    async def test_unknown_field_is_named_in_a_warning(
+        self, tools: AreaTools, home: None
+    ) -> None:
         result = await tools.ha_list_floors_areas(fields=["nonexistent_key"])
+
         assert result["success"] is True
-        assert "warnings" in result
         assert any("nonexistent_key" in w for w in result["warnings"])
 
-    async def test_bad_fields_integer_raises_tool_error(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_list_floors_areas(fields=123)
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_FAILED"
-        assert error.get("parameter") == "fields"
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            pytest.param(123, id="not-a-list"),
+            pytest.param('["', id="malformed-json"),
+            pytest.param([], id="empty-list"),
+        ],
+    )
+    async def test_unusable_fields_are_refused_by_name(
+        self, tools: AreaTools, fields: Any
+    ) -> None:
+        body = await rejected_call_body(tools.ha_list_floors_areas(fields=fields))
 
-    async def test_bad_json_fields_raises_tool_error(self, tools):
-        with pytest.raises(ToolError):
-            await tools.ha_list_floors_areas(fields='["')
-
-    async def test_empty_fields_list_raises_tool_error(self, tools):
-        """fields=[] is rejected with VALIDATION_FAILED, mirroring area_fields=[]."""
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_list_floors_areas(fields=[])
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_FAILED"
-        assert error.get("parameter") == "fields"
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert body["parameter"] == "fields"
 
 
-class TestListFloorsAreasAreaFieldsProjection:
-    """Unit tests for area_fields= per-record projection across all 3 area buckets."""
+class TestListAreaFieldsProjection:
+    """``area_fields`` slims the area records and nothing else."""
 
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-
-        def _route(msg):
-            return {
-                "config/area_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "area_id": "kitchen",
-                            "name": "Kitchen",
-                            "icon": "mdi:silverware",
-                            "floor_id": "ground",
-                        },
-                        {
-                            "area_id": "garage",
-                            "name": "Garage",
-                            "icon": None,
-                            "floor_id": None,
-                        },
-                        {
-                            "area_id": "ghost",
-                            "name": "Ghost",
-                            "icon": None,
-                            "floor_id": "deleted_floor_id",
-                        },
-                    ],
-                },
-                "config/floor_registry/list": {
-                    "success": True,
-                    "result": [{"floor_id": "ground", "name": "Ground", "level": 0}],
-                },
-            }[msg["type"]]
-
-        client.send_websocket_message = AsyncMock(side_effect=_route)
-        return AreaTools(client)
-
-    async def test_area_fields_projects_nested_areas(self, tools):
-        """Areas nested under floors are projected to only the requested keys."""
-        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
-        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
-        assert all(set(a.keys()) == {"area_id"} for a in ground["areas"])
-
-    async def test_area_fields_projects_unassigned_areas(self, tools):
-        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
-        assert all(set(a.keys()) == {"area_id"} for a in result["unassigned_areas"])
-
-    async def test_area_fields_projects_orphaned_areas(self, tools):
-        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
-        assert all(set(a.keys()) == {"area_id"} for a in result["orphaned_areas"])
-
-    async def test_area_fields_does_not_affect_floor_records(self, tools):
-        """Floor metadata (name, level, etc.) is untouched — only area records project."""
-        result = await tools.ha_list_floors_areas(area_fields=["area_id"])
-        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
-        assert "name" in ground
-        assert "level" in ground
-
-    async def test_area_fields_multiple_keys(self, tools):
+    @pytest.mark.parametrize("bucket", ["nested", "unassigned", "orphaned"])
+    async def test_area_fields_slim_every_area_bucket(
+        self, tools: AreaTools, home: None, bucket: str
+    ) -> None:
         result = await tools.ha_list_floors_areas(area_fields=["area_id", "name"])
-        ground = next(f for f in result["floors"] if f["floor_id"] == "ground")
-        for area in ground["areas"]:
-            assert set(area.keys()) == {"area_id", "name"}
 
-    async def test_area_fields_unknown_key_emits_warning(self, tools):
-        """area_fields with only unknown keys projects records to {} and emits the typo-guard warning across all 3 buckets."""
-        result = await tools.ha_list_floors_areas(area_fields=["are_id"])
-        # Every projected area record is empty, regardless of bucket
-        for floor in result["floors"]:
-            for area in floor["areas"]:
-                assert area == {}, (
-                    f"Expected empty record in nested bucket, got: {area}"
-                )
-        for area in result["unassigned_areas"]:
-            assert area == {}, (
-                f"Expected empty record in unassigned bucket, got: {area}"
-            )
-        for area in result["orphaned_areas"]:
-            assert area == {}, f"Expected empty record in orphaned bucket, got: {area}"
-        # Diagnostic warning is present and names the typo'd key
-        assert "warnings" in result, (
-            "Expected warnings key when all projected records are empty"
-        )
-        assert any("are_id" in w for w in result["warnings"]), (
-            f"Expected typo field name in warning, got: {result['warnings']}"
-        )
+        records = {
+            "nested": result["floors"][0]["areas"],
+            "unassigned": result["unassigned_areas"],
+            "orphaned": result["orphaned_areas"],
+        }[bucket]
+        assert records
+        assert all(set(area) == {"area_id", "name"} for area in records)
 
-    async def test_area_fields_does_not_affect_outer_response_keys(self, tools):
-        """area_fields only projects inside area records; top-level keys are unchanged."""
+    async def test_area_fields_leave_floor_records_and_top_level_keys_alone(
+        self, tools: AreaTools, home: None
+    ) -> None:
         result = await tools.ha_list_floors_areas(area_fields=["area_id"])
-        assert "success" in result
-        assert "floor_count" in result
-        assert "area_count" in result
-        assert "floors" in result
-        assert "unassigned_areas" in result
-        assert "orphaned_areas" in result
 
+        (ground,) = result["floors"]
+        assert ground["name"] == "Ground"
+        assert ground["level"] == 0
+        assert {
+            "success",
+            "floor_count",
+            "area_count",
+            "floors",
+            "unassigned_areas",
+            "orphaned_areas",
+        } <= set(result)
 
-class TestSetAreaLabels:
-    """Area labels replace the existing set (issue #2455); floors reject labels."""
+    async def test_unknown_area_field_empties_every_record_and_warns(
+        self, tools: AreaTools, home: None
+    ) -> None:
+        """A typo in ``area_fields`` would otherwise come back as three lists
+        of empty records with no hint why."""
+        result = await tools.ha_list_floors_areas(area_fields=["are_id"])
 
-    @staticmethod
-    def _ws_handler(*, label_ids=(), floor_ids=(), areas=None, echo_labels=True):
-        """Answer the registry calls ``ha_set_area_or_floor`` makes.
-
-        ``config/area_registry/list`` must answer with a LIST: it is the
-        post-write verification re-read, and a dict there silently sent every
-        test down the "could not verify" branch instead of the path it meant
-        to cover. ``echo_labels=False`` models HA acknowledging the write
-        without echoing the stored labels, which is what forces that re-read.
-        """
-        area_rows = (
-            areas
-            if areas is not None
-            else [{"area_id": "kitchen", "name": "Kitchen", "labels": []}]
-        )
-
-        async def handler(msg):
-            msg_type = msg.get("type")
-            if msg_type == "config/label_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"label_id": lid} for lid in label_ids],
-                }
-            if msg_type == "config/floor_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"floor_id": fid} for fid in floor_ids],
-                }
-            if msg_type == "config/area_registry/list":
-                return {"success": True, "result": area_rows}
-            entry = {"area_id": "kitchen", "name": "Kitchen"}
-            if echo_labels:
-                entry["labels"] = msg.get("labels", [])
-            return {"success": True, "result": entry}
-
-        return handler
-
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return AreaTools(client)
-
-    @staticmethod
-    def _sent_types(tools):
-        return [
-            call.args[0]["type"]
-            for call in tools._client.send_websocket_message.call_args_list
+        every_area = [
+            *(a for floor in result["floors"] for a in floor["areas"]),
+            *result["unassigned_areas"],
+            *result["orphaned_areas"],
         ]
-
-    @staticmethod
-    def _write_message(tools):
-        return next(
-            call.args[0]
-            for call in tools._client.send_websocket_message.call_args_list
-            if call.args[0]["type"].startswith("config/area_registry/")
-        )
-
-    async def test_labels_rejected_for_floor(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="floor", name="Ground", labels=["site_home"]
-            )
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "labels" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
-
-    async def test_unknown_label_rejected_on_create(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler(
-            label_ids=("site_home",)
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="area", name="Kitchen", labels=["ghost_label"]
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["unknown_labels"] == ["ghost_label"]
-        assert self._sent_types(tools) == ["config/label_registry/list"]
-
-    async def test_empty_labels_clears_without_lookup(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler()
-
-        result = await tools.ha_set_area_or_floor(kind="area", id="kitchen", labels=[])
-
-        assert result["success"] is True
-        assert self._sent_types(tools) == ["config/area_registry/update"]
-        assert self._write_message(tools)["labels"] == []
-
-    async def test_create_includes_labels(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler(
-            label_ids=("site_home",)
-        )
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", name="Kitchen", labels=["site_home"]
-        )
-
-        assert result["success"] is True
-        assert self._sent_types(tools) == [
-            "config/label_registry/list",
-            "config/area_registry/create",
-        ]
-        assert self._write_message(tools)["labels"] == ["site_home"]
-
-    async def test_update_replaces_labels(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler(
-            label_ids=("site_home", "hvac")
-        )
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", id="kitchen", labels=["hvac"]
-        )
-
-        assert result["success"] is True
-        sent = self._write_message(tools)
-        assert sent["type"] == "config/area_registry/update"
-        assert sent["labels"] == ["hvac"]
-
-    async def test_omitted_labels_not_in_update_payload(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler()
-
-        await tools.ha_set_area_or_floor(kind="area", id="kitchen", name="K2")
-
-        sent = self._write_message(tools)
-        assert "labels" not in sent
-
-    async def test_labels_verified_from_write_result(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler(
-            label_ids=("site_home",)
-        )
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", name="Kitchen", labels=["site_home"]
-        )
-
-        assert result["success"] is True
-        assert result["area"]["labels"] == ["site_home"]
-        assert "config/area_registry/list" not in self._sent_types(tools)
-
-    async def test_labels_missing_from_result_fail_after_reread(self, tools):
-        async def handler(msg):
-            msg_type = msg.get("type")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": [{"label_id": "site_home"}]}
-            if msg_type == "config/area_registry/create":
-                return {
-                    "success": True,
-                    "result": {"area_id": "kitchen", "name": "Kitchen"},
-                }
-            if msg_type == "config/area_registry/list":
-                return {
-                    "success": True,
-                    "result": [{"area_id": "kitchen", "name": "Kitchen", "labels": []}],
-                }
-            return {"success": True, "result": {}}
-
-        tools._client.send_websocket_message.side_effect = handler
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="area", name="Kitchen", labels=["site_home"]
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "requested labels" in error_data["error"]["message"]
-        assert error_data["expected_labels"] == ["site_home"]
-        # The area itself exists at this point — only the labels are missing,
-        # so a caller must fix the labels, not retry the create.
-        assert error_data["write_committed"] is True
-        assert error_data["area_id"] == "kitchen"
-        assert any(
-            "ha_set_area_or_floor" in s
-            for s in error_data["error"].get("suggestions", [])
-        ), error_data["error"].get("suggestions")
-
-    async def test_labels_confirmed_by_reread_when_result_omits_them(self, tools):
-        tools._client.send_websocket_message.side_effect = self._ws_handler(
-            label_ids=("site_home",),
-            echo_labels=False,
-            areas=[{"area_id": "kitchen", "name": "Kitchen", "labels": ["site_home"]}],
-        )
-
-        result = await tools.ha_set_area_or_floor(
-            kind="area", name="Kitchen", labels=["site_home"]
-        )
-
-        assert result["success"] is True
-        assert self._sent_types(tools) == [
-            "config/label_registry/list",
-            "config/area_registry/create",
-            "config/area_registry/list",
-        ]
-
-    async def test_verify_list_transport_failure_marks_write_committed(self, tools):
-        async def handler(msg):
-            msg_type = msg.get("type")
-            if msg_type == "config/label_registry/list":
-                return {"success": True, "result": [{"label_id": "site_home"}]}
-            if msg_type == "config/area_registry/create":
-                return {
-                    "success": True,
-                    "result": {"area_id": "kitchen", "name": "Kitchen"},
-                }
-            if msg_type == "config/area_registry/list":
-                raise ConnectionError("ws dropped")
-            return {"success": True, "result": {}}
-
-        tools._client.send_websocket_message.side_effect = handler
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="area", name="Kitchen", labels=["site_home"]
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert error_data["write_committed"] is True
-        assert error_data["area_id"] == "kitchen"
-        assert error_data["expected_labels"] == ["site_home"]
-        assert "ws dropped" in error_data["error"]["details"]
+        assert len(every_area) == 3
+        assert all(area == {} for area in every_area)
+        assert any("are_id" in w for w in result["warnings"]), result["warnings"]
 
 
-class TestSetAreaSensorReferences:
-    """Issue #2619: an area's temperature/humidity sensor references could not be
-    set or cleared — the raw WS guard points at ha_set_area_or_floor, which had
-    no parameter for either field."""
+# --- remove ---------------------------------------------------------------------
 
-    @pytest.fixture
-    def tools(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"area_id": "kitchen", "name": "Kitchen"},
-            }
-        )
-        return AreaTools(client)
 
-    @staticmethod
-    def _sent(tools):
-        return tools._client.send_websocket_message.call_args.args[0]
+async def test_removing_an_area_deletes_it_from_core(
+    tools: AreaTools, area_registry: ar.AreaRegistry
+) -> None:
+    garage = area_registry.async_create("Garage")
 
-    async def test_create_includes_sensor_references(self, tools):
+    result = await tools.ha_remove_area_or_floor(kind="area", id=garage.id)
+
+    assert (result["success"], result["kind"], result["area_id"]) == (
+        True,
+        "area",
+        garage.id,
+    )
+    assert area_registry.async_get_area(garage.id) is None
+
+
+async def test_removing_a_floor_deletes_it_from_core(
+    tools: AreaTools, floor_registry: fr.FloorRegistry
+) -> None:
+    ground = floor_registry.async_create("Ground")
+
+    result = await tools.ha_remove_area_or_floor(kind="floor", id=ground.floor_id)
+
+    assert (result["success"], result["kind"], result["floor_id"]) == (
+        True,
+        "floor",
+        ground.floor_id,
+    )
+    assert floor_registry.async_get_floor(ground.floor_id) is None
+
+
+# --- set: area and floor writes -------------------------------------------------
+
+
+async def test_updating_an_area_renames_it_in_core(
+    tools: AreaTools, area_registry: ar.AreaRegistry
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="K2")
+
+    assert result["success"] is True
+    assert _stored(area_registry, kitchen.id).name == "K2"
+
+
+async def test_creating_a_floor_stores_its_level(
+    tools: AreaTools, floor_registry: fr.FloorRegistry
+) -> None:
+    """Level 0 is the ground floor, not "no level"."""
+    result = await tools.ha_set_area_or_floor(kind="floor", name="Ground", level=0)
+
+    floor = floor_registry.async_get_floor(result["floor_id"])
+    assert floor is not None
+    assert (floor.name, floor.level) == ("Ground", 0)
+
+
+async def test_updating_a_floor_changes_its_level(
+    tools: AreaTools, floor_registry: fr.FloorRegistry
+) -> None:
+    ground = floor_registry.async_create("Ground", level=0)
+
+    await tools.ha_set_area_or_floor(kind="floor", id=ground.floor_id, level=2)
+
+    floor = floor_registry.async_get_floor(ground.floor_id)
+    assert floor is not None
+    assert floor.level == 2
+
+
+@pytest.mark.parametrize(
+    ("kind", "params", "refused"),
+    [
+        pytest.param("area", {"level": 1}, ["level"], id="level-on-area"),
+        pytest.param("floor", {"floor_id": "ground"}, ["floor_id"], id="floor_id"),
+        pytest.param("floor", {"picture": "/local/x.png"}, ["picture"], id="picture"),
+        pytest.param("floor", {"labels": ["site_home"]}, ["labels"], id="labels"),
+        pytest.param(
+            "floor",
+            {"temperature_entity_id": "sensor.t", "humidity_entity_id": "sensor.h"},
+            ["temperature_entity_id", "humidity_entity_id"],
+            id="sensors",
+        ),
+        # An explicit clear is still intent for a field floors do not have.
+        pytest.param(
+            "floor",
+            {"temperature_entity_id": None},
+            ["temperature_entity_id"],
+            id="cleared-sensor",
+        ),
+    ],
+)
+async def test_parameter_of_the_other_kind_is_refused_not_dropped(
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+    kind: str,
+    params: dict[str, Any],
+    refused: list[str],
+) -> None:
+    """Dropping it would report success for a write that left the field out."""
+    body = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind=kind, name="Ground", **params)
+    )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["invalid_parameters"] == refused
+    assert all(name in body["error"]["message"] for name in refused)
+    assert not list(area_registry.async_list_areas())
+    assert not list(floor_registry.async_list_floors())
+
+
+# --- set: floor references ------------------------------------------------------
+
+
+async def test_area_create_onto_an_unknown_floor_is_refused(
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    """Core would store the dangling floor_id (issue #2159)."""
+    floor_registry.async_create("Ground")
+
+    body = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", name="Kitchen", floor_id="ghost_floor")
+    )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["floor_id"] == "ghost_floor"
+    assert not list(area_registry.async_list_areas())
+
+
+async def test_area_update_onto_an_unknown_floor_is_refused(
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    ground = floor_registry.async_create("Ground")
+    kitchen = area_registry.async_create("Kitchen", floor_id=ground.floor_id)
+
+    body = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", id=kitchen.id, floor_id="ghost_floor")
+    )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert _stored(area_registry, kitchen.id).floor_id == ground.floor_id
+
+
+async def test_empty_floor_id_takes_the_area_off_its_floor(
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    """``""`` is the clear sentinel, not a floor to look up and reject."""
+    ground = floor_registry.async_create("Ground")
+    kitchen = area_registry.async_create("Kitchen", floor_id=ground.floor_id)
+
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, floor_id="")
+
+    assert result["success"] is True
+    assert _stored(area_registry, kitchen.id).floor_id is None
+
+
+async def test_area_is_created_on_an_existing_floor(
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    floor_registry: fr.FloorRegistry,
+) -> None:
+    ground = floor_registry.async_create("Ground")
+
+    result = await tools.ha_set_area_or_floor(
+        kind="area", name="Kitchen", floor_id=ground.floor_id
+    )
+
+    assert _stored(area_registry, result["area_id"]).floor_id == ground.floor_id
+
+
+# --- set: labels ----------------------------------------------------------------
+
+
+async def test_unknown_label_is_refused_before_the_area_is_created(
+    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+) -> None:
+    """Core drops a label id it does not have and still answers success."""
+    label_registry.async_create("Site Home")
+
+    body = await rejected_call_body(
+        tools.ha_set_area_or_floor(kind="area", name="Kitchen", labels=["ghost_label"])
+    )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["unknown_labels"] == ["ghost_label"]
+    assert not list(area_registry.async_list_areas())
+
+
+async def test_creating_an_area_stores_its_labels(
+    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+) -> None:
+    site_home = label_registry.async_create("Site Home")
+
+    result = await tools.ha_set_area_or_floor(
+        kind="area", name="Kitchen", labels=[site_home.label_id]
+    )
+
+    assert result["area"]["labels"] == [site_home.label_id]
+    assert _stored(area_registry, result["area_id"]).labels == {site_home.label_id}
+
+
+async def test_labels_core_echoes_need_no_reread(
+    hass: HomeAssistant, tools: AreaTools, label_registry: lr.LabelRegistry
+) -> None:
+    site_home = label_registry.async_create("Site Home")
+
+    with received(hass, AREA_LIST) as seen:
         await tools.ha_set_area_or_floor(
-            kind="area",
-            name="Kitchen",
-            temperature_entity_id="sensor.kitchen_temp",
-            humidity_entity_id="sensor.kitchen_hum",
+            kind="area", name="Kitchen", labels=[site_home.label_id]
         )
-        sent = self._sent(tools)
-        assert sent["type"] == "config/area_registry/create"
-        assert sent["temperature_entity_id"] == "sensor.kitchen_temp"
-        assert sent["humidity_entity_id"] == "sensor.kitchen_hum"
 
-    async def test_update_sets_one_reference_and_leaves_the_other_alone(self, tools):
-        await tools.ha_set_area_or_floor(
-            kind="area", id="kitchen", temperature_entity_id="sensor.kitchen_temp"
-        )
-        sent = self._sent(tools)
-        assert sent["type"] == "config/area_registry/update"
-        assert sent["temperature_entity_id"] == "sensor.kitchen_temp"
-        assert "humidity_entity_id" not in sent
+    assert seen[AREA_LIST] == []
 
-    async def test_empty_string_clears_reference(self, tools):
-        """'' is the clear sentinel the sibling fields (icon, picture) already use;
-        HA accepts null to drop the reference."""
-        await tools.ha_set_area_or_floor(
-            kind="area", id="kitchen", temperature_entity_id="", humidity_entity_id=""
-        )
-        sent = self._sent(tools)
-        assert sent["temperature_entity_id"] is None
-        assert sent["humidity_entity_id"] is None
 
-    async def test_omitted_references_absent_from_payload(self, tools):
-        await tools.ha_set_area_or_floor(kind="area", id="kitchen", name="K2")
-        sent = self._sent(tools)
-        assert "temperature_entity_id" not in sent
-        assert "humidity_entity_id" not in sent
+async def test_labels_replace_the_areas_label_set(
+    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+) -> None:
+    site_home = label_registry.async_create("Site Home")
+    hvac = label_registry.async_create("HVAC")
+    kitchen = area_registry.async_create("Kitchen", labels={site_home.label_id})
 
-    async def test_sensor_references_rejected_for_floor(self, tools):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="floor",
-                name="Ground",
-                temperature_entity_id="sensor.t",
-                humidity_entity_id="sensor.h",
-            )
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "temperature_entity_id" in error_data["error"]["message"]
-        assert "humidity_entity_id" in error_data["error"]["message"]
-        tools._client.send_websocket_message.assert_not_called()
+    await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, labels=[hvac.label_id])
 
-    async def test_explicit_none_clears_reference(self, tools):
-        """JSON null clears too: some MCP clients drop an empty-string argument
-        in transit, so '' alone left those clients with no clear path."""
-        await tools.ha_set_area_or_floor(
-            kind="area",
-            id="kitchen",
-            temperature_entity_id=None,
-            humidity_entity_id=None,
-        )
-        sent = self._sent(tools)
-        assert sent["temperature_entity_id"] is None
-        assert sent["humidity_entity_id"] is None
+    assert _stored(area_registry, kitchen.id).labels == {hvac.label_id}
 
-    async def test_explicit_none_clears_floor_icon_picture(self, tools):
-        await tools.ha_set_area_or_floor(
-            kind="area", id="kitchen", floor_id=None, icon=None, picture=None
-        )
-        sent = self._sent(tools)
-        assert sent["floor_id"] is None
-        assert sent["icon"] is None
-        assert sent["picture"] is None
 
-    async def test_explicit_none_sensor_reference_rejected_for_floor(self, tools):
-        """An explicit clear is still intent, so kind='floor' rejects it."""
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_area_or_floor(
-                kind="floor", id="ground", temperature_entity_id=None
-            )
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        tools._client.send_websocket_message.assert_not_called()
+async def test_empty_labels_clear_the_areas_labels(
+    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+) -> None:
+    site_home = label_registry.async_create("Site Home")
+    kitchen = area_registry.async_create("Kitchen", labels={site_home.label_id})
+
+    result = await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, labels=[])
+
+    assert result["success"] is True
+    assert _stored(area_registry, kitchen.id).labels == set()
+
+
+async def test_omitted_labels_are_left_as_they_are(
+    tools: AreaTools, area_registry: ar.AreaRegistry, label_registry: lr.LabelRegistry
+) -> None:
+    site_home = label_registry.async_create("Site Home")
+    kitchen = area_registry.async_create("Kitchen", labels={site_home.label_id})
+
+    await tools.ha_set_area_or_floor(kind="area", id=kitchen.id, name="K2")
+
+    stored = _stored(area_registry, kitchen.id)
+    assert (stored.name, stored.labels) == ("K2", {site_home.label_id})
+
+
+def _kitchen_with_site_home(tools: AreaTools) -> asyncio.Task[dict[str, Any]]:
+    return asyncio.create_task(
+        tools.ha_set_area_or_floor(kind="area", name="Kitchen", labels=["site_home"])
+    )
+
+
+async def test_label_deleted_during_the_create_fails_the_call_as_committed(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """Core drops the label it no longer has and still answers success. The
+    area exists by then, so the caller must fix the labels, not retry the
+    create and get a second Kitchen."""
+    label_registry.async_create("Site Home")
+
+    async with held_command(hass, AREA_CREATE) as create:
+        call = _kitchen_with_site_home(tools)
+        await create.arrived.wait()
+        label_registry.async_delete("site_home")
+        create.release.set()
+        body = await rejected_call_body(call)
+
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "requested labels" in body["error"]["message"]
+    assert body["expected_labels"] == ["site_home"]
+    assert body["write_committed"] is True
+    assert body["area_id"] == "kitchen"
+    assert any("ha_set_area_or_floor" in s for s in body["error"]["suggestions"]), body[
+        "error"
+    ]["suggestions"]
+    assert _stored(area_registry, "kitchen").labels == set()
+
+
+async def test_labels_restored_before_the_reread_count_as_written(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """The reply alone is not the verdict: what Core holds at the re-read is."""
+    label_registry.async_create("Site Home")
+
+    async with (
+        held_command(hass, AREA_CREATE) as create,
+        held_command(hass, AREA_LIST) as reread,
+    ):
+        call = _kitchen_with_site_home(tools)
+        await create.arrived.wait()
+        label_registry.async_delete("site_home")
+        create.release.set()
+        await reread.arrived.wait()
+        restored = label_registry.async_create("Site Home")
+        area_registry.async_update("kitchen", labels={restored.label_id})
+        reread.release.set()
+        (result,) = await asyncio.gather(call)
+
+    assert result["success"] is True
+    assert reread.calls == 1
+
+
+async def test_reread_that_gets_no_answer_still_reports_the_write_committed(
+    hass: HomeAssistant,
+    tools: AreaTools,
+    client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+    label_registry: lr.LabelRegistry,
+) -> None:
+    """Reported as a failed create, the dropped re-read would invite a retry
+    that duplicates the area."""
+    label_registry.async_create("Site Home")
+    socket = await pooled_socket(client)
+
+    async with held_command(hass, AREA_CREATE) as create:
+        with dropped_on(hass, AREA_LIST, socket):
+            call = _kitchen_with_site_home(tools)
+            await create.arrived.wait()
+            label_registry.async_delete("site_home")
+            create.release.set()
+            body = await rejected_call_body(call)
+
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert (
+        body["error"]["message"]
+        == "Area write succeeded, but label verification failed"
+    )
+    assert body["write_committed"] is True
+    assert body["area_id"] == "kitchen"
+    assert body["expected_labels"] == ["site_home"]
+    assert area_registry.async_get_area("kitchen") is not None
+
+
+# --- set: temperature and humidity sensors (issue #2619) ------------------------
+
+
+async def test_creating_an_area_stores_its_sensors(
+    tools: AreaTools, area_registry: ar.AreaRegistry, sensors: None
+) -> None:
+    result = await tools.ha_set_area_or_floor(
+        kind="area",
+        name="Kitchen",
+        temperature_entity_id="sensor.kitchen_temp",
+        humidity_entity_id="sensor.kitchen_hum",
+    )
+
+    stored = _stored(area_registry, result["area_id"])
+    assert (stored.temperature_entity_id, stored.humidity_entity_id) == (
+        "sensor.kitchen_temp",
+        "sensor.kitchen_hum",
+    )
+
+
+async def test_setting_one_sensor_leaves_the_other_alone(
+    tools: AreaTools, area_registry: ar.AreaRegistry, furnished_kitchen: str
+) -> None:
+    await tools.ha_set_area_or_floor(
+        kind="area",
+        id=furnished_kitchen,
+        temperature_entity_id="sensor.kitchen_temp_2",
+    )
+
+    stored = _stored(area_registry, furnished_kitchen)
+    assert (stored.temperature_entity_id, stored.humidity_entity_id) == (
+        "sensor.kitchen_temp_2",
+        "sensor.kitchen_hum",
+    )
+
+
+async def test_empty_string_clears_the_sensors(
+    tools: AreaTools, area_registry: ar.AreaRegistry, furnished_kitchen: str
+) -> None:
+    await tools.ha_set_area_or_floor(
+        kind="area",
+        id=furnished_kitchen,
+        temperature_entity_id="",
+        humidity_entity_id="",
+    )
+
+    stored = _stored(area_registry, furnished_kitchen)
+    assert (stored.temperature_entity_id, stored.humidity_entity_id) == (None, None)
+
+
+# --- the registered tool, as an MCP client calls it ------------------------------
+
+
+@pytest.fixture
+async def set_tool(client: HomeAssistantClient) -> Tool:
+    """``ha_set_area_or_floor`` as registered: null and omission differ only
+    at the FastMCP boundary."""
+    mcp = FastMCP("test")
+    register_area_tools(mcp, client)
+    tool = await mcp.get_tool("ha_set_area_or_floor")
+    assert tool is not None
+    return tool
 
 
 class TestClearableParamsThroughMcp:
-    """The null-vs-omitted distinction only exists at the FastMCP boundary, so
-    these drive the registered tool the way a client does."""
-
-    @pytest.fixture
-    async def tool(self) -> tuple[Any, MagicMock]:
-        from ha_mcp._vendor.fastmcp import FastMCP
-        from ha_mcp.tools.tools_areas import register_area_tools
-
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"area_id": "kitchen", "name": "Kitchen"},
-            }
-        )
-        mcp = FastMCP("test")
-        register_area_tools(mcp, client)
-        tool = await mcp.get_tool("ha_set_area_or_floor")
-        return tool, client
-
-    _CLEARABLE = (
-        "floor_id",
-        "icon",
-        "picture",
-        "temperature_entity_id",
-        "humidity_entity_id",
-    )
-
     async def test_schema_advertises_null_and_omission_without_a_default(
-        self, tool: tuple[Any, MagicMock]
+        self, set_tool: Tool
     ) -> None:
-        tool, _ = tool
-        props = tool.parameters["properties"]
-        for name in self._CLEARABLE:
+        props = set_tool.parameters["properties"]
+        for name in _CLEARABLE:
             assert "default" not in props[name], name
             assert {"type": "null"} in props[name]["anyOf"], name
-            assert name not in tool.parameters.get("required", []), name
+            assert name not in set_tool.parameters.get("required", []), name
 
-    async def test_omitted_params_are_absent_from_the_write(
-        self, tool: tuple[Any, MagicMock]
+    async def test_omitted_params_leave_the_area_as_it_is(
+        self,
+        set_tool: Tool,
+        area_registry: ar.AreaRegistry,
+        furnished_kitchen: str,
     ) -> None:
-        tool, client = tool
-        await tool.run({"kind": "area", "id": "kitchen", "name": "K2"})
-        sent = client.send_websocket_message.call_args.args[0]
-        assert sent == {
-            "type": "config/area_registry/update",
-            "area_id": "kitchen",
-            "name": "K2",
-        }
+        before = _clearables(_stored(area_registry, furnished_kitchen))
+
+        await set_tool.run({"kind": "area", "id": furnished_kitchen, "name": "K2"})
+
+        stored = _stored(area_registry, furnished_kitchen)
+        assert stored.name == "K2"
+        assert _clearables(stored) == before
 
     async def test_explicit_null_clears_every_clearable_param(
-        self, tool: tuple[Any, MagicMock]
+        self,
+        set_tool: Tool,
+        area_registry: ar.AreaRegistry,
+        furnished_kitchen: str,
     ) -> None:
-        tool, client = tool
-        await tool.run(
-            {"kind": "area", "id": "kitchen", **dict.fromkeys(self._CLEARABLE)}
+        """Some MCP clients drop an empty-string argument in transit, so null
+        must clear as ``""`` does."""
+        await set_tool.run(
+            {"kind": "area", "id": furnished_kitchen, **dict.fromkeys(_CLEARABLE)}
         )
-        sent = client.send_websocket_message.call_args.args[0]
-        for name in self._CLEARABLE:
-            assert name in sent and sent[name] is None, name
 
-    async def test_empty_string_still_clears(self, tool: tuple[Any, MagicMock]) -> None:
-        tool, client = tool
-        await tool.run({"kind": "area", "id": "kitchen", "temperature_entity_id": ""})
-        sent = client.send_websocket_message.call_args.args[0]
-        assert sent["temperature_entity_id"] is None
+        stored = _clearables(_stored(area_registry, furnished_kitchen))
+        assert stored == dict.fromkeys(_CLEARABLE)
 
     async def test_omitted_params_do_not_leak_the_sentinel_into_usage_logs(
-        self, tool: tuple[Any, MagicMock]
+        self, set_tool: Tool, area_registry: ar.AreaRegistry
     ) -> None:
         """log_tool_usage records the call's kwargs, and ha_report_issue returns
         those entries as structured content, so the UNSET default must serialize."""
-        from ha_mcp.utils.usage_logger import get_recent_logs
+        kitchen = area_registry.async_create("Kitchen")
 
-        tool, _ = tool
-        await tool.run({"kind": "area", "id": "kitchen", "name": "K2"})
+        await set_tool.run({"kind": "area", "id": kitchen.id, "name": "K2"})
+
         entry = get_recent_logs(max_entries=1)[-1]
         assert entry["tool_name"] == "ha_set_area_or_floor"
         json.dumps(entry)
