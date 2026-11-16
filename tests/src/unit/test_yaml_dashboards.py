@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from custom_components.ha_mcp_tools.const import (
     DASHBOARD_URL_PATH_PATTERN,
@@ -645,25 +646,35 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["success"] is False
         assert "command_line" in result["error"]
 
-    async def test_single_key_post_action_for_template(
-        self, tmp_path: Path, edit_yaml: EditYaml
+    async def test_the_reload_advertised_for_template_loads_the_new_entity(
+        self, hass: HomeAssistant, tmp_path: Path, edit_yaml: EditYaml
     ) -> None:
-        """template -> reload_available; covers post-action lookup for single-key kind."""
-        cfg = tmp_path / "configuration.yaml"
-        cfg.write_text("")
+        """The edit is on disk only; the service the reply names is what makes
+        Core read it, so calling it must create the entity."""
+        (tmp_path / "configuration.yaml").write_text("")
+        for domain in ("homeassistant", "template"):
+            assert await async_setup_component(hass, domain, {})
 
         result = await edit_yaml(
             {
                 "file": "configuration.yaml",
                 "action": "add",
                 "yaml_path": "template",
-                "content": ("- sensor:\n    - name: t\n      state: 'ok'\n"),
+                "content": "- sensor:\n    - name: t\n      state: 'ok'\n",
                 "backup": False,
             }
         )
         assert result["success"] is True, result
         assert result["post_action"] == "reload_available"
-        assert result["reload_service"] == "homeassistant.reload_custom_templates"
+        assert hass.states.get("sensor.t") is None
+
+        domain, service = result["reload_service"].split(".")
+        await hass.services.async_call(domain, service, blocking=True)
+        await hass.async_block_till_done()
+
+        state = hass.states.get("sensor.t")
+        assert state is not None
+        assert state.state == "ok"
 
     async def test_single_key_post_action_for_shell_command(
         self, tmp_path: Path, edit_yaml: EditYaml

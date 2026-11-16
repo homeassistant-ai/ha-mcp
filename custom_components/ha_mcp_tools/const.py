@@ -225,7 +225,7 @@ YAML_KEY_DENYLIST = frozenset(
 YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
     "template": {
         "post_action": "reload_available",
-        "reload_service": "homeassistant.reload_custom_templates",
+        "reload_service": "template.reload",
     },
     "mqtt": {
         "post_action": "reload_available",
