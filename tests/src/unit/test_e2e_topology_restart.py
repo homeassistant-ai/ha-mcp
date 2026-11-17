@@ -1,12 +1,19 @@
 """Wait for Supervisor's existing Core job before requesting another restart."""
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from ..e2e import _conftest_topology as topology
+from ..e2e._conftest_topology import _wait_for_core_job
+
+
+@pytest.fixture(autouse=True)
+def _haos_runtime_import_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -31,7 +38,7 @@ def test_core_job_wait_observes_completion(monkeypatch, nested):
         topology, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleep)
     )
 
-    topology._wait_for_core_job({"base_url": "http://ha.invalid", "token": "test"})
+    _wait_for_core_job({"base_url": "http://ha.invalid", "token": "test"})
 
     assert command.call_count == 2
     assert command.call_args.args[2] == {
@@ -62,7 +69,7 @@ def test_core_job_wait_is_bounded(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="previous Core job did not finish"):
-        topology._wait_for_core_job(
+        _wait_for_core_job(
             {"base_url": "http://ha.invalid", "token": "test"}, timeout=2
         )
     command.assert_called_once()
