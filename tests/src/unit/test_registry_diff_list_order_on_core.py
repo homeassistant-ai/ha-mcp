@@ -14,6 +14,7 @@ it does not depend on the hash seed.
 
 from __future__ import annotations
 
+import uuid
 from typing import cast
 
 import orjson
@@ -362,8 +363,9 @@ async def test_a_helper_diff_reports_options_in_another_order(
     are compared in the order given: an input_select keeps its options in that
     order, and another order is a difference."""
     assert await async_setup_component(hass, "input_select", {})
+    name = f"Mode {uuid.uuid4().hex[:8]}"
     created = await core_client.send_websocket_message(
-        {"type": "input_select/create", "name": "Mode", "options": ["first", "second"]}
+        {"type": "input_select/create", "name": name, "options": ["first", "second"]}
     )
     item_id = created["result"]["id"]
     path = await backup_manager.maybe_snapshot(
@@ -374,7 +376,7 @@ async def test_a_helper_diff_reports_options_in_another_order(
         {
             "type": "input_select/update",
             "input_select_id": item_id,
-            "name": "Mode",
+            "name": name,
             "options": ["second", "first"],
         }
     )
@@ -391,7 +393,11 @@ async def test_a_warning_stored_in_the_snapshot_file_is_not_the_diffs(
     snapshot file carries."""
     assert await async_setup_component(hass, "input_select", {})
     created = await core_client.send_websocket_message(
-        {"type": "input_select/create", "name": "Mode", "options": ["first", "second"]}
+        {
+            "type": "input_select/create",
+            "name": f"Mode {uuid.uuid4().hex[:8]}",
+            "options": ["first", "second"],
+        }
     )
     path = await backup_manager.maybe_snapshot(
         "helper_input_select", created["result"]["id"], force=True
