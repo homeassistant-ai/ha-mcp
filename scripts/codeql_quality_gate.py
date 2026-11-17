@@ -279,7 +279,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "import translate_locales",
         "Both forms are load-bearing in this one file. The module object is "
         "what the monkeypatch sites need — translate_locales.time, .httpx and "
-        "._call_gemini are replaced per test, twenty-three attributes in all — "
+        ".call_gemini are replaced per test, twenty-three attributes in all — "
         "while the from-imports name the API under test at seventy call sites. "
         "Collapsing either direction requalifies those without making anything "
         "clearer. The pair predates this entry and is unchanged from master; "

@@ -238,7 +238,7 @@ When the engine is unavailable, a human may translate the dry-run list, run
 `python scripts/generate_locales.py` and
 `python scripts/update_locale_baseline.py`, and open a normal pull request.
 Human edits win because the machine touches only missing or stale strings. The
-provider boundary is `_call_gemini`, configured by `GEMINI_API_URL`,
+provider boundary is `call_gemini`, configured by `GEMINI_API_URL`,
 `GEMINI_MODEL`, and `GEMINI_API_KEY`.
 
 The Webhook Proxy app and its bundled integration remain English-only by

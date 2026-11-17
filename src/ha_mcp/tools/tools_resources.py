@@ -39,13 +39,13 @@ from .resource_codec import (
     _MAX_CONTENT_BUDGET,
     MAX_CONTENT_SIZE,
     _check_ws_error,
-    _data_uri_for,
-    _decode_inline_content,
-    _is_data_url,
     _is_preview_of,
     _looks_like_preview,
     _process_resource_list,
     content_sha256,
+    data_uri_for,
+    decode_inline_content,
+    is_data_url,
     summarize_resources,
 )
 from .resource_patch import (
@@ -427,7 +427,7 @@ class ResourceTools:
         # size / type checks and the #1072 YAML-misroute rejection) now that
         # the inline format is documented in this docstring. Route callers to
         # content=, where those guards run.
-        if url is not None and _is_data_url(url):
+        if url is not None and is_data_url(url):
             raise_tool_error(
                 create_error_response(
                     code=ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -549,7 +549,7 @@ class ResourceTools:
         if resource_id is not None and check_preview:
             await self._reject_truncated_preview_resave(content, resource_id)
 
-        resource_url = _data_uri_for(content, resource_type)
+        resource_url = data_uri_for(content, resource_type)
 
         try:
             result, action = await self._upsert_resource(
@@ -961,7 +961,7 @@ def _stored_content_hash(result: Any) -> str | None:
     """
     item = result.get("result") if isinstance(result, dict) else None
     url = item.get("url") if isinstance(item, dict) else None
-    decoded = _decode_inline_content(url) if isinstance(url, str) else None
+    decoded = decode_inline_content(url) if isinstance(url, str) else None
     return content_sha256(decoded[0]) if decoded else None
 
 

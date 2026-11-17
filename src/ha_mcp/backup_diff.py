@@ -22,7 +22,7 @@ _DICT_KIND: Literal["dict"] = "dict"
 # Output cap for the text (file/YAML) diff. Bounded like the manager's ``_MAX_PATCH_OPS``
 # so a pathological whole-file rewrite stays token-friendly; the response
 # sets ``truncated`` and points the caller at the full snapshot via view.
-_MAX_DIFF_LINES = 400
+MAX_DIFF_LINES = 400
 
 
 # --------------------------- diff helpers -----------------------------------
@@ -30,7 +30,7 @@ _MAX_DIFF_LINES = 400
 
 class DiffCounts(TypedDict):
     """Per-op-class tallies for a diff patch. ``total`` is the op count;
-    ``add + remove + replace`` equals it today (see ``_summarize_patch_counts``)."""
+    ``add + remove + replace`` equals it today (see ``summarize_patch_counts``)."""
 
     add: int
     remove: int
@@ -112,7 +112,7 @@ class DiffResponseText(TypedDict):
     truncated: bool
 
 
-def _build_text_diff_response(
+def build_text_diff_response(
     name: str,
     domain: str,
     entity_id: str,
@@ -127,7 +127,7 @@ def _build_text_diff_response(
     the diff is empty (mirrors the dict branch's missing-target handling).
     The diff recovers ``stored`` *from* ``current`` (snapshot is the target
     state), consistent with the JSON-Patch direction. Output is bounded by
-    ``_MAX_DIFF_LINES``; overflow sets ``truncated``.
+    ``MAX_DIFF_LINES``; overflow sets ``truncated``.
     """
     if current is None:
         return {
@@ -152,9 +152,9 @@ def _build_text_diff_response(
         lines.append(line.removesuffix("\n"))
         if not line.endswith("\n"):
             lines.append("\\ No newline at end of file")
-    truncated = len(lines) > _MAX_DIFF_LINES
+    truncated = len(lines) > MAX_DIFF_LINES
     if truncated:
-        lines = lines[:_MAX_DIFF_LINES]
+        lines = lines[:MAX_DIFF_LINES]
     return {
         "kind": _TEXT_KIND,
         "backup_name": name,
@@ -168,7 +168,7 @@ def _build_text_diff_response(
     }
 
 
-def _compute_json_patch(
+def compute_json_patch(
     stored: Any, current: Any, max_ops: int, out: list[dict[str, Any]]
 ) -> bool:
     """Generate an RFC 6902 JSON-Patch from ``current`` to ``stored``.
@@ -219,7 +219,7 @@ def _diff_node(
     # a different state for HA toggles. The different-type branch
     # forces a replace unconditionally. No post-append length guard here
     # (unlike the loop sites in the dict/list walkers below): this append is terminal, and
-    # ``_compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
+    # ``compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
     # one final overflow op before trimming.
     out.append({"op": "replace", "path": path or "", "value": stored})
 
@@ -290,7 +290,7 @@ def _pointer_segment(key: str) -> str:
     return key.replace("~", "~0").replace("/", "~1")
 
 
-def _summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
+def summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
     """Tally op classes. ``add + remove + replace == total`` holds today
     because ``_diff_node`` only emits those three ops; if a future change
     starts emitting ``move``/``copy``/``test``, the class counts would sum

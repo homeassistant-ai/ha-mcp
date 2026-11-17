@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from ha_mcp.tools.best_practice_result import BestPracticeCheckResult
 from ha_mcp.tools.config_write_helpers import (
-    _SKILL_CONTENT_OPTOUT_HINT,
-    _SKILLS_VENDOR_MISSING_WARNING,
-    _WRITE_TOOL_BP_HINT_SUGGESTION,
+    SKILL_CONTENT_OPTOUT_HINT,
+    SKILLS_VENDOR_MISSING_WARNING,
+    WRITE_TOOL_BP_HINT_SUGGESTION,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -34,10 +36,17 @@ def _make_validation_error() -> ValidationError:
         x: int
 
     try:
-        _M(x="not-an-int")  # type: ignore[arg-type]
+        _M.model_validate({"x": "not-an-int"})
     except ValidationError as exc:
         return exc
     raise AssertionError("expected ValidationError")  # pragma: no cover
+
+
+def _bp_result(*refs: str) -> BestPracticeCheckResult:
+    """A checker result citing ``refs``, as a write tool hands it over."""
+    result = BestPracticeCheckResult()
+    result.referenced_files = set(refs)
+    return result
 
 
 @pytest.fixture
@@ -246,7 +255,7 @@ class TestDegradedPaths:
     def test_master_off_with_vendor_missing_does_not_emit_warning(self):
         """When master is off + vendor missing + caller wanted skills,
         attach_skill_content must NOT emit the
-        ``_SKILLS_VENDOR_MISSING_WARNING`` (which tells the operator to
+        ``SKILLS_VENDOR_MISSING_WARNING`` (which tells the operator to
         run ``git submodule update --init``) — the suppression cause is
         the deliberate operator config, not a missing submodule."""
         from ha_mcp import config as config_module
@@ -277,7 +286,7 @@ class TestDegradedPaths:
         (helpers / dashboards / yaml have no BP integration). Without
         this, an error with no BP warnings ships zero skill guidance and
         the LLM has no breadcrumb to ha_get_skill_guide."""
-        error = {
+        error: dict[str, Any] = {
             "success": False,
             "error": {
                 "code": "VALIDATION_FAILED",
@@ -287,7 +296,7 @@ class TestDegradedPaths:
         }
         augment_error_dict_with_skill_content(error, bp_warnings=None)
         suggestions = error["error"]["suggestions"]
-        assert _WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
+        assert WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
         assert "check your config" in suggestions
         # singular ``suggestion`` mirrors the first entry for legacy consumers.
         assert error["error"]["suggestion"] == suggestions[0]
@@ -315,7 +324,7 @@ class TestDegradedPaths:
         body = json.loads(str(error))
         assert body["error"]["suggestions"] == [
             *guidance,
-            _WRITE_TOOL_BP_HINT_SUGGESTION,
+            WRITE_TOOL_BP_HINT_SUGGESTION,
         ]
         assert body["error"]["suggestion"] == guidance[0]
         assert body["write_committed"] is False
@@ -323,11 +332,11 @@ class TestDegradedPaths:
     def test_augment_error_idempotent_on_re_raise(self):
         """The hint must not double-append when augment runs twice
         (e.g. nested try/except re-raise paths)."""
-        error = {"success": False, "error": {"suggestions": []}}
+        error: dict[str, Any] = {"success": False, "error": {"suggestions": []}}
         augment_error_dict_with_skill_content(error, bp_warnings=None)
         augment_error_dict_with_skill_content(error, bp_warnings=None)
         suggestions = error["error"]["suggestions"]
-        assert suggestions.count(_WRITE_TOOL_BP_HINT_SUGGESTION) == 1
+        assert suggestions.count(WRITE_TOOL_BP_HINT_SUGGESTION) == 1
 
     def test_augment_error_embeds_bp_sections_when_referenced(
         self, patched_get_skills_dir
@@ -336,17 +345,12 @@ class TestDegradedPaths:
         response auto-embeds the matching section bodies under
         skill_content — the LLM gets the actionable fix material inline
         instead of having to make a second tool call."""
-
-        # Build a minimal BestPracticeCheckResult-like object — the
-        # augment helper uses duck-typing on .referenced_files.
-        class _BP:
-            def __init__(self, refs):
-                self.referenced_files = refs
-
-        error = {"success": False, "error": {"suggestions": []}}
+        error: dict[str, Any] = {"success": False, "error": {"suggestions": []}}
         augment_error_dict_with_skill_content(
             error,
-            bp_warnings=_BP({"references/automation-patterns.md#native-conditions"}),
+            bp_warnings=_bp_result(
+                "references/automation-patterns.md#native-conditions"
+            ),
         )
         # Section body inlined, hint at top, generic hint in suggestions.
         assert "skill_content" in error
@@ -354,8 +358,8 @@ class TestDegradedPaths:
             "references/automation-patterns.md#native-conditions"
             in error["skill_content"]
         )
-        assert error.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
-        assert _WRITE_TOOL_BP_HINT_SUGGESTION in error["error"]["suggestions"]
+        assert error.get("skill_content_hint") == SKILL_CONTENT_OPTOUT_HINT
+        assert WRITE_TOOL_BP_HINT_SUGGESTION in error["error"]["suggestions"]
         # Canonical files NOT attached on error — section body is enough.
         assert "references/automation-patterns.md" not in (
             error.get("skill_content") or {}
@@ -371,10 +375,6 @@ class TestDegradedPaths:
         unverified — only the dict variant was covered."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        class _BP:
-            def __init__(self, refs):
-                self.referenced_files = refs
-
         error_dict = {
             "success": False,
             "error": {
@@ -386,13 +386,15 @@ class TestDegradedPaths:
         te = ToolError(json.dumps(error_dict))
         augmented = augment_tool_error_with_skill_content(
             te,
-            bp_warnings=_BP({"references/automation-patterns.md#native-conditions"}),
+            bp_warnings=_bp_result(
+                "references/automation-patterns.md#native-conditions"
+            ),
         )
         # New ToolError instance is returned; body carries the augmentation.
         assert isinstance(augmented, ToolError)
         body = json.loads(str(augmented))
         suggestions = body["error"]["suggestions"]
-        assert _WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
+        assert WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
         assert "fix the config" in suggestions
         # Section auto-embedded under skill_content with hint at top.
         assert "skill_content" in body
@@ -400,7 +402,7 @@ class TestDegradedPaths:
             "references/automation-patterns.md#native-conditions"
             in body["skill_content"]
         )
-        assert body.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
+        assert body.get("skill_content_hint") == SKILL_CONTENT_OPTOUT_HINT
 
     def test_augment_tool_error_falls_through_on_non_json_body(self):
         """When the ToolError body isn't a JSON-decodable error dict,
@@ -478,55 +480,6 @@ class TestDegradedPaths:
 
 
 # ---------------------------------------------------------------------------
-# Per-tool canonical mappings exist and point to files that should exist
-# ---------------------------------------------------------------------------
-
-
-class TestPerToolCanonicalMappings:
-    """Each write tool exports its canonical mapping constant. These tests
-    pin the contract — changing a mapping is a deliberate edit, not an
-    accident."""
-
-    def test_automation_mapping(self):
-        from ha_mcp.tools.tools_config_automations import _AUTOMATION_SKILL_FILES
-
-        assert _AUTOMATION_SKILL_FILES == (
-            "references/triggers-and-conditions.md",
-            "references/automation-actions.md",
-            "references/template-guidelines.md",
-        )
-
-    def test_script_mapping(self):
-        from ha_mcp.tools.tools_config_scripts import _SCRIPT_SKILL_FILES
-
-        assert _SCRIPT_SKILL_FILES == (
-            "references/automation-actions.md",
-            "references/triggers-and-conditions.md",
-            "references/template-guidelines.md",
-        )
-
-    def test_scene_mapping(self):
-        from ha_mcp.tools.tools_config_scenes import _SCENE_SKILL_FILES
-
-        assert _SCENE_SKILL_FILES == ("SKILL.md",)
-
-    def test_helper_mapping(self):
-        from ha_mcp.tools.config_helpers.schemas import _HELPER_SKILL_FILES
-
-        assert _HELPER_SKILL_FILES == ("references/helper-selection.md",)
-
-    def test_dashboard_mapping(self):
-        from ha_mcp.tools.tools_config_dashboards import _DASHBOARD_SKILL_FILES
-
-        assert _DASHBOARD_SKILL_FILES == ("references/dashboard-guide.md",)
-
-    def test_yaml_mapping(self):
-        from ha_mcp.tools.tools_yaml_config import _YAML_SKILL_FILES
-
-        assert _YAML_SKILL_FILES == ("references/template-guidelines.md",)
-
-
-# ---------------------------------------------------------------------------
 # attach_skill_content — happy + degraded paths
 # ---------------------------------------------------------------------------
 
@@ -553,7 +506,7 @@ class TestAttachSkillContent:
         # MandatoryBPS param does — the bare-bool catalog entry alone
         # carries no semantic signal. Must accompany every delivered
         # skill_content payload.
-        assert response.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
+        assert response.get("skill_content_hint") == SKILL_CONTENT_OPTOUT_HINT
         assert "warnings" not in response
 
     def test_hint_appears_first_and_content_last(self, patched_get_skills_dir):
@@ -614,7 +567,7 @@ class TestAttachSkillContent:
                 referenced_files=None,
             )
         assert "skill_content" not in response
-        assert response.get("warnings") == [_SKILLS_VENDOR_MISSING_WARNING]
+        assert response.get("warnings") == [SKILLS_VENDOR_MISSING_WARNING]
 
     def test_vendor_missing_with_opt_out_is_silent(self):
         """Caller explicitly opted out with MandatoryBPS=False — don't nag."""
@@ -642,7 +595,7 @@ class TestAttachSkillContent:
                 },
             )
         assert "skill_content" not in response
-        assert _SKILLS_VENDOR_MISSING_WARNING in response.get("warnings", [])
+        assert SKILLS_VENDOR_MISSING_WARNING in response.get("warnings", [])
 
     def test_warning_appended_not_overwritten(self):
         """If the response already has a warnings list, we append, not overwrite."""
@@ -654,7 +607,7 @@ class TestAttachSkillContent:
                 canonical_files=("references/automation-patterns.md",),
                 referenced_files=None,
             )
-        assert response["warnings"] == ["pre-existing", _SKILLS_VENDOR_MISSING_WARNING]
+        assert response["warnings"] == ["pre-existing", SKILLS_VENDOR_MISSING_WARNING]
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ its network-free logic is pinned here: the validation gate that decides
 whether an engine answer may be written at all, the baseline-diff planning
 that decides what gets retranslated or deleted, the request chunking, the
 retry/backoff branching (with a monkeypatched transport — no real network),
-and the catalog write-back. Only ``_call_gemini``'s happy path against the
+and the catalog write-back. Only ``call_gemini``'s happy path against the
 real API is left to the live workflow run.
 """
 
@@ -13,30 +13,32 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO_ROOT / "scripts"))
-import translate_locales  # noqa: E402
-from translate_locales import (  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+import translate_locales
+from translate_locales import (
     Plan,
     WorkItem,
-    _chunk,
-    _flatten,
-    _plan_locale_groups,
-    _plan_locale_messages,
-    _plan_locale_tools,
-    _unflatten,
-    _validate,
+    chunk_batch,
+    flatten,
+    plan_locale_groups,
+    plan_locale_messages,
+    plan_locale_tools,
+    unflatten,
+    validate,
 )
 
-from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES  # noqa: E402
+from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 # Catalogs that carry translated text. A catalog with no `messages` yet has no
 # wording to sample, so sampling it would fail on emptiness rather than on the
@@ -52,7 +54,7 @@ _TRANSLATED_LOCALES = sorted(
     and json.loads(path.read_text("utf-8")).get("messages")
 )
 # The other authored surface samples its own catalog, never the settings one
-# (`_surface_catalogs`), so it needs its own list. Read the production constant
+# (`surface_catalogs`), so it needs its own list. Read the production constant
 # rather than rebuilding the path: a catalog this list misses is a catalog the
 # check below silently never runs on. An empty catalog is excluded for the same
 # reason as above: the locale README allows an empty starting catalog, which
@@ -62,7 +64,7 @@ _COMPONENT_LOCALES = sorted(
     for path in translate_locales.COMPONENT_DIR.glob("*.json")
     if path.stem != "en"
     and path.stem not in BEST_EFFORT_LOCALES
-    and _flatten(json.loads(path.read_text("utf-8")))
+    and flatten(json.loads(path.read_text("utf-8")))
 )
 
 
@@ -72,6 +74,9 @@ _SAMPLE_ENGLISH = {
     "short": "Your browser blocks storage.",
     "middle": "Reload the page, then re-apply your changes.",
 }
+# English that speaks to the reader: what a style sample must carry for the
+# engine to see how a catalog addresses its reader.
+_ADDRESSES_READER = re.compile(r"\byou(?:|r|rs|rself|rselves)\b", re.IGNORECASE)
 
 
 def _item(section: str = "messages", english: str = "Hello {name}") -> WorkItem:
@@ -80,7 +85,7 @@ def _item(section: str = "messages", english: str = "Hello {name}") -> WorkItem:
 
 class TestValidate:
     def test_accepts_a_plain_translation(self) -> None:
-        assert _validate(_item(english="Hello"), "Hallo") is None
+        assert validate(_item(english="Hello"), "Hallo") is None
 
     def test_refuses_any_number_the_english_does_not_state(self) -> None:
         """A swapped, dropped or invented number, or an English digit spelled out.
@@ -96,36 +101,35 @@ class TestValidate:
             ("keeps entries", "behaelt 30 Eintraege"),
             ("the 5 experimental sub-flags", "die fuenf experimentellen Unterschalter"),
         ):
-            assert _validate(_item(english=english), bad) is not None, (english, bad)
-        assert _validate(_item(english="Range 1-600."), "Bereich 1-600.") is None
+            assert validate(_item(english=english), bad) is not None, (english, bad)
+        assert validate(_item(english="Range 1-600."), "Bereich 1-600.") is None
 
     def test_rejects_empty_and_non_string(self) -> None:
-        assert _validate(_item(), "") is not None
-        assert _validate(_item(), "   ") is not None
-        assert _validate(_item(), None) is not None
-        assert _validate(_item(), 42) is not None
+        assert validate(_item(), "") is not None
+        assert validate(_item(), "   ") is not None
+        assert validate(_item(), None) is not None
+        assert validate(_item(), 42) is not None
 
     def test_rejects_placeholder_drift_both_directions(self) -> None:
-        assert _validate(_item(), "Hallo") is not None  # dropped {name}
-        assert _validate(_item(english="Hello"), "Hallo {name}") is not None
-        assert _validate(_item(), "Hallo {name}") is None
+        assert validate(_item(), "Hallo") is not None  # dropped {name}
+        assert validate(_item(english="Hello"), "Hallo {name}") is not None
+        assert validate(_item(), "Hallo {name}") is None
 
     def test_rejects_markup_outside_the_allowlist_in_messages(self) -> None:
         english = "a <code>word</code>"
-        assert _validate(_item(english=english), "ein <b>Wort</b>") is not None
-        assert _validate(_item(english=english), "ein <CODE>Wort</CODE>") is not None
-        assert _validate(_item(english=english), "ein <code>Wort</code>") is None
+        assert validate(_item(english=english), "ein <b>Wort</b>") is not None
+        assert validate(_item(english=english), "ein <CODE>Wort</CODE>") is not None
+        assert validate(_item(english=english), "ein <code>Wort</code>") is None
 
     def test_rejects_formatting_tag_multiset_drift(self) -> None:
         """A dropped closing tag or an invented allowlisted tag is still
         malformed markup for tHtml, even though every tag passes the
         allowlist individually."""
         english = "a <strong>bold</strong> word"
-        assert _validate(_item(english=english), "ein <strong>fettes Wort") is not None
-        assert _validate(_item(english="plain"), "ein <code>Wort</code>") is not None
+        assert validate(_item(english=english), "ein <strong>fettes Wort") is not None
+        assert validate(_item(english="plain"), "ein <code>Wort</code>") is not None
         assert (
-            _validate(_item(english=english), "ein <strong>fettes</strong> Wort")
-            is None
+            validate(_item(english=english), "ein <strong>fettes</strong> Wort") is None
         )
 
     def test_rejects_output_the_merge_gate_would_refuse(self) -> None:
@@ -150,7 +154,7 @@ class TestValidate:
                 "rufe ha_get_skill_guide, dann wrong_tool erneut",
             ),
         ):
-            assert _validate(_item(english=english), bad) is not None, (
+            assert validate(_item(english=english), bad) is not None, (
                 f"the engine accepted {bad!r} for {english!r}, which the "
                 "merge-time literal-parity check refuses"
             )
@@ -166,20 +170,20 @@ class TestValidate:
             "5분 동안 5회 이상 잘못된 PIN을 입력하면 채널이 차단됩니다.",
             "Fuenf falsche PINs innerhalb von fuenf Minuten sperren den Kanal.",
         ):
-            assert _validate(_item(english=english), translated) is None, translated
-        assert _validate(_item(english=english), "6분 동안 5회 잘못된 PIN") is not None
+            assert validate(_item(english=english), translated) is None, translated
+        assert validate(_item(english=english), "6분 동안 5회 잘못된 PIN") is not None
 
     def test_markup_rules_apply_only_to_messages(self) -> None:
         # Tool and component strings render through escapeHtml / HA core, so
         # the settings-UI markup allowlist deliberately does not gate them.
-        assert _validate(_item(section="tools", english="x"), "<b>y</b>") is None
+        assert validate(_item(section="tools", english="x"), "<b>y</b>") is None
 
     def test_rejects_panel_link_target_drift(self) -> None:
         english = 'see the <a href="#" data-panel-link="tools">Tools</a> tab'
         ok = 'siehe <a href="#" data-panel-link="tools">Tools</a>'
         wrong = 'siehe <a href="#" data-panel-link="backups">Tools</a>'
-        assert _validate(_item(english=english), ok) is None
-        assert _validate(_item(english=english), wrong) is not None
+        assert validate(_item(english=english), ok) is None
+        assert validate(_item(english=english), wrong) is not None
 
 
 class TestHardcodedOptionLabels:
@@ -188,34 +192,26 @@ class TestHardcodedOptionLabels:
     English whatever the reader's language is. A catalog that localises one
     sends the reader looking for something that is not on the screen: the
     failure that stopped a whole sync run, since the engine only had a prose
-    rule telling it not to."""
+    rule telling it not to.
 
-    def test_the_name_set_is_read_from_the_source(self) -> None:
-        # Without this the check degrades silently: an empty name set accepts
-        # every translation and still reports a clean run. Both kinds are
-        # asserted because either regex can stop matching on its own.
-        names = translate_locales._hardcoded_ui_names()
-        assert names, "no on-screen names found — the sources were restructured"
-        assert any(name.startswith("Local network") for name in names), (
-            "no selector label found — check the config flow's selector syntax"
-        )
-        assert "HA-MCP File & YAML Tools" in names, (
-            "no config-entry title found — check the *_ENTRY_TITLE constants"
-        )
+    The names are read from the sources, so an empty name set would accept
+    every translation and still report a clean run. A selector label and a
+    config-entry title are each asserted below, because either regex can stop
+    matching on its own."""
 
     def test_rejects_a_localised_hardcoded_label(self) -> None:
         english = 'Local/LAN (when Network access is "Local network"): {url}'
         localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
         kept = 'Lokaal/LAN (wanneer Netwerktoegang "Local network" is): {url}'
-        assert _validate(_item(section="component", english=english), localised)
-        assert _validate(_item(section="component", english=english), kept) is None
+        assert validate(_item(section="component", english=english), localised)
+        assert validate(_item(section="component", english=english), kept) is None
 
     def test_reads_the_label_through_typographic_quotes(self) -> None:
         # Shipped English already quotes both ways, so which mark an author
         # reached for must not decide whether the label is protected.
         english = "Local/LAN (when Network access is “Local network”): {url}"
         localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
-        assert _validate(_item(section="component", english=english), localised)
+        assert validate(_item(section="component", english=english), localised)
 
     def test_rejects_a_localised_entry_title(self) -> None:
         # The exact string the 2026-08-08 nl fill shipped: the reader is sent
@@ -233,8 +229,8 @@ class TestHardcodedOptionLabels:
             'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
             'integratie en kies "HA-MCP File & YAML Tools" om deze toe te voegen'
         )
-        assert _validate(_item(section="component", english=english), localised)
-        assert _validate(_item(section="component", english=english), kept) is None
+        assert validate(_item(section="component", english=english), localised)
+        assert validate(_item(section="component", english=english), kept) is None
 
     def test_rejects_a_localised_name_in_single_quotes(self) -> None:
         # Shipped English at options.step.init.data_description.enable_llm_api
@@ -246,8 +242,8 @@ class TestHardcodedOptionLabels:
         english = "agents can select 'HA-MCP Server' under Control Home Assistant"
         localised = "agenten kunnen 'HA-MCP Servidor' kiezen onder Bediening"
         kept = "agenten kunnen 'HA-MCP Server' kiezen onder Bediening"
-        assert _validate(_item(section="component", english=english), localised)
-        assert _validate(_item(section="component", english=english), kept) is None
+        assert validate(_item(section="component", english=english), localised)
+        assert validate(_item(section="component", english=english), kept) is None
 
     def test_apostrophes_do_not_hide_a_double_quoted_name(self) -> None:
         # The regression the obvious repair would have caused: this English
@@ -257,7 +253,7 @@ class TestHardcodedOptionLabels:
             '"HA-MCP File & YAML Tools" to add it'
         )
         localised = 'druk op "Item toevoegen" en kies "HA-MCP Bestands-tools"'
-        assert _validate(_item(section="component", english=english), localised)
+        assert validate(_item(section="component", english=english), localised)
 
     def test_leaves_other_quoted_text_translatable(self) -> None:
         # "Add entry" is Home Assistant's own button: HA translates it, so
@@ -265,7 +261,7 @@ class TestHardcodedOptionLabels:
         # config flow hardcodes are pinned to English.
         english = 'Not installed — press "Add entry" on this integration\'s page'
         assert (
-            _validate(
+            validate(
                 _item(section="component", english=english),
                 'Nicht installiert — klicke auf "Eintrag hinzufügen"',
             )
@@ -275,23 +271,23 @@ class TestHardcodedOptionLabels:
 
 class TestChunk:
     def test_splits_on_the_character_budget(self) -> None:
-        big = "x" * (translate_locales._MAX_CHARS_PER_REQUEST - 10)
+        big = "x" * (translate_locales.MAX_CHARS_PER_REQUEST - 10)
         batch = {"a": big, "b": "small", "c": big}
-        chunks = _chunk(batch)
+        chunks = chunk_batch(batch)
         assert [list(chunk) for chunk in chunks] == [["a", "b"], ["c"]]
 
     def test_single_item_over_budget_gets_its_own_chunk(self) -> None:
-        huge = "x" * (translate_locales._MAX_CHARS_PER_REQUEST + 1)
-        assert [list(c) for c in _chunk({"a": huge, "b": "y"})] == [["a"], ["b"]]
+        huge = "x" * (translate_locales.MAX_CHARS_PER_REQUEST + 1)
+        assert [list(c) for c in chunk_batch({"a": huge, "b": "y"})] == [["a"], ["b"]]
 
     def test_empty_batch_yields_no_chunks(self) -> None:
-        assert _chunk({}) == []
+        assert chunk_batch({}) == []
 
 
 class TestStyleSamples:
     """The samples are the catalog's address register, and only the samples.
 
-    Nothing downstream can recover it: ``_validate`` checks placeholders and
+    Nothing downstream can recover it: ``validate`` checks placeholders and
     markup, the parity suite checks keys and how much text is still English.
     A sample pair whose English does not address the reader therefore leaves
     the engine on its own default for the language — measured against the
@@ -301,7 +297,7 @@ class TestStyleSamples:
 
     def test_prefers_reader_addressing_sources_shortest_first(self) -> None:
         translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
-        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+        assert translate_locales.style_sample_keys(_SAMPLE_ENGLISH, translated) == [
             "short",
             "middle",
             "long",
@@ -311,7 +307,7 @@ class TestStyleSamples:
         """``messages`` may omit keys — English is the per-key fallback — so an
         untranslated key carries no register and must not be sampled."""
         translated = {"long": "…", "neutral": "…"}
-        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+        assert translate_locales.style_sample_keys(_SAMPLE_ENGLISH, translated) == [
             "long"
         ]
 
@@ -327,7 +323,7 @@ class TestStyleSamples:
         else. Whitespace counts as blank: it renders the same.
         """
         translated = dict.fromkeys(_SAMPLE_ENGLISH, "…") | {"short": blank}
-        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+        assert translate_locales.style_sample_keys(_SAMPLE_ENGLISH, translated) == [
             "middle",
             "long",
         ]
@@ -336,7 +332,7 @@ class TestStyleSamples:
         """Degenerate but defined: an English catalog that never addresses the
         reader gives the prompt no style block rather than a neutral one."""
         assert (
-            translate_locales._style_sample_keys({"a": "Server Settings"}, {"a": "…"})
+            translate_locales.style_sample_keys({"a": "Server Settings"}, {"a": "…"})
             == []
         )
 
@@ -346,7 +342,7 @@ class TestStyleSamples:
         very string being translated, the model answers with that stale text —
         measured against the live engine, byte-identical to the old wording."""
         translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
-        assert translate_locales._style_sample_keys(
+        assert translate_locales.style_sample_keys(
             _SAMPLE_ENGLISH, translated, {"short"}
         ) == ["middle", "long"]
 
@@ -355,14 +351,14 @@ class TestStyleSamples:
         English string uses them today, so this pins the intent rather than a
         current behaviour."""
         english = {"a": "Give yourself access.", "b": "Help yourselves."}
-        assert translate_locales._style_sample_keys(
+        assert translate_locales.style_sample_keys(
             english, dict.fromkeys(english, "…")
         ) == ["b", "a"]
 
     def test_a_meta_only_stub_samples_nothing(self) -> None:
         """A new language starts as a stub the pipeline fills, so an empty
         catalog must yield no samples rather than raise."""
-        assert translate_locales._style_sample_keys({"a": "Your setting"}, {}) == []
+        assert translate_locales.style_sample_keys({"a": "Your setting"}, {}) == []
 
     def test_the_translated_catalogs_are_discovered(self) -> None:
         """The parametrised check below runs over a glob, and an empty glob
@@ -382,15 +378,15 @@ class TestStyleSamples:
         translated = json.loads(
             (_SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
         ).get("messages", {})
-        keys = translate_locales._style_sample_keys(english, translated)
+        keys = translate_locales.style_sample_keys(english, translated)
 
         assert keys, (
             f"{locale}.json yields no style sample, so the engine gets no "
             "signal about how this catalog addresses its reader"
         )
-        assert all(
-            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
-        ), f"{locale}.json samples {keys} do not address the reader"
+        assert all(_ADDRESSES_READER.search(english[key]) for key in keys), (
+            f"{locale}.json samples {keys} do not address the reader"
+        )
 
     @pytest.mark.parametrize("locale", _TRANSLATED_LOCALES)
     def test_settings_samples_survive_their_own_anchor_being_queued(
@@ -399,7 +395,7 @@ class TestStyleSamples:
         """The production caller excludes what the run is about to rewrite.
 
         ``_prompt`` hands ``queued_keys`` to ``_style_samples``, and
-        ``_style_sample_keys`` drops those from the candidates -- so a catalog
+        ``style_sample_keys`` drops those from the candidates -- so a catalog
         whose only reader-addressing key is itself queued for retranslation
         sends a request with neither a tone sample nor the register rule, both
         of which are guarded on ``if samples``. The two tests above pass the
@@ -415,8 +411,8 @@ class TestStyleSamples:
         translated = json.loads(
             (_SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
         ).get("messages", {})
-        for queued in translate_locales._style_sample_keys(english, translated):
-            assert translate_locales._style_sample_keys(
+        for queued in translate_locales.style_sample_keys(english, translated):
+            assert translate_locales.style_sample_keys(
                 english, translated, frozenset({queued})
             ), (
                 f"{locale}.json falls back to no style sample at all once "
@@ -443,19 +439,19 @@ class TestStyleSamples:
         how this language addresses its reader and falls back to its own
         register for every later string, and the only trace is a line on
         stderr inside an unattended workflow run. Goes through
-        ``_surface_catalogs`` on purpose: that it reads the component catalog
+        ``surface_catalogs`` on purpose: that it reads the component catalog
         rather than the settings one is the property at issue.
         """
-        english, translated = translate_locales._surface_catalogs(locale, "component")
-        keys = translate_locales._style_sample_keys(english, translated)
+        english, translated = translate_locales.surface_catalogs(locale, "component")
+        keys = translate_locales.style_sample_keys(english, translated)
 
         assert keys, (
             f"component {locale}.json yields no style sample, so the engine "
             "gets no signal about how this catalog addresses its reader"
         )
-        assert all(
-            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
-        ), f"component {locale}.json samples {keys} do not address the reader"
+        assert all(_ADDRESSES_READER.search(english[key]) for key in keys), (
+            f"component {locale}.json samples {keys} do not address the reader"
+        )
 
     @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
     def test_component_samples_survive_their_own_anchor_being_queued(
@@ -473,9 +469,9 @@ class TestStyleSamples:
         first. That is the case where the run this guards is likeliest to
         happen -- rewording that key is what queues it.
         """
-        english, translated = translate_locales._surface_catalogs(locale, "component")
-        for queued in translate_locales._style_sample_keys(english, translated):
-            assert translate_locales._style_sample_keys(
+        english, translated = translate_locales.surface_catalogs(locale, "component")
+        for queued in translate_locales.style_sample_keys(english, translated):
+            assert translate_locales.style_sample_keys(
                 english, translated, frozenset({queued})
             ), (
                 f"component {locale}.json falls back to no style sample at all "
@@ -521,13 +517,26 @@ class TestPromptRegisterRule:
         )
         monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
 
+    @staticmethod
+    def _prompt(monkeypatch: pytest.MonkeyPatch, item: WorkItem) -> str:
+        """The prompt the run sends the engine for ``item``."""
+        prompts: list[str] = []
+
+        def engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            return {f"{item.section}:{item.key}": "Speichern"}
+
+        monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(translate_locales, "call_gemini", engine)
+        translate_locales.translate_locale("de", [item])
+        assert len(prompts) == 1, prompts
+        return prompts[0]
+
     def test_rule_ships_with_the_samples(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
-        prompt = translate_locales._prompt(
-            "de", {"messages:other": "Save"}, "messages", set()
-        )
+        prompt = self._prompt(monkeypatch, WorkItem("de", "messages", "other", "Save"))
         assert "Starte deinen Client neu." in prompt
         assert "Address the reader the way the sample translations" in prompt
 
@@ -535,25 +544,9 @@ class TestPromptRegisterRule:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._locales(tmp_path, monkeypatch, {})
-        prompt = translate_locales._prompt(
-            "de", {"messages:greeting": "Save"}, "messages", set()
-        )
+        prompt = self._prompt(monkeypatch, WorkItem("de", "messages", "other", "Save"))
         assert "Match the tone and terminology" not in prompt
         assert "Address the reader the way" not in prompt
-
-    def test_a_key_queued_for_a_later_chunk_is_not_sampled(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Results are applied only after every chunk finishes, so a key another
-        chunk still owes carries the translation of the PREVIOUS English while
-        this chunk is prompted. Excluding only the current chunk's keys would
-        show that stale pair as the sample — the whole queue has to go."""
-        self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
-        prompt = translate_locales._prompt(
-            "de", {"messages:other": "Save"}, "messages", {"greeting"}
-        )
-        assert "Starte deinen Client neu." not in prompt
-        assert "Match the tone and terminology" not in prompt
 
     def test_component_work_samples_the_component_catalog(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -568,9 +561,7 @@ class TestPromptRegisterRule:
             {"greeting": "Starte deinen Client neu."},
             component_de={"title": "Prüfen Sie Ihr Token."},
         )
-        prompt = translate_locales._prompt(
-            "de", {"component:other": "Save"}, "component", set()
-        )
+        prompt = self._prompt(monkeypatch, WorkItem("de", "component", "other", "Save"))
         assert "Prüfen Sie Ihr Token." in prompt
         assert "Starte deinen Client neu." not in prompt
 
@@ -578,18 +569,18 @@ class TestPromptRegisterRule:
 class TestFlattenRoundTrip:
     def test_round_trips_nested_catalogs(self) -> None:
         nested = {"config": {"step": {"user": {"title": "Hi", "desc": "There"}}}}
-        flat = _flatten(nested)
+        flat = flatten(nested)
         assert flat == {
             "config.step.user.title": "Hi",
             "config.step.user.desc": "There",
         }
-        assert _unflatten(flat) == nested
+        assert unflatten(flat) == nested
 
     def test_flatten_refuses_non_string_leaves(self) -> None:
         """A leaf the round-trip would silently delete must fail loudly
         instead — the pipeline rewrites whole files unattended in CI."""
         with pytest.raises(ValueError, match=r"a\.c"):
-            _flatten({"a": {"b": "x", "c": [1, 2]}})
+            flatten({"a": {"b": "x", "c": [1, 2]}})
 
 
 class TestPlanning:
@@ -602,7 +593,7 @@ class TestPlanning:
             (locales / f"{locale}.json").write_text("{}", encoding="utf-8")
         monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
 
-        assert translate_locales._target_locales() == ["de"]
+        assert translate_locales.target_locales() == ["de"]
 
     def test_best_effort_component_locale_is_not_planned(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -620,7 +611,7 @@ class TestPlanning:
         )
 
         plan = Plan()
-        translate_locales._plan_component(plan, changed={})
+        translate_locales.plan_component(plan, changed={})
 
         assert [(item.locale, item.key) for item in plan.items] == [
             ("de", "config.title")
@@ -628,7 +619,7 @@ class TestPlanning:
 
     def test_missing_and_changed_messages_are_planned(self) -> None:
         plan = Plan()
-        _plan_locale_messages(
+        plan_locale_messages(
             plan,
             "de",
             en_messages={"kept": "Kept", "changed": "New text", "new": "Added"},
@@ -643,7 +634,7 @@ class TestPlanning:
 
     def test_tools_plan_fills_changed_and_missing_fields(self) -> None:
         plan = Plan()
-        _plan_locale_tools(
+        plan_locale_tools(
             plan,
             "de",
             catalog={"tools": {"ha_a": {"title": "T"}, "ha_gone": {}}},
@@ -665,7 +656,7 @@ class TestPlanning:
 
     def test_groups_plan_uses_the_english_key_as_source(self) -> None:
         plan = Plan()
-        _plan_locale_groups(
+        plan_locale_groups(
             plan,
             "de",
             catalog={"tool_groups": {"Old": "Alt"}},
@@ -677,15 +668,18 @@ class TestPlanning:
     def test_run_wide_queue_reaches_every_chunk_and_the_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``_translate_locale`` is what computes the exclusion set and hands it
-        to each request; the per-``_prompt`` tests cannot see that. Two chunks
-        plus a forced retry, and no prompt may quote a key the run still owes."""
+        """``translate_locale`` is what computes the exclusion set and hands it
+        to each request; a single-request run cannot show that. Two chunks plus
+        a forced retry, and no prompt may quote a key the run still owes —
+        including a key a LATER chunk owes: results are applied only after
+        every chunk finishes, so that key still carries the translation of the
+        previous English."""
         locales = tmp_path / "locales"
         locales.mkdir()
         # Each over half the character budget, so the two land in separate
         # chunks — with both in one chunk the run-wide set and the chunk-local
         # one are the same thing and the check below proves nothing.
-        big = "x" * (translate_locales._MAX_CHARS_PER_REQUEST // 2 + 100)
+        big = "x" * (translate_locales.MAX_CHARS_PER_REQUEST // 2 + 100)
         english = {
             "first": f"Restart your client. {big}",
             "second": f"Reload your page. {big}",
@@ -719,12 +713,12 @@ class TestPlanning:
             # retry prompt in _accept_or_retry.
             return dict.fromkeys(("messages:first", "messages:second"), "")
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
 
         items = [
             WorkItem("de", "messages", key, english[key]) for key in ("first", "second")
         ]
-        translate_locales._translate_locale("de", items)
+        translate_locales.translate_locale("de", items)
 
         assert len(chunk_prompts) >= 2, (
             f"expected the work to span two chunks, got {len(chunk_prompts)} "
@@ -773,9 +767,9 @@ class TestPlanning:
             calls.append(prompt)
             raise SystemExit("engine down")
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", dead_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", dead_engine)
 
-        _results, _failures, _failed, dead = translate_locales._translate_locale(
+        _results, _failures, _failed, dead = translate_locales.translate_locale(
             "de",
             [
                 WorkItem("de", "messages", "a", "Your page."),
@@ -804,7 +798,7 @@ class TestPlanning:
         """The sync's own no-op invariant: after a run repins the baseline,
         a rerun must find nothing — verified in the workflow, where it runs
         against the freshly translated tree."""
-        module = translate_locales._load_test_module()
+        module = translate_locales.load_test_module()
         plan = translate_locales.build_plan(module)
         assert plan.items == []
         assert plan.deletions == []
@@ -844,7 +838,7 @@ class TestCallGeminiRetry:
             return self._response(200)
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert request["url"] == (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             "gemini-3.5-flash-lite:generateContent"
@@ -864,7 +858,7 @@ class TestCallGeminiRetry:
             return responses[len(calls) - 1]
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 3
 
     def test_retries_transport_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -877,7 +871,7 @@ class TestCallGeminiRetry:
             return self._response(200)
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 2
 
     def test_terminal_status_raises_without_retry(
@@ -891,7 +885,7 @@ class TestCallGeminiRetry:
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
         with pytest.raises(SystemExit, match="HTTP 400"):
-            translate_locales._call_gemini("prompt")
+            translate_locales.call_gemini("prompt")
         assert len(calls) == 1
 
     def test_missing_key_is_a_clear_error(
@@ -899,7 +893,7 @@ class TestCallGeminiRetry:
     ) -> None:
         monkeypatch.delenv("GEMINI_API_KEY")
         with pytest.raises(SystemExit, match="GEMINI_API_KEY"):
-            translate_locales._call_gemini("prompt")
+            translate_locales.call_gemini("prompt")
 
     def test_blocked_response_is_a_clear_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -916,7 +910,7 @@ class TestCallGeminiRetry:
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
         with pytest.raises(SystemExit, match="unusable response") as excinfo:
-            translate_locales._call_gemini("prompt")
+            translate_locales.call_gemini("prompt")
         assert len(calls) == 1
         assert 'promptFeedback={"blockReason": "SAFETY"}' in str(excinfo.value)
 
@@ -944,7 +938,7 @@ class TestCallGeminiRetry:
             return responses[len(calls) - 1]
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 2
 
     def test_non_object_envelope_is_retried_not_a_traceback(
@@ -970,7 +964,7 @@ class TestCallGeminiRetry:
             return responses[len(calls) - 1]
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 3
 
     def test_odd_shaped_envelope_fields_are_retried_not_a_traceback(
@@ -987,7 +981,7 @@ class TestCallGeminiRetry:
             return responses[len(calls) - 1]
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 2
 
     def test_non_object_answer_is_retried(
@@ -1005,7 +999,7 @@ class TestCallGeminiRetry:
             return responses[len(calls) - 1]
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
-        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert translate_locales.call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 2
 
     def test_persistently_unparseable_answer_names_the_finish_reason(
@@ -1019,7 +1013,7 @@ class TestCallGeminiRetry:
 
         monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
         with pytest.raises(SystemExit, match="unusable response") as excinfo:
-            translate_locales._call_gemini("prompt")
+            translate_locales.call_gemini("prompt")
         assert len(calls) == 5
         message = str(excinfo.value)
         assert "finishReason=STOP" in message
@@ -1033,12 +1027,14 @@ class TestEngineFailureDegradation:
     def _fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
         # One string per chunk so chunk boundaries are deterministic.
-        monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
+        monkeypatch.setattr(translate_locales, "MAX_CHARS_PER_REQUEST", 1)
 
     def test_one_failed_chunk_degrades_to_per_string_failures(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        answers = iter([SystemExit("quota"), {"messages:second": "Zwei"}])
+        answers: Iterator[SystemExit | dict[str, str]] = iter(
+            [SystemExit("quota"), {"messages:second": "Zwei"}]
+        )
 
         def fake_call(_prompt: str) -> dict[str, str]:
             answer = next(answers)
@@ -1046,12 +1042,12 @@ class TestEngineFailureDegradation:
                 raise answer
             return answer
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_call)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_call)
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
         ]
-        results, failures, failed, dead = translate_locales._translate_locale(
+        results, failures, failed, dead = translate_locales.translate_locale(
             "de", items
         )
         assert results == {("messages", "second"): "Zwei"}
@@ -1065,13 +1061,13 @@ class TestEngineFailureDegradation:
         def fake_call(_prompt: str) -> dict[str, str]:
             raise SystemExit("quota")
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_call)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_call)
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
             WorkItem("de", "messages", "third", "Three"),
         ]
-        results, failures, failed, dead = translate_locales._translate_locale(
+        results, failures, failed, dead = translate_locales.translate_locale(
             "de", items
         )
         assert results == {}
@@ -1101,16 +1097,16 @@ class TestResumableProgress:
                 WorkItem("ru", "messages", "greeting", "Hello", changed=True),
             ]
         )
-        translate_locales._record_progress({("messages", "greeting"): {"de"}}, plan)
-        progress = translate_locales._progress_load()
-        assert translate_locales._progress_done(
+        translate_locales.record_progress({("messages", "greeting"): {"de"}}, plan)
+        progress = translate_locales.progress_load()
+        assert translate_locales.progress_done(
             progress, "messages", "greeting", "Hello", "de"
         )
         # ru never completed; and a further English change invalidates de too.
-        assert not translate_locales._progress_done(
+        assert not translate_locales.progress_done(
             progress, "messages", "greeting", "Hello", "ru"
         )
-        assert not translate_locales._progress_done(
+        assert not translate_locales.progress_done(
             progress, "messages", "greeting", "Hello again", "de"
         )
 
@@ -1118,16 +1114,16 @@ class TestResumableProgress:
         plan = Plan(
             items=[WorkItem("de", "messages", "greeting", "Hello", changed=True)]
         )
-        translate_locales._record_progress({("messages", "greeting"): {"de"}}, plan)
+        translate_locales.record_progress({("messages", "greeting"): {"de"}}, plan)
         plan.items[0] = WorkItem("es", "messages", "greeting", "Hello", changed=True)
-        translate_locales._record_progress({("messages", "greeting"): {"es"}}, plan)
-        progress = translate_locales._progress_load()
+        translate_locales.record_progress({("messages", "greeting"): {"es"}}, plan)
+        progress = translate_locales.progress_load()
         assert progress["messages|greeting"]["locales"] == ["de", "es"]
-        translate_locales._clear_progress()
-        assert translate_locales._progress_load() == {}
+        translate_locales.clear_progress()
+        assert translate_locales.progress_load() == {}
 
     def test_full_success_leaves_no_progress_file(self) -> None:
-        translate_locales._clear_progress()  # no file: a clean no-op
+        translate_locales.clear_progress()  # no file: a clean no-op
         assert not translate_locales.PROGRESS_PATH.exists()
 
 
@@ -1143,13 +1139,13 @@ class TestTimeBudget:
         def must_not_call(_prompt: str) -> dict[str, Any]:
             raise AssertionError("engine called after the deadline")
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", must_not_call)
-        monkeypatch.setattr(translate_locales, "_DEADLINE", float("-inf"))
+        monkeypatch.setattr(translate_locales, "call_gemini", must_not_call)
+        monkeypatch.setattr(translate_locales, "DEADLINE", float("-inf"))
         items = [
             WorkItem("de", "messages", "first", "One"),
             WorkItem("de", "messages", "second", "Two"),
         ]
-        results, failures, failed, dead = translate_locales._translate_locale(
+        results, failures, failed, dead = translate_locales.translate_locale(
             "de", items
         )
         assert results == {}
@@ -1169,9 +1165,9 @@ class TestTimeBudget:
             "post",
             lambda *_a, **_k: pytest.fail("HTTP call after the deadline"),
         )
-        monkeypatch.setattr(translate_locales, "_DEADLINE", float("-inf"))
+        monkeypatch.setattr(translate_locales, "DEADLINE", float("-inf"))
         with pytest.raises(SystemExit, match="before the engine call"):
-            translate_locales._call_gemini("prompt")
+            translate_locales.call_gemini("prompt")
 
 
 class TestRepinBaseline:
@@ -1205,7 +1201,7 @@ class TestRepinBaseline:
                 }
             },
         )
-        translate_locales._repin_baseline(module)
+        translate_locales.repin_baseline(module)
         written = json.loads(baseline.read_text(encoding="utf-8"))
         assert written[surface]["ha_x.description (parsed)"] == "oldhash"
         assert written[surface]["ha_x.description"] == "NEWrendered"
@@ -1220,7 +1216,7 @@ class TestRepinBaseline:
             BASELINE_PATH=baseline,
             english_sources=lambda: {"s": {"ha_new.description (parsed)": "h1"}},
         )
-        translate_locales._repin_baseline(module)
+        translate_locales.repin_baseline(module)
         written = json.loads(baseline.read_text(encoding="utf-8"))
         assert written["s"]["ha_new.description (parsed)"] == "h1"
 
@@ -1255,9 +1251,9 @@ class TestMetaOnlyStub:
         monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
         monkeypatch.setattr(translate_locales, "REPO_ROOT", tmp_path)
 
-        module = translate_locales._load_test_module()
+        module = translate_locales.load_test_module()
         plan = Plan()
-        translate_locales._plan_settings(plan, module, changed={})
+        translate_locales.plan_settings(plan, module, changed={})
         stub_messages = [
             item
             for item in plan.items
@@ -1265,7 +1261,7 @@ class TestMetaOnlyStub:
         ]
         assert [item.key for item in stub_messages] == ["greeting"]
 
-        translate_locales._apply_settings(
+        translate_locales.apply_settings(
             "xx", translations={("messages", "greeting"): "Hallo-xx"}, deletions=[]
         )
         written = json.loads((locales / "xx.json").read_text(encoding="utf-8"))
@@ -1344,12 +1340,12 @@ class TestSharedTranslationReuse:
             prompts.append(prompt)
             return {"messages:other": "Andere"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [
             WorkItem("de", "messages", "shared", "Unknown"),
             WorkItem("de", "messages", "other", "Other"),
         ]
-        failures, _completed = translate_locales._translate_and_apply(
+        failures, _completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1379,9 +1375,9 @@ class TestSharedTranslationReuse:
             prompts.append(prompt)
             return {"messages:shared": "unbekannt"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [WorkItem("de", "messages", "shared", "Unknown")]
-        failures, _completed = translate_locales._translate_and_apply(
+        failures, _completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1411,7 +1407,7 @@ class TestSharedTranslationReuse:
             prompts.append(prompt)
             return {"messages:shared": "unbekannt"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [
             WorkItem(
                 "de",
@@ -1420,7 +1416,7 @@ class TestSharedTranslationReuse:
                 "Unknown",
             )
         ]
-        failures, _completed = translate_locales._translate_and_apply(
+        failures, _completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1470,9 +1466,9 @@ class TestSharedTranslationReuse:
             prompts.append(prompt)
             return {"messages:shared": "unbekannt"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [WorkItem("de", "messages", "shared", "Unknown")]
-        failures, _completed = translate_locales._translate_and_apply(
+        failures, _completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1505,9 +1501,9 @@ class TestSharedTranslationReuse:
             prompts.append(prompt)
             return {"messages:shared": "unbekannt"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [WorkItem("de", "messages", "shared", "Unknown")]
-        failures, _completed = translate_locales._translate_and_apply(
+        failures, _completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1536,7 +1532,7 @@ class TestSharedTranslationReuse:
                 return {"messages:shared": "<script>neu</script>"}
             return {"component:common.version_unknown": "<script>neu</script>"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [
             WorkItem("de", "messages", "shared", "Unknown", changed=True),
             WorkItem(
@@ -1547,7 +1543,7 @@ class TestSharedTranslationReuse:
                 changed=True,
             ),
         ]
-        failures, completed = translate_locales._translate_and_apply(
+        failures, completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1577,7 +1573,7 @@ class TestSharedTranslationReuse:
                 return {"messages:shared": "neu"}
             return {"component:common.version_unknown": "anders"}
 
-        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        monkeypatch.setattr(translate_locales, "call_gemini", fake_engine)
         items = [
             WorkItem("de", "messages", "shared", "Unknown", changed=True),
             WorkItem(
@@ -1588,7 +1584,7 @@ class TestSharedTranslationReuse:
                 changed=True,
             ),
         ]
-        failures, completed = translate_locales._translate_and_apply(
+        failures, completed = translate_locales.translate_and_apply(
             Plan(items=items), {"de": items}, module
         )
 
@@ -1656,7 +1652,7 @@ class TestApplyWrites:
         self, catalog_dirs: tuple[Path, Path]
     ) -> None:
         locales, _component = catalog_dirs
-        translate_locales._apply_settings(
+        translate_locales.apply_settings(
             "de",
             translations={("messages", "first"): "Eins"},
             deletions=[("de", "messages", "orphan")],
@@ -1670,7 +1666,7 @@ class TestApplyWrites:
         self, catalog_dirs: tuple[Path, Path]
     ) -> None:
         _locales, component = catalog_dirs
-        translate_locales._apply_component(
+        translate_locales.apply_component(
             "de", translations={("component", "config.title"): "Hallo"}, deletions=[]
         )
         written = json.loads((component / "de.json").read_text(encoding="utf-8"))
@@ -1680,9 +1676,9 @@ class TestApplyWrites:
         """A second no-work pass must not rewrite the file — this is the
         property that keeps the CI auto-commit loop from ping-ponging."""
         locales, _component = catalog_dirs
-        translate_locales._apply_settings(
+        translate_locales.apply_settings(
             "de", translations={}, deletions=[("de", "messages", "orphan")]
         )
         settled = (locales / "de.json").read_text(encoding="utf-8")
-        translate_locales._apply_settings("de", translations={}, deletions=[])
+        translate_locales.apply_settings("de", translations={}, deletions=[])
         assert (locales / "de.json").read_text(encoding="utf-8") == settled

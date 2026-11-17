@@ -152,10 +152,7 @@ def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
         resolved = _static_value(value.value, scope)
         if resolved is UNRESOLVED:
             return UNRESOLVED
-        convert = _CONVERSIONS.get(value.conversion)
-        if convert is None:
-            return UNRESOLVED
-        parts.append(convert(resolved))
+        parts.append(_CONVERSIONS[value.conversion](resolved))
     return "".join(parts)
 
 
@@ -581,7 +578,7 @@ def _tool_name_from_tool_decorator(
     return None
 
 
-def _find_tool_decorator(
+def find_tool_decorator(
     node: ast.AsyncFunctionDef,
 ) -> tuple[ast.Call | None, str | None]:
     """Find the @mcp.tool / @tool decorator on a function and its tool name."""
@@ -698,7 +695,7 @@ def _extract_tool_from_node(
     node: ast.AsyncFunctionDef, source_file: str, scope: ModuleScope | None = None
 ) -> dict | None:
     """Build the tool-metadata dict for one function node, or None if not a tool."""
-    tool_dec, tool_name = _find_tool_decorator(node)
+    tool_dec, tool_name = find_tool_decorator(node)
     if tool_dec is None or tool_name is None:
         return None
 

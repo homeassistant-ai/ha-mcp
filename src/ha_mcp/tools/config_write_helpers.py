@@ -287,7 +287,7 @@ def build_skill_content(
     )
 
 
-_SKILLS_VENDOR_MISSING_WARNING = (
+SKILLS_VENDOR_MISSING_WARNING = (
     "skill_content unavailable — the home-assistant-best-practices "
     "skills-vendor submodule is not initialised. The agent will not "
     "receive the relevant best-practice guidance for this write. "
@@ -300,7 +300,7 @@ _SKILLS_VENDOR_MISSING_WARNING = (
 # (failing alternatives reflexively triggered minimisation, omission,
 # or invisibility on at least one model). Don't tune any of them
 # casually; re-BAT before any change.
-_SKILL_CONTENT_OPTOUT_HINT = (
+SKILL_CONTENT_OPTOUT_HINT = (
     "Pass `MandatoryBPS=false` on subsequent calls to this tool in "
     "this session to skip this content."
 )
@@ -310,7 +310,7 @@ _SKILL_CONTENT_OPTOUT_HINT = (
 # the floor — when BP fired, the checker's own warning text (with its
 # more specific 2-route hint) is appended alongside in the suggestions
 # array, and the matching section body auto-embeds inline.
-_WRITE_TOOL_BP_HINT_SUGGESTION = (
+WRITE_TOOL_BP_HINT_SUGGESTION = (
     "For Home Assistant best-practice guidance, call "
     "ha_get_skill_guide() to read SKILL.md, then the reference file its "
     "table points to, before retrying."
@@ -363,7 +363,7 @@ def attach_skill_content(
         # pointing at the same response object.
         existing_items = list(response.items())
         response.clear()
-        response["skill_content_hint"] = _SKILL_CONTENT_OPTOUT_HINT
+        response["skill_content_hint"] = SKILL_CONTENT_OPTOUT_HINT
         response.update(existing_items)
         response["skill_content"] = content
         return
@@ -385,7 +385,7 @@ def attach_skill_content(
         master_on = False
     requested_anything = MandatoryBPS or referenced_files
     if master_on and requested_anything and get_skills_dir() is None:
-        response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)
+        response.setdefault("warnings", []).append(SKILLS_VENDOR_MISSING_WARNING)
 
 
 def augment_error_dict_with_skill_content(
@@ -395,7 +395,7 @@ def augment_error_dict_with_skill_content(
     """In-place: add generic BP-skill-guide hint + auto-embed any
     BP-referenced section bodies into a write-tool error response dict.
 
-    Appends ``_WRITE_TOOL_BP_HINT_SUGGESTION`` to ``error_dict["error"]
+    Appends ``WRITE_TOOL_BP_HINT_SUGGESTION`` to ``error_dict["error"]
     ["suggestions"]`` (idempotent — won't double-append) and keeps the
     legacy singular ``suggestion`` field aligned with the first entry.
 
@@ -421,8 +421,8 @@ def augment_error_dict_with_skill_content(
     primary = err.get("suggestion")
     if not suggestions and isinstance(primary, str) and primary:
         suggestions.append(primary)
-    if _WRITE_TOOL_BP_HINT_SUGGESTION not in suggestions:
-        suggestions.append(_WRITE_TOOL_BP_HINT_SUGGESTION)
+    if WRITE_TOOL_BP_HINT_SUGGESTION not in suggestions:
+        suggestions.append(WRITE_TOOL_BP_HINT_SUGGESTION)
     if suggestions:
         err["suggestion"] = suggestions[0]
 

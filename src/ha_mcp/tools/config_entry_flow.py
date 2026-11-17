@@ -285,10 +285,10 @@ class _OptionsFlowProgress:
 
 def _json_differs(stored: Any, snapshot: Any) -> bool:
     """Type-sensitive comparison, as the restore preview shows it (False is not 0)."""
-    from ..backup_diff import _compute_json_patch
+    from ..backup_diff import compute_json_patch
 
     patch: list[dict[str, Any]] = []
-    _compute_json_patch(snapshot, stored, 1, patch)
+    compute_json_patch(snapshot, stored, 1, patch)
     return bool(patch)
 
 

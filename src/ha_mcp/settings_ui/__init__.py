@@ -34,12 +34,6 @@ from ._handlers_server import (
 )
 from ._handlers_theme import build_theme_handlers
 from ._handlers_tools import build_tools_handlers
-from ._i18n import (
-    LOCALE_COOKIE,
-    build_payload,
-    select_locale,
-    serialize_payload,
-)
 from ._persistence import (
     _atomic_write_json,
     _get_backup_settings_override_path,
@@ -72,6 +66,12 @@ from ._tools_meta import (
     _get_tool_metadata,
     apply_tool_visibility,
     effective_mandatory_tools,
+)
+from .i18n import (
+    LOCALE_COOKIE,
+    build_payload,
+    select_locale,
+    serialize_payload,
 )
 
 if TYPE_CHECKING:

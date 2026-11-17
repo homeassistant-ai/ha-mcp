@@ -16,7 +16,7 @@ without the others and CI goes red naming the files that are missing —
 Simplified Chinese shipped settings-UI-only in #1992 and the same
 half-install was proposed again for French in #2038.
 
-The per-surface content rules are enforced elsewhere — ``_i18n.load_catalogs``
+The per-surface content rules are enforced elsewhere — ``i18n.load_catalogs``
 validates settings UI placeholders and inline markup, and
 ``tests/addon/test_addon_structure.py`` requires a ``name``/``description``
 for every add-on ``schema:`` key. The component catalogs had no such guard,
@@ -492,7 +492,7 @@ def test_english_only_surfaces_have_not_gained_a_locale() -> None:
 def test_locale_codes_use_one_spelling_across_surfaces() -> None:
     """Only the settings UI is case-insensitive about the language code.
 
-    ``_i18n.normalize_locale`` lowercases catalog stems, but Home Assistant
+    ``i18n.normalize_locale`` lowercases catalog stems, but Home Assistant
     loads ``translations/<code>.json`` and Supervisor keys add-on catalogs by
     the literal filename stem — so a ``zh-hans.yaml`` typo still renders in the
     settings UI while being invisible to both of those. Left to
@@ -1264,7 +1264,7 @@ def _english_tool_sent_to_translators() -> dict[str, str]:
     first physical line cut at 120 characters, the parsed docstring, and the
     summary paragraph the baseline hashes -- and accepting whichever one
     matches lets a fault present in the real source hide behind another. It
-    does not have to be guessed: ``_plan_settings`` feeds the engine
+    does not have to be guessed: ``plan_settings`` feeds the engine
     ``_english_tool_texts()`` and nothing else (``scripts/translate_locales.py``,
     where ``tool_texts`` is built), so that rendering is what a catalog was
     translated from.
@@ -1408,8 +1408,8 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     sent = _english_tool_sent_to_translators()
     # Matched raw, and deliberately so. A suffixed key pins the rendering the
     # catalogs do NOT translate, so its moving is stub-review work rather than
-    # a rewrite the sync owes: `_plan_settings` filters those keys out of its
-    # work list, `_repin_baseline` holds them stale until a human confirms the
+    # a rewrite the sync owes: `plan_settings` filters those keys out of its
+    # work list, `repin_baseline` holds them stale until a human confirms the
     # stub, and the locale guide names the exception. Stripping the suffix to match
     # the catalog's bare key would drop that tool out of this check while its
     # translation is still current and nothing is coming to replace it —
@@ -1783,7 +1783,7 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     against the one the sync sends rather than whichever one matches: seven of
     the 176 tool keys differ between renderings, and accepting any of them
     would let a fault in the real source hide behind another. Which one that is
-    needs no guessing -- ``_plan_settings`` builds its ``tool_texts`` from
+    needs no guessing -- ``plan_settings`` builds its ``tool_texts`` from
     ``_english_tool_texts()`` and feeds the engine that alone.
     """
     divergent: dict[str, str] = {}

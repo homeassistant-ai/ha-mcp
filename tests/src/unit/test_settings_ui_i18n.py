@@ -17,7 +17,7 @@ from starlette.requests import Request
 from ha_mcp.policy.approval_queue import Decision
 from ha_mcp.policy.model import PredicateOp
 from ha_mcp.settings_ui import render_settings_html
-from ha_mcp.settings_ui._i18n import (
+from ha_mcp.settings_ui.i18n import (
     CATALOGS,
     DEFAULT_LOCALE,
     LOCALES_DIR,
@@ -62,8 +62,8 @@ def _write_catalog(
     locale: str,
     *,
     native_name: str,
-    messages: dict[str, str],
-    tools: dict[str, dict[str, str]] | None = None,
+    messages: dict[str, object],
+    tools: dict[str, dict[str, object]] | None = None,
 ) -> None:
     (directory / f"{locale}.json").write_text(
         json.dumps(
@@ -100,7 +100,7 @@ def test_invalid_best_effort_catalog_warns_without_blocking_other_locales(
     _write_catalog(tmp_path, "de", native_name="Deutsch", messages={"a": "Eins"})
     (tmp_path / "tlh.json").write_bytes(payload)
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert sorted(catalogs) == ["de", "en"]
@@ -254,7 +254,7 @@ def test_invalid_best_effort_message_falls_back_without_dropping_locale(
         messages={"saved": "pol", "greeting": "nuqneH"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["messages"] == {"greeting": "nuqneH"}
@@ -284,7 +284,7 @@ def test_invalid_best_effort_message_value_preserves_valid_siblings(
         messages={"invalid": invalid, "valid": "Qapla'"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["messages"] == {"valid": "Qapla'"}
@@ -345,7 +345,7 @@ def test_invalid_best_effort_tool_field_falls_back_without_dropping_siblings(
         },
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
@@ -379,7 +379,7 @@ def test_invalid_best_effort_tool_field_preserves_valid_siblings(
         tools={"ha_example": {"title": "ghantoH", "description": 7}},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
@@ -532,7 +532,7 @@ def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
 def test_shipped_locales_are_discovered() -> None:
     """The parametrized check below collects nothing on an empty registry."""
     assert _shipped_locales(), (
-        "no non-English catalogs registered in ha_mcp.settings_ui._i18n.CATALOGS "
+        "no non-English catalogs registered in ha_mcp.settings_ui.i18n.CATALOGS "
         "— the per-locale check below would pass by collecting zero cases"
     )
 

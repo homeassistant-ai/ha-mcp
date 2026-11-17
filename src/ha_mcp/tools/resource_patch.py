@@ -19,8 +19,8 @@ from .resource_codec import (
     _MAX_ECHOED_URL,
     MAX_CONTENT_SIZE,
     _check_ws_error,
-    _decode_inline_content,
     content_sha256,
+    decode_inline_content,
 )
 
 MAX_EDITS = 100
@@ -192,7 +192,7 @@ async def find_resource(
         # A malformed entry must not raise a bare AttributeError.
         if isinstance(row, dict) and str(row.get("id")) == str(resource_id):
             url = row.get("url")
-            decoded = _decode_inline_content(url) if isinstance(url, str) else None
+            decoded = decode_inline_content(url) if isinstance(url, str) else None
             return row, decoded[0] if decoded else None
     return None
 

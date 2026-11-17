@@ -53,7 +53,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from ha_mcp.settings_ui._i18n import _validate_string_map
+from ha_mcp.settings_ui.i18n import _validate_string_map
 from ha_mcp.settings_ui.locale_policy import is_best_effort_locale
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

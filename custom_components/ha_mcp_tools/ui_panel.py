@@ -82,7 +82,7 @@ _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
 # path-scoped to the proxy so it is never sent to the boot/session endpoints.
 _COOKIE_NAME = "ha_mcp_tools_ui_session"
 _COOKIE_PATH = f"{_UI_BASE}/app"
-# Keep in sync with ``ha_mcp.settings_ui._i18n.LOCALE_COOKIE`` without
+# Keep in sync with ``ha_mcp.settings_ui.i18n.LOCALE_COOKIE`` without
 # importing the separately installed server package into the HA component.
 _LOCALE_COOKIE_NAME = "ha_mcp_locale"
 

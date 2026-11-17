@@ -34,7 +34,7 @@ _DATA_URI_MIME: dict[str, str] = {
 # accepted with and without the charset parameter so resources written
 # before and after a charset change both still decode. Foreign data: URLs
 # match nothing here and pass through untouched instead of being claimed.
-_ALLOWED_DATA_URI_PREFIXES = tuple(
+ALLOWED_DATA_URI_PREFIXES = tuple(
     f"data:{base}{charset};base64,"
     # dict.fromkeys dedupes while keeping a deterministic order.
     for base in dict.fromkeys(mime.split(";", 1)[0] for mime in _DATA_URI_MIME.values())
@@ -42,7 +42,7 @@ _ALLOWED_DATA_URI_PREFIXES = tuple(
 )
 # Scheme and media type are case-insensitive (RFC 3986/2397); prefixes are
 # lowercase, so matching lowercases the URL head. Longest prefix is 42 chars.
-_DATA_URI_HEAD = max(len(p) for p in _ALLOWED_DATA_URI_PREFIXES)
+_DATA_URI_HEAD = max(len(p) for p in ALLOWED_DATA_URI_PREFIXES)
 
 _B64_URLSAFE_RE = re.compile(r"[A-Za-z0-9_-]*={0,2}")
 
@@ -75,7 +75,7 @@ def content_sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _data_uri_for(content: str, resource_type: str) -> str:
+def data_uri_for(content: str, resource_type: str) -> str:
     """Encode content as a base64 ``data:`` URI for the given resource type.
 
     Standard base64 (not URL-safe): browsers decode data: URIs with the
@@ -101,13 +101,13 @@ def _match_data_uri_prefix(url: str) -> str | None:
     case-insensitive per RFC 3986/2397); the payload's case is preserved.
     """
     head = url[:_DATA_URI_HEAD].lower()
-    for prefix in _ALLOWED_DATA_URI_PREFIXES:
+    for prefix in ALLOWED_DATA_URI_PREFIXES:
         if head.startswith(prefix):
             return prefix
     return None
 
 
-def _decode_data_uri(url: str) -> str | None:
+def decode_data_uri(url: str) -> str | None:
     """Decode one of our base64 ``data:`` URIs back to content.
 
     None for foreign data: URLs (other media types, percent-encoded form) —
@@ -124,7 +124,7 @@ def _decode_data_uri(url: str) -> str | None:
         return None
 
 
-def _is_data_url(url: str) -> bool:
+def is_data_url(url: str) -> bool:
     """True when ``url`` parses as the ``data:`` scheme in a browser.
 
     ``urlsplit`` applies WHATWG's leading C0-control-or-space strip and
@@ -193,7 +193,7 @@ def _is_preview_of(content: str, stored: str) -> bool:
     return bool(candidate) and stored.startswith(candidate)
 
 
-def _decode_inline_content(url: str) -> tuple[str, bool] | None:
+def decode_inline_content(url: str) -> tuple[str, bool] | None:
     """Decode an inline resource URL to ``(content, is_legacy_worker)``.
 
     ``None`` when the URL is not one of ours, or is one of ours but holds
@@ -204,16 +204,16 @@ def _decode_inline_content(url: str) -> tuple[str, bool] | None:
     "not-ours-but-legacy" combination unrepresentable and forces callers
     through one check instead of indexing the tuple.
     """
-    content = _decode_data_uri(url)
+    content = decode_data_uri(url)
     if content:
         return content, False
-    legacy = _decode_legacy_worker_url(url)
+    legacy = decode_legacy_worker_url(url)
     if legacy:
         return legacy, True
     return None
 
 
-def _decode_legacy_worker_url(url: str) -> str | None:
+def decode_legacy_worker_url(url: str) -> str | None:
     """Decode a legacy worker inline URL back to content (pure local base64).
 
     The worker embedded URL-safe base64 in its path; decoding needs no
@@ -228,7 +228,7 @@ def _decode_legacy_worker_url(url: str) -> str | None:
     try:
         # Extract base64 part: https://worker.dev/{base64}?type=module
         encoded = url[len(prefix) :].split("?", maxsplit=1)[0]
-        # validate=True mirrors _decode_data_uri: urlsafe_b64decode otherwise
+        # validate=True mirrors decode_data_uri: urlsafe_b64decode otherwise
         # silently DISCARDS non-alphabet characters, so a junk path could
         # decode to plausible text and be masked as inline content.
         return base64.urlsafe_b64decode(_pad_b64(encoded)).decode("utf-8")
@@ -267,7 +267,7 @@ def summarize_resources(
             by_type_counts[res_type] = by_type_counts.get(res_type, 0) + 1
         url = res.get("url", "")
         if isinstance(url, str):
-            decoded = _decode_inline_content(url)
+            decoded = decode_inline_content(url)
             if decoded:
                 inline_count += 1
                 if keep_start <= index < keep_stop:
