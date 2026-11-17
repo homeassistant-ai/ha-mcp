@@ -26,6 +26,15 @@ def _store(backup_manager: BackupManager, snapshot: str, **values: Any) -> None:
     path.write_text(yaml.safe_dump(stored))
 
 
+def _drop(backup_manager: BackupManager, snapshot: str, *keys: str) -> None:
+    """Edit the snapshot to hold no ``keys`` in its row."""
+    path = next(backup_manager.backup_dir.rglob(snapshot))
+    stored = yaml.safe_load(path.read_text())
+    for key in keys:
+        del stored["config"][key]
+    path.write_text(yaml.safe_dump(stored))
+
+
 def _store_reversed(
     backup_manager: BackupManager, snapshot: str, area: ar.AreaEntry, *keys: str
 ) -> None:

@@ -519,9 +519,7 @@ async def compared_row(
             stamped = readonly
         else:
             stamped = ()
-            untold = sorted(
-                k for k in readonly if k in config and current.get(k) != config[k]
-            )
+            untold = sorted(k for k in readonly if current.get(k) != config.get(k))
             if untold:
                 warnings.append(_stamps_untold(untold))
     return {**_without(current, *stamped), **_only(config, stamped)}, warnings

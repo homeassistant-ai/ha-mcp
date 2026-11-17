@@ -37,7 +37,7 @@ from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_restore_helpers import backup_tool, use_backup_manager
 from ._command_faults import received, taking
-from ._registry_item_snapshots import _snapshot
+from ._registry_item_snapshots import _drop, _snapshot
 
 
 async def _snapshot_reversing(
@@ -262,12 +262,13 @@ async def test_the_settings_diff_carries_the_diff_warning(
 
 
 async def _snapshot_then_rename(
-    hass: HomeAssistant, backup_manager: BackupManager
+    hass: HomeAssistant, backup_manager: BackupManager, *dropped: str
 ) -> str:
-    """Snapshot a device, then give it a name, which gives it a new
-    ``modified_at`` too."""
+    """Snapshot a device without the ``dropped`` keys, then give it a name, which
+    gives it a new ``modified_at`` too."""
     device = _device(hass)
     snapshot = await _snapshot(backup_manager, "device", device.id)
+    _drop(backup_manager, snapshot, *dropped)
     dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
     return snapshot
 
@@ -297,15 +298,9 @@ async def test_a_point_in_time_the_snapshot_lacks_is_no_difference(
     """A snapshot from a Core whose device row had no ``created_at`` is compared
     without it: Core sets that point in time itself and no restore puts it back,
     so the diff names only the field that changed."""
-    device = _device(hass)
-    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
-    assert path is not None
-    stored = yaml.safe_load(path.read_text())
-    del stored["config"]["created_at"]
-    path.write_text(yaml.safe_dump(stored))
-    dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
+    snapshot = await _snapshot_then_rename(hass, backup_manager, "created_at")
 
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
 
     assert _changed_fields(diff) == {"name_by_user"}, diff
 
@@ -343,19 +338,30 @@ async def test_a_device_diff_without_the_component_reports_modified_at_and_says_
     assert "install or update it via HACS" in warning
 
 
+async def test_a_point_in_time_the_snapshot_lacks_is_named_without_the_component(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Without the component a device snapshot that has no ``created_at`` gets
+    the live one reported as removed, and the warning names it too."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager, "created_at")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user", "created_at", "modified_at"}, diff
+    assert {"op": "remove", "path": "/created_at"} in diff["patch"], diff
+    (warning,) = diff["warnings"]
+    assert "reports created_at, modified_at as" in warning
+
+
 async def test_a_device_diff_names_a_list_the_snapshot_does_not_hold(
     hass: HomeAssistant, backup_manager: BackupManager
 ) -> None:
     """A snapshot taken before Core's row had a list is compared as it is: the
     diff names the list instead of failing on the missing key."""
-    device = _device(hass)
-    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
-    assert path is not None
-    stored = yaml.safe_load(path.read_text())
-    del stored["config"]["labels"]
-    path.write_text(yaml.safe_dump(stored))
+    snapshot = await _snapshot(backup_manager, "device", _device(hass).id)
+    _drop(backup_manager, snapshot, "labels")
 
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
 
     assert "/labels" in [op["path"] for op in diff["patch"]], diff
 
