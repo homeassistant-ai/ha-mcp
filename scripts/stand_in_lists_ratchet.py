@@ -263,9 +263,9 @@ def _module_path(base: Base, module: str) -> str:
 
 class _MypyState(NamedTuple):
     exempt: set[str]
-    # The settings mypy applies to a test module: the global ones, then the
-    # ``tests.*`` override's.
-    settings: dict[str, Any]
+    # The settings mypy applies to each test module: the global ones, then each
+    # override whose pattern reaches that module, in order.
+    settings: dict[str, dict[str, Any]]
     excluded: set[str]
     # (module pattern, follow_imports) for the packages a test is typed against.
     untyped: set[tuple[str, str]]
@@ -305,10 +305,11 @@ def _mypy_state(text: str, test_paths: Sequence[str] = ()) -> _MypyState:
         path.removesuffix(".py").replace("/", ".")
         for path in test_paths
         if path.endswith(".py")
-    ]
+    ] or ["tests"]
     exempt: set[str] = set()
     untyped: set[tuple[str, str]] = set()
-    settings = {k: v for k, v in mypy.items() if k not in MYPY_NEUTRAL}
+    general = {k: v for k, v in mypy.items() if k not in MYPY_NEUTRAL}
+    settings = {module: dict(general) for module in test_modules}
     for override in mypy.get("overrides", []):
         modules = _modules(override)
         follow = override.get("follow_imports", "normal")
@@ -321,18 +322,17 @@ def _mypy_state(text: str, test_paths: Sequence[str] = ()) -> _MypyState:
         if modules != ["tests.*"] and named:
             exempt.update(named)
             continue
-        # The ``tests.*`` override, or one whose pattern reaches a test module
-        # (``*.unit.*``), sets what mypy applies to the tests.
-        if modules != ["tests.*"] and not any(
-            _covers(m, test_modules) for m in modules
-        ):
-            continue
-        for key, value in override.items():
-            if key in MYPY_GAINED_LOOSENS:
-                # A code disabled for every module stays disabled for the tests.
-                settings[key] = sorted({*settings.get(key, []), *value})
-            elif key != "module":
-                settings[key] = value
+        # An override applies to the test modules its pattern reaches: the
+        # ``tests.*`` one to all of them, ``*.unit.*`` to the unit tests only.
+        for module, applied in settings.items():
+            if not any(_covers(pattern, [module]) for pattern in modules):
+                continue
+            for key, value in override.items():
+                if key in MYPY_GAINED_LOOSENS:
+                    # A code disabled for every module stays disabled for it.
+                    applied[key] = sorted({*applied.get(key, []), *value})
+                elif key != "module":
+                    applied[key] = value
     exclude = mypy.get("exclude", [])
     excluded = {
         pattern
@@ -401,7 +401,14 @@ def _check_mypy(base: Base, repo: Path, problems: list[str]) -> None:
         f"{PYPROJECT}: mypy exclude gained {pattern!r}"
         for pattern in sorted(head.excluded - at_base.excluded)
     )
-    problems.extend(_loosened_settings(head.settings, at_base.settings))
+    # The same loosening in many modules is reported once.
+    problems.extend(
+        dict.fromkeys(
+            problem
+            for module, applied in sorted(head.settings.items())
+            for problem in _loosened_settings(applied, at_base.settings[module])
+        )
+    )
     problems.extend(
         f"{PYPROJECT}: follow_imports = {follow!r} for {module} turns the types "
         "the tests are checked against into Any"

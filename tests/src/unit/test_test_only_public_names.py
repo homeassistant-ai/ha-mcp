@@ -141,6 +141,16 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
             False,
             id="called-through-a-module-a-script-loads-by-path",
         ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "def other():\n    pass\n",
+                "src/ha_mcp/c.py": "from . import a as api\n\napi.probe()\n\n\n"
+                "def run():\n    from . import b as api\n\n    api.other()\n",
+            },
+            False,
+            id="alias-bound-again-inside-a-function",
+        ),
     ],
 )
 def test_only_a_use_of_the_definition_itself_counts(

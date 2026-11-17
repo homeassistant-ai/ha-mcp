@@ -132,36 +132,71 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
         for elt in node.value.elts
     }
     package = module if is_package else module.rpartition(".")[0]
-    aliases: dict[str, str] = {}
     uses = _Uses(set(), set(), set())
-    for node in ast.walk(tree):
+
+    def walk(scope: ast.AST, enclosing: dict[str, str]) -> None:
+        # A scope's imports bind for its whole body, wherever they stand.
+        nodes = list(_scope_nodes(scope))
+        aliases = {**enclosing, **_bindings(nodes, package)}
+        for node in nodes:
+            if isinstance(node, _SCOPES):
+                walk(node, aliases)
+            elif isinstance(node, ast.ImportFrom):
+                base = _import_base(node, package)
+                uses.qualified.update((base, alias.name) for alias in node.names)
+            elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
+                uses.qualified.add((module, node.id))
+            elif isinstance(node, ast.Attribute):
+                uses.attributes.add(node.attr)
+                if (owner := _dotted(node.value)) is not None:
+                    head, _, rest = owner.partition(".")
+                    target = ".".join(filter(None, [aliases.get(head, head), rest]))
+                    uses.qualified.add((target, node.attr))
+            elif (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in exported
+            ):
+                uses.strings.update(WORD.findall(node.value))
+
+    walk(tree, {})
+    return uses
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
+    """The nodes of ``scope``'s own body; a nested function's body is its own."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, _SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _import_base(node: ast.ImportFrom, package: str) -> str:
+    """The module ``from <base> import ...`` reads, relative imports resolved."""
+    parts = package.split(".") if node.level else []
+    return ".".join(
+        [*parts[: len(parts) - node.level + 1], *filter(None, [node.module])]
+    )
+
+
+def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
+    """What each name an import in ``nodes`` binds refers to."""
+    bound: dict[str, str] = {}
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                bound = alias.asname or alias.name.split(".")[0]
-                aliases[bound] = alias.name if alias.asname else bound
+                name = alias.asname or alias.name.split(".")[0]
+                bound[name] = alias.name if alias.asname else name
         elif isinstance(node, ast.ImportFrom):
-            parts = package.split(".") if node.level else []
-            base = ".".join(
-                [*parts[: len(parts) - node.level + 1], *filter(None, [node.module])]
-            )
+            base = _import_base(node, package)
             for alias in node.names:
-                uses.qualified.add((base, alias.name))
-                aliases[alias.asname or alias.name] = f"{base}.{alias.name}"
-        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
-            uses.qualified.add((module, node.id))
-        elif isinstance(node, ast.Attribute):
-            uses.attributes.add(node.attr)
-            if (owner := _dotted(node.value)) is not None:
-                head, _, rest = owner.partition(".")
-                target = ".".join(filter(None, [aliases.get(head, head), rest]))
-                uses.qualified.add((target, node.attr))
-        elif (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and id(node) not in exported
-        ):
-            uses.strings.update(WORD.findall(node.value))
-    return uses
+                bound[alias.asname or alias.name] = f"{base}.{alias.name}"
+    return bound
 
 
 def _words(paths: list[Path]) -> set[str]:

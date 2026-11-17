@@ -312,6 +312,16 @@ def _listed(rule: str, entry: str) -> str:
             id="test-directory-excluded-without-the-word-tests",
         ),
         pytest.param(
+            {
+                "pyproject.toml": _PYPROJECT
+                + '\n[[tool.mypy.overrides]]\nmodule = ["*.unit.*"]\nignore_errors = true\n'
+                + '\n[[tool.mypy.overrides]]\nmodule = ["*.addon.*"]\n'
+                + "ignore_errors = false\n"
+            },
+            "mypy ignore_errors for the tests changed",
+            id="unit-tests-loosened-by-one-override-and-not-undone-by-another",
+        ),
+        pytest.param(
             {_RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', "")},
             f"{_OLD} came off no-hand-made-core-replies but is still on "
             f"pyproject.toml (mypy), {_GUARD_PATH}, {_RUFF_PATH}",
