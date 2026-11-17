@@ -104,7 +104,7 @@ The separate no-tools jobs and HAOS stdio job remain available manually:
 PR updates use eight E2E jobs. ARM64, update-path, HAOS external, and the
 post-merge stable/beta workflows retain their existing coverage.
 
-## No-tools topology (`E2E_NO_TOOLS_ENTRY=1`, #2292)
+## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
 `E2E_NO_TOOLS_ENTRY=1` runs without the "HA-MCP File & YAML Tools" entry,
 either throughout a manual-only lane or during a combined lane's first phase.
