@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
+import pytest
+
+from ha_mcp.config import Settings
 from ha_mcp.llm_exposure import effective_llm_api_exposed
 from ha_mcp.policy.evaluator import find_matching_rule
 from ha_mcp.policy.persistence import load_policy
@@ -24,7 +25,20 @@ from ha_mcp.renamed_tools import (
     current_tool_name,
     rename_retired_keys,
 )
-from ha_mcp.settings_ui._persistence import env_pinned_tools, load_tool_config
+from ha_mcp.settings_ui import env_pinned_tools, load_tool_config
+from ha_mcp.utils.data_paths import get_data_dir
+
+
+@pytest.fixture
+def config_path() -> Path:
+    """Where the settings UI keeps ``tool_config.json`` (this test's own
+    config directory, which the unit conftest sets)."""
+    return get_data_dir() / "tool_config.json"
+
+
+def env(disabled: str, pinned: str) -> Settings:
+    """Settings as read from ``DISABLED_TOOLS`` and ``PINNED_TOOLS``."""
+    return Settings(_env_file=None, DISABLED_TOOLS=disabled, PINNED_TOOLS=pinned)
 
 
 class TestRenameMapping:
@@ -52,21 +66,17 @@ class TestRenameMapping:
 
 class TestStoredToolConfig:
     def test_a_disabled_tool_stays_disabled_through_the_rename(
-        self, tmp_path: Path
+        self, config_path: Path
     ) -> None:
-        config_path = tmp_path / "tool_config.json"
         config_path.write_text(
             json.dumps({"tools": {"ha_manage_addon": "disabled"}}), encoding="utf-8"
         )
 
-        with patch(
-            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
-        ):
-            loaded = load_tool_config()
+        loaded = load_tool_config()
 
         assert loaded["tools"] == {"ha_manage_app": "disabled"}
 
-    def test_an_llm_api_override_follows_the_rename(self, tmp_path: Path) -> None:
+    def test_an_llm_api_override_follows_the_rename(self, config_path: Path) -> None:
         """The second name-keyed map in the same file, and the riskier one.
 
         ``ha_manage_app`` is exposed to conversation agents by default, so an
@@ -74,30 +84,23 @@ class TestStoredToolConfig:
         install/uninstall/restart to a voice assistant, and the next Tools-tab
         save writes the map back without the record.
         """
-        config_path = tmp_path / "tool_config.json"
         config_path.write_text(
             json.dumps({"llm_api": {"ha_manage_addon": False}}), encoding="utf-8"
         )
 
-        with patch(
-            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
-        ):
-            loaded = load_tool_config()
+        loaded = load_tool_config()
 
         assert loaded["llm_api"] == {"ha_manage_app": False}
         assert not effective_llm_api_exposed("ha_manage_app", [], loaded["llm_api"])
 
     def test_an_env_pin_follows_the_rename(self) -> None:
-        settings = SimpleNamespace(
-            disabled_tools="ha_manage_addon", pinned_tools="ha_get_addon"
-        )
-
-        assert env_pinned_tools(settings) == {
+        assert env_pinned_tools(env("ha_manage_addon", "ha_get_addon")) == {
             "ha_manage_app": "disabled",
             "ha_get_app": "pinned",
         }
 
-    def test_the_seeds_tie_rule_survives_the_rename(self, tmp_path: Path) -> None:
+    @pytest.mark.usefixtures("config_path")
+    def test_the_seeds_tie_rule_survives_the_rename(self) -> None:
         """A retired name on one env var and the current one on the other.
 
         The seed's documented rule is that PINNED_TOOLS wins a tie only where
@@ -105,25 +108,15 @@ class TestStoredToolConfig:
         has to leave the tool disabled — losing that is how a write tool the
         user switched off comes back on.
         """
-        with patch(
-            "ha_mcp.settings_ui._persistence._get_config_path",
-            return_value=tmp_path / "tool_config.json",
-        ):
-            config = load_tool_config(
-                SimpleNamespace(
-                    disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
-                )
-            )
+        config = load_tool_config(env("ha_manage_addon", "ha_manage_app"))
 
         assert config["tools"] == {"ha_manage_app": "disabled"}
 
     def test_the_env_tie_rule_still_applies_to_one_name_in_both_vars(self) -> None:
         """PINNED_TOOLS wins when the SAME tool is named in both vars."""
-        settings = SimpleNamespace(
-            disabled_tools="ha_manage_app", pinned_tools="ha_manage_app"
-        )
-
-        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
+        assert env_pinned_tools(env("ha_manage_app", "ha_manage_app")) == {
+            "ha_manage_app": "pinned"
+        }
 
     def test_two_retired_names_colliding_keep_the_restriction(self) -> None:
         """A disabled half must not come back enabled via its pinned sibling.
@@ -133,11 +126,9 @@ class TestStoredToolConfig:
         a consolidation collision here would hand the operator back an enabled
         write-capable tool they had explicitly disabled.
         """
-        settings = SimpleNamespace(
-            disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
-        )
-
-        assert env_pinned_tools(settings) == {"ha_manage_app": "disabled"}
+        assert env_pinned_tools(env("ha_manage_addon", "ha_manage_app")) == {
+            "ha_manage_app": "disabled"
+        }
 
     def test_a_repeated_pinned_alias_cannot_undo_the_restriction(self) -> None:
         """Naming the disabled spelling in PINNED_TOOLS too must not free the
@@ -147,10 +138,7 @@ class TestStoredToolConfig:
         "pinned" in place, so the second alias then merged against "pinned"
         instead of "disabled" and the restriction vanished.
         """
-        settings = SimpleNamespace(
-            disabled_tools="ha_get_blueprint",
-            pinned_tools="ha_get_blueprint,ha_import_blueprint",
-        )
+        settings = env("ha_get_blueprint", "ha_get_blueprint,ha_import_blueprint")
 
         assert env_pinned_tools(settings) == {"ha_manage_blueprints": "pinned"}
 
@@ -158,20 +146,15 @@ class TestStoredToolConfig:
         self,
     ) -> None:
         """Order must not matter either: the disabled spelling is not pinned."""
-        settings = SimpleNamespace(
-            disabled_tools="ha_import_blueprint",
-            pinned_tools="ha_get_blueprint",
-        )
-
-        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
+        assert env_pinned_tools(env("ha_import_blueprint", "ha_get_blueprint")) == {
+            "ha_manage_blueprints": "disabled"
+        }
 
     def test_a_disabled_blueprint_alias_survives_a_pinned_sibling(self) -> None:
         """The pair this PR consolidates, through the same path."""
-        settings = SimpleNamespace(
-            disabled_tools="ha_get_blueprint", pinned_tools="ha_import_blueprint"
-        )
-
-        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
+        assert env_pinned_tools(env("ha_get_blueprint", "ha_import_blueprint")) == {
+            "ha_manage_blueprints": "disabled"
+        }
 
 
 class TestStoredPolicy:
@@ -292,9 +275,8 @@ class TestBlueprintConsolidation:
         assert states == {"ha_manage_blueprints": "disabled"}
 
     def test_a_disabled_retired_blueprint_tool_disables_the_merged_one(
-        self, tmp_path: Path
+        self, config_path: Path
     ) -> None:
-        config_path = tmp_path / "tool_config.json"
         config_path.write_text(
             json.dumps(
                 {
@@ -307,12 +289,7 @@ class TestBlueprintConsolidation:
             ),
             encoding="utf-8",
         )
-        with patch(
-            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
-        ):
-            config = load_tool_config(
-                SimpleNamespace(disabled_tools="", pinned_tools="")
-            )
+        config = load_tool_config(env("", ""))
 
         assert config["tools"] == {"ha_manage_blueprints": "disabled"}
         assert config["llm_api"] == {"ha_manage_blueprints": False}

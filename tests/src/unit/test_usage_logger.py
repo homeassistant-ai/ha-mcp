@@ -10,19 +10,21 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from ha_mcp import redaction
+from ha_mcp.config import reset_global_settings
+from ha_mcp.utils.data_paths import get_data_dir
 from ha_mcp.utils.usage_logger import (
-    _MAX_REDACT_DEPTH,
-    _REDACTED_VALUE,
     AVG_LOG_ENTRIES_PER_TOOL,
     DEFAULT_RING_BUFFER_SIZE,
-    ToolUsageLog,
+    MAX_REDACT_DEPTH,
+    REDACTED_VALUE,
     UsageLogger,
-    _redact_parameters,
     get_recent_logs,
     log_tool_call,
     shutdown_usage_logger,
@@ -184,8 +186,6 @@ class TestUsageLoggerDefaults:
 
     @pytest.fixture(autouse=True)
     def _reset_data_dir_cache(self):
-        from ha_mcp.utils.data_paths import get_data_dir
-
         get_data_dir.cache_clear()
         yield
         get_data_dir.cache_clear()
@@ -211,33 +211,32 @@ class TestUsageLoggerDefaults:
         logger.shutdown()
 
 
-def test_shutdown_wakes_the_idle_writer_at_once(tmp_path, monkeypatch) -> None:
+def test_shutdown_wakes_the_idle_writer_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An idle writer used to sleep out a full 0.1 s poll on a fresh Event
     before it saw the stop flag, so every shutdown (each server stop, each
-    unit test) waited. It now idles on the stop event itself."""
+    unit test) waited. It now idles on the stop event itself.
 
-    class _SignallingEvent(threading.Event):
-        def __init__(self) -> None:
-            super().__init__()
-            self.idling = threading.Event()
+    The writer's waits are made to last until their event is set: one on
+    the stop event ends at ``shutdown()``, one on any other never does."""
+    before = set(threading.enumerate())
+    logger = UsageLogger(str(tmp_path / "usage.jsonl"))
+    (writer,) = set(threading.enumerate()) - before
+    real_wait = threading.Event.wait
+    idling = threading.Event()
 
-        def wait(self, timeout: float | None = None) -> bool:
-            self.idling.set()
-            return super().wait(timeout)
+    def wait_until_set(self: threading.Event, timeout: float | None = None) -> bool:
+        if threading.current_thread() is not writer:
+            return real_wait(self, timeout)
+        idling.set()
+        return real_wait(self, None)
 
-    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
-    logger = UsageLogger()
-    thread = logger._logger_thread
-    assert thread is not None
-    stop = _SignallingEvent()
-    logger._stop_event = stop
+    monkeypatch.setattr(threading.Event, "wait", wait_until_set)
+    assert idling.wait(timeout=5)
+    logger.shutdown()
 
-    # The writer idles on the stop event: shutdown() can wake it.
-    assert stop.idling.wait(timeout=5)
-    stop.set()
-    thread.join(timeout=5)
-
-    assert not thread.is_alive()
+    assert not writer.is_alive()
 
 
 class TestUsageLoggerConstants:
@@ -288,6 +287,19 @@ class TestUsageLoggerGlobalFunctions:
         assert our_entry["success"] is True
 
 
+@pytest.fixture
+def known_secret(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """A secret value the server has seen, with redaction switched on."""
+    monkeypatch.setenv("REDACT_SECRETS", "true")
+    reset_global_settings()
+    remembered = redaction.known_secret_values()
+    redaction.clear_known_secret_values()
+    redaction.register_known_secret_values(["hunter2-secret"])
+    yield "hunter2-secret"
+    redaction.clear_known_secret_values()
+    redaction.register_known_secret_values(remembered)
+
+
 class TestLogToolUsageDecorator:
     """Tests for the @log_tool_usage decorator in ha_mcp.tools.helpers."""
 
@@ -321,26 +333,18 @@ class TestLogToolUsageDecorator:
         assert entry["success"] is False
         assert entry["error_message"] == "CancelledError"
 
-    async def test_a_known_secret_in_the_error_is_scrubbed(self, monkeypatch):
+    async def test_a_known_secret_in_the_error_is_scrubbed(
+        self, known_secret: str
+    ) -> None:
         """The usage log keeps the error text, which RedactSecretsMiddleware
         only scrubs on its way to the client."""
-        from types import SimpleNamespace
-
-        from ha_mcp import redaction
         from ha_mcp.tools.helpers import log_tool_usage
 
-        monkeypatch.setattr(
-            redaction,
-            "get_global_settings",
-            lambda: SimpleNamespace(redact_secrets=True, redact_app_option_keys=""),
-        )
-        monkeypatch.setattr(redaction, "_known_secrets", {"hunter2-secret"})
-
         @log_tool_usage
-        async def ha_failing_tool():
-            raise ValueError("login failed for hunter2-secret")
+        async def ha_failing_tool() -> None:
+            raise ValueError(f"login failed for {known_secret}")
 
-        with pytest.raises(ValueError, match="hunter2-secret"):
+        with pytest.raises(ValueError, match=known_secret):
             await ha_failing_tool()
 
         entry = next(
@@ -349,8 +353,22 @@ class TestLogToolUsageDecorator:
         assert entry["error_message"] == "login failed for <redacted>"
 
 
+def _logged(parameters: Any) -> Any:
+    """The parameters the usage log keeps of a call made with ``parameters``."""
+    log_tool_call(
+        tool_name="ha_call_service",
+        parameters=parameters,
+        execution_time_ms=1.0,
+        success=True,
+    )
+    return get_recent_logs(1)[0]["parameters"]
+
+
 class TestParameterRedaction:
-    """Tests for secret masking at the logging chokepoint (GHSA-mc92-ww4q-6fg4)."""
+    """Tests for secret masking at the logging chokepoint (GHSA-mc92-ww4q-6fg4).
+
+    Each call goes through ``log_tool_call`` into the ring buffer that
+    ha_report_issue reads."""
 
     @pytest.fixture(autouse=True)
     def reset_global_logger(self):
@@ -361,17 +379,17 @@ class TestParameterRedaction:
     def test_nested_code_redacted_sibling_preserved(self):
         """ha_call_service(data={'code': ...}) leaks the code via the log; the
         recursive key match must mask it while keeping debug-useful siblings."""
-        result = _redact_parameters(
+        result = _logged(
             {"data": {"code": "4321", "entity_id": "lock.front", "brightness": 255}}
         )
-        assert result["data"]["code"] == _REDACTED_VALUE
+        assert result["data"]["code"] == REDACTED_VALUE
         assert result["data"]["entity_id"] == "lock.front"
         assert result["data"]["brightness"] == 255
 
     def test_code_inside_a_json_string_redacted(self):
         """A client that stringifies `data`, or an MQTT payload nested inside
         it, carries the code as text the key match cannot see."""
-        result = _redact_parameters(
+        result = _logged(
             {
                 "data": '{"code": "4321", "entity_id": "lock.front"}',
                 "extra": {"payload": '{"code": "9876"}'},
@@ -395,14 +413,14 @@ class TestParameterRedaction:
     def test_code_inside_unparsed_json_text_left_out(self, truncated):
         """Text that names a sensitive key as a JSON member but does not
         parse, whatever is wrong with it, still shows the code."""
-        result = _redact_parameters({"data": truncated})
+        result = _logged({"data": truncated})
         assert "4321" not in json.dumps(result)
 
     def test_unparsed_json_without_a_sensitive_key_stays_readable(self):
         """A broken payload is what a report reader debugs with; only one
         that names a sensitive key has to go."""
         params = {"data": '{"entity_id": "light.kitchen", "brightness": 255'}
-        assert _redact_parameters(params) == params
+        assert _logged(params) == params
 
     def test_templates_and_bracketed_text_stay_readable(self):
         """A Jinja template and a "[tag] message" start like JSON but are not;
@@ -413,82 +431,69 @@ class TestParameterRedaction:
             "list": "[{{ a }}, {{ b }}",
             "message": "[Alert] front door open",
         }
-        assert _redact_parameters(params) == params
+        assert _logged(params) == params
 
     def test_top_level_sensitive_keys_redacted(self):
-        result = _redact_parameters(
+        result = _logged(
             {"token": "abc", "password": "hunter2", "secret": "s", "api_key": "k"}
         )
-        assert all(result[k] == _REDACTED_VALUE for k in result)
+        assert all(result[k] == REDACTED_VALUE for k in result)
 
     def test_suffix_match_redacts_token_family(self):
-        result = _redact_parameters({"auth_token": "x", "device_secret": "y"})
-        assert result["auth_token"] == _REDACTED_VALUE
-        assert result["device_secret"] == _REDACTED_VALUE
+        result = _logged({"auth_token": "x", "device_secret": "y"})
+        assert result["auth_token"] == REDACTED_VALUE
+        assert result["device_secret"] == REDACTED_VALUE
 
     def test_non_secret_code_key_suffixes_preserved(self):
         """status_code / cache_key are NOT secrets — _code/_key are deliberately
         excluded from suffix matching so debug value survives."""
-        result = _redact_parameters({"status_code": 500, "cache_key": "abc"})
+        result = _logged({"status_code": 500, "cache_key": "abc"})
         assert result["status_code"] == 500
         assert result["cache_key"] == "abc"
 
     def test_assist_sentence_redacted(self):
         """ha_manage_pipeline(action='process') carries user speech, which
         ha_report_issue would otherwise publish verbatim."""
-        result = _redact_parameters(
+        result = _logged(
             {"action": "process", "sentence": "unlock the front door for Alex"}
         )
-        assert result["sentence"] == _REDACTED_VALUE
+        assert result["sentence"] == REDACTED_VALUE
         assert result["action"] == "process"
 
     def test_case_insensitive(self):
-        result = _redact_parameters({"CODE": "1234", "Token": "t"})
-        assert result["CODE"] == _REDACTED_VALUE
-        assert result["Token"] == _REDACTED_VALUE
+        result = _logged({"CODE": "1234", "Token": "t"})
+        assert result["CODE"] == REDACTED_VALUE
+        assert result["Token"] == REDACTED_VALUE
 
     def test_benign_params_unchanged(self):
         params = {"entity_id": "light.test", "key": "value", "nested": {"a": 1}}
-        assert _redact_parameters(params) == params
+        assert _logged(params) == params
 
     def test_list_of_dicts_recursed(self):
-        result = _redact_parameters({"items": [{"code": "1"}, {"entity_id": "x"}]})
-        assert result["items"][0]["code"] == _REDACTED_VALUE
+        result = _logged({"items": [{"code": "1"}, {"entity_id": "x"}]})
+        assert result["items"][0]["code"] == REDACTED_VALUE
         assert result["items"][1]["entity_id"] == "x"
 
-    def test_fail_closed_past_max_depth(self):
+    def test_fail_closed_past_max_depth(self) -> None:
         """A subtree nested past the recursion guard is masked wholesale, never
         returned verbatim."""
-        deep = current = {}
-        for _ in range(_MAX_REDACT_DEPTH + 3):
+        deep: dict[str, Any] = {}
+        current = deep
+        for _ in range(MAX_REDACT_DEPTH + 3):
             current["next"] = {}
             current = current["next"]
         current["code"] = "leak"
-        result = _redact_parameters(deep)
+        result = _logged(deep)
         # Walk down until we hit the masked cutoff; the deep 'code' must not survive.
         flat = repr(result)
         assert "leak" not in flat
-        assert _REDACTED_VALUE in flat
+        assert REDACTED_VALUE in flat
 
     def test_does_not_mutate_input(self):
         """log_tool_usage receives the live kwargs dict — redaction must copy."""
         original = {"data": {"code": "4321"}}
-        _redact_parameters(original)
+        _logged(original)
         assert original["data"]["code"] == "4321"
-
-    def test_end_to_end_buffer_redacted(self):
-        """The ring buffer (read by ha_report_issue) must hold redacted params."""
-        log_tool_call(
-            tool_name="ha_call_service",
-            parameters={"data": {"code": "4321", "entity_id": "lock.front"}},
-            execution_time_ms=10.0,
-            success=False,
-        )
-        entry = next(
-            e for e in get_recent_logs(5) if e["tool_name"] == "ha_call_service"
-        )
-        assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
-        assert entry["parameters"]["data"]["entity_id"] == "lock.front"
 
     def test_secrets_not_persisted_to_jsonl(self, tmp_path):
         """The on-disk mcp_usage.jsonl must not contain raw secrets either — the
@@ -503,12 +508,7 @@ class TestParameterRedaction:
                 execution_time_ms=10.0,
                 success=True,
             )
-            # The disk write happens on a background thread; wait for it to flush.
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                if log_path.exists() and log_path.read_text().strip():
-                    break
-                time.sleep(0.05)
+            logger.log_queue.join()
         finally:
             logger.shutdown()
 
@@ -516,23 +516,18 @@ class TestParameterRedaction:
         assert "code-4321" not in content
         assert "lock.front" in content
         entry = json.loads(content.splitlines()[0])
-        assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
+        assert entry["parameters"]["data"]["code"] == REDACTED_VALUE
 
 
 def _log_one(logger: UsageLogger, tool_name: str = "ha_get_state") -> None:
+    """Log one call and wait until the disk writer has handled it."""
     logger.log_tool_usage(
         tool_name=tool_name,
         parameters={"entity_id": "sun.sun"},
         execution_time_ms=1.0,
         success=True,
     )
-
-
-def _wait_for(condition: Callable[[], bool], timeout: float = 3.0) -> None:
-    """Wait for the background disk writer to reach ``condition``."""
-    deadline = time.monotonic() + timeout
-    while not condition() and time.monotonic() < deadline:
-        time.sleep(0.05)
+    logger.log_queue.join()
 
 
 def _disk_disabled_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -551,7 +546,6 @@ class TestLogFileMode:
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
             _log_one(logger)
-            _wait_for(lambda: log_path.exists() and bool(log_path.read_text().strip()))
         finally:
             logger.shutdown()
 
@@ -596,16 +590,14 @@ class TestLogFileMode:
 
         monkeypatch.setattr(Path, "chmod", refuse)
         caplog.set_level(logging.WARNING, logger="ha_mcp.utils.usage_logger")
-        logger = UsageLogger(str(log_path), ring_buffer_size=5)
-        try:
-            assert logger._disk_enabled is False
-        finally:
-            logger.shutdown()
+        self._write_one(log_path)
+        # One warning, at startup: the file is never tried.
         [warning] = _disk_disabled_warnings(caplog)
         # The directory exists and is writable; only the file's mode is at fault,
         # so the operator must be pointed at the file, not told to fix a mkdir.
         assert str(log_path) in warning
         assert "could not create" not in warning
+        assert log_path.read_text() == ""
 
 
 class TestLogPathControlledByOthers:
@@ -621,26 +613,33 @@ class TestLogPathControlledByOthers:
         monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
         try:
-            assert logger._disk_enabled is False
+            _log_one(logger)
         finally:
             logger.shutdown()
+        assert not (log_dir / "usage.jsonl").exists()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
     def test_refused_log_file_keeps_recent_calls_for_bug_reports(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
+        """The server's own usage log, in a logs directory of another user."""
+        (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
         real_euid = os.geteuid()
         monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
-        logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
-        monkeypatch.setattr("ha_mcp.utils.usage_logger._usage_logger", logger)
+        caplog.set_level(logging.WARNING, logger="ha_mcp.utils.usage_logger")
+        shutdown_usage_logger()
         try:
-            assert logger._disk_enabled is False
-            _log_one(logger, tool_name="ha_kept_in_memory")
+            log_tool_call(
+                tool_name="ha_kept_in_memory",
+                parameters={"entity_id": "sun.sun"},
+                execution_time_ms=1.0,
+                success=True,
+            )
             assert [e["tool_name"] for e in get_recent_logs(5)] == ["ha_kept_in_memory"]
         finally:
-            logger.shutdown()
+            shutdown_usage_logger()
+        [warning] = _disk_disabled_warnings(caplog)
+        assert "owned by another user" in warning
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and modes")
     def test_world_writable_log_directory_is_closed_to_other_writers(
@@ -651,10 +650,11 @@ class TestLogPathControlledByOthers:
         log_dir.chmod(0o777)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
         try:
-            assert logger._disk_enabled is True
+            _log_one(logger, tool_name="ha_written")
             assert log_dir.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0
         finally:
             logger.shutdown()
+        assert "ha_written" in (log_dir / "usage.jsonl").read_text()
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
     def test_symlinked_log_directory_is_refused_and_left_unchanged(
@@ -667,10 +667,11 @@ class TestLogPathControlledByOthers:
         log_dir.symlink_to(target, target_is_directory=True)
         logger = UsageLogger(str(log_dir / "usage.jsonl"), ring_buffer_size=5)
         try:
-            assert logger._disk_enabled is False
-            assert stat.S_IMODE(target.stat().st_mode) == 0o777
+            _log_one(logger)
         finally:
             logger.shutdown()
+        assert not (target / "usage.jsonl").exists()
+        assert stat.S_IMODE(target.stat().st_mode) == 0o777
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
     def test_symlink_planted_before_startup_is_refused(self, tmp_path: Path) -> None:
@@ -681,10 +682,11 @@ class TestLogPathControlledByOthers:
         log_path.symlink_to(target)
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
-            assert logger._disk_enabled is False
-            assert stat.S_IMODE(target.stat().st_mode) == 0o644
+            _log_one(logger)
         finally:
             logger.shutdown()
+        assert target.read_text() == ""
+        assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX links")
     @pytest.mark.parametrize("link", ["symlink", "hardlink"])
@@ -702,8 +704,7 @@ class TestLogPathControlledByOthers:
             else:
                 os.link(target, log_path)
             _log_one(logger)
-            _wait_for(lambda: not logger._disk_enabled)
-            assert logger._disk_enabled is False
+            _log_one(logger)
             assert target.read_text() == ""
         finally:
             logger.shutdown()
@@ -724,8 +725,7 @@ class TestLogPathControlledByOthers:
                 real_euid = os.geteuid()
                 monkeypatch.setattr(os, "geteuid", lambda: real_euid + 1)
             _log_one(logger)
-            _wait_for(lambda: not logger._disk_enabled)
-            assert logger._disk_enabled is False
+            _log_one(logger)
             assert log_path.read_text() == ""
         finally:
             logger.shutdown()
@@ -747,10 +747,14 @@ class TestLogPathControlledByOthers:
                 fd = os.open(log_path, os.O_CREAT | os.O_WRONLY, 0o600)
                 os.close(fd)
                 log_path.chmod(0o000)
-            _log_one(logger)
-            _log_one(logger)
-            _wait_for(lambda: logger._log_queue.empty() and not logger._disk_enabled)
-            assert logger._disk_enabled is False
+            for tool_name in ("ha_first", "ha_second"):
+                logger.log_tool_usage(
+                    tool_name=tool_name,
+                    parameters={},
+                    execution_time_ms=1.0,
+                    success=True,
+                )
+            logger.log_queue.join()
         finally:
             logger.shutdown()
         [warning] = _disk_disabled_warnings(caplog)
@@ -767,15 +771,12 @@ class TestLogPathControlledByOthers:
         try:
             log_dir.rmdir()
             _log_one(logger, tool_name="ha_while_gone")
-            _wait_for(lambda: logger._log_queue.unfinished_tasks == 0)
-            assert logger._disk_enabled is True
             log_dir.mkdir(mode=0o700)
             _log_one(logger, tool_name="ha_after_recreate")
-            _wait_for(lambda: log_path.exists() and log_path.read_text() != "")
-            assert "ha_after_recreate" in log_path.read_text()
-            assert "ha_while_gone" not in log_path.read_text()
         finally:
             logger.shutdown()
+        assert "ha_after_recreate" in log_path.read_text()
+        assert "ha_while_gone" not in log_path.read_text()
         assert _disk_disabled_warnings(caplog) == []
 
     @pytest.mark.parametrize("err", [errno.EMFILE, errno.ENFILE])
@@ -783,26 +784,43 @@ class TestLogPathControlledByOthers:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: int
     ) -> None:
         log_path = tmp_path / "usage.jsonl"
+        real_open = os.open
+
+        def exhausted(
+            path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+        ) -> int:
+            if str(path) == str(log_path):
+                raise OSError(err, os.strerror(err))
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
         try:
-
-            def exhausted(path: str, flags: int) -> int:
-                raise OSError(err, os.strerror(err))
-
-            monkeypatch.setattr("ha_mcp.utils.usage_logger._private_opener", exhausted)
-            _log_one(logger)
-            _wait_for(lambda: logger._log_queue.unfinished_tasks == 0)
-            assert logger._disk_enabled is True
+            with monkeypatch.context() as patched:
+                patched.setattr(os, "open", exhausted)
+                _log_one(logger, tool_name="ha_while_exhausted")
+            _log_one(logger, tool_name="ha_after_exhausted")
         finally:
             logger.shutdown()
+        assert "ha_after_exhausted" in log_path.read_text()
+        assert "ha_while_exhausted" not in log_path.read_text()
 
     def test_descriptor_is_closed_when_the_file_object_cannot_be_made(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         log_path = tmp_path / "usage.jsonl"
         logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        opened: list[int] = []
         closed: list[int] = []
+        real_open = os.open
         real_close = os.close
+
+        def tracking_open(
+            path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+        ) -> int:
+            fd = real_open(path, flags, mode, dir_fd=dir_fd)
+            if str(path) == str(log_path):
+                opened.append(fd)
+            return fd
 
         def failing_open(*args: object, **kwargs: object) -> None:
             raise ValueError("cannot wrap the descriptor")
@@ -812,18 +830,12 @@ class TestLogPathControlledByOthers:
             real_close(fd)
 
         try:
-            monkeypatch.setattr("builtins.open", failing_open)
-            monkeypatch.setattr(os, "close", tracking_close)
-            logger._write_log_entry(
-                ToolUsageLog(
-                    timestamp="2026-10-29T00:00:00+00:00",
-                    tool_name="ha_get_state",
-                    parameters={},
-                    execution_time_ms=1.0,
-                    success=True,
-                )
-            )
-            assert len(closed) == 1
+            with monkeypatch.context() as patched:
+                patched.setattr(os, "open", tracking_open)
+                patched.setattr(os, "close", tracking_close)
+                patched.setattr("builtins.open", failing_open)
+                _log_one(logger)
         finally:
-            monkeypatch.undo()
             logger.shutdown()
+        assert len(opened) == 1
+        assert opened[0] in closed

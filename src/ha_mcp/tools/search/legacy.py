@@ -23,21 +23,21 @@ from ..util_helpers import merge_visibility_warnings
 from .entities import (
     _normalize_state_filter,
     _requested_membership,
-    _validate_entity_search_params,
+    validate_entity_search_params,
 )
 from .modes import EntityModesMixin
 from .response import (
     _CONFIG_BUCKETS,
     _apply_search_outcome,
-    _emit_intent_skip_warning,
-    _finalize_partial_state,
-    _mirror_partial_to_warnings,
     _new_search_response,
     _prefetch_shared_search_snapshots,
-    _project_response_fields,
     _ResolvedSearch,
-    _synthesize_combined_pagination,
-    _validate_search_types,
+    emit_intent_skip_warning,
+    finalize_partial_state,
+    mirror_partial_to_warnings,
+    project_response_fields,
+    synthesize_combined_pagination,
+    validate_search_types,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class LegacySearchMixin(EntityModesMixin):
         # Surface the body-skip so a caller who actually wanted config
         # matches alongside the entity scope can see why their request
         # returned no automations / scripts / etc.
-        _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
+        emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
@@ -151,11 +151,11 @@ class LegacySearchMixin(EntityModesMixin):
             len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
         )
 
-        _synthesize_combined_pagination(response)
-        _finalize_partial_state(response, partial_local=partial, errors_local=errors)
-        _mirror_partial_to_warnings(response)
+        synthesize_combined_pagination(response)
+        finalize_partial_state(response, partial_local=partial, errors_local=errors)
+        mirror_partial_to_warnings(response)
 
-        return _project_response_fields(response, req.parsed_fields)
+        return project_response_fields(response, req.parsed_fields)
 
     async def _ha_search_entities(
         self,
@@ -303,7 +303,7 @@ class LegacySearchMixin(EntityModesMixin):
         path, which is the only one that can run alongside the config branch.
         """
         query, domain_filter, area_filter, parsed_result_fields = (
-            _validate_entity_search_params(
+            validate_entity_search_params(
                 query, domain_filter, area_filter, result_fields, state_filter
             )
         )
@@ -548,7 +548,7 @@ class LegacySearchMixin(EntityModesMixin):
             raise_tool_error(
                 create_validation_error(str(exc), parameter="search_types")
             )
-        _validate_search_types(parsed_search_types)
+        validate_search_types(parsed_search_types)
         include_config_bool = include_config
         exact_match_bool = exact_match
         try:

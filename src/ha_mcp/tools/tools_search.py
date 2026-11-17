@@ -43,10 +43,10 @@ from .search.overview import (
     _OverviewInputs,
 )
 from .search.response import (
-    _compute_eligibility,
     _omit_empty_warnings,
     _ResolvedSearch,
-    _validate_search_types,
+    compute_eligibility,
+    validate_search_types,
 )
 from .search.state import StateMixin
 from .tool_hints import read_only_hints
@@ -334,7 +334,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             raise_tool_error(
                 create_validation_error(str(exc), parameter="search_types")
             )
-        _validate_search_types(parsed_search_types)
+        validate_search_types(parsed_search_types)
         try:
             parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
         except ValueError as exc:
@@ -362,7 +362,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         state_filter_text = (state_filter or "").strip()
         explicit_config_only = parsed_search_types is not None
         registry_eligible, body_eligible, body_skipped_by_intent_gate = (
-            _compute_eligibility(
+            compute_eligibility(
                 query_text=query_text,
                 domain_filter_text=domain_filter_text,
                 area_filter_text=area_filter_text,

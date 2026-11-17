@@ -1177,7 +1177,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         fetch returning ``None`` (unexpected/failed shape — previously
         swallowed by ``or []``) plus each per-dashboard ``lovelace/config``
         fetch that raised or returned a non-dict. Routed through
-        ``_apply_per_type_partial_flag`` so a failed dashboard backend
+        ``apply_per_type_partial_flag`` so a failed dashboard backend
         surfaces as ``partial`` instead of a complete-looking empty result.
         The outer ``except`` still re-raises a catastrophic gather failure to
         deep_search's handler.
@@ -1308,7 +1308,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
             response["dashboards"] = final_results["dashboards"]
 
         self._apply_scene_partial_flag(response, scene_stats)
-        self._apply_per_type_partial_flag(
+        self.apply_per_type_partial_flag(
             response,
             # Scenes are a graph bucket too, so a scene-only search whose
             # configs all failed must still get the scope sentence explaining
@@ -1353,7 +1353,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         return response
 
     @staticmethod
-    def _apply_per_type_partial_flag(
+    def apply_per_type_partial_flag(
         response: dict[str, Any],
         *,
         automation_skipped: int = 0,

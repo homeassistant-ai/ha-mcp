@@ -1,9 +1,10 @@
 """Unit tests for the strict mandatory best-practices gate (#1779).
 
-Covers, without a FastMCP boot:
+Covers:
 
 * ``strict_bps_effective`` truth table + the two fail-open degrade paths
-  (settings ValidationError, missing skills-vendor submodule).
+  (settings ValidationError, missing skills-vendor submodule), driven by the
+  real settings from the environment.
 * ``StrictBpsMiddleware.on_call_tool`` — driven directly with a fake
   ``call_next`` (mirrors ``test_read_only.py``): keyless / wrong-key
   blocks on a gated tool, correct-key passes, non-gated tools pass
@@ -13,14 +14,13 @@ Covers, without a FastMCP boot:
   rotation with previous-bucket grace, non-string key degradation, and
   the schema-as-protocol framing on ``BestPracticeKeyParam``.
 * Wiring: every ``STRICT_BPS_GATED_TOOLS`` tool declares a
-  ``BestPracticeKey`` parameter and maps to the FIRST entry of its
-  module's canonical ``_*_SKILL_FILES`` constant.
-* Server wiring: ``_apply_strict_bps_middleware`` installs the middleware
-  regardless of flags and warns when the child flag is on but the parent
-  is off (strict mode inert).
-* Skill-guide injection: the Tier-3 best-practices content carries the
-  acknowledgment line when strict is effective, and does not when it is
-  off.
+  ``BestPracticeKey`` parameter and points its block error at a file the
+  bundled skill serves.
+* Server wiring, through a real server: the gate engages whatever the flags
+  were at startup, passes an unregistered gate-map tool through, and the
+  startup warns when the child flag is on but the parent is off.
+* Skill-guide injection: ``ha_get_skill_guide`` serves the acknowledgment
+  line when strict is effective, and does not when it is off.
 """
 
 from __future__ import annotations
@@ -29,15 +29,26 @@ import importlib
 import json
 import logging
 import re
+import subprocess
+import sys
+import typing
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import ha_mcp.server as server_module
+from ha_mcp import strict_bps
+from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.config import reset_global_settings
 from ha_mcp.errors import ErrorCode
 from ha_mcp.strict_bps import (
+    STRICT_BPS_ACK_KEY_PREFIX,
     STRICT_BPS_GATED_TOOLS,
     STRICT_BPS_KEY_PARAM,
     StrictBpsMiddleware,
@@ -45,66 +56,84 @@ from ha_mcp.strict_bps import (
     strict_bps_ack_line,
     strict_bps_effective,
 )
+from ha_mcp.tools.config_helpers.schemas import HELPER_SKILL_FILES
+from ha_mcp.tools.tools_config_automations import AUTOMATION_SKILL_FILES
+from ha_mcp.tools.tools_config_dashboards import DASHBOARD_SKILL_FILES
+from ha_mcp.tools.tools_config_scenes import SCENE_SKILL_FILES
+from ha_mcp.tools.tools_config_scripts import SCRIPT_SKILL_FILES
+from ha_mcp.tools.tools_yaml_config import YAML_SKILL_FILES
+from ha_mcp.utils.skill_loader import (
+    best_practices_skill,
+    get_skills_dir,
+    list_skill_files,
+)
 
-# tool name -> (module under ha_mcp.tools, canonical _*_SKILL_FILES const)
-GATED_TOOL_MODULES: dict[str, tuple[str, str]] = {
-    "ha_config_set_automation": ("tools_config_automations", "_AUTOMATION_SKILL_FILES"),
-    "ha_config_set_script": ("tools_config_scripts", "_SCRIPT_SKILL_FILES"),
-    "ha_config_set_scene": ("tools_config_scenes", "_SCENE_SKILL_FILES"),
-    "ha_config_set_helper": ("tools_config_helpers", "_HELPER_SKILL_FILES"),
-    "ha_config_set_dashboard": ("tools_config_dashboards", "_DASHBOARD_SKILL_FILES"),
-    "ha_config_set_yaml": ("tools_yaml_config", "_YAML_SKILL_FILES"),
+# tool name -> module under ha_mcp.tools that registers it
+GATED_TOOL_MODULES: dict[str, str] = {
+    "ha_config_set_automation": "tools_config_automations",
+    "ha_config_set_script": "tools_config_scripts",
+    "ha_config_set_scene": "tools_config_scenes",
+    "ha_config_set_helper": "tools_config_helpers",
+    "ha_config_set_dashboard": "tools_config_dashboards",
+    "ha_config_set_yaml": "tools_yaml_config",
 }
 
-# Tools whose canonical _*_SKILL_FILES constant lives outside the tool module.
-_SKILL_FILES_MODULE: dict[str, str] = {"ha_config_set_helper": "config_helpers.schemas"}
+# The key rotates hourly: the documented period every prose mention promises.
+HOUR = 3600
+# The start of a day, so also of every hour and of any longer period that
+# divides a day: a key that held for more than an hour would hold past it.
+BUCKET_START = 1_000_000_000.0 - (1_000_000_000.0 % 86_400)
 
 # ---------------------------------------------------------------------------
 # strict_bps_effective
 # ---------------------------------------------------------------------------
 
 
-def _patch_settings(monkeypatch, *, parent: bool, child: bool) -> None:
-    monkeypatch.setattr(
-        "ha_mcp.config.get_global_settings",
-        lambda: SimpleNamespace(
-            enable_mandatory_bps=parent, enable_strict_mandatory_bps=child
-        ),
-    )
+def _set_flags(monkeypatch: pytest.MonkeyPatch, *, parent: bool, child: bool) -> None:
+    """Set both flags in the environment the settings are read from."""
+    monkeypatch.setenv("ENABLE_MANDATORY_BPS", str(parent).lower())
+    monkeypatch.setenv("ENABLE_STRICT_MANDATORY_BPS", str(child).lower())
+    reset_global_settings()
 
 
-def _patch_skills_dir(monkeypatch, value: Path | None) -> None:
+def _patch_skills_dir(monkeypatch: pytest.MonkeyPatch, value: Path | None) -> None:
     monkeypatch.setattr("ha_mcp.utils.skill_loader.get_skills_dir", lambda: value)
+
+
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
+    """Make the key derivation read ``now`` as the time."""
+    monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: now))
+
+
+def _key_at(monkeypatch: pytest.MonkeyPatch, now: float) -> str:
+    _freeze_clock(monkeypatch, now)
+    return current_strict_bps_ack_key()
 
 
 class TestStrictBpsEffective:
     def test_both_on_is_effective(self, monkeypatch, tmp_path):
-        _patch_settings(monkeypatch, parent=True, child=True)
+        _set_flags(monkeypatch, parent=True, child=True)
         _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
         assert strict_bps_effective() is True
 
     def test_parent_off_is_not_effective(self, monkeypatch, tmp_path):
         """Child on but parent off ⇒ inert (no config-level cascade)."""
-        _patch_settings(monkeypatch, parent=False, child=True)
-        _patch_skills_dir(monkeypatch, tmp_path)
+        _set_flags(monkeypatch, parent=False, child=True)
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
         assert strict_bps_effective() is False
 
     def test_child_off_is_not_effective(self, monkeypatch, tmp_path):
-        _patch_settings(monkeypatch, parent=True, child=False)
-        _patch_skills_dir(monkeypatch, tmp_path)
+        _set_flags(monkeypatch, parent=True, child=False)
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
         assert strict_bps_effective() is False
 
     def test_validation_error_fails_open(self, monkeypatch, caplog):
         """A corrupt settings env degrades to False, not an exception."""
-
-        def _boom():
-            from ha_mcp.config import Settings
-
-            # Non-boolean coerces to a pydantic ValidationError at load.
-            Settings(_env_file=None, ENABLE_MANDATORY_BPS="garbage")  # type: ignore[call-arg]
-
-        monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
-        monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
+        # Not a boolean: loading the settings raises a pydantic ValidationError.
+        monkeypatch.setenv("ENABLE_MANDATORY_BPS", "garbage")
+        reset_global_settings()
+        # Warn-once memory is process-wide; start from none warned yet.
+        monkeypatch.setattr(strict_bps, "DEGRADE_WARNED", set())
         with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
             assert strict_bps_effective() is False
             # Warn-once: a second degraded call must not log again.
@@ -123,9 +152,9 @@ class TestStrictBpsEffective:
         skill = tmp_path / "home-assistant-best-practices"
         skill.mkdir()
         (skill / "SKILL.md").write_text("# No frontmatter here\n")
-        _patch_settings(monkeypatch, parent=True, child=True)
+        _set_flags(monkeypatch, parent=True, child=True)
         _patch_skills_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
+        monkeypatch.setattr(strict_bps, "DEGRADE_WARNED", set())
         with caplog.at_level(logging.WARNING):
             assert strict_bps_effective() is False
             assert strict_bps_effective() is False
@@ -150,45 +179,40 @@ class TestAckKeyShape:
     hourly, derived from a per-process salt."""
 
     def test_key_is_attestation_phrase_with_rotating_suffix(self):
-        from ha_mcp.strict_bps import STRICT_BPS_ACK_KEY_PREFIX
-
         assert STRICT_BPS_ACK_KEY_PREFIX == "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
         assert re.fullmatch(
             re.escape(STRICT_BPS_ACK_KEY_PREFIX) + r"-[0-9a-f]{8}",
             current_strict_bps_ack_key(),
         )
 
-    def test_key_stable_within_a_bucket_and_rotates_across(self, monkeypatch):
-        """Salt pinned so the cross-bucket inequality is deterministic, not
-        a per-process dice roll on a suffix hash collision."""
-        from ha_mcp import strict_bps
-
-        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
-        # The prose everywhere says "rotates hourly" — pin the period so a
-        # silent change to the constant can't make that claim false.
-        assert strict_bps._ACK_KEY_ROTATION_SECONDS == 3600
-
-        base = 1_000_000_000.0
-        start = base - (base % strict_bps._ACK_KEY_ROTATION_SECONDS)
-        assert strict_bps._current_ack_key(start) == strict_bps._current_ack_key(
-            start + 100
-        )
-        assert strict_bps._current_ack_key(start) != strict_bps._current_ack_key(
-            start + strict_bps._ACK_KEY_ROTATION_SECONDS
-        )
+    def test_key_stable_within_the_hour_and_rotates_at_its_end(self, monkeypatch):
+        """The prose everywhere says "rotates hourly": the key holds for the
+        whole hour and changes when the next one starts."""
+        key = _key_at(monkeypatch, BUCKET_START)
+        assert _key_at(monkeypatch, BUCKET_START + 100) == key
+        assert _key_at(monkeypatch, BUCKET_START + HOUR - 1) == key
+        assert _key_at(monkeypatch, BUCKET_START + HOUR) != key
 
     def test_key_salted_per_process(self, monkeypatch):
         """Without the process salt the suffix is not derivable — a key
-        computed by one process (or reconstructed from the public formula)
-        does not satisfy another process's gate. Both salts pinned for
-        determinism."""
-        from ha_mcp import strict_bps
+        computed by another process (or reconstructed from the public
+        formula) for the same moment does not satisfy this process's gate."""
+        other_process = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; time.time = lambda: float(sys.argv[1]); "
+                "from ha_mcp.strict_bps import current_strict_bps_ack_key; "
+                "print(current_strict_bps_ack_key())",
+                str(BUCKET_START),
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
 
-        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
-        k1 = strict_bps._current_ack_key(1_000_000_000.0)
-        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "different-salt")
-        k2 = strict_bps._current_ack_key(1_000_000_000.0)
-        assert k1 != k2
+        assert other_process.startswith(STRICT_BPS_ACK_KEY_PREFIX)
+        assert other_process != _key_at(monkeypatch, BUCKET_START)
 
     def test_param_schema_documents_protocol_not_a_secret(self):
         """The tool schema (trusted metadata, unlike tool output) must carry
@@ -198,7 +222,7 @@ class TestAckKeyShape:
         found in fetched content' when it replays the key."""
         from ha_mcp.strict_bps import BestPracticeKeyParam
 
-        field = BestPracticeKeyParam.__metadata__[0]
+        field = typing.get_args(BestPracticeKeyParam)[1]
         desc = field.description
         assert "not a secret" in desc.lower()
         assert "ha_get_skill_guide" in desc
@@ -207,13 +231,9 @@ class TestAckKeyShape:
         assert current_strict_bps_ack_key() not in desc
 
     def test_ack_line_frames_key_as_read_receipt(self, monkeypatch):
-        from ha_mcp import strict_bps
-
         # Freeze the clock: the line and the assertion each derive the key,
         # and an hour-boundary straddle between the two would flake.
-        monkeypatch.setattr(
-            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
-        )
+        _freeze_clock(monkeypatch, 1_000_000_000.0)
         line = strict_bps_ack_line()
         assert current_strict_bps_ack_key() in line
         assert STRICT_BPS_KEY_PARAM in line
@@ -331,14 +351,8 @@ class TestStrictBpsMiddleware:
         """A key obtained just before an hourly rotation must not strand
         the agent mid-workflow — the previous bucket's key stays valid for
         one rotation period."""
-        from ha_mcp import strict_bps
-
-        fixed = 1_000_000_000.0
-        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
-        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
-        prev_key = strict_bps._current_ack_key(
-            fixed - strict_bps._ACK_KEY_ROTATION_SECONDS
-        )
+        prev_key = _key_at(monkeypatch, BUCKET_START + 100 - HOUR)
+        _freeze_clock(monkeypatch, BUCKET_START + 100)
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
@@ -350,17 +364,9 @@ class TestStrictBpsMiddleware:
 
     async def test_key_two_rotations_old_rejected(self, strict_on, monkeypatch):
         """A key held past the grace window is stale — an agent that saved
-        the key to persistent memory must re-read the guide. Salt pinned so
-        a suffix collision with a valid bucket can't spuriously pass the
-        stale key."""
-        from ha_mcp import strict_bps
-
-        fixed = 1_000_000_000.0
-        monkeypatch.setattr(strict_bps, "_ACK_KEY_SALT", "fixed-test-salt")
-        monkeypatch.setattr(strict_bps, "time", SimpleNamespace(time=lambda: fixed))
-        stale = strict_bps._current_ack_key(
-            fixed - 2 * strict_bps._ACK_KEY_ROTATION_SECONDS
-        )
+        the key to persistent memory must re-read the guide."""
+        stale = _key_at(monkeypatch, BUCKET_START + 100 - 2 * HOUR)
+        _freeze_clock(monkeypatch, BUCKET_START + 100)
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
@@ -385,6 +391,7 @@ class TestStrictBpsMiddleware:
         # (it would otherwise churn the policy middleware's approval
         # args-hash and leak into downstream logging), while every other
         # argument passes through untouched.
+        assert call_next.await_args is not None
         forwarded = call_next.await_args.args[0]
         assert STRICT_BPS_KEY_PARAM not in forwarded.message.arguments
         assert forwarded.message.arguments == {"config": {"alias": "x"}}
@@ -400,6 +407,7 @@ class TestStrictBpsMiddleware:
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
+        assert call_next.await_args is not None
         forwarded = call_next.await_args.args[0]
         assert STRICT_BPS_KEY_PARAM not in forwarded.message.arguments
 
@@ -495,7 +503,7 @@ class TestStrictBpsMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# Wiring: gated tools declare BestPracticeKey + map their first canonical file
+# Wiring: gated tools declare BestPracticeKey + name a file the skill serves
 # ---------------------------------------------------------------------------
 
 
@@ -542,24 +550,32 @@ def test_gated_tools_set_matches_expected_six():
     assert set(STRICT_BPS_GATED_TOOLS) == set(GATED_TOOL_MODULES)
 
 
+def test_the_gate_names_the_file_each_tools_own_hint_lists_first() -> None:
+    """A tool's write hint and its block error send the model to the same
+    file: the gate's map is a second copy of each module's own first entry."""
+    assert dict(STRICT_BPS_GATED_TOOLS) == {
+        "ha_config_set_automation": AUTOMATION_SKILL_FILES[0],
+        "ha_config_set_script": SCRIPT_SKILL_FILES[0],
+        "ha_config_set_scene": SCENE_SKILL_FILES[0],
+        "ha_config_set_helper": HELPER_SKILL_FILES[0],
+        "ha_config_set_dashboard": DASHBOARD_SKILL_FILES[0],
+        "ha_config_set_yaml": YAML_SKILL_FILES[0],
+    }
+
+
 @pytest.mark.parametrize("tool_name", sorted(STRICT_BPS_GATED_TOOLS))
-def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
+def test_gated_tool_declares_key_and_names_a_servable_file(tool_name: str) -> None:
+    """The block error sends the model to ``ha_get_skill_guide(file=...)``
+    for the key: a file the bundled skill does not serve leaves it nothing
+    to read the key from."""
     from ha_mcp._vendor.fastmcp.tools import Tool
 
-    module_name, const_name = GATED_TOOL_MODULES[tool_name]
+    skill = best_practices_skill(get_skills_dir())
+    assert skill is not None
+    assert STRICT_BPS_GATED_TOOLS[tool_name] in list_skill_files(skill[1])
+
+    module_name = GATED_TOOL_MODULES[tool_name]
     module = importlib.import_module(f"ha_mcp.tools.{module_name}")
-
-    canonical_files = getattr(
-        importlib.import_module(
-            f"ha_mcp.tools.{_SKILL_FILES_MODULE.get(tool_name, module_name)}"
-        ),
-        const_name,
-    )
-    assert STRICT_BPS_GATED_TOOLS[tool_name] == canonical_files[0], (
-        f"{tool_name} block-error ref {STRICT_BPS_GATED_TOOLS[tool_name]!r} must "
-        f"equal {const_name}[0] ({canonical_files[0]!r})"
-    )
-
     registered = _registered_tools_in_module(module)
     assert tool_name in registered, (
         f"{tool_name} is in STRICT_BPS_GATED_TOOLS but no @tool method in "
@@ -585,52 +601,92 @@ def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
 
 
 # ---------------------------------------------------------------------------
-# Server wiring + inert startup warning
+# Server wiring + inert startup warning, on a real server
 # ---------------------------------------------------------------------------
 
+AUTOMATION_CALL = {"config": {"alias": "x", "triggers": [], "actions": []}}
 
-def _make_server_stub(*, parent: bool, child: bool) -> MagicMock:
-    stub = MagicMock()
-    stub.settings = MagicMock(
-        enable_mandatory_bps=parent, enable_strict_mandatory_bps=child
-    )
-    stub.mcp = MagicMock()
-    return stub
+
+@asynccontextmanager
+async def _no_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
+    yield {}
+
+
+def _server(
+    monkeypatch: pytest.MonkeyPatch, *, parent: bool, child: bool
+) -> server_module.HomeAssistantSmartMCPServer:
+    """A server started with the two flags; its startup checks are left out."""
+    monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", "unused")
+    monkeypatch.setattr(server_module, "server_lifespan", _no_lifespan)
+    _set_flags(monkeypatch, parent=parent, child=child)
+    return server_module.HomeAssistantSmartMCPServer()
+
+
+async def _call(
+    server: server_module.HomeAssistantSmartMCPServer,
+    tool: str,
+    arguments: dict[str, Any],
+) -> Any:
+    async with Client(server.mcp) as client:
+        return await client.call_tool(tool, arguments, raise_on_error=False)
 
 
 class TestServerWiring:
-    def test_middleware_installed_regardless_of_flags(self):
-        from ha_mcp.server import HomeAssistantSmartMCPServer
+    @pytest.mark.parametrize(
+        ("parent", "child"),
+        [(True, True), (False, False), (True, False), (False, True)],
+    )
+    async def test_gate_engages_whatever_the_flags_were_at_startup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        parent: bool,
+        child: bool,
+    ) -> None:
+        """The settings UI turns strict mode on without a restart, so the gate
+        is part of every server and a keyless write is blocked once both
+        flags are on."""
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
+        server = _server(monkeypatch, parent=parent, child=child)
+        _set_flags(monkeypatch, parent=True, child=True)
 
-        for parent, child in (
-            (True, True),
-            (False, False),
-            (True, False),
-            (False, True),
-        ):
-            stub = _make_server_stub(parent=parent, child=child)
-            HomeAssistantSmartMCPServer._apply_strict_bps_middleware(stub)
-            assert stub.mcp.add_middleware.call_count == 1
-            args, _kwargs = stub.mcp.add_middleware.call_args
-            assert isinstance(args[0], StrictBpsMiddleware)
-            # The catalog lookup must be injected so unregistered gate-map
-            # tools pass through to the unknown-tool error.
-            assert args[0]._list_tools is not None
+        result = await _call(server, "ha_config_set_automation", AUTOMATION_CALL)
 
-    def test_inert_warning_when_child_on_parent_off(self, caplog):
-        from ha_mcp.server import HomeAssistantSmartMCPServer
+        assert result.is_error
+        assert ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED.value in result.content[0].text
 
-        stub = _make_server_stub(parent=False, child=True)
+    async def test_an_unregistered_gate_map_tool_is_not_gated(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``ha_config_set_yaml`` registers only with YAML editing on. Without
+        it the caller is told the tool does not exist, not sent to fetch a
+        key for it."""
+        monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "false")
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
+        server = _server(monkeypatch, parent=True, child=True)
+
+        result = await _call(
+            server, "ha_config_set_yaml", {"yaml_path": "automations.yaml"}
+        )
+
+        assert result.is_error
+        text = result.content[0].text
+        assert ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED.value not in text
+        assert "ha_config_set_yaml" in text
+
+    def test_inert_warning_when_child_on_parent_off(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            HomeAssistantSmartMCPServer._apply_strict_bps_middleware(stub)
+            _server(monkeypatch, parent=False, child=True)
         assert any("INERT" in r.getMessage() for r in caplog.records)
 
-    def test_no_inert_warning_when_both_on(self, caplog):
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = _make_server_stub(parent=True, child=True)
+    def test_no_inert_warning_when_both_on(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            HomeAssistantSmartMCPServer._apply_strict_bps_middleware(stub)
+            _server(monkeypatch, parent=True, child=True)
         assert not any("INERT" in r.getMessage() for r in caplog.records)
 
 
@@ -639,17 +695,9 @@ class TestServerWiring:
 # ---------------------------------------------------------------------------
 
 
-def _make_bare_server() -> object:
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    srv.settings = MagicMock()
-    return srv
-
-
 def _best_practices_skills_dir(tmp_path: Path) -> Path:
     skill = tmp_path / "home-assistant-best-practices"
-    skill.mkdir()
+    skill.mkdir(exist_ok=True)
     (skill / "SKILL.md").write_text(
         "---\nname: best-practices\ndescription: Best practices.\n---\n"
         "# Best practices\nReal content here.\n"
@@ -657,29 +705,34 @@ def _best_practices_skills_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+async def _skill_guide(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, strict: bool
+) -> dict[str, Any]:
+    _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
+    server = _server(monkeypatch, parent=True, child=strict)
+    result = await _call(server, "ha_get_skill_guide", {})
+    assert not result.is_error, result.content
+    return json.loads(result.content[0].text)
+
+
 class TestSkillGuideKeyInjection:
-    def test_ack_line_prepended_when_strict_effective(self, monkeypatch, tmp_path):
+    async def test_ack_line_prepended_when_strict_effective(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """A model reads the key from the top of the served file; without
         it every gated write stays blocked."""
-        from ha_mcp import strict_bps
-
-        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
         # Freeze the clock: content generation and the assertions each
         # derive the key; an hour-boundary straddle between them would flake.
-        monkeypatch.setattr(
-            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
-        )
-        srv = _make_bare_server()
-        skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(skills_dir)
+        _freeze_clock(monkeypatch, 1_000_000_000.0)
+        result = await _skill_guide(monkeypatch, tmp_path, strict=True)
         assert result["content"].startswith(strict_bps_ack_line())
         assert current_strict_bps_ack_key() in result["content"]
         assert "Real content here." in result["content"]
 
-    def test_ack_line_absent_when_strict_off(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: False)
-        srv = _make_bare_server()
-        skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(skills_dir)
+    async def test_ack_line_absent_when_strict_off(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        result = await _skill_guide(monkeypatch, tmp_path, strict=False)
         assert result["success"] is True
+        assert "Real content here." in result["content"]
         assert current_strict_bps_ack_key() not in result["content"]

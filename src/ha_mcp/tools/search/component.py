@@ -40,17 +40,17 @@ from .response import (
     _apply_result_fields_to_response,
     _apply_search_outcome,
     _as_record_list,
-    _emit_intent_skip_warning,
-    _finalize_partial_state,
     _format_search_diagnostics,
     _merge_partial_reason,
-    _mirror_partial_to_warnings,
     _new_search_response,
     _normalized_domain_filter,
     _parse_component_result_fields,
-    _project_response_fields,
     _ResolvedSearch,
-    _synthesize_combined_pagination,
+    emit_intent_skip_warning,
+    finalize_partial_state,
+    mirror_partial_to_warnings,
+    project_response_fields,
+    synthesize_combined_pagination,
 )
 
 logger = logging.getLogger(__name__)
@@ -308,7 +308,7 @@ def _apply_entity_window(req: _ResolvedSearch, windowed: dict[str, Any]) -> None
 
     No CURRENT request gets past the early return: the split needs an explicit
     ``search_types``, which pins the call config-only
-    (``_compute_eligibility``), so the window carries no entity surface at all.
+    (``compute_eligibility``), so the window carries no entity surface at all.
     This is the guard that keeps the window honest if that eligibility ever
     admits one — without it the entity page would silently be the whole
     ``[0, offset + limit)`` prefix.
@@ -415,11 +415,11 @@ def _apply_dashboard_leg_state(response: dict[str, Any], leg: _DashboardLeg) -> 
     dashboards bucket is never mistaken for a clean zero.
     """
     if leg.failed:
-        DeepSearchMixin._apply_per_type_partial_flag(
+        DeepSearchMixin.apply_per_type_partial_flag(
             response, dashboard_failed=leg.failed
         )
     if leg.error is not None:
-        _finalize_partial_state(
+        finalize_partial_state(
             response,
             partial_local=True,
             errors_local=[{"surface": "dashboards", "error": leg.error}],
@@ -575,7 +575,7 @@ def _shape_component_search_response(
     the enforce-mode scrub both see the merged envelope.
     """
     response = _new_search_response(req.query, req.parsed_search_types)
-    _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
+    emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
 
     if req.registry_eligible:
         parsed_result_fields = _parse_component_result_fields(req.result_fields)
@@ -662,9 +662,9 @@ def _shape_component_search_response(
     response["count"] = len(response["entities"]) + sum(
         len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
     )
-    _synthesize_combined_pagination(response)
-    _mirror_partial_to_warnings(response)
-    return _project_response_fields(response, req.parsed_fields)
+    synthesize_combined_pagination(response)
+    mirror_partial_to_warnings(response)
+    return project_response_fields(response, req.parsed_fields)
 
 
 class ComponentSearchMixin(LegacySearchMixin):
