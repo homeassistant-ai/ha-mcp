@@ -15,7 +15,8 @@ compares the row of an entity and of a device through ``compared_row`` as well.
 Which keys a restore sends, which lists match in any order and which points in
 time a diff leaves out are asked of the component's
 ``ha_mcp_tools/registry_fields``; that contract and its fallbacks are in
-``docs/agents/native-core-contracts.md`` (Choose the authoritative path).
+``docs/agents/native-core-contracts.md`` (Choose the authoritative path, the
+``registry_fields`` paragraphs).
 """
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ from .client.rest_client import (
 logger = logging.getLogger(__name__)
 
 
-async def registry_rows(client: Any, kind: str) -> list[Any]:
-    """The rows of the label, area or floor registry, in the order Core lists them."""
+async def _rows(client: Any, kind: str) -> list[Any]:
     # Route the read through the component's ``registries`` capability when
     # available (one in-process read of the registry) instead of dumping the
     # whole registry via WS. Lazy import to avoid the backup_manager → tools →
@@ -55,7 +55,7 @@ async def registry_rows(client: Any, kind: str) -> list[Any]:
 
 
 async def _category_rows(client: Any, scope: str) -> list[Any]:
-    # Same component-first routing as ``registry_rows``; categories are scoped, so the
+    # Same component-first routing as ``_rows``; categories are scoped, so the
     # requested scope rides ``category_scopes``.
     from .tools.component_registries import fetch_registries_via_component
 
@@ -118,7 +118,7 @@ async def _registry_fields(
     ``item_id``, for one of its entries; None when the component cannot be asked
     (no usable component, one without the command, command not sent or left
     without an answer), refuses or answers in another shape."""
-    from .tools.component_api import ask_component  # import cycle, as registry_rows
+    from .tools.component_api import ask_component  # import cycle, as _rows
 
     params = {"registry": registry}
     if item_id is not None:
@@ -154,7 +154,7 @@ def _without(row: dict[str, Any], *keys: str) -> dict[str, Any]:
 
 
 def _get_the_component() -> str:
-    # Import cycle, as registry_rows.
+    # Import cycle, as _rows.
     from .tools.component_api import COMPONENT_VIA_HACS
 
     return (
@@ -263,9 +263,11 @@ async def _restore_item(
     """Update the item, or create it again when Core no longer holds its id.
 
     ``stored`` is the snapshot's row without its own id and the ``kind`` or
-    ``scope`` the snapshot adds. The keys sent, and when a list matches in
-    another order, follow ``registry_fields`` (module docstring); the row
-    carries a warning for the stored keys left out (``_not_restored``).
+    ``scope`` the snapshot adds. Which keys are sent, and whether a list in
+    another order still matches, follow ``registry_fields``
+    (``docs/agents/native-core-contracts.md``, the ``registry_fields``
+    paragraphs); stored keys left out are named as ``_not_restored``
+    describes.
 
     A row whose fields all match the create's stands for the item an earlier
     restore created, and is returned with its own fields. A create leaves out a
@@ -294,7 +296,7 @@ async def _restore_item(
     if noun == "category":
         rows = await _category_rows(client, extra_ids["scope"])
     else:
-        rows = await registry_rows(client, noun)
+        rows = await _rows(client, noun)
     if any(r.get(id_key) == item_id for r in rows):
         row = await bm._ws_send(
             client,
@@ -327,7 +329,7 @@ async def _restore_item(
                 client, {"type": f"config/{registry}/create", **extra_ids, **fields}
             )
         except HomeAssistantCommandError as err:
-            # Import cycle, as registry_rows.
+            # Import cycle, as _rows.
             from .tools.helpers import core_error_message
 
             core = core_error_message(err)
@@ -358,7 +360,7 @@ async def _restore_item(
 
 
 async def fetch_label(client: Any, entity_id: str) -> Any:
-    rows = await registry_rows(client, "label")
+    rows = await _rows(client, "label")
     return next((r for r in rows if r.get("label_id") == entity_id), None)
 
 
@@ -399,7 +401,7 @@ async def fetch_area_or_floor(client: Any, entity_id: str) -> Any:
     kind, _, real_id = entity_id.partition(":")
     if kind not in _AREA_OR_FLOOR or not real_id:
         return None
-    for item in await registry_rows(client, kind):
+    for item in await _rows(client, kind):
         if item.get(f"{kind}_id") == real_id:
             return {"kind": kind, **item}
     return None
@@ -440,7 +442,7 @@ async def _area_warnings(client: Any, stored: dict[str, Any], row: Any) -> list[
         )
     floor_id = row.get("floor_id")
     if floor_id and floor_id not in {
-        f.get("floor_id") for f in await registry_rows(client, "floor")
+        f.get("floor_id") for f in await _rows(client, "floor")
     }:
         warnings.append(
             f"The area is on floor {floor_id}, which no longer exists, and Core "
@@ -464,7 +466,7 @@ async def _restored_item(client: Any, domain: str, entity_id: str, config: Any) 
     differs.
     """
     if domain == "label":
-        return _holding_name(await registry_rows(client, "label"), config)
+        return _holding_name(await _rows(client, "label"), config)
     if domain == "category":
         scope = entity_id.partition(":")[0]
         row = _holding_name(await _category_rows(client, scope), config)
@@ -472,7 +474,7 @@ async def _restored_item(client: Any, domain: str, entity_id: str, config: Any) 
     kind = entity_id.partition(":")[0]
     if domain != "area_or_floor" or kind not in _AREA_OR_FLOOR:
         return None
-    row = _holding_name(await registry_rows(client, kind), config)
+    row = _holding_name(await _rows(client, kind), config)
     return row and {"kind": kind, **row}
 
 
@@ -487,7 +489,8 @@ async def compared_row(
 
     A list Core keeps in a set gets the snapshot's order, and a point in time
     Core sets itself the snapshot's value, as ``registry_fields`` names them
-    (module docstring). The component is asked once, and only when the rows
+    (``docs/agents/native-core-contracts.md``, the ``registry_fields``
+    paragraphs). ``registry_fields`` is asked once, and only when the rows
     differ.
     """
     if current is None:

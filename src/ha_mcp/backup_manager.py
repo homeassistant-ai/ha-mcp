@@ -2222,11 +2222,10 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 # Registry read-only fields
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
-# ``modified_at`` their lists return, which snapshots keep. The restore of a
-# label, category, area or floor asks the component which keys those commands
-# take, and the diff asks it which points in time Core sets itself
-# (``backup_registry_items``); this list is what both use when the component
-# gives no answer. The other restores apply it without asking.
+# ``modified_at`` their lists return, which snapshots keep. The registry item
+# restores and diffs use this list when the component gives no answer
+# (docs/agents/native-core-contracts.md, the ``registry_fields`` paragraphs);
+# the other restores apply it without asking.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 

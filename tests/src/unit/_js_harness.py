@@ -133,7 +133,7 @@ class HarnessResult:
 
 
 def _assert_clean_init(result: HarnessResult) -> None:
-    """Fail loud on any script-init or transpile error.
+    """Fail loud on a script-init, transpile, invoke or jsdom error.
 
     A JS behaviour test asserts on side effects (fetches, broadcasts,
     reloads, alerts). When the script throws at init time the side

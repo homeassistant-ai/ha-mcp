@@ -54,7 +54,8 @@ def component_tools(component_core_client: HomeAssistantClient) -> AreaTools:
 
 @pytest.fixture
 def routed_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
-    """The client fixture a test names as its ``routed_client`` parameter."""
+    """The client fixture whose name the test passes through the indirect
+    ``routed_client`` parametrization."""
     client: HomeAssistantClient = request.getfixturevalue(request.param)
     return client
 
@@ -87,14 +88,14 @@ async def _floors_in_reordered_registry(hass: HomeAssistant, tools: AreaTools) -
     cellar = floors.async_create("Cellar", level=-1)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
-    floors.async_reorder([attic.floor_id, cellar.floor_id, ground.floor_id])
+    floors.async_reorder([ground.floor_id, attic.floor_id, cellar.floor_id])
 
     listed = await tools.ha_list_floors_areas()
 
     assert [f["floor_id"] for f in listed["floors"]] == [
+        ground.floor_id,
         attic.floor_id,
         cellar.floor_id,
-        ground.floor_id,
     ]
 
 
@@ -239,8 +240,8 @@ async def test_an_unknown_id_is_looked_up_without_a_connection_of_its_own(
 ) -> None:
     """The registry read that tells an unknown id from another "Unknown error"
     asks the component when it is installed, and goes over the server's pooled
-    socket, not over a connection opened for it."""
-
+    socket: an update of an unknown id does not open and authenticate a new
+    connection for the read."""
     with sent_commands(await pooled_socket(routed_client)) as sent:
         error = await rejected_call_body(
             AreaTools(routed_client).ha_set_area_or_floor(
@@ -455,7 +456,8 @@ async def test_a_reorder_reads_both_orders_without_a_connection_of_its_own(
 ) -> None:
     """The order is read before and after Core's reorder command, from the
     component when it is installed, and both reads go over the server's pooled
-    socket, not over a connection opened for each."""
+    socket: a reorder does not open and authenticate a new connection for each
+    read."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
@@ -519,7 +521,7 @@ async def test_a_reorder_is_not_sent_when_the_order_before_it_cannot_be_read(
             )
         )
 
-    assert error["success"] is False
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
     assert any("Nothing was reordered" in s for s in error["error"]["suggestions"])
     assert [f.floor_id for f in floors.async_list_floors()] == [
         ground.floor_id,
@@ -583,14 +585,14 @@ async def test_areas_are_reordered_with_cores_reorder(
     hass: HomeAssistant, tools: AreaTools
 ) -> None:
     areas = ar.async_get(hass)
-    kitchen = areas.async_create("Kitchen")
     hall = areas.async_create("Hall")
+    kitchen = areas.async_create("Kitchen")
 
-    await tools.ha_set_area_or_floor(kind="area", order=[hall.id, kitchen.id])
+    await tools.ha_set_area_or_floor(kind="area", order=[kitchen.id, hall.id])
 
-    assert [a.id for a in areas.async_list_areas()] == [hall.id, kitchen.id]
+    assert [a.id for a in areas.async_list_areas()] == [kitchen.id, hall.id]
     listed = await tools.ha_list_floors_areas()
-    assert [a["area_id"] for a in listed["unassigned_areas"]] == [hall.id, kitchen.id]
+    assert [a["area_id"] for a in listed["unassigned_areas"]] == [kitchen.id, hall.id]
 
 
 async def test_an_incomplete_order_is_refused_with_cores_reason(

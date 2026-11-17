@@ -170,8 +170,8 @@ async def registry_list_reply(client: Any, kind: str) -> dict[str, Any]:
 
 
 async def registry_list_rows(client: Any, kind: str) -> list[Any]:
-    """The rows of :func:`registry_list_reply`; Core's refusal of the list is
-    raised as ``HomeAssistantCommandError``."""
+    """The rows of :func:`registry_list_reply`; a reply that is not a success
+    is raised as ``HomeAssistantCommandError``."""
     reply = await registry_list_reply(client, kind)
     if not reply.get("success"):
         raise HomeAssistantCommandError(

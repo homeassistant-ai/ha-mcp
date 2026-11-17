@@ -99,10 +99,9 @@ def _do_registry_fields(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
     entry. All lists are sorted. How the server uses them:
     ``docs/agents/native-core-contracts.md`` (Choose the authoritative path).
 
-    A field is named, not a row key: a caller matches a row key to a field of
-    the same name. Only declared fields are read, never a row key as an
-    attribute: ``DeviceEntry.config_entries`` and its siblings are deprecated
-    properties that report their use.
+    Only declared fields are named (read by attribute); a row key that is a
+    property, such as a device's deprecated ``config_entries``, is never
+    named; on Core 2026.10 and later, reading it reports its use.
 
     Raises ``HomeAssistantError`` when Core registers no update command for the
     registry, and, with ``item_id``, for a ``category`` without ``scope`` and
