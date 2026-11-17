@@ -82,6 +82,8 @@ from ._conftest_testcontainer import (
 )
 from ._conftest_topology import (
     e2e_topology as e2e_topology,
+)
+from ._conftest_topology import (
     pytest_configure,  # noqa: F401 (pytest hook)
     pytest_generate_tests,  # noqa: F401 (pytest hook)
     pytest_xdist_make_scheduler,  # noqa: F401 (pytest hook)
