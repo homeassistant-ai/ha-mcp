@@ -184,8 +184,14 @@ def _import_base(node: ast.ImportFrom, package: str) -> str:
     )
 
 
+_LOADERS = frozenset({"module_from_spec", "import_module", "load_source"})
+# A module a script loads by its file path, under the name it is bound to
+# (``tool_hints = module_from_spec(...)``), which names it after the file.
+_LOADED = "<loaded>."
+
+
 def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
-    """What each name an import in ``nodes`` binds refers to."""
+    """What each name an import or a module loader in ``nodes`` binds refers to."""
     bound: dict[str, str] = {}
     for node in nodes:
         if isinstance(node, ast.Import):
@@ -196,6 +202,17 @@ def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
             base = _import_base(node, package)
             for alias in node.names:
                 bound[alias.asname or alias.name] = f"{base}.{alias.name}"
+        elif (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and (loader := _dotted(node.value.func)) is not None
+            and loader.rpartition(".")[2] in _LOADERS
+        ):
+            bound.update(
+                (target.id, f"{_LOADED}{target.id}")
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            )
     return bound
 
 
@@ -238,9 +255,8 @@ def test_only_names(repo: Path) -> list[str]:
         for name, is_method in _definitions(tree):
             if name.startswith("_") or HA_HOOK.match(name) or name in uses.strings:
                 continue
-            # A script loads a module by its file path and names it after the
-            # file (``tool_hints = module_from_spec(...)``).
-            reached = {(module, name), (module.rpartition(".")[2], name)}
+            loaded = f"{_LOADED}{module.rpartition('.')[2]}"
+            reached = {(module, name), (loaded, name)}
             if reached & uses.qualified or (is_method and name in uses.attributes):
                 continue
             if name in tested and f"{relative}:{name}" not in EXEMPT:

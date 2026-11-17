@@ -144,6 +144,14 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         pytest.param(
             {
                 "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "def run(a):\n    a.probe()\n",
+            },
+            True,
+            id="parameter-named-like-the-module",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
                 "src/ha_mcp/b.py": "def other():\n    pass\n",
                 "src/ha_mcp/c.py": "from . import a as api\n\napi.probe()\n\n\n"
                 "def run():\n    from . import b as api\n\n    api.other()\n",
