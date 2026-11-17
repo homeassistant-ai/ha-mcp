@@ -208,8 +208,9 @@ PyPI answered (`get_component_caps`, `component_serves`, `component_supports`,
 `get_addon_info`, `get_update_info`, any `fetch_*` or `_fetch_*`) when the
 replacement carries an answer written in the test (`return_value=`, a
 `lambda`), or is a patch with nothing but its target (`DEFAULT` in
-`patch.multiple`), whose mock answers for the function. A spy (`wraps=`) and a
-failure (`side_effect=`) stay. The test sets
+`patch.multiple`), whose mock answers for the function. A spy on the real
+function (`wraps=real_fn`) and a failure (`side_effect=SomeError`) stay; a
+`lambda` is refused in either. The test sets
 up the real component or integration, uses Core's Supervisor test support, or
 serves PyPI's JSON from a local server. It has no list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and

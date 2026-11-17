@@ -9,26 +9,16 @@
 id: no-typed-in-server-answers
 language: python
 utils:
-  # An answer written in the test. A spy (wraps=) or a failure (side_effect=)
-  # carries none and stays; so does a wraps= lambda that only calls a function
-  # named after the one it replaces (`wraps=lambda: real_get_update_info()`).
+  # An answer written in the test. A spy on the real function (wraps=real_fn)
+  # or a failure (side_effect=SomeError) carries none and stays. A lambda is
+  # refused wherever it sits: nothing here can tell one that calls the real
+  # function from one that returns a value, and a spy needs none.
   typed-in-answer:
     any:
       - regex: '\breturn_value\s*='
       - has:
           kind: lambda
           stopBy: end
-          not:
-            all:
-              - inside:
-                  kind: keyword_argument
-                  regex: '^wraps\s*='
-              - has:
-                  field: body
-                  kind: call
-                  has:
-                    field: function
-                    regex: '(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|fetch_\w+)$'
 rule:
   any:
     # The function is named where the call names what it replaces, and nowhere

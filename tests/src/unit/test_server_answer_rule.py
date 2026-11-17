@@ -89,14 +89,24 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="setattr-dotted-target",
         ),
         pytest.param(
-            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: real_get_update_info())\n',
+            'patch("ha_mcp.update_check.get_update_info", wraps=real_get_update_info)\n',
             False,
+            id="spy-on-the-real-function-by-name",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: real_get_update_info())\n',
+            True,
             id="spy-lambda-that-calls-through",
         ),
         pytest.param(
             'patch("ha_mcp.update_check.get_update_info", wraps=lambda: dict(latest="1"))\n',
             True,
             id="spy-lambda-calling-something-else",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: fetch_fake())\n',
+            True,
+            id="spy-lambda-calling-a-helper-with-a-listed-name",
         ),
         pytest.param(
             'patch("ha_mcp.update_check.get_update_info", wraps=lambda: {"latest": "1"})\n',
