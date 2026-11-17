@@ -24,10 +24,6 @@
     "tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py::_set_options",
     "tests/src/e2e/haos_only/test_webhook_proxy_addon.py::_set_options"
   ],
-  "1209bb3de2af": [
-    "tests/src/unit/test_yaml_config_tool.py::_reset_caller_token_cache",
-    "tests/src/unit/test_yaml_read_tool.py::_reset_caller_token_cache"
-  ],
   "1316d0124a7d": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::wrap_refresh_token",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::wrap_refresh_token"
@@ -165,10 +161,6 @@
   "7083682913c1": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_handle_authorization_code",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_handle_authorization_code"
-  ],
-  "7696103a1c0e": [
-    "tests/src/unit/test_bulk_selector.py::_state",
-    "tests/src/unit/test_ha_bulk_control_selector.py::_light_state"
   ],
   "7b168a7ee5ef": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_extract_client_creds",
