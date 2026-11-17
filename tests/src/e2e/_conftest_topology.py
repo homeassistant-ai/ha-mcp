@@ -74,30 +74,27 @@ def order_topologies(items: list[Any]) -> None:
 def _restart_core(env: dict[str, Any]) -> None:
     headers = {"Authorization": f"Bearer {env['token']}"}
     base_url = env["base_url"]
-    if env.get("container") is not None:
-        env["container"].get_wrapped_container().restart(timeout=30)
-    else:
+    try:
+        response = requests.post(
+            f"{base_url}/api/services/homeassistant/restart",
+            headers=headers,
+            json={},
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.ConnectionError:
+        logger.debug("Core closed the restart request during shutdown")
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
         try:
-            response = requests.post(
-                f"{base_url}/api/services/homeassistant/restart",
-                headers=headers,
-                json={},
-                timeout=30,
-            )
-            response.raise_for_status()
-        except requests.ConnectionError:
-            logger.debug("Core closed the restart request during shutdown")
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            try:
-                response = requests.get(f"{base_url}/api/", headers=headers, timeout=5)
-                if response.status_code != 200:
-                    break
-            except requests.ConnectionError:
+            response = requests.get(f"{base_url}/api/", headers=headers, timeout=5)
+            if response.status_code != 200:
                 break
-            time.sleep(1)
-        else:
-            raise RuntimeError("Core never went down after the topology restart")
+        except requests.ConnectionError:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("Core never went down after the topology restart")
     if not _wait_for_ha_api_ready(base_url, headers, timeout=600):
         raise RuntimeError("Core did not return after the topology restart")
 
