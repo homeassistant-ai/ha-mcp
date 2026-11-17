@@ -30,6 +30,37 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="setattr-lambda",
         ),
         pytest.param(
+            'patch(target="ha_mcp.update_check.get_update_info", return_value=None)\n',
+            True,
+            id="patch-target-keyword",
+        ),
+        pytest.param(
+            'patch.object(update_check, attribute="get_update_info", return_value=None)\n',
+            True,
+            id="patch-object-attribute-keyword",
+        ),
+        pytest.param(
+            'monkeypatch.setattr(update_check, name="get_update_info", value=lambda: None)\n',
+            True,
+            id="setattr-name-keyword",
+        ),
+        pytest.param(
+            'with patch(target="ha_mcp.update_check.get_update_info") as info:\n'
+            "    info.return_value = None\n",
+            True,
+            id="bare-patch-target-keyword",
+        ),
+        pytest.param(
+            'patch.object(target=update_check, attribute="get_update_info")\n',
+            True,
+            id="bare-patch-object-keywords",
+        ),
+        pytest.param(
+            'patch(target="ha_mcp.paths.get_data_dir", return_value="get_update_info")\n',
+            False,
+            id="another-function-by-target-keyword",
+        ),
+        pytest.param(
             "patch.multiple(update_check, get_update_info=AsyncMock(return_value=None))\n",
             True,
             id="patch-multiple-keyword",

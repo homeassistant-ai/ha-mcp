@@ -22,6 +22,34 @@ utils:
       - has:
           kind: lambda
           stopBy: end
+  # The function named by its dotted path, first or as target=:
+  # patch("pkg.mod.get_component_caps", ...),
+  # monkeypatch.setattr("pkg.mod._fetch_x", ...)
+  names-dotted-target:
+    has:
+      field: arguments
+      any:
+        - has:
+            nthChild: 1
+            kind: string
+            regex: '^\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+        - has:
+            kind: keyword_argument
+            regex: '^target\s*=\s*\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+  # The function named as an attribute, second or as attribute= / name=:
+  # patch.object(mod, "get_update_info", ...),
+  # monkeypatch.setattr(mod, "_fetch_x", ...)
+  names-attribute-target:
+    has:
+      field: arguments
+      any:
+        - has:
+            nthChild: 2
+            kind: string
+            regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+        - has:
+            kind: keyword_argument
+            regex: '^(attribute|name)\s*=\s*\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
 rule:
   any:
     # The function is named where the call names what it replaces, and nowhere
@@ -29,30 +57,16 @@ rule:
     - all:
         - kind: call
         - any:
-            # patch("pkg.mod.get_component_caps", ...),
-            # monkeypatch.setattr("pkg.mod._fetch_x", ...)
             - all:
                 - has:
                     field: function
                     regex: '^(\w+\.)*(patch|setattr)$'
-                - has:
-                    field: arguments
-                    has:
-                      nthChild: 1
-                      kind: string
-                      regex: '^\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-            # patch.object(mod, "get_update_info", ...),
-            # monkeypatch.setattr(mod, "_fetch_x", ...)
+                - matches: names-dotted-target
             - all:
                 - has:
                     field: function
                     regex: '^(\w+\.)*(patch\.object|setattr)$'
-                - has:
-                    field: arguments
-                    has:
-                      nthChild: 2
-                      kind: string
-                      regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+                - matches: names-attribute-target
         - matches: typed-in-answer
     # patch.multiple(mod, get_update_info=...): the answer is read from that
     # keyword alone. DEFAULT puts a mock in place that answers for the function.
@@ -73,9 +87,9 @@ rule:
     # for the function, and the test sets that answer through the alias
     # (`with patch(...) as caps: caps.return_value = ...`).
     - kind: call
-      regex: '^(\w+\.)*patch\(\s*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
+      regex: '^(\w+\.)*patch\(\s*(target\s*=\s*)?["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
     - kind: call
-      regex: '^(\w+\.)*patch\.object\(\s*[\w.]+\s*,\s*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
+      regex: '^(\w+\.)*patch\.object\(\s*(target\s*=\s*)?[\w.]+\s*,\s*(attribute\s*=\s*)?["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
     # from unittest.mock import patch as replace
     - kind: aliased_import
       has:
