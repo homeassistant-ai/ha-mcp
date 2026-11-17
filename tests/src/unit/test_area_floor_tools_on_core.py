@@ -52,6 +52,13 @@ def component_tools(component_core_client: HomeAssistantClient) -> AreaTools:
     return AreaTools(component_core_client)
 
 
+@pytest.fixture
+def routed_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
+    """The client fixture a test names as its ``routed_client`` parameter."""
+    client: HomeAssistantClient = request.getfixturevalue(request.param)
+    return client
+
+
 @contextmanager
 def _floor_list_failing_on_read(
     monkeypatch: pytest.MonkeyPatch, read: int
@@ -219,20 +226,30 @@ async def test_updating_an_unknown_id_is_reported_as_not_found(
     assert error["ha_error_code"] == "unknown_error"
 
 
-async def test_an_unknown_id_is_looked_up_through_the_component(
-    component_tools: AreaTools, component_core_client: HomeAssistantClient
+@pytest.mark.parametrize(
+    ("routed_client", "read"),
+    [
+        ("core_client", "config/area_registry/list"),
+        ("component_core_client", WS_REGISTRIES),
+    ],
+    indirect=["routed_client"],
+)
+async def test_an_unknown_id_is_looked_up_without_a_connection_of_its_own(
+    routed_client: HomeAssistantClient, read: str
 ) -> None:
-    """With the component, the tool asks the component for the registry that
-    tells an unknown id from another "Unknown error"."""
-    with sent_commands(await pooled_socket(component_core_client)) as sent:
+    """The registry read that tells an unknown id from another "Unknown error"
+    asks the component when it is installed, and goes over the server's pooled
+    socket, not over a connection opened for it."""
+
+    with sent_commands(await pooled_socket(routed_client)) as sent:
         error = await rejected_call_body(
-            component_tools.ha_set_area_or_floor(
+            AreaTools(routed_client).ha_set_area_or_floor(
                 kind="area", id="missing", name="Attic"
             )
         )
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert WS_REGISTRIES in sent_types(sent)
+    assert read in sent_types(sent)
 
 
 async def test_labels_core_dropped_are_read_back_through_the_component(
@@ -425,27 +442,34 @@ async def test_a_reorder_reply_names_the_order_core_lists_not_the_one_sent(
     assert result["order"] == listed == [second, first]
 
 
-async def test_a_reorder_reads_both_orders_through_the_component(
-    hass: HomeAssistant,
-    component_tools: AreaTools,
-    component_core_client: HomeAssistantClient,
+@pytest.mark.parametrize(
+    ("routed_client", "read"),
+    [
+        ("core_client", "config/floor_registry/list"),
+        ("component_core_client", WS_REGISTRIES),
+    ],
+    indirect=["routed_client"],
+)
+async def test_a_reorder_reads_both_orders_without_a_connection_of_its_own(
+    hass: HomeAssistant, routed_client: HomeAssistantClient, read: str
 ) -> None:
-    """The order is read before and after Core's reorder command, and with the
-    component the tool asks the component both times."""
+    """The order is read before and after Core's reorder command, from the
+    component when it is installed, and both reads go over the server's pooled
+    socket, not over a connection opened for each."""
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
 
-    with sent_commands(await pooled_socket(component_core_client)) as sent:
-        await component_tools.ha_set_area_or_floor(
+    with sent_commands(await pooled_socket(routed_client)) as sent:
+        await AreaTools(routed_client).ha_set_area_or_floor(
             kind="floor", order=[attic.floor_id, ground.floor_id]
         )
 
     reorder = "config/floor_registry/reorder"
-    assert [t for t in sent_types(sent) if t in (WS_REGISTRIES, reorder)] == [
-        WS_REGISTRIES,
+    assert [t for t in sent_types(sent) if t in (read, reorder)] == [
+        read,
         reorder,
-        WS_REGISTRIES,
+        read,
     ]
 
 
@@ -505,8 +529,8 @@ async def test_a_reorder_is_not_sent_when_the_order_before_it_cannot_be_read(
 
 async def test_a_reorder_that_was_not_sent_says_nothing_was_reordered(
     hass: HomeAssistant,
-    tools: AreaTools,
-    core_client: HomeAssistantClient,
+    component_tools: AreaTools,
+    component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A reorder that never left the server changed nothing: the error says so
@@ -514,16 +538,16 @@ async def test_a_reorder_that_was_not_sent_says_nothing_was_reordered(
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
-    # The order before it is read on a connection of its own, so this fails
-    # the reorder alone.
+    # With the component the order before it is read through the component,
+    # not through this bridge, so this fails the reorder alone.
     monkeypatch.setattr(
-        core_client,
+        component_core_client,
         "send_websocket_message",
         AsyncMock(side_effect=HomeAssistantCommandNotSent("no connection")),
     )
 
     error = await rejected_call_body(
-        tools.ha_set_area_or_floor(
+        component_tools.ha_set_area_or_floor(
             kind="floor", order=[attic.floor_id, ground.floor_id]
         )
     )
@@ -565,6 +589,8 @@ async def test_areas_are_reordered_with_cores_reorder(
     await tools.ha_set_area_or_floor(kind="area", order=[hall.id, kitchen.id])
 
     assert [a.id for a in areas.async_list_areas()] == [hall.id, kitchen.id]
+    listed = await tools.ha_list_floors_areas()
+    assert [a["area_id"] for a in listed["unassigned_areas"]] == [hall.id, kitchen.id]
 
 
 async def test_an_incomplete_order_is_refused_with_cores_reason(

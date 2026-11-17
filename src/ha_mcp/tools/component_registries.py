@@ -169,6 +169,18 @@ async def registry_list_reply(client: Any, kind: str) -> dict[str, Any]:
     return reply
 
 
+async def registry_list_rows(client: Any, kind: str) -> list[Any]:
+    """The rows of :func:`registry_list_reply`; Core's refusal of the list is
+    raised as ``HomeAssistantCommandError``."""
+    reply = await registry_list_reply(client, kind)
+    if not reply.get("success"):
+        raise HomeAssistantCommandError(
+            str(reply.get("error")), reply.get("error_code")
+        )
+    rows: list[Any] = reply["result"]
+    return rows
+
+
 async def category_list_reply(client: Any, scope: str) -> dict[str, Any]:
     """:func:`registry_list_reply` for the categories of ``scope``."""
     via_component = await fetch_registries_via_component(

@@ -15,7 +15,6 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..backup_registry_items import registry_rows
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from ..utils.registry_update_lock import registry_update_lock
 from .area_messages import (
@@ -31,7 +30,11 @@ from .area_messages import (
 from .area_reorder import reorder_area_or_floor
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, UNSET, parse_string_list_param
-from .component_registries import fetch_registries_via_component, registry_list_reply
+from .component_registries import (
+    fetch_registries_via_component,
+    registry_list_reply,
+    registry_list_rows,
+)
 from .config_helpers.registry import validate_registry_ids
 from .entity_param_parsing import _parse_string_list_field
 from .helpers import (
@@ -422,7 +425,7 @@ class AreaTools:
         do not catch. The registry tells the two apart, and is read only then.
         """
         id_key = f"{kind}_id"
-        rows = await registry_rows(self._client, kind)
+        rows = await registry_list_rows(self._client, kind)
         if any(isinstance(r, dict) and r.get(id_key) == identifier for r in rows):
             return
         raise_tool_error(

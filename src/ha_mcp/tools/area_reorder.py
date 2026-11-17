@@ -5,10 +5,10 @@ from typing import Any
 
 from pydantic.fields import FieldInfo
 
-from ..backup_registry_items import registry_rows
 from ..client.exceptions import HomeAssistantCommandNotSent
 from ..errors import ErrorCode, create_error_response
 from .coercion import UNSET, parse_string_list_param
+from .component_registries import registry_list_rows
 from .helpers import (
     exception_to_structured_error,
     raise_core_refusal,
@@ -33,7 +33,7 @@ def _passed_params(plain: dict[str, Any], clearable: dict[str, Any]) -> list[str
 
 async def _order(client: Any, kind: str) -> list[str]:
     """The ids of the areas or floors, in the order Core lists them."""
-    return [row[f"{kind}_id"] for row in await registry_rows(client, kind)]
+    return [row[f"{kind}_id"] for row in await registry_list_rows(client, kind)]
 
 
 async def reorder_area_or_floor(
