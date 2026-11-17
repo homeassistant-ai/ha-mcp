@@ -31,6 +31,7 @@ before adding a gate:
 | `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
 | `requires_component_surface` | needs an active component entry (`src/e2e/utilities/topology.py::component_surface_available`); runs after installation on combined external lanes and skips permanently component-free lanes |
 | `component_topology` | tests whose assertions exercise different component and fallback behavior; both states on combined external lanes, once on embedded lanes whose server already provides the shared surface |
+| `installs_component_surface` | tests that enable a shared component entry themselves; run only after the absent phase in combined lanes |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
@@ -83,6 +84,8 @@ tools entry through its config flow, restart Core, recreate the test clients,
 and run only the tests that need the newly available capabilities:
 
 - `requires_tools_entry` runs after installation.
+- `installs_component_surface` also runs afterwards, so tests that enable the
+  embedded server cannot change later absent-component expectations.
 - `requires_component_surface` runs before installation on embedded backends,
   whose server entry already provides that surface, and afterwards externally.
 - `component_topology` runs both before and after installation externally;

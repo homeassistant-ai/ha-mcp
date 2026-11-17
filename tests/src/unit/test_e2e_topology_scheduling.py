@@ -11,7 +11,7 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    ("workers", "backend", "expected"), [(0, "", 15), (2, "", 15), (2, "embedded", 12)]
+    ("workers", "backend", "expected"), [(0, "", 18), (2, "", 18), (2, "embedded", 15)]
 )
 def test_component_installation_is_one_way_per_worker(
     tmp_path: Path, workers: int, backend: str, expected: int
@@ -19,7 +19,8 @@ def test_component_installation_is_one_way_per_worker(
     """Exercise real pytest session parameters and xdist scope dispatch together."""
     root = Path(__file__).resolve().parents[3]
     (tmp_path / "pytest.ini").write_text(
-        "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n    requires_component_surface\n"
+        "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n"
+        "    requires_component_surface\n    installs_component_surface\n"
     )
     (tmp_path / "conftest.py").write_text("""
 import os
@@ -53,6 +54,10 @@ def test_general_coverage_runs_once(e2e_topology):
 
 @pytest.mark.requires_tools_entry
 def test_privileged_services_run_after_installation(e2e_topology):
+    assert e2e_topology == "topology_with_tools"
+
+@pytest.mark.installs_component_surface
+def test_enabling_server_entry_cannot_contaminate_absent_phase(e2e_topology):
     assert e2e_topology == "topology_with_tools"
 
 @pytest.mark.component_topology

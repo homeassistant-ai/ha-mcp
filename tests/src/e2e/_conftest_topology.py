@@ -40,7 +40,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
     if combined_topologies() and "e2e_topology" in metafunc.fixturenames:
         markers = {marker.name for marker in metafunc.definition.iter_markers()}
         has_surface = component_surface_available(no_tools_entry=True)
-        if "requires_tools_entry" in markers:
+        if markers & {"requires_tools_entry", "installs_component_surface"}:
             phases = [WITH_TOOLS]
         elif "requires_component_surface" in markers:
             phases = [WITHOUT_TOOLS if has_surface else WITH_TOOLS]
