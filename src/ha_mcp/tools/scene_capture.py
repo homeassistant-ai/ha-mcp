@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.exceptions import HomeAssistantAPIError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
 
@@ -25,8 +25,8 @@ async def capture_scene_states(
     for entity_id in entity_ids:
         try:
             state = await client.get_entity_state(entity_id)
-        except HomeAssistantAPIError as e:
-            if e.status_code != 404:
+        except HomeAssistantError as e:
+            if not (isinstance(e, HomeAssistantAPIError) and e.status_code == 404):
                 exception_to_structured_error(
                     e,
                     context={"action": "capture", "entity_id": entity_id},

@@ -292,7 +292,8 @@ class TestSceneLifecycle:
                 "ha_config_set_scene",
                 {
                     "scene_id": scene_id,
-                    "config": _make_test_scene_config("Related", name=scene_id),
+                    # The scene's entity_id comes from its name.
+                    "config": {**_make_test_scene_config("Related"), "name": scene_id},
                 },
             )
             created = await mcp.call_tool_success(

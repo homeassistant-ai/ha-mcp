@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant, StateMachine
@@ -17,7 +17,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._tool_errors import error_body
@@ -747,6 +747,29 @@ class TestCapture:
             )
 
         assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+        assert body["entity_id"] == "input_boolean.tv"
+        assert body["action"] == "capture"
+        upsert.assert_not_awaited()
+
+    async def test_a_lost_connection_names_the_entity_unwritten(
+        self, core_client: HomeAssistantClient, tools: ConfigSceneTools
+    ) -> None:
+        """A read that never reaches Core is refused like one Core fails."""
+        with (
+            patch.object(
+                core_client,
+                "get_entity_state",
+                AsyncMock(side_effect=HomeAssistantConnectionError("timed out")),
+            ),
+            upserts(core_client) as upsert,
+        ):
+            body = await _rejected(
+                tools,
+                scene_id="movie",
+                config={"name": "Movie"},
+                capture_entities=["input_boolean.tv"],
+            )
+
         assert body["entity_id"] == "input_boolean.tv"
         assert body["action"] == "capture"
         upsert.assert_not_awaited()
