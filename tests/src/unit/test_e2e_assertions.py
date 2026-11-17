@@ -9,17 +9,15 @@ the e2e suite itself, because every failure mode they guard degrades into a
   it results, and some of those never came from the client at all -- the
   ``_safe_tool_call`` wrappers return a marked dict. Losing the passthrough
   would replace the discrimination markers with a generic placeholder.
-- The error-flag gate in the same helper. fastmcp's ``CallToolResult`` spells
-  the flag ``is_error``; the raw MCP one spells it ``isError``. A gate that
-  checks only one spelling is silently dead against the other transport, and
-  a JSON error envelope decodes identically down the success branch, so
-  nothing observable changes until the payload is not JSON.
+- The error-flag gate in the same helper. A JSON error envelope decodes
+  identically down the success branch, so a gate that stops reading the flag
+  changes nothing observable until the payload is not JSON.
 - ``_hard_failures``
   (``tests/src/e2e/error_handling/test_network_errors.py``), which decides
   which concurrent results are regressions. Too strict and healthy bulk
   batches fail the suite; too loose and real tool errors ride through.
 
-No Docker and no HA instance: every input here is a plain object.
+No Docker and no HA instance: the results are the real MCP result types.
 """
 
 from __future__ import annotations
@@ -28,6 +26,8 @@ import json
 
 import pytest
 
+from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.fastmcp.client.client import CallToolResult
 from tests.src.e2e.error_handling.test_network_errors import _hard_failures
 from tests.src.e2e.utilities.assertions import (
     assert_mcp_failure,
@@ -52,34 +52,21 @@ def test_pending_restart_does_not_override_an_error_field() -> None:
         assert_mcp_success({"status": "pending_restart", "error": "config rejected"})
 
 
-class _TextBlock:
-    """Minimal stand-in for an MCP text content block."""
-
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
-class _FastmcpResult:
-    """Stand-in for fastmcp's ``CallToolResult`` (flag spelled ``is_error``).
-
-    Deliberately a plain class rather than a ``MagicMock``: attribute
-    auto-creation would make *every* flag spelling read truthy and hide
-    exactly the bug these tests exist to catch.
-    """
-
-    def __init__(self, text: str, is_error: bool = False) -> None:
-        self.content = [_TextBlock(text)]
-        self.structured_content = None
-        self.is_error = is_error
+def _FastmcpResult(text: str, is_error: bool = False) -> CallToolResult:
+    """fastmcp's real ``CallToolResult`` (flag spelled ``is_error``)."""
+    return CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=text)],
+        structured_content=None,
+        meta=None,
+        is_error=is_error,
+    )
 
 
-class _RawMcpResult:
-    """Stand-in for the raw MCP ``CallToolResult`` (flag spelled ``isError``)."""
-
-    def __init__(self, text: str, error_flag: bool = False) -> None:
-        self.content = [_TextBlock(text)]
-        self.structured_content = None
-        self.isError = error_flag
+def _RawMcpResult(text: str) -> mcp_types.CallToolResult:
+    """The raw MCP ``CallToolResult`` the vendored client session returns."""
+    return mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=text)]
+    )
 
 
 class TestParsedDictPassthrough:
@@ -148,10 +135,6 @@ class TestErrorFlagRouting:
         result = _FastmcpResult(json.dumps(_ERROR_ENVELOPE), is_error=True)
         assert parse_mcp_result(result) == _ERROR_ENVELOPE
 
-    def test_legacy_iserror_spelling_also_routes(self):
-        result = _RawMcpResult(json.dumps(_ERROR_ENVELOPE), error_flag=True)
-        assert parse_mcp_result(result) == _ERROR_ENVELOPE
-
     def test_is_error_with_non_json_body_takes_the_error_branch(self):
         """The spelling bug is only *observable* on a non-JSON body.
 
@@ -161,12 +144,6 @@ class TestErrorFlagRouting:
         branch yields ``{"raw_response": ...}``.
         """
         assert parse_mcp_result(_FastmcpResult("boom", is_error=True)) == {
-            "success": False,
-            "error": "boom",
-        }
-
-    def test_legacy_iserror_with_non_json_body_takes_the_error_branch(self):
-        assert parse_mcp_result(_RawMcpResult("boom", error_flag=True)) == {
             "success": False,
             "error": "boom",
         }

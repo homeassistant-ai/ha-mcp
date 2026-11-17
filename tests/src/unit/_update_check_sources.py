@@ -17,7 +17,7 @@ from aiohttp import web
 
 from ha_mcp import update_check
 
-from ._tools_addons_core import APP_TOKEN, Supervisor
+from ._tools_addons_core import APP_TOKEN, Supervisor, app_info
 
 
 @dataclass
@@ -77,9 +77,9 @@ def app_store(
     supervisor.answer(
         "GET",
         "/addons/self/info",
-        {
-            "version": installed,
-            "version_latest": latest,
-            "update_available": update_available,
-        },
+        app_info(
+            version=installed,
+            version_latest=latest,
+            update_available=update_available,
+        ),
     )

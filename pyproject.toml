@@ -181,49 +181,6 @@ warn_return_any = false
 disable_error_code = ["import-not-found", "import-untyped"]
 
 [[tool.mypy.overrides]]
-# Test files written before mypy ran on the tests (and the E2E helpers they
-# import). scripts/mypy_tests_exact.py keeps this list exact: fixing a module
-# removes it, and no new module is added (tests/AGENTS.md, "Unit Tests Run on
-# Real Home Assistant Core").
-module = [
-    "tests.haos_image_build.build_image",
-    "tests.haos_image_build.dev_addon_tree",
-    "tests.src.unit._js_harness",
-    "tests.src.unit.policy.test_handlers",
-    "tests.src.unit.policy.test_mrtr",
-    "tests.src.unit.test_auto_backup_e2e_isolation",
-    "tests.src.unit.test_backup_diff",
-    "tests.src.unit.test_build_skill_content",
-    "tests.src.unit.test_e2e_failure_diagnostics",
-    "tests.src.unit.test_e2e_lane_env_shape",
-    "tests.src.unit.test_e2e_session_fixture_cleanup",
-    "tests.src.unit.test_embedded_worker_teardown_2127",
-    "tests.src.unit.test_extract_tools_field_info",
-    "tests.src.unit.test_ha_search_merge",
-    "tests.src.unit.test_haos_supervisor_wait",
-    "tests.src.unit.test_http_transport_options",
-    "tests.src.unit.test_llm_api_probe",
-    "tests.src.unit.test_oauth_consent_binding",
-    "tests.src.unit.test_oauth_core_forward_tls",
-    "tests.src.unit.test_oauth_ha_auth",
-    "tests.src.unit.test_oidc_compat",
-    "tests.src.unit.test_read_only",
-    "tests.src.unit.test_renamed_tools",
-    "tests.src.unit.test_resource_codec",
-    "tests.src.unit.test_settings_ui_i18n",
-    "tests.src.unit.test_standard_mode_logging",
-    "tests.src.unit.test_strict_bps",
-    "tests.src.unit.test_translate_locales",
-    "tests.src.unit.test_usage_logger",
-    "tests.src.unit.test_validation_middleware",
-    "tests.src.unit.test_webhook_proxy_dev_isolation",
-    "tests.src.unit.test_webhook_proxy_liveness",
-    "tests.src.unit.test_webhook_proxy_sync",
-    "tests.src.unit.test_ws_pool_loop_change_1994",
-]
-ignore_errors = true
-
-[[tool.mypy.overrides]]
 module = [
     "annotatedyaml.*",
     "homeassistant.*",
@@ -539,6 +496,7 @@ dev = [
     "gazetteer-matcher==1.1.0",
     "ha-silabs-firmware-client==0.4.0",
     "hassil==3.12.1",
+    "home-assistant-frontend==20261028.6",
     "home-assistant-intents==2026.10.27",
     "ical==14.3.1",
     "infrared-protocols==10.5.0",

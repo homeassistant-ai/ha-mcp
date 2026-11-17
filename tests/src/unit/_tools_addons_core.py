@@ -19,12 +19,26 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from ipaddress import IPv4Address
 from typing import Any
 
 import httpx
 import pytest
+from aiohasupervisor.models import (
+    AddonBoot,
+    AddonStage,
+    AddonStartup,
+    AddonState,
+    InstalledAddonComplete,
+)
+from aiohasupervisor.models.addons import (
+    AddonBootConfig,
+    AppArmor,
+    CpuArch,
+    SupervisorRole,
+)
 from aiohttp import WSMsgType, web
 from homeassistant.components.hassio import const as hassio_const
 from homeassistant.components.hassio import websocket_api as hassio_websocket_api
@@ -195,8 +209,10 @@ class Supervisor:
         self._answers.setdefault((method, path), []).append(answer)
 
     def answer(self, method: str, path: str, data: Any = None) -> None:
-        """Supervisor accepts the request and answers ``data``."""
-        self._queue(method, path, _Answer(payload={"result": "ok", "data": data}))
+        """Supervisor accepts the request and answers ``data``; with none it
+        answers ``{}``, as its ``api_return_ok`` does."""
+        payload = {"result": "ok", "data": {} if data is None else data}
+        self._queue(method, path, _Answer(payload=payload))
 
     def refuse(self, method: str, path: str, message: str, status: int = 400) -> None:
         """Supervisor refuses the request with its own message."""
@@ -225,17 +241,7 @@ class Supervisor:
 
     def running(self, slug: str = SLUG, **fields: Any) -> None:
         """Answer ``slug``'s info as a running app with ingress; ``fields`` win."""
-        info: dict[str, Any] = {
-            "name": "Target App",
-            "slug": slug,
-            "state": "started",
-            "ingress": True,
-            "ingress_entry": f"/api/hassio_ingress/{INGRESS_TOKEN}",
-            "ip_address": "127.0.0.1",
-            "ingress_port": self.target.port,
-            "options": {},
-            "schema": [],
-        } | fields
+        info = app_info(slug, **{"ingress_port": self.target.port, **fields})
         self.answer("GET", f"/addons/{slug}/info", info)
 
     async def serve(self, request: web.Request) -> web.StreamResponse:
@@ -270,6 +276,87 @@ class Supervisor:
         _, _, token, rest = path.split("/", 3)
         assert token == INGRESS_TOKEN
         return await self.target.handle(request, "/" + rest)
+
+
+def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
+    """``GET /addons/<slug>/info`` as Supervisor answers it: a started app with
+    ingress, built from aiohasupervisor's model; ``changes`` replace its fields."""
+    info = InstalledAddonComplete(
+        apparmor=AppArmor.DEFAULT,
+        auth_api=False,
+        docker_api=False,
+        full_access=False,
+        homeassistant_api=True,
+        host_network=False,
+        host_pid=False,
+        ingress=True,
+        long_description=None,
+        rating=6,
+        signed=False,
+        supervisor_api=True,
+        supervisor_role=SupervisorRole.DEFAULT,
+        arch=[CpuArch.AMD64, CpuArch.AARCH64],
+        documentation=False,
+        detached=False,
+        advanced=False,
+        available=True,
+        build=True,
+        description="An app the tests reach",
+        homeassistant=None,
+        icon=False,
+        logo=False,
+        name="Target App",
+        repository="local",
+        slug=slug,
+        stage=AddonStage.STABLE,
+        update_available=False,
+        url=None,
+        version_latest="1.0.0",
+        version="1.0.0",
+        state=AddonState.STARTED,
+        hostname=slug.replace("_", "-"),
+        dns=[f"{slug.replace('_', '-')}.local.hass.io"],
+        protected=True,
+        boot=AddonBoot.AUTO,
+        boot_config=AddonBootConfig.AUTO,
+        options={},
+        schema=[],
+        machine=[],
+        network=None,
+        network_description=None,
+        host_ipc=False,
+        host_uts=False,
+        host_dbus=False,
+        privileged=[],
+        changelog=False,
+        stdin=False,
+        gpio=False,
+        usb=False,
+        uart=False,
+        kernel_modules=False,
+        devicetree=False,
+        udev=False,
+        video=False,
+        audio=False,
+        startup=AddonStartup.APPLICATION,
+        services=[],
+        discovery=[],
+        translations={},
+        webui=None,
+        ingress_entry=f"/api/hassio_ingress/{INGRESS_TOKEN}",
+        ingress_url=f"/api/hassio_ingress/{INGRESS_TOKEN}/",
+        ingress_port=8099,
+        ingress_panel=False,
+        audio_input=None,
+        audio_output=None,
+        auto_update=False,
+        ip_address=IPv4Address("127.0.0.1"),
+        watchdog=False,
+        devices=[],
+        system_managed=False,
+        system_managed_config_entry=None,
+    )
+    return replace(info, **changes).to_dict()
 
 
 @pytest.fixture

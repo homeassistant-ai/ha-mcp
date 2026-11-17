@@ -45,6 +45,7 @@ INTEGRATIONS = (
     "local_calendar",
     "remote_calendar",
     "conversation",
+    "frontend",
 )
 
 

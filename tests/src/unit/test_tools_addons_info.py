@@ -9,9 +9,20 @@ options write that merges with what the app already has, and the
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
+from aiohasupervisor.models import (
+    AddonsStats,
+    AddonStage,
+    AddonState,
+    CpuArch,
+    InstalledAddon,
+    StoreAddon,
+    StoreInfo,
+)
+from aiohasupervisor.models.addons import AddonsList
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET, known_secret_values
@@ -27,10 +38,18 @@ from ._tools_addons_core import target_app as target_app
 INFO = f"/addons/{SLUG}/info"
 OPTIONS = f"/addons/{SLUG}/options"
 LIVE_SECRET = "github_pat_LIVESECRETVALUE"
+
+
+def _field(name: str, type_: str = "string", **extra: Any) -> dict[str, Any]:
+    """One entry of an app's ``schema`` as Supervisor renders it for the UI
+    (``UiOptions``): a required option of ``type_``."""
+    return {"name": name, "required": True, "type": type_} | extra
+
+
 SECRET_SCHEMA = [
-    {"name": "github_pat", "type": "string", "format": "password"},
-    {"name": "log_level", "type": "list", "options": ["info", "debug"]},
-    {"name": "empty_pw", "type": "string", "format": "password"},
+    _field("github_pat", format="password"),
+    _field("log_level", "select", options=["info", "debug"]),
+    _field("empty_pw", format="password"),
 ]
 SECRET_OPTIONS = {
     "github_pat": LIVE_SECRET,
@@ -40,8 +59,70 @@ SECRET_OPTIONS = {
 }
 
 
-def _installed(slug: str, state: str) -> dict[str, Any]:
-    return {"name": slug.title(), "slug": slug, "version": "1.0", "state": state}
+def _installed(slug: str, state: AddonState) -> InstalledAddon:
+    return InstalledAddon(
+        advanced=False,
+        available=True,
+        build=False,
+        description=f"The {slug} app",
+        homeassistant=None,
+        icon=False,
+        logo=False,
+        name=slug.title(),
+        repository="local",
+        slug=slug,
+        stage=AddonStage.STABLE,
+        update_available=False,
+        url=None,
+        version_latest="1.0",
+        version="1.0",
+        detached=False,
+        state=state,
+    )
+
+
+def _store_app(slug: str, version_latest: str, version: str | None) -> StoreAddon:
+    """A ``/store`` entry: ``version`` is the installed one, null if absent."""
+    return StoreAddon(
+        advanced=False,
+        available=True,
+        build=False,
+        description=f"The {slug} app",
+        homeassistant=None,
+        icon=False,
+        logo=False,
+        name=slug.title(),
+        repository="core",
+        slug=slug,
+        stage=AddonStage.STABLE,
+        update_available=version is not None and version != version_latest,
+        url=None,
+        version_latest=version_latest,
+        version=version,
+        arch=[CpuArch.AMD64],
+        documentation=False,
+        installed=version is not None,
+    )
+
+
+def _stats(**changes: Any) -> dict[str, Any]:
+    """``GET /addons/<slug>/stats`` as Supervisor answers it."""
+    stats = AddonsStats(
+        cpu_percent=0.0,
+        memory_usage=0,
+        memory_limit=1024,
+        memory_percent=0.0,
+        network_rx=0,
+        network_tx=0,
+        blk_read=0,
+        blk_write=0,
+    )
+    return replace(stats, **changes).to_dict()
+
+
+def _listing(*apps: InstalledAddon) -> dict[str, Any]:
+    """``GET /addons`` as Supervisor answers it."""
+    return AddonsList(addons=list(apps)).to_dict()
 
 
 class TestAnAppsDetails:
@@ -54,13 +135,12 @@ class TestAnAppsDetails:
 
         assert result["log_level"] == "debug"
 
-    @pytest.mark.parametrize("configured", ["", 42])
+    @pytest.mark.parametrize(("type_", "configured"), [("string", ""), ("integer", 42)])
     async def test_an_unusable_log_level_falls_back_to_the_schema_default(
-        self, core_route: Route, configured: object
+        self, core_route: Route, type_: str, configured: object
     ) -> None:
         core_route.supervisor.running(
-            options={"log_level": configured},
-            schema=[{"name": "log_level", "type": "list(info|debug)"}],
+            options={"log_level": configured}, schema=[_field("log_level", type_)]
         )
 
         result = await read(core_route.client, slug=SLUG)
@@ -71,7 +151,7 @@ class TestAnAppsDetails:
         self, core_route: Route
     ) -> None:
         core_route.supervisor.running(
-            options={"port": 1883}, schema=[{"name": "port", "type": "port"}]
+            options={"port": 1883}, schema=[_field("port", "integer")]
         )
 
         result = await read(core_route.client, slug=SLUG)
@@ -84,21 +164,14 @@ class TestListings:
         self, core_route: Route
     ) -> None:
         """A store entry's ``version`` is the installed one, null if absent."""
-        core_route.supervisor.answer(
-            "GET",
-            "/store",
-            {
-                "repositories": [],
-                "addons": [
-                    {
-                        "slug": "core_mosquitto",
-                        "version_latest": "6.5.2",
-                        "version": "6.5.1",
-                    },
-                    {"slug": "core_never", "version_latest": "1.4.0", "version": None},
-                ],
-            },
+        store = StoreInfo(
+            repositories=[],
+            addons=[
+                _store_app("core_mosquitto", "6.5.2", "6.5.1"),
+                _store_app("core_never", "1.4.0", None),
+            ],
         )
+        core_route.supervisor.answer("GET", "/store", store.to_dict())
 
         result = await read(core_route.client, source="available")
 
@@ -112,10 +185,16 @@ class TestListings:
         self, core_route: Route
     ) -> None:
         sup = core_route.supervisor
-        apps = [_installed("matter", "started"), _installed("parked", "stopped")]
-        sup.answer("GET", "/addons", {"addons": apps})
         sup.answer(
-            "GET", "/addons/matter/stats", {"cpu_percent": 0.5, "memory_usage": 9}
+            "GET",
+            "/addons",
+            _listing(
+                _installed("matter", AddonState.STARTED),
+                _installed("parked", AddonState.STOPPED),
+            ),
+        )
+        sup.answer(
+            "GET", "/addons/matter/stats", _stats(cpu_percent=0.5, memory_usage=9)
         )
 
         result = await read(core_route.client, include_stats=True)
@@ -130,10 +209,16 @@ class TestListings:
         self, core_route: Route
     ) -> None:
         sup = core_route.supervisor
-        apps = [_installed("matter", "started"), _installed("music", "started")]
-        sup.answer("GET", "/addons", {"addons": apps})
+        sup.answer(
+            "GET",
+            "/addons",
+            _listing(
+                _installed("matter", AddonState.STARTED),
+                _installed("music", AddonState.STARTED),
+            ),
+        )
         sup.refuse("GET", "/addons/matter/stats", "Connection reset")
-        sup.answer("GET", "/addons/music/stats", {"memory_percent": 10.8})
+        sup.answer("GET", "/addons/music/stats", _stats(memory_percent=10.8))
 
         result = await read(core_route.client, include_stats=True)
 
@@ -143,13 +228,16 @@ class TestListings:
         [warning] = result["warnings"]
         assert warning.startswith("Statistics unavailable for app 'matter'")
 
-    @pytest.mark.parametrize("slug", [None, "../supervisor"])
     async def test_a_running_app_without_a_valid_slug_is_never_asked_for_stats(
-        self, core_route: Route, slug: str | None
+        self, core_route: Route
     ) -> None:
-        """Malformed Supervisor data cannot become an ``/addons/None`` request."""
-        app = _installed("x", "started") | {"slug": slug}
-        core_route.supervisor.answer("GET", "/addons", {"addons": [app]})
+        """A slug that is no path segment cannot become a stats request.
+
+        Supervisor's own slugs never look like this and the model types the
+        field as any string, so it is the one field changed on a real entry.
+        """
+        app = replace(_installed("x", AddonState.STARTED), slug="../supervisor")
+        core_route.supervisor.answer("GET", "/addons", _listing(app))
 
         with pytest.raises(TypeError, match="running app without a valid slug"):
             await read(core_route.client, include_stats=True)
@@ -159,8 +247,9 @@ class TestListings:
     async def test_a_listing_without_statistics_carries_none(
         self, core_route: Route
     ) -> None:
-        apps = [_installed("matter", "started")]
-        core_route.supervisor.answer("GET", "/addons", {"addons": apps})
+        core_route.supervisor.answer(
+            "GET", "/addons", _listing(_installed("matter", AddonState.STARTED))
+        )
 
         result = await read(core_route.client)
 
@@ -175,7 +264,7 @@ class TestConfigMode:
         """Supervisor validates the full options, so a partial write would fail."""
         core_route.supervisor.running(
             options={"required_key": "kept", "log_level": "info"},
-            schema=[{"name": "required_key"}, {"name": "log_level"}],
+            schema=[_field("required_key"), _field("log_level")],
         )
         core_route.supervisor.answer("POST", OPTIONS, {})
 
@@ -196,7 +285,19 @@ class TestConfigMode:
                 "ssh": {"sftp": False, "authorized_keys": ["key1"]},
                 "log_level": "info",
             },
-            schema=[{"name": "ssh"}, {"name": "log_level"}],
+            schema=[
+                {
+                    "name": "ssh",
+                    "type": "schema",
+                    "optional": True,
+                    "multiple": False,
+                    "schema": [
+                        _field("sftp", "boolean"),
+                        _field("authorized_keys", multiple=True),
+                    ],
+                },
+                _field("log_level"),
+            ],
         )
         core_route.supervisor.answer("POST", OPTIONS, {})
 
@@ -213,7 +314,7 @@ class TestConfigMode:
     ) -> None:
         """Supervisor drops an unknown option silently; the caller is told."""
         core_route.supervisor.running(
-            options={"log_level": "info"}, schema=[{"name": "log_level"}]
+            options={"log_level": "info"}, schema=[_field("log_level")]
         )
         core_route.supervisor.answer("POST", OPTIONS, {})
 
@@ -263,7 +364,7 @@ class TestConfigMode:
     async def test_every_config_field_goes_in_one_write(
         self, core_route: Route
     ) -> None:
-        core_route.supervisor.running(schema=[{"name": "log_level"}])
+        core_route.supervisor.running(schema=[_field("log_level")])
         core_route.supervisor.answer("POST", OPTIONS, {})
 
         result = await manage(
@@ -398,7 +499,7 @@ class TestRedaction:
     ) -> None:
         core_route.supervisor.running(
             options={"log_level": "secret-log-pw"},
-            schema=[{"name": "log_level", "type": "string", "format": "password"}],
+            schema=[_field("log_level", format="password")],
         )
 
         result = await read(core_route.client, slug=SLUG)

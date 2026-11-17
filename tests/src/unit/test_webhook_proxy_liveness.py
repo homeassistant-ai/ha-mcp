@@ -4,11 +4,13 @@ import importlib.util
 import json
 import os
 import sys
+import time
 import types
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -16,8 +18,9 @@ COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy
 
 
 @pytest.fixture
-def oauth(monkeypatch):
-    """Load the dev proxy against real Home Assistant and aiohttp imports."""
+def oauth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.ModuleType:
+    """Load the dev proxy against real Home Assistant and aiohttp imports, with
+    its heartbeat file under ``tmp_path``."""
     package = types.ModuleType("mcp_proxy_dev")
     package.__path__ = [str(COMPONENT_DIR)]
     monkeypatch.setitem(sys.modules, "mcp_proxy_dev", package)
@@ -25,18 +28,26 @@ def oauth(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "mcp_proxy_dev.oauth", COMPONENT_DIR / "oauth.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "HEARTBEAT_FILE", tmp_path / ".mcp_proxy_dev_heartbeat")
     return module
 
 
-def _provider(oauth, hass: HomeAssistant, mode: str):
+async def _beat(oauth: types.ModuleType, hass: HomeAssistant) -> None:
+    """The add-on's keep-alive touch."""
+    await hass.async_add_executor_job(oauth.HEARTBEAT_FILE.touch)
+
+
+async def _metadata_status(oauth: types.ModuleType, hass: HomeAssistant) -> int:
+    """What a client asking the bound discovery view gets."""
     hass.data[oauth.DOMAIN] = {
-        "oauth_mode": mode,
+        "oauth_mode": oauth.MODE_LEGACY,
         "target_url": "http://127.0.0.1:9583/private_x",
     }
-    return oauth.OAuthProvider(
+    provider = oauth.OAuthProvider(
         hass,
         client_id="test-client-identifier",
         client_secret="test-secret",
@@ -44,87 +55,56 @@ def _provider(oauth, hass: HomeAssistant, mode: str):
         signing_key=b"x" * 32,
         public_base_url="https://ha.example",
     )
-
-
-async def test_mode_none_when_addon_down(oauth, monkeypatch, hass: HomeAssistant):
-    """A bound discovery view behaves like an unregistered route when stopped."""
-
-    async def _down(_hass):
-        return False
-
-    monkeypatch.setattr(oauth, "_addon_alive", _down)
-    view = oauth.AuthorizationServerMetadataView(
-        _provider(oauth, hass, oauth.MODE_HA_AUTH)
-    )
-
+    view = oauth.AuthorizationServerMetadataView(provider)
     response = await view.get(make_mocked_request("GET", "/"))
-
-    assert response.status == 404
-
-
-async def test_mode_served_when_addon_up(oauth, monkeypatch, hass: HomeAssistant):
-    """The existing mode dispatch still serves while the heartbeat is fresh."""
-
-    async def _up(_hass):
-        return True
-
-    monkeypatch.setattr(oauth, "_addon_alive", _up)
-    view = oauth.AuthorizationServerMetadataView(
-        _provider(oauth, hass, oauth.MODE_LEGACY)
-    )
-
-    response = await view.get(make_mocked_request("GET", "/"))
-
-    body = json.loads(response.body)
-    assert body["issuer"] == "https://ha.example/api/mcp_proxy_dev/oauth"
-    assert response.status == 200
+    if response.status == 200:
+        body = json.loads(response.body)
+        assert body["issuer"] == "https://ha.example/api/mcp_proxy_dev/oauth"
+    return int(response.status)
 
 
-def test_heartbeat_fresh_only_for_recent_mtime(oauth, monkeypatch, tmp_path, freezer):
+async def test_oauth_serves_only_while_the_heartbeat_is_fresh(
+    oauth: types.ModuleType, hass: HomeAssistant
+) -> None:
     """The liveness signal is the heartbeat file's mtime, not TCP reachability
     of target_url — that URL is the INDEPENDENT ha-mcp server add-on, which
-    keeps accepting connections after this proxy add-on stops (#2218 review)."""
-    freezer.move_to("2026-01-01 12:00:00")
-    heartbeat = tmp_path / ".mcp_proxy_dev_heartbeat"
-    monkeypatch.setattr(oauth, "HEARTBEAT_FILE", heartbeat)
+    keeps accepting connections after this proxy add-on stops (#2218 review).
+    A bound view behaves like an unregistered route when the add-on is down."""
+    # The add-on's keep-alive loop is running.
+    await _beat(oauth, hass)
+    assert await _metadata_status(oauth, hass) == 200
 
-    # Missing file (clean shutdown deleted it, or the add-on never ran).
-    assert oauth._heartbeat_fresh() is False
+    # One missed 30-second touch is a slow loop, not a stopped add-on.
+    minute_ago = time.time() - 60
+    await hass.async_add_executor_job(
+        os.utime, oauth.HEARTBEAT_FILE, (minute_ago, minute_ago)
+    )
+    assert await _metadata_status(oauth, hass) == 200
 
-    # Fresh touch — the add-on's keep-alive loop is running.
-    heartbeat.touch()
-    now = oauth.time.time()
-    os.utime(heartbeat, (now, now))
-    assert oauth._heartbeat_fresh() is True
-
-    # Stale mtime — the add-on crashed without cleanup.
-    stale = heartbeat.stat().st_mtime - (oauth._HEARTBEAT_MAX_AGE + 60)
-    os.utime(heartbeat, (stale, stale))
-    assert oauth._heartbeat_fresh() is False
+    # The add-on crashed without cleanup a day ago.
+    day_ago = time.time() - 86400
+    await hass.async_add_executor_job(
+        os.utime, oauth.HEARTBEAT_FILE, (day_ago, day_ago)
+    )
+    assert await _metadata_status(oauth, hass) == 404
 
 
-async def test_addon_alive_caches_only_the_negative_verdict(
-    oauth, monkeypatch, hass: HomeAssistant, freezer
-):
-    """A positive verdict re-stats every request so a clean shutdown's file
-    deletion takes effect immediately (#2218 review); only the down verdict
-    caches, bounding stat traffic from anonymous requests to a stopped
-    install."""
-    calls = []
-    fresh = {"value": True}
+async def test_a_clean_stop_goes_dark_at_once_and_a_restart_is_seen_soon(
+    oauth: types.ModuleType, hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """A clean shutdown's file deletion takes effect on the next request (an
+    up verdict is never reused, #2218 review); a down verdict is held briefly
+    to bound stat traffic from anonymous requests to a stopped install, but
+    for less than the 2 s the starting add-on waits between its probes of
+    this view (#2219)."""
+    await _beat(oauth, hass)
+    assert await _metadata_status(oauth, hass) == 200
 
-    def _heartbeat_fresh():
-        calls.append(True)
-        return fresh["value"]
+    await hass.async_add_executor_job(oauth.HEARTBEAT_FILE.unlink)
+    assert await _metadata_status(oauth, hass) == 404
 
-    monkeypatch.setattr(oauth, "_heartbeat_fresh", _heartbeat_fresh)
-    monkeypatch.setitem(oauth._addon_down_state, "until", 0.0)
+    await _beat(oauth, hass)
+    assert await _metadata_status(oauth, hass) == 404
 
-    assert await oauth._addon_alive(hass) is True
-    assert await oauth._addon_alive(hass) is True
-    assert len(calls) == 2  # alive verdicts are never cached
-
-    fresh["value"] = False
-    assert await oauth._addon_alive(hass) is False
-    assert await oauth._addon_alive(hass) is False  # served from the down cache
-    assert len(calls) == 3
+    freezer.tick(2)
+    assert await _metadata_status(oauth, hass) == 200

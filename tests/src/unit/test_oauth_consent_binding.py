@@ -1,10 +1,11 @@
 """The OAuth consent flow binds a submitted token to the code it mints."""
 
 import time
-from types import SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import AnyHttpUrl
+from starlette.applications import Starlette
 
 from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams, TokenError
 from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
@@ -23,13 +24,27 @@ def provider() -> HomeAssistantOAuthProvider:
     return HomeAssistantOAuthProvider(base_url="http://localhost:8086")
 
 
-def _consent_request(form: dict[str, object]) -> SimpleNamespace:
-    """A consent-form POST carrying ``form`` as its body."""
+async def _post_consent(
+    provider: HomeAssistantOAuthProvider,
+    form: dict[str, str],
+    files: dict[str, tuple[str, bytes]] | None = None,
+) -> httpx.Response:
+    """Submit the consent form to the provider's own ``/consent`` route."""
+    app = Starlette(routes=provider.get_routes())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://localhost:8086"
+    ) as client:
+        return await client.post("/consent", data=form, files=files)
 
-    async def read_form() -> dict[str, object]:
-        return form
 
-    return SimpleNamespace(query_params={}, form=read_form)
+async def _access_token_credential(
+    provider: HomeAssistantOAuthProvider, access_token: str
+) -> object:
+    """The Home Assistant credential an issued access token carries."""
+    loaded = await provider.load_access_token(access_token)
+    assert loaded is not None
+    return loaded.claims["ha_token"]
 
 
 def _pending(client_id: str, created_at: float | None = None) -> dict:
@@ -72,10 +87,8 @@ async def _consent(
 ) -> str:
     """Submit the consent form for ``txn_id`` and return the minted code."""
     provider.pending_authorizations[txn_id] = _pending(client_id)
-    response = await provider._consent_post(
-        _consent_request({"txn_id": txn_id, "ha_token": ha_token})
-    )
-    assert response.status_code == 303, response.body
+    response = await _post_consent(provider, {"txn_id": txn_id, "ha_token": ha_token})
+    assert response.status_code == 303, response.text
     return response.headers["location"].split("code=")[1].split("&")[0]
 
 
@@ -88,12 +101,12 @@ async def test_consent_post_rejects_expired_transaction(
         "test-client", STALE_CREATED_AT
     )
 
-    response = await provider._consent_post(
-        _consent_request({"txn_id": "stale-txn", "ha_token": "token"})
+    response = await _post_consent(
+        provider, {"txn_id": "stale-txn", "ha_token": "token"}
     )
 
     assert response.status_code == 400
-    assert b"expired" in response.body
+    assert "expired" in response.text
     assert "stale-txn" not in provider.pending_authorizations
     assert not provider.auth_codes
 
@@ -118,9 +131,8 @@ async def test_token_carries_the_credential_submitted_for_its_own_code(
         auth_code = await provider.load_authorization_code(client_info, codes[user])
         assert auth_code is not None
         token = await provider.exchange_authorization_code(client_info, auth_code)
-        payload = provider._decode_token(token.access_token)
-        assert payload is not None
-        assert payload["ha_token"] == f"llat-{user}"
+        credential = await _access_token_credential(provider, token.access_token)
+        assert credential == f"llat-{user}"
 
 
 @pytest.mark.asyncio
@@ -134,26 +146,27 @@ async def test_padded_token_is_bound_without_its_whitespace(
     auth_code = await provider.load_authorization_code(client_info, code)
     assert auth_code is not None
     token = await provider.exchange_authorization_code(client_info, auth_code)
-    payload = provider._decode_token(token.access_token)
-    assert payload is not None
-    assert payload["ha_token"] == "llat"
+    assert await _access_token_credential(provider, token.access_token) == "llat"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "ha_token",
-    ["   ", SimpleNamespace(filename="token.txt")],
+    ("form", "files"),
+    [
+        ({"txn_id": "txn", "ha_token": "   "}, None),
+        ({"txn_id": "txn"}, {"ha_token": ("token.txt", b"llat")}),
+    ],
     ids=["whitespace-only", "file-upload"],
 )
 async def test_consent_post_rejects_a_token_that_is_not_text(
-    provider: HomeAssistantOAuthProvider, ha_token: object
+    provider: HomeAssistantOAuthProvider,
+    form: dict[str, str],
+    files: dict[str, tuple[str, bytes]] | None,
 ) -> None:
     """A blank or uploaded token field returns the user to the form, minting nothing."""
     provider.pending_authorizations["txn"] = _pending("test-client")
 
-    response = await provider._consent_post(
-        _consent_request({"txn_id": "txn", "ha_token": ha_token})
-    )
+    response = await _post_consent(provider, form, files)
 
     assert response.status_code == 303
     location = response.headers["location"]

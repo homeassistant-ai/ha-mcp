@@ -16,11 +16,13 @@ from typing import Any
 import httpx
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import (
     BETA_FEATURE_FIELDS,
     get_global_settings,
     reset_global_settings,
 )
+from ha_mcp.server import HomeAssistantSmartMCPServer
 
 from ._settings_ui_app import app_server, settings_http
 from ._settings_ui_app import settings_world as settings_world
@@ -231,15 +233,17 @@ class TestRestartProbe:
     differs; a polled value that never flips times the cycle out, and one that
     flips on every poll reloads at once."""
 
-    async def _info(self, server: Any) -> dict[str, Any]:
+    async def _info(self, server: HomeAssistantSmartMCPServer) -> dict[str, Any]:
         async with settings_http(server) as http:
             response = await http.get("/api/settings/info")
         assert response.status_code == 200
         body: dict[str, Any] = response.json()
         return body
 
-    async def test_the_process_is_named_with_its_start_time(self) -> None:
-        body = await self._info(app_server())
+    async def test_the_process_is_named_with_its_start_time(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
+        body = await self._info(app_server(monkeypatch, core_client))
 
         assert isinstance(body["instance_id"], str)
         assert body["instance_id"]
@@ -247,8 +251,10 @@ class TestRestartProbe:
         assert "is_addon" in body
         assert "is_sidecar" in body
 
-    async def test_the_process_answers_the_same_on_every_poll(self) -> None:
-        server = app_server()
+    async def test_the_process_answers_the_same_on_every_poll(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
+        server = app_server(monkeypatch, core_client)
 
         first, second = await self._info(server), await self._info(server)
 
@@ -258,13 +264,13 @@ class TestRestartProbe:
         assert first["worker_id"]
 
     async def test_a_new_server_in_the_same_process_answers_a_new_worker(
-        self,
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
     ) -> None:
         """#2279: the in-process server restarts as a new server object inside
         Home Assistant's process, whose id stays the same."""
-        first = await self._info(app_server())
+        first = await self._info(app_server(monkeypatch, core_client))
 
-        second = await self._info(app_server())
+        second = await self._info(app_server(monkeypatch, core_client))
 
         assert first["worker_id"] != second["worker_id"]
         assert first["instance_id"] == second["instance_id"]

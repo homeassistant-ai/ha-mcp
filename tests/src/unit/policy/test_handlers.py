@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.applications import Starlette
@@ -37,6 +38,13 @@ def make_app(tmp_path: Path, queue: ApprovalQueue) -> TestClient:
         ]
     )
     return TestClient(app)
+
+
+def decision_of(queue: ApprovalQueue, token: str) -> str:
+    """The decision the queue holds for ``token``, which it must still hold."""
+    entry = queue.get(token)
+    assert entry is not None
+    return entry.decision
 
 
 def test_get_config_returns_default(tmp_path):
@@ -88,7 +96,7 @@ def test_approve_flow(tmp_path):
 
     r = c.post("/api/policy/approve", json={"token": entry.token})
     assert r.status_code == 200
-    assert queue.get(entry.token).decision == "approved"
+    assert decision_of(queue, entry.token) == "approved"
 
 
 def test_approve_unknown_token_404(tmp_path):
@@ -103,7 +111,7 @@ def test_deny_flow(tmp_path):
     c = make_app(tmp_path, queue)
     r = c.post("/api/policy/deny", json={"token": entry.token})
     assert r.status_code == 200
-    assert queue.get(entry.token).decision == "denied"
+    assert decision_of(queue, entry.token) == "denied"
 
 
 def test_approve_bad_json_body_400(tmp_path):
@@ -175,7 +183,7 @@ def test_approve_then_deny_returns_409(tmp_path):
     assert c.post("/api/policy/approve", json={"token": entry.token}).status_code == 200
     r = c.post("/api/policy/deny", json={"token": entry.token})
     assert r.status_code == 409
-    assert queue.get(entry.token).decision == "approved"
+    assert decision_of(queue, entry.token) == "approved"
 
 
 def test_get_config_returns_500_when_policy_corrupt(tmp_path):
@@ -498,11 +506,12 @@ def test_removing_the_pin_with_the_toggle_already_off_touches_no_policy(
 
     saves: list[object] = []
     real_save = handlers.save_policy
-    monkeypatch.setattr(
-        handlers,
-        "save_policy",
-        lambda *a, **k: (saves.append(a), real_save(*a, **k))[1],
-    )
+
+    def counted_save(*args: Any, **kwargs: Any) -> Any:
+        saves.append(args)
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(handlers, "save_policy", counted_save)
     r = c.delete("/api/policy/decision-pin")
     monkeypatch.undo()
 
@@ -537,11 +546,12 @@ def test_setting_the_pin_does_not_hash_on_the_event_loop(
 
     Verification already runs in one; creation ran on the loop, where a
     quarter-second of pure CPU blocks every other request the server is
-    serving. Pinned by the thread identity the hashing actually runs on.
+    serving. Pinned by the thread identity ``set_pin``, which derives and
+    writes the hash, actually runs on.
     """
     import threading
 
-    from ha_mcp.policy import decision_pin, handlers
+    from ha_mcp.policy import handlers
 
     c = make_app(tmp_path, ApprovalQueue())
     # The event-loop thread is NOT this test's thread: the test client runs
@@ -557,14 +567,14 @@ def test_setting_the_pin_does_not_hash_on_the_event_loop(
         return real_validate(*args, **kwargs)
 
     hashed_on: list[int] = []
-    real_derive = decision_pin._derive
+    real_set_pin = handlers.set_pin
 
     def note_hash_thread(*args, **kwargs):
         hashed_on.append(threading.get_ident())
-        return real_derive(*args, **kwargs)
+        return real_set_pin(*args, **kwargs)
 
     monkeypatch.setattr(handlers, "validate_pin", note_loop_thread)
-    monkeypatch.setattr(decision_pin, "_derive", note_hash_thread)
+    monkeypatch.setattr(handlers, "set_pin", note_hash_thread)
     r = c.post("/api/policy/decision-pin", json={"pin": "2468"})
     monkeypatch.undo()
 

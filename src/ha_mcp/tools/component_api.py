@@ -177,11 +177,6 @@ _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary
 _PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
-def component_probe_auth_failed(client: Any) -> bool:
-    """True when the latest capability probe was rejected as unauthorized."""
-    return _per_user(client) in _PROBE_AUTH_REJECTED
-
-
 def component_probe_auth_kind(client: Any) -> str | None:
     """``permission`` or ``token`` for the latest probe rejection, else None."""
     return _PROBE_AUTH_REJECTED.get(_per_user(client))

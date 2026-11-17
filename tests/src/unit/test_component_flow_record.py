@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 from homeassistant.config_entries import (
-    SOURCE_RECONFIGURE,
     SOURCE_USER,
     ConfigFlow,
     ConfigFlowResult,
@@ -57,9 +56,7 @@ async def test_a_reconfigure_flow_is_told_from_a_setup_flow_of_its_domain(
     setup = await hass.config_entries.flow.async_init(
         _DOMAIN, context={"source": SOURCE_USER}
     )
-    reconfigure = await hass.config_entries.flow.async_init(
-        _DOMAIN, context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
-    )
+    reconfigure = await entry.start_reconfigure_flow(hass)
 
     records = [
         await ws_result(

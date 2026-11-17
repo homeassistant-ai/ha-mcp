@@ -1,0 +1,125 @@
+# A Core state, registry row or config entry in a unit test comes from Core
+# (tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core": "Data handed
+# straight to a pure helper follows the same rule: get it from Core"). A dict
+# typed into the test with that shape, as a literal or ``dict(...)``, is a
+# guess of what Core holds. A dict an assert compares is what our code is
+# expected to return, not Core's data.
+id: no-typed-core-objects
+language: python
+utils:
+  dict-arguments:
+    kind: argument_list
+    inside:
+      kind: call
+      has:
+        field: function
+        regex: '^dict$'
+  # An entry of a dict literal, or a keyword of ``dict(...)``.
+  entry:
+    any:
+      - kind: pair
+      - kind: keyword_argument
+  # What an assert compares, not what it hands to a call.
+  expected:
+    inside:
+      kind: assert_statement
+      stopBy: end
+    not:
+      inside:
+        kind: argument_list
+        stopBy: end
+        not:
+          matches: dict-arguments
+        inside:
+          kind: assert_statement
+          stopBy: end
+rule:
+  any:
+    - kind: dictionary
+    - matches: dict-arguments
+  not:
+    any:
+      - matches: expected
+      # A registry file Core loads at startup (``hass_storage[key] = ...``): the
+      # only way Core holds a row it refuses at runtime, such as an
+      # entity whose config entry is gone.
+      - inside:
+          kind: assignment
+          stopBy: end
+          has:
+            field: left
+            pattern: hass_storage[$KEY]
+      # A trigger, condition or action of an automation or script config: what
+      # a user writes, which also names entity_id and a state.
+      - has:
+          matches: entry
+          has:
+            nthChild: 1
+            regex: '^["'']?(condition|trigger|service|action)["'']?$'
+  all:
+    - any:
+        # A state: it always carries its attributes or timestamps besides the
+        # value (a scene's ``{"entity_id", "state"}`` entry is a user's config).
+        - all:
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?entity_id["'']?$'
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?state["'']?$'
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?(attributes|last_changed|last_updated|last_reported|context)["'']?$'
+        # An entity registry row. ``platform`` alone is not enough: trigger and
+        # condition configs pair it with ``entity_id``.
+        - all:
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?entity_id["'']?$'
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?(unique_id|config_entry_id|original_name)["'']?$'
+        # A device registry row.
+        - all:
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?id["'']?$'
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?(identifiers|manufacturer|via_device_id|name_by_user)["'']?$'
+        # A config entry. Tools take ``domain`` with ``entry_id`` as arguments;
+        # an entry also has its ``title``.
+        - all:
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?entry_id["'']?$'
+            - has:
+                matches: entry
+                has:
+                  nthChild: 1
+                  regex: '^["'']?title["'']?$'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+message: |
+  Do not type a Home Assistant state, registry row or config entry into a test.
+  Set Core up (`hass.states.async_set`, a registry fixture, `MockConfigEntry`)
+  and read the object back from Core, or let the tool read it. See
+  tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core".
+severity: error
