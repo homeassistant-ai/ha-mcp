@@ -96,8 +96,7 @@ def _do_registry_fields(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
     ``set_fields`` (declared fields holding a ``set`` or ``frozenset``) and
     ``stamped_fields`` (declared ``datetime`` fields ``update_fields`` does not
     name). Both are ``None`` without ``item_id`` or when Core holds no such
-    entry. All lists are sorted. How the server uses them:
-    ``docs/agents/native-core-contracts.md`` (Choose the authoritative path).
+    entry. All lists are sorted.
 
     Only declared fields are named (read by attribute); a row key that is a
     property, such as a device's deprecated ``config_entries``, is never

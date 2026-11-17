@@ -19,6 +19,13 @@ migrated, so those changes would be thrown away when it is reworked. Fix a bug
 in such a tool by migrating the affected path to the native approach this
 document describes, not by patching it so it keeps working the old way.
 
+This document holds the rules for building tools, not each tool's contract.
+The tool-specific passages already here are worked examples of those rules.
+A migration does not add a section for its own tool: the tool's contract lives
+in its code, its `Field` texts and its tests, and a copy here only duplicates
+them. Add a rule here only when later migrations need it, written as a general
+rule rather than as one tool's behaviour.
+
 ## Choose the authoritative path
 
 The component is part of the native contract, not an exception to it. The
@@ -63,7 +70,10 @@ translate Core's validator into another handwritten validator, and do not keep
 one because the WebSocket API cannot express what Core accepts: that is exactly
 the case the component exists for. "It works without the component" does not
 justify the copy; an installation without the component may get less, and the
-fallback says so.
+fallback says so. A fallback that says what it could not judge is finished: do
+not refine it case by case (more fields compared, more of what it missed
+named). Bringing the fallback up to the component case by case is the churn
+the component exists to end.
 
 Component and server releases are paired: every release stamps both with one
 version and the component pins the server build it runs. A bridge and its
@@ -284,38 +294,6 @@ values an edit form shows; Core drops a stored optional value a submit leaves
 out, so a submit to an options or reconfigure form goes over those values
 (`config_entry_flow_form`). A backup restore is the exception: it replays a
 stored snapshot into the flow's forms and is verified by readback.
-
-A backup diff compares a registry row with a snapshot's, and the restore of a
-label, category, area or floor writes a snapshot's row back. What Core's
-commands take and how Core keeps a row is Core's to say: the component's
-`ha_mcp_tools/registry_fields` bridge (capability `registry_fields`) reads it
-from Core on every call.
-
-- The keys of the schemas Core registered for the registry's update and create
-  commands: the restore sends only those, and names every other stored key in
-  a warning unless Core's row carries the key and neither command takes it
-  (Core sets that one itself). When the component cannot be asked or refuses,
-  it sends the stored row without `created_at` and `modified_at`.
-- The fields of the live entry whose value is a set. Core lists a set in hash
-  order, so a list the bridge names matches in any order; every other list is
-  compared in the order given (a device's `config_entries` is a property, not
-  a field, and holds its one config entry). When the component cannot be asked
-  or refuses, the diff reports the order as a difference and the restore takes
-  the row an earlier restore created, each with a warning that the order could
-  not be judged. When the component does not find the entry, the diff does the same
-  and the restore creates the item again. A list nested inside a row value
-  (the lists in a device's `config_entries_subentries`, the pairs in
-  `identifiers`) is compared by position, with or without the component.
-- The fields of the live entry that hold a point in time and that the update
-  command does not take: Core sets those itself, so the diff does not report
-  them. When the component cannot be asked, refuses or does not find the
-  entry, the diff of a label, category, area or floor leaves out `created_at`
-  and `modified_at`, and the diff of a device reports them with a warning.
-
-A command that was sent and got no answer, and an answer that is not in the
-shape the command documents, count as a component that cannot be asked: the
-[component guide](custom-component.md#compatibility) treats a read the
-component fails as a missing component.
 
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses

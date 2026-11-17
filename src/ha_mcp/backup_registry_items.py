@@ -14,9 +14,7 @@ compares the row of an entity and of a device through ``compared_row`` as well.
 
 Which keys a restore sends, which lists match in any order and which points in
 time a diff leaves out are asked of the component's
-``ha_mcp_tools/registry_fields``; that contract and its fallbacks are in
-``docs/agents/native-core-contracts.md`` (Choose the authoritative path, the
-``registry_fields`` paragraphs).
+``ha_mcp_tools/registry_fields``.
 """
 
 from __future__ import annotations
@@ -264,10 +262,8 @@ async def _restore_item(
 
     ``stored`` is the snapshot's row without its own id and the ``kind`` or
     ``scope`` the snapshot adds. Which keys are sent, and whether a list in
-    another order still matches, follow ``registry_fields``
-    (``docs/agents/native-core-contracts.md``, the ``registry_fields``
-    paragraphs); stored keys left out are named as ``_not_restored``
-    describes.
+    another order still matches, follow ``registry_fields``; stored keys left
+    out are named as ``_not_restored`` describes.
 
     A row whose fields all match the create's stands for the item an earlier
     restore created, and is returned with its own fields. A create leaves out a
@@ -489,10 +485,8 @@ async def compared_row(
 
     A list Core keeps in a set gets the snapshot's order, and a point in time
     Core sets itself the snapshot's value (or is left out when the snapshot
-    has none), as ``registry_fields`` names them
-    (``docs/agents/native-core-contracts.md``, the ``registry_fields``
-    paragraphs). ``registry_fields`` is asked once, and only when the rows
-    differ.
+    has none), as ``registry_fields`` names them. ``registry_fields`` is asked
+    once, and only when the rows differ.
     """
     if current is None:
         # A restored label, category, area or floor can carry another id.
