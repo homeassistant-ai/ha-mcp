@@ -55,7 +55,12 @@ topology = _load_topology()
 @pytest.fixture(autouse=True)
 def _clear_lane_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every parser test from a lane-less environment."""
-    for name in ("E2E_NO_TOOLS_ENTRY", "E2E_COMBINE_TOPOLOGIES", "E2E_BACKEND", "HAOS_TEST_MODE"):
+    for name in (
+        "E2E_NO_TOOLS_ENTRY",
+        "E2E_COMBINE_TOPOLOGIES",
+        "E2E_BACKEND",
+        "HAOS_TEST_MODE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

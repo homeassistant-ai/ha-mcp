@@ -99,6 +99,15 @@ def test_shared_surface_runs_when_available(e2e_topology):
     assert f"{expected} passed" in result.stdout, result.stdout
     traces = [path.read_text().splitlines() for path in tmp_path.glob("*.trace")]
     assert traces
-    assert all(
-        trace == ["topology_without_tools", "topology_with_tools"] for trace in traces
+    # A worker may finish its absent scopes while another consumes all the
+    # smaller installed scopes. Only workers assigned those scopes install.
+    allowed = (
+        ["topology_without_tools"],
+        ["topology_with_tools"],
+        ["topology_without_tools", "topology_with_tools"],
     )
+    assert all(trace in allowed for trace in traces), traces
+    assert {phase for trace in traces for phase in trace} == {
+        "topology_without_tools",
+        "topology_with_tools",
+    }
