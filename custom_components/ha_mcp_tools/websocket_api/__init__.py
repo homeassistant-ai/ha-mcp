@@ -284,16 +284,9 @@ the info handshake carries no capability entry:
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported
   function-locally (not needed at module top).
-* ``ha_mcp_tools/registry_fields`` — what Core's own commands take for the
-  device, entity, area, floor, label or category registry
-  (``update_fields``, ``create_fields``: the keys of the schemas Core
-  registered), and with ``item_id`` how Core keeps that entry's fields
-  (``set_fields``: kept in a set; ``stamped_fields``: a point in time the
-  update command does not take; both ``None`` without ``item_id`` or when
-  Core holds no such entry). The restore of a label, category, area or floor
-  sends only the fields named here, and a backup diff asks this before it
-  treats a list in another order as unchanged, and before it reports a point
-  in time that differs. A ``category`` entry REQUIRES its ``scope``.
+* ``ha_mcp_tools/registry_fields`` — the fields Core's commands take for a
+  registry, and how Core keeps the fields of one of its entries (see
+  ``registries._do_registry_fields``).
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next

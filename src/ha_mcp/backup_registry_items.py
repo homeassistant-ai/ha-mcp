@@ -12,30 +12,10 @@ the item that holds the name, or says Core refused it. The diff finds the live
 item that holds a deleted item's name, and reports an id that differs. It
 compares the row of an entity and of a device through ``compared_row`` as well.
 
-What Core's commands take and how Core keeps a row is asked of the component
-(``ha_mcp_tools/registry_fields``), which reads both from Core:
-
-- The keys a restore sends are those Core's update or create command takes.
-  It names every other stored key in a warning, unless Core's row carries the
-  key and neither command takes it: Core sets that one itself.
-  When the component cannot be asked or refuses, the restore sends the stored
-  row without ``created_at`` and ``modified_at``, which those commands refuse
-  on the Core releases this server knows.
-- Core keeps some lists of a row in a set and lists a set in hash order, which
-  differs between runs. A list the component names as a set matches in any
-  order, every other list in the order given. When the component cannot be
-  asked or refuses, the diff reports the order as a difference and a restore
-  still takes the row an earlier restore created, and each says so. When the
-  component does not find the entry, the diff does the same and a restore
-  creates the item again.
-- Core sets some points in time of a row itself, and no restore puts them
-  back: the diff leaves out the ones the component names. When the component
-  cannot be asked, refuses or does not find the entry, the diff of a label,
-  category, area or floor leaves out ``created_at`` and ``modified_at``; the
-  diff of a device reports them as differences and says so.
-
-A command that was sent and got no answer, and an answer that is not in the
-shape the command documents, count as a component that cannot be asked.
+Which keys a restore sends, which lists match in any order and which points in
+time a diff leaves out are asked of the component's
+``ha_mcp_tools/registry_fields``; that contract and its fallbacks are in
+``docs/agents/native-core-contracts.md`` (Choose the authoritative path).
 """
 
 from __future__ import annotations
@@ -283,19 +263,14 @@ async def _restore_item(
     """Update the item, or create it again when Core no longer holds its id.
 
     ``stored`` is the snapshot's row without its own id and the ``kind`` or
-    ``scope`` the snapshot adds. An update sends the keys of it that Core's
-    update command takes and a create those its create command takes, as the
-    component names them, and the row carries a warning for the stored keys
-    left out (``_not_restored``); when the component cannot be asked or
-    refuses, both send the row without ``created_at`` and ``modified_at``.
+    ``scope`` the snapshot adds. The keys sent, and when a list matches in
+    another order, follow ``registry_fields`` (module docstring); the row
+    carries a warning for the stored keys left out (``_not_restored``).
 
     A row whose fields all match the create's stands for the item an earlier
-    restore created, and is returned with its own fields. A list matches in
-    another order when the component names it as a set of Core's; one it does
-    not name is no match, and when the component cannot be asked or refuses the
-    row is taken and says so. A create leaves out a field that is None: some
-    create schemas (an area's icon and floor) take a string or nothing, and
-    nothing is the default. The row carries a warning
+    restore created, and is returned with its own fields. A create leaves out a
+    field that is None: some create schemas (an area's icon and floor) take a
+    string or nothing, and nothing is the default. The row carries a warning
     when its id is not the snapshot's. A create Core refuses is raised as
     ``not_applied``, since a refused write changes nothing. When the refusal is
     Core's ``invalid_info`` and a row holds the name, the error names that row
@@ -510,20 +485,9 @@ async def compared_row(
     """The live registry row of a snapshot's item, as a diff compares it, and
     the warnings for the comparison.
 
-    A diff compares lists position by position. A list that holds the
-    snapshot's items in another order gets the snapshot's order when the
-    component names it as a set of Core's; one it does not name stays as Core
-    lists it, and when the component cannot be asked, refuses or does not find
-    the entry every such list stays and a warning says so.
-
-    A point in time Core sets itself gets the snapshot's value, since no
-    restore puts it back: the ones the component names for the entry. When the
-    component cannot be asked, refuses or does not find the entry, those are
-    ``created_at`` and ``modified_at`` for a label, category, area or floor.
-    For any other row none is left out, and a warning names the ones that
-    differ.
-
-    The component's ``registry_fields`` is asked once, and only when the rows
+    A list Core keeps in a set gets the snapshot's order, and a point in time
+    Core sets itself the snapshot's value, as ``registry_fields`` names them
+    (module docstring). The component is asked once, and only when the rows
     differ.
     """
     if current is None:

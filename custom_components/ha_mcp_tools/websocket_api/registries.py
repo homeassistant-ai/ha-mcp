@@ -89,40 +89,24 @@ def _do_registry_fields(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
     """Name the fields Core's commands take for a registry, and how Core keeps
     the fields of one of its entries.
 
-    ``update_fields`` and ``create_fields`` are the keys of the schema Core
-    registered for ``config/<registry>_registry/update`` and ``.../create``,
-    without the transport keys ``id`` and ``type``, sorted. ``create_fields`` is
-    ``None`` for a registry Core registers no create command for (a device, an
-    entity). A caller that writes a stored row back sends the keys named here,
-    so a key Core starts or stops taking is answered without a change here.
+    Returns ``update_fields`` and ``create_fields`` (the keys of the schemas
+    Core registered for ``config/<registry>_registry/update`` and
+    ``.../create``, without ``id`` and ``type``; ``create_fields`` is ``None``
+    without a create command), and with ``item_id`` the entry's
+    ``set_fields`` (declared fields holding a ``set`` or ``frozenset``) and
+    ``stamped_fields`` (declared ``datetime`` fields ``update_fields`` does not
+    name). Both are ``None`` without ``item_id`` or when Core holds no such
+    entry. All lists are sorted. How the server uses them:
+    ``docs/agents/native-core-contracts.md`` (Choose the authoritative path).
+
+    A field is named, not a row key: a caller matches a row key to a field of
+    the same name. Only declared fields are read, never a row key as an
+    attribute: ``DeviceEntry.config_entries`` and its siblings are deprecated
+    properties that report their use.
+
     Raises ``HomeAssistantError`` when Core registers no update command for the
-    registry.
-
-    With ``item_id`` the entry is read too; without it, and when Core holds no
-    such entry, both of these are ``None``:
-
-    * ``set_fields``: the declared fields of the entry's class whose value on
-      this entry is a ``set`` or ``frozenset``, sorted. Core lists a set in hash
-      order, which differs between runs, so a caller that compares two rows of
-      the entry takes a list named here as equal in any order, and every other
-      list by position.
-    * ``stamped_fields``: the declared fields whose value is a ``datetime`` and
-      that ``update_fields`` does not name, sorted: the points in time Core sets
-      itself, which no write puts back.
-
-    Both are read from the entry, so a field Core starts or stops keeping that
-    way is answered without a change here. A field is named, not a row key: in
-    every row Core 2026.11 serves a list of more than one item of a set carries
-    its field's name (a device's ``config_entries`` holds its one config entry),
-    and a list whose key names no such field is compared by position. Only
-    declared fields are read, never a row key as an attribute:
-    ``DeviceEntry.config_entries`` and its siblings are deprecated properties
-    that report their use.
-
-    A device is looked up where ``device_get`` looks it up (main and child
-    devices). A category id is unique within its scope only, so a ``category``
-    entry REQUIRES ``scope`` and raises ``HomeAssistantError`` without it. A
-    registry whose accessor drifted raises as in :func:`_do_registries`.
+    registry, and, with ``item_id``, for a ``category`` without ``scope`` and
+    for a registry whose accessor drifted (as :func:`_do_registries`).
     """
     kind = params["registry"]
     update_fields = _command_fields(hass, f"config/{kind}_registry/update")
