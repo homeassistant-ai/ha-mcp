@@ -289,6 +289,27 @@ async def test_a_device_diff_names_the_changed_field_and_not_modified_at(
     assert "warnings" not in diff
 
 
+async def test_a_point_in_time_the_snapshot_lacks_is_no_difference(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A snapshot from a Core whose device row had no ``created_at`` is compared
+    without it: Core sets that point in time itself and no restore puts it back,
+    so the diff names only the field that changed."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    del stored["config"]["created_at"]
+    path.write_text(yaml.safe_dump(stored))
+    dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+
+    assert _changed_fields(diff) == {"name_by_user"}, diff
+
+
 async def test_a_point_in_time_cores_update_command_takes_is_compared(
     hass: HomeAssistant,
     backup_manager: BackupManager,

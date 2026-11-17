@@ -488,7 +488,8 @@ async def compared_row(
     the warnings for the comparison.
 
     A list Core keeps in a set gets the snapshot's order, and a point in time
-    Core sets itself the snapshot's value, as ``registry_fields`` names them
+    Core sets itself the snapshot's value (or is left out when the snapshot
+    has none), as ``registry_fields`` names them
     (``docs/agents/native-core-contracts.md``, the ``registry_fields``
     paragraphs). ``registry_fields`` is asked once, and only when the rows
     differ.
@@ -523,4 +524,4 @@ async def compared_row(
             )
             if untold:
                 warnings.append(_stamps_untold(untold))
-    return {**current, **_only(config, stamped)}, warnings
+    return {**_without(current, *stamped), **_only(config, stamped)}, warnings
