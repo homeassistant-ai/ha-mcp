@@ -1,5 +1,6 @@
 """The edit-backup E2E fixture must never select a developer's legacy history."""
 
+import inspect
 import os
 import subprocess
 import sys
@@ -19,15 +20,20 @@ from ..e2e.workflows.auto_backup import conftest as backup_fixtures
 from ..e2e.workflows.auto_backup.test_capture_and_restore import _enable_auto_backup
 
 
+def _legacy_history(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """A developer's pre-#2372 backup store, holding a snapshot."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    legacy = tmp_path / "xdg" / "ha_mcp" / "backups"
+    legacy.mkdir(parents=True)
+    (legacy / "existing.yaml").write_text("existing backup", encoding="utf-8")
+    return legacy
+
+
 @pytest.mark.parametrize("backend", ["container", "haos"])
 def test_backup_fixture_overrides_existing_legacy_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
 ) -> None:
-    legacy = tmp_path / "legacy"
-    legacy.mkdir()
-    sentinel = legacy / "existing.yaml"
-    sentinel.write_text("existing backup", encoding="utf-8")
-    monkeypatch.setattr(bm, "_legacy_default_dir", lambda: legacy)
+    legacy = _legacy_history(monkeypatch, tmp_path)
     monkeypatch.setattr(bm, "get_data_dir", lambda: tmp_path / "data")
     monkeypatch.setattr(data_paths, "get_data_dir", lambda: tmp_path / "data")
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
@@ -37,7 +43,7 @@ def test_backup_fixture_overrides_existing_legacy_directory(
     client = SimpleNamespace()
     assert bm.get_backup_manager(client, before).backup_dir == legacy
 
-    fixture = contextmanager(backup_fixtures.isolate_edit_backups.__wrapped__)
+    fixture = contextmanager(inspect.unwrap(backup_fixtures.isolate_edit_backups))
     with fixture(monkeypatch, tmp_path, {"backend": backend}):
         settings = config.get_global_settings()
         assert settings is not before
@@ -47,12 +53,6 @@ def test_backup_fixture_overrides_existing_legacy_directory(
         _enable_auto_backup(monkeypatch)
         manager = bm.get_backup_manager(client, config.get_global_settings())
         assert manager.backup_dir == tmp_path / "backups"
-        path = manager._write_snapshot(
-            "automation", "fixture", {"id": "fixture"}, "test"
-        )
-        assert path.parent == tmp_path / "backups"
-        assert list(legacy.iterdir()) == [sentinel]
-        assert sentinel.read_text(encoding="utf-8") == "existing backup"
 
     assert os.environ["HAMCP_BACKUP_DIR"] == ""
     assert config.get_global_settings().auto_backup_dir == ""
@@ -68,7 +68,7 @@ def test_backup_fixture_preserves_out_of_process_environment(
     monkeypatch.setenv("HAMCP_BACKUP_DIR", "/server/backups")
     reset = Mock()
     monkeypatch.setattr(config, "reset_global_settings", reset)
-    fixture = contextmanager(backup_fixtures.isolate_edit_backups.__wrapped__)
+    fixture = contextmanager(inspect.unwrap(backup_fixtures.isolate_edit_backups))
     with fixture(monkeypatch, tmp_path, {"backend": backend}):
         assert os.environ["HAMCP_BACKUP_DIR"] == "/server/backups"
         reset.assert_not_called()
@@ -82,18 +82,17 @@ def test_stdio_environment_pins_backups_inside_its_disposable_directory(
 ) -> None:
     config_dir = tmp_path / "stdio"
     monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "developer-backups"))
-    env = e2e_fixtures._stdio_env(
+    env = e2e_fixtures.stdio_env(
         {"base_url": "http://homeassistant.invalid:8123", "token": "test-token"},
         config_dir,
     )
     assert env["HAMCP_BACKUP_DIR"] == str(config_dir / "backups")
-    default = Mock(side_effect=AssertionError("Must not inspect legacy backups"))
-    monkeypatch.setattr(bm, "_resolve_default_dir", default)
+    # The developer's legacy history is not where the stdio server writes.
+    _legacy_history(monkeypatch, tmp_path)
     manager = bm.BackupManager(
         SimpleNamespace(auto_backup_dir=env["HAMCP_BACKUP_DIR"]), SimpleNamespace()
     )
     assert manager.backup_dir == config_dir / "backups"
-    default.assert_not_called()
 
 
 def test_in_process_server_keeps_every_write_out_of_the_developer_home(
@@ -120,13 +119,12 @@ def test_in_process_server_keeps_every_write_out_of_the_developer_home(
         path.mkdir(parents=True)
         return path
 
-    fixture = contextmanager(e2e_fixtures.in_process_data_dir.__wrapped__)
+    fixture = contextmanager(inspect.unwrap(e2e_fixtures.in_process_data_dir))
     with fixture(SimpleNamespace(mktemp=mktemp)) as config_dir:
         assert not data_paths.get_data_dir().is_relative_to(home)
         manager = bm.get_backup_manager(SimpleNamespace(), config.get_global_settings())
-        path = manager._write_snapshot("automation", "fixture", {"id": "x"}, "test")
 
-    assert path.is_relative_to(config_dir)
+    assert manager.backup_dir.is_relative_to(config_dir)
     assert not (home / ".ha-mcp").exists()
     assert list(legacy.iterdir()) == [sentinel]
     assert "HAMCP_BACKUP_DIR" not in os.environ

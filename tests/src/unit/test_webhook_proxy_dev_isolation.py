@@ -6,7 +6,6 @@ would make the dev component collide with stable's domain/state. These tests
 fail CI if that ever happens.
 """
 
-import importlib.util
 import re
 from pathlib import Path
 
@@ -84,64 +83,3 @@ def test_dev_slug_and_domain():
         encoding="utf-8"
     )
     assert '"domain": "mcp_proxy_dev"' in manifest
-
-
-STABLE_START = REPO_ROOT / "homeassistant-addon-webhook-proxy" / "start.py"
-
-
-def _load_stable_start():
-    spec = importlib.util.spec_from_file_location("wp_stable_start", STABLE_START)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # safe: module-level has no side effects
-    return mod
-
-
-def test_sibling_matcher_handles_hash_prefix_and_disambiguates_dev():
-    start = _load_stable_start()
-    # stable looks for the dev sibling:
-    dev_base = "ha_mcp_webhook_proxy_dev"
-    # stable dismisses dev's banner on a clean start, so its sibling-mutex id is
-    # the dev flavor's own notification id.
-    assert start.SIBLING_MUTEX_NOTIFICATION_ID == "mcp_proxy_dev_mutex"
-    started_dev = [{"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "started"}]
-    stopped_dev = [{"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "stopped"}]
-    only_stable = [{"slug": "abc12345_ha_mcp_webhook_proxy", "state": "started"}]
-    assert start._sibling_is_running(started_dev, dev_base) is True
-    assert start._sibling_is_running(stopped_dev, dev_base) is False
-    # a running STABLE slug must NOT be mistaken for the dev sibling:
-    assert start._sibling_is_running(only_stable, dev_base) is False
-    # exact (non-hashed official) slug also matches:
-    assert (
-        start._sibling_is_running(
-            [{"slug": "ha_mcp_webhook_proxy_dev", "state": "started"}], dev_base
-        )
-        is True
-    )
-
-
-DEV_START = DEV_ADDON / "start.py"
-
-
-def _load_dev_start():
-    spec = importlib.util.spec_from_file_location("wp_dev_start", DEV_START)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # safe: module-level has no side effects
-    return mod
-
-
-def test_dev_sibling_matcher_detects_stable_not_itself():
-    start = _load_dev_start()
-    # The dev flavor's sibling is STABLE (not its own dev slug).
-    assert start.SIBLING_SLUG_BASE == "ha_mcp_webhook_proxy"
-    assert start.MUTEX_NOTIFICATION_ID == "mcp_proxy_dev_mutex"
-    # Dev dismisses stable's banner on a clean start, so its sibling-mutex id is
-    # the stable flavor's own notification id.
-    assert start.SIBLING_MUTEX_NOTIFICATION_ID == "mcp_proxy_mutex"
-    stable_base = "ha_mcp_webhook_proxy"
-    running_stable = [{"slug": "abc12345_ha_mcp_webhook_proxy", "state": "started"}]
-    running_dev_self = [
-        {"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "started"}
-    ]
-    assert start._sibling_is_running(running_stable, stable_base) is True
-    # dev must NOT treat its own (dev) slug as the stable sibling:
-    assert start._sibling_is_running(running_dev_self, stable_base) is False

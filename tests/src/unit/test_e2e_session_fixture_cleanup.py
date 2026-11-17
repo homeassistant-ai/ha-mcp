@@ -21,12 +21,15 @@ in the resolver unit test.
 
 from __future__ import annotations
 
+import inspect
 import os
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from tests.src.e2e import _conftest_testcontainer
 from tests.src.e2e import conftest as e2e_conftest
 
@@ -71,8 +74,8 @@ class _FakeContainer:
     def __enter__(self) -> _FakeContainer:
         return self
 
-    def __exit__(self, *exc_info: Any) -> bool:
-        return False
+    def __exit__(self, *exc_info: object) -> None:
+        return None
 
     def get_exposed_port(self, port: int) -> int:
         return 32768
@@ -94,24 +97,34 @@ def _fixture_world(
     The settings/WebSocket reset stays real: it is what makes the fixture's URL
     reach settings-backed clients, and one test asserts exactly that.
     """
-    monkeypatch.setattr(e2e_conftest, "_prepare_testcontainer_config", prepare)
+    monkeypatch.setattr(e2e_conftest, "prepare_testcontainer_config", prepare)
     monkeypatch.setattr(
-        e2e_conftest, "_build_ha_testcontainer", lambda *args: _FakeContainer()
+        e2e_conftest, "build_ha_testcontainer", lambda *args: _FakeContainer()
     )
-    monkeypatch.setattr(e2e_conftest, "_is_embedded_backend_selected", lambda: False)
-    monkeypatch.setattr(e2e_conftest, "is_haos_backend_selected", lambda: False)
-    monkeypatch.setattr(e2e_conftest, "_wait_for_testcontainer_ready", readiness)
+    monkeypatch.setattr(e2e_conftest, "wait_for_testcontainer_ready", readiness)
     docker_sdk = pytest.importorskip("docker")
     monkeypatch.setattr(docker_sdk, "from_env", _FakeDaemon)
+    # The plain testcontainer lane: no HAOS image, no embedded server, and the
+    # component's tools entry installed.
+    for name in (e2e_conftest.HAOS_IMAGE_ENV, "E2E_BACKEND", "E2E_NO_TOOLS_ENTRY"):
+        monkeypatch.delenv(name, raising=False)
     for name in _STAGED_ENV:
+        # Recorded first, so the fixture's own writes are undone after the test.
         monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     return _FakeRequest()
 
 
+def _session_fixture(request: _FakeRequest) -> Generator[dict[str, Any]]:
+    """The session fixture's body, run outside pytest's fixture machinery."""
+    fixture = inspect.unwrap(e2e_conftest.ha_container_with_fresh_config)
+    generator: Generator[dict[str, Any]] = fixture(request, None)
+    return generator
+
+
 def _drive_to_failure(request: _FakeRequest, error: str) -> None:
-    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
     with pytest.raises(RuntimeError, match=error):
-        next(fixture(request, None))
+        next(_session_fixture(request))
 
 
 def _assert_finalizer_removed(request: _FakeRequest, staged: Path) -> None:
@@ -125,7 +138,7 @@ def _assert_finalizer_removed(request: _FakeRequest, staged: Path) -> None:
 def test_a_staging_failure_still_removes_the_staged_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    real_prepare = _conftest_testcontainer._prepare_testcontainer_config
+    real_prepare = _conftest_testcontainer.prepare_testcontainer_config
     seen: dict[str, Path] = {}
 
     def recording_prepare(embedded: bool, config_path: Path) -> Any:
@@ -135,7 +148,7 @@ def test_a_staging_failure_still_removes_the_staged_config(
     def staging_fails(initial_state_path: Path) -> None:
         raise RuntimeError("HACS frontend download failed")
 
-    monkeypatch.setattr(_conftest_testcontainer, "_ensure_hacs_frontend", staging_fails)
+    monkeypatch.setattr(_conftest_testcontainer, "ensure_hacs_frontend", staging_fails)
     request = _fixture_world(monkeypatch, recording_prepare, lambda *args: None)
 
     _drive_to_failure(request, "HACS frontend download failed")
@@ -147,7 +160,7 @@ def test_a_failure_after_token_injection_still_removes_the_staged_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The leaked directory is the one that matters: it holds an injected token."""
-    real_prepare = _conftest_testcontainer._prepare_testcontainer_config
+    real_prepare = _conftest_testcontainer.prepare_testcontainer_config
     seen: dict[str, Path] = {}
     token = "ghp_staged_token_must_not_survive"
 
@@ -172,10 +185,10 @@ def test_a_failure_after_token_injection_still_removes_the_staged_config(
     # The HACS frontend download is a 51 MB network step; the token injection
     # this test targets happens after it, so skip just the download.
     monkeypatch.setattr(
-        _conftest_testcontainer, "_ensure_hacs_frontend", lambda path: None
+        _conftest_testcontainer, "ensure_hacs_frontend", lambda path: None
     )
     monkeypatch.setattr(
-        _conftest_testcontainer, "_install_custom_component", component_install_fails
+        _conftest_testcontainer, "install_custom_component", component_install_fails
     )
     monkeypatch.setenv("GITHUB_TOKEN", token)
     request = _fixture_world(monkeypatch, recording_prepare, lambda *args: None)
@@ -218,8 +231,7 @@ def test_a_successful_session_removes_the_staged_config_after_the_container_stop
         return config_path, {}, None
 
     request = _fixture_world(monkeypatch, fake_prepare, lambda *args: None)
-    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
-    generator = fixture(request, None)
+    generator = _session_fixture(request)
 
     next(generator)
     staged = Path(seen["config_path"])
@@ -241,13 +253,12 @@ def test_a_successful_session_removes_the_staged_config_after_the_container_stop
     ("override", "expected_host"),
     [(None, "localhost"), ("192.0.2.10", "192.0.2.10")],
 )
-def test_the_fixture_builds_the_client_url_from_the_resolved_host(
+async def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
     override: str | None,
     expected_host: str,
 ) -> None:
-    from types import SimpleNamespace
-
     from ha_mcp import config
     from ha_mcp.client.websocket_client import websocket_manager
 
@@ -260,38 +271,35 @@ def test_the_fixture_builds_the_client_url_from_the_resolved_host(
     else:
         monkeypatch.setenv("HA_E2E_BASE_HOST", override)
 
-    # A client built before the session must not keep the stale URL: prime the
-    # settings cache and the connection pool with one, then let the fixture's
-    # real reset replace them. The TLS mode is pinned on both sides so an
-    # inherited HA_VERIFY_SSL=false cannot make the post-reset lookup miss the
-    # seeded entry and pass without the pool actually being cleared.
-    stale_url, stale_token = "http://stale.invalid:1", "stale-token"
-    monkeypatch.setenv("HA_VERIFY_SSL", "false")
-    stale = SimpleNamespace(homeassistant_url=stale_url, verify_ssl=True)
-    monkeypatch.setattr(config, "_settings", stale)
-    assert config.get_global_settings() is stale
-    # Replace the pool dicts instead of editing and restoring them by hand:
-    # Core's plugin gives every test a fresh event loop, so a pool carried into
-    # the next test would be bound to a loop that is already closed. The
-    # fixture clears whatever ``_clients`` it finds, and monkeypatch restores
-    # the original dicts untouched at teardown.
-    stale_client = object()
-    stale_key = websocket_manager._pool_key(stale_url, stale_token, True)[2]
-    monkeypatch.setattr(websocket_manager, "_clients", {stale_key: stale_client})
-    monkeypatch.setattr(websocket_manager, "_last_used", {stale_key: 0.0})
-    assert websocket_manager.pooled_client(stale_url, stale_token, True) is stale_client
+    # A client built before the session must not keep the previous Home
+    # Assistant's URL: the settings cache and a pooled, connected client both
+    # point at it until the fixture's real reset replaces them.
+    previous_url, previous_token = core_client.base_url, core_client.token
+    monkeypatch.setenv("HOMEASSISTANT_URL", previous_url)
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", previous_token)
+    config.reset_global_settings()
+    assert config.get_global_settings().homeassistant_url == previous_url
+    previous = await websocket_manager.get_client(
+        previous_url, previous_token, verify_ssl=False
+    )
+    assert websocket_manager.pooled_client(previous_url, previous_token, False) is (
+        previous
+    )
 
-    fixture = e2e_conftest.ha_container_with_fresh_config.__wrapped__
-    generator = fixture(request, None)
+    generator = _session_fixture(request)
     try:
         info = next(generator)
         assert info["base_url"] == f"http://{expected_host}:32768"
         assert os.environ["HOMEASSISTANT_URL"] == info["base_url"]
         assert config.get_global_settings().homeassistant_url == info["base_url"]
         # The next lookup must build a client for the session URL rather than
-        # reuse the pooled one that points at the stale address.
-        assert websocket_manager.pooled_client(stale_url, stale_token, True) is None
+        # reuse the pooled one that points at the previous address.
+        assert (
+            websocket_manager.pooled_client(previous_url, previous_token, False) is None
+        )
     finally:
         generator.close()
         for finalizer in request.finalizers:
             finalizer()
+        await previous.disconnect()
+        config.reset_global_settings()

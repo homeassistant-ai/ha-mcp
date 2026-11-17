@@ -38,6 +38,7 @@ _TOPOLOGY_PATH = (
 
 def _load_topology():
     spec = importlib.util.spec_from_file_location("e2e_topology", _TOPOLOGY_PATH)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -141,7 +142,7 @@ def test_requires_component_surface_skips_only_without_the_surface() -> None:
             self.markers.append(marker)
 
     marker = object()
-    apply = _conftest_collection._apply_requires_component_surface_skip
+    apply = _conftest_collection.apply_requires_component_surface_skip
 
     absent = Item(gated=True)
     apply(absent, False, marker)

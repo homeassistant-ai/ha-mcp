@@ -291,7 +291,7 @@ def _download_hacs_frontend(frontend_dir: Path) -> None:
         logger.warning("HACS tests may be skipped without the frontend")
 
 
-def _ensure_hacs_frontend(initial_state_path: Path) -> None:
+def ensure_hacs_frontend(initial_state_path: Path) -> None:
     """Download HACS frontend if not present.
 
     HACS requires the frontend (~51MB) to be present to fully initialize.
@@ -370,7 +370,7 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
             )
 
 
-def _install_custom_component(
+def install_custom_component(
     config_path: Path,
     component_src: Path,
     domain: str,
@@ -584,7 +584,7 @@ def _collect_manifest_requirements(
     env before HA boots: HA's runtime manifest-requirement-install does
     not reliably fire for config entries that the e2e fixture pre-injects
     via ``.storage/core.config_entries`` (the path
-    ``_install_custom_component`` takes), so an integration that imports
+    ``install_custom_component`` takes), so an integration that imports
     a third-party package at module load or in ``async_setup_entry``
     would otherwise hit ``ModuleNotFoundError`` and end up in
     ``state=setup_error``. Live evidence on PR #1268 ARM E2E

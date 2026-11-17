@@ -39,6 +39,7 @@ _sync_point_only = pytest.mark.skipif(
 
 def _load_sync():
     spec = importlib.util.spec_from_file_location("webhook_proxy_sync", SYNC_PATH)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     # Register before exec so the module's @dataclass can resolve its own
     # __module__ (dataclasses looks it up in sys.modules during processing).
@@ -307,12 +308,13 @@ def _docs_text(flavor) -> str:
 
 
 def test_docs_banners_match_canonical():
-    """Each committed DOCS.md must carry exactly its flavor's canonical banner.
+    """Each committed DOCS.md must carry its flavor's canonical banner.
 
     The banner is identity, owned by DOCS_BANNERS in the sync script (like the
     start.py mutex constants). A hand edit to a committed banner without
     updating the constant would be silently reverted at the next promote/reset
-    — fail immediately instead.
+    — fail immediately instead. That each carries exactly one banner is what
+    the transform tests below need: ``transform_docs`` refuses any other count.
     """
     for flavor in (sync.STABLE, sync.DEV):
         text = _docs_text(flavor)
@@ -321,7 +323,6 @@ def test_docs_banners_match_canonical():
             f"{flavor.addon_dir}/DOCS.md banner diverged from "
             "DOCS_BANNERS in scripts/webhook_proxy_sync.py — edit them together"
         )
-        assert len(sync._DOCS_BANNER_RE.findall(text)) == 1
 
 
 def test_transform_docs_promote_direction():

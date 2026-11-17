@@ -67,18 +67,18 @@ from ._conftest_haos import (
 )
 from ._conftest_knobs import resolve_base_host
 from ._conftest_readiness import (
-    _HA_CONTAINER_KEY,
+    HA_CONTAINER_KEY,
     pytest_runtest_makereport,  # noqa: F401  (pytest hook)
     pytest_sessionfinish,  # noqa: F401  (pytest hook)
     pytest_terminal_summary,  # noqa: F401  (pytest hook)
     pytest_testnodedown,  # noqa: F401  (pytest hook)
 )
 from ._conftest_testcontainer import (
-    _build_ha_testcontainer,
     _detect_docker_host,
-    _prepare_testcontainer_config,
     _reset_ha_in_process_caches,
-    _wait_for_testcontainer_ready,
+    build_ha_testcontainer,
+    prepare_testcontainer_config,
+    wait_for_testcontainer_ready,
 )
 
 # Import test utilities
@@ -249,18 +249,18 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
     # wheel name is captured here and consumed by the entrypoint preinstall below.
     embedded = _is_embedded_backend_selected()
     # The staged config can hold an injected GITHUB_TOKEN (see
-    # ``_prepare_testcontainer_config``), and staging itself can fail partway.
+    # ``prepare_testcontainer_config``), and staging itself can fail partway.
     # Create the directory here and register its removal first, so pytest
     # removes it however this fixture ends, setup failures included. The
     # finalizer also runs after the ``with container:`` block has stopped Home
     # Assistant, so the bind mount is released before the directory goes away.
     temp_dir = Path(tempfile.mkdtemp(prefix="ha_e2e_test_"))
     request.addfinalizer(partial(shutil.rmtree, temp_dir, ignore_errors=True))
-    config_path, local_blueprint, embedded_wheel_name = _prepare_testcontainer_config(
+    config_path, local_blueprint, embedded_wheel_name = prepare_testcontainer_config(
         embedded, temp_dir
     )
 
-    container = _build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
+    container = build_ha_testcontainer(config_path, embedded, embedded_wheel_name)
 
     with container:
         # Readiness-gate budgets for the testcontainer path. Defined at
@@ -328,7 +328,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
-        embedded_webhook_url = _wait_for_testcontainer_ready(
+        embedded_webhook_url = wait_for_testcontainer_ready(
             container,
             base_url,
             headers,
@@ -354,11 +354,11 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
             "embedded_webhook_url": embedded_webhook_url,
         }
 
-        request.config.stash[_HA_CONTAINER_KEY] = container
+        request.config.stash[HA_CONTAINER_KEY] = container
         try:
             yield container_info
         finally:
-            del request.config.stash[_HA_CONTAINER_KEY]
+            del request.config.stash[HA_CONTAINER_KEY]
             # Container cleanup runs via the enclosing ``with container:``
             # block's ``__exit__`` (calls ``stop()`` which removes the
             # container). With ``TESTCONTAINERS_RYUK_DISABLED=true`` set in
@@ -523,7 +523,7 @@ async def mcp_client(
         yield client
 
 
-def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, str]:
+def stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, str]:
     """Build the explicit environment for an installed ``ha-mcp`` process."""
     # StdioTransport's explicit env does not inherit the pytest process. Keep every
     # load-bearing setting here, including the env-file selector that prevents a
@@ -568,7 +568,7 @@ def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
         command="ha-mcp",
         # FastMCP expects an explicit empty list; omitting args changes its default.
         args=[],
-        env=_stdio_env(container_info, config_dir),
+        env=stdio_env(container_info, config_dir),
         # The fixture owns process lifetime and must run lifespan cancellation.
         keep_alive=False,
     )

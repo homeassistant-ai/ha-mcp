@@ -29,7 +29,7 @@ The policy this test enforces is the linked/unlinked split:
   constraint, the version HA's own requirement processing would pick.
 
 The snapshots come from the session container every embedded-lane test
-already boots (see ``_build_ha_testcontainer`` in ``_conftest_testcontainer``), so the
+already boots (see ``build_ha_testcontainer`` in ``_conftest_testcontainer``), so the
 guard also covers dependencies we don't declare directly — a transitive
 floor-bump into governed territory trips it the same way the old exact
 websockets pin would have.

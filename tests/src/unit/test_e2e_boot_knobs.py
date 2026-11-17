@@ -9,7 +9,7 @@ cache across runs, ``HA_E2E_READY_TIMEOUT`` raises the readiness budget.
 Both are opt-in, so the property that matters as much as "the knob works" is
 that an unset knob changes nothing: a lane with no environment set must build
 the same container it always did. The assertions below therefore go through
-``_build_ha_testcontainer`` and check the assembled mounts and entrypoint
+``build_ha_testcontainer`` and check the assembled mounts and entrypoint
 rather than the helpers' own return values. No Docker daemon is involved:
 ``DockerContainer`` builds its client on construction, so the client is
 replaced and the container only records configuration.
@@ -173,7 +173,7 @@ def test_unset_cache_knob_keeps_the_preinstall_ephemeral(tmp_path: Path) -> None
     """Stock behaviour: one /config mount, and pip caches nothing."""
     config = _config_dir(tmp_path, ["ruamel.yaml"])
 
-    container = _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
+    container = _conftest_testcontainer.build_ha_testcontainer(config, True, _WHEEL)
 
     assert _mount_targets(container) == {str(config): "/config"}
     # Both preinstalls — the component manifest requirements and the checkout
@@ -191,7 +191,7 @@ def test_a_mounted_pip_cache_is_used_by_every_preinstall(
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
 
-    container = _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
+    container = _conftest_testcontainer.build_ha_testcontainer(config, True, _WHEEL)
 
     # /root/.cache/pip is where pip inside the HA image resolves its cache: the
     # upstream image runs as root and sets neither PIP_CACHE_DIR nor
@@ -226,7 +226,7 @@ def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
 
     script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
+        _conftest_testcontainer.build_ha_testcontainer(config, True, _WHEEL)
     )
 
     claim = script.index("chown 0:0 /root/.cache/pip")
@@ -258,7 +258,7 @@ def test_a_failed_preinstall_still_hands_the_cache_back(
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
     script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+        _conftest_testcontainer.build_ha_testcontainer(config, False, None)
     )
 
     stub_bin, calls = _stub_container_tools(tmp_path, pip_status=3)
@@ -284,7 +284,7 @@ def test_a_successful_preinstall_still_boots_home_assistant(
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
     script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+        _conftest_testcontainer.build_ha_testcontainer(config, False, None)
     )
     stub_bin, calls = _stub_container_tools(tmp_path, pip_status=0)
     booted = tmp_path / "booted"
@@ -329,7 +329,7 @@ def test_the_plain_container_lane_gets_the_cache_without_the_wheel(
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
 
-    container = _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+    container = _conftest_testcontainer.build_ha_testcontainer(config, False, None)
 
     assert _mount_targets(container) == {
         str(config): "/config",

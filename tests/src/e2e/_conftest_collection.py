@@ -88,7 +88,7 @@ def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
         item.add_marker(skip_marker)
 
 
-def _apply_requires_component_surface_skip(
+def apply_requires_component_surface_skip(
     item: Any, available: bool, skip_marker: Any
 ) -> None:
     """Skip a ``requires_component_surface`` item on a lane without the surface.
@@ -292,7 +292,7 @@ def pytest_collection_modifyitems(session, config, items):
         _apply_no_tools_entry_skips(
             item, no_tools_entry, skip_requires_tools_entry, skip_no_tools_only
         )
-        _apply_requires_component_surface_skip(
+        apply_requires_component_surface_skip(
             item, component_surface, skip_requires_component_surface
         )
         # Deliberate: inserting the haos_tls dispatch above broke the old

@@ -60,7 +60,7 @@ from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS, SETTI
 from ha_mcp.tools.hacs_backend import STORE_APIS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
-from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
+from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, stdio_env
 from ...utilities.http_launcher import http_launcher_env, spawn_http_launcher
 from ...utilities.wait_helpers import wait_for_condition
 
@@ -224,7 +224,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
     # Use the same explicit environment as the stdio fixtures, plus this test's
     # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
     # would return the nudge early.
-    env = _stdio_env(container_info, tmp_path)
+    env = stdio_env(container_info, tmp_path)
     env[SETTING_ENV] = "true"  # The nudge is opt-in.
     transport = StdioTransport(command="ha-mcp", args=[], env=env, keep_alive=False)
     client = Client(transport)

@@ -2520,7 +2520,7 @@ def _wait_supervisor_update_done(
     head. ``/store/reload`` and ``/addons/{slug}/update`` are both
     SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
     first" / "No update available", #1594) if they fire while need_update is
-    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    still True. Mirror ``build_image.wait_supervisor_ready``: wait until
     update_available is false (and a version_latest is present, so a pre-fetch
     latest=None does not read as a false clear).
 

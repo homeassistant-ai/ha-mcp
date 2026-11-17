@@ -32,9 +32,11 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-if __package__:  # imported by the unit tests
+if TYPE_CHECKING:
+    from websockets.sync.client import ClientConnection
+if TYPE_CHECKING or __package__:  # imported by the unit tests (and mypy)
     from .dev_addon_tree import stage_dev_addon_tree
     from .python_base import copy_addon_tree
     from .supervisor_logs import log_supervisor_tail
@@ -296,7 +298,7 @@ def _run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=True, text=True, **kwargs)
 
 
-def _http(
+def http(
     method: str,
     url: str,
     *,
@@ -385,7 +387,7 @@ def _wait_any_port(
     raise TimeoutError(f"none of {host}:{list(ports)} opened within {timeout}s")
 
 
-def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
+def wait_http_ok(url: str, timeout: float = 300.0) -> None:
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
     while time.monotonic() < deadline:
@@ -533,7 +535,7 @@ def onboard(base_url: str) -> OAuthCredentials:
     not copy an OAuth access or refresh token value into the emitted qcow2.
     """
     LOG.info("Onboarding first user")
-    resp = _http(
+    resp = http(
         "POST",
         f"{base_url}/api/onboarding/users",
         body={
@@ -545,7 +547,7 @@ def onboard(base_url: str) -> OAuthCredentials:
         },
     )
     auth_code = resp["auth_code"]
-    token_resp = _http(
+    token_resp = http(
         "POST",
         f"{base_url}/auth/token",
         # /auth/token uses await request.post() — must be form-encoded.
@@ -592,14 +594,14 @@ class HAWebSocket:
             + "/api/websocket"
         )
         self._credentials = credentials
-        self._ws = None  # type: ignore[var-annotated]
+        self._ws: ClientConnection | None = None
         self._next_id = 0
 
     def __enter__(self) -> HAWebSocket:
-        self._connect()
+        self.connect()
         return self
 
-    def _connect(self, *, deadline: float | None = None) -> None:
+    def connect(self, *, deadline: float | None = None) -> None:
         """Open and authenticate a WebSocket within an optional deadline."""
         # Imported lazily so the module still imports on systems without the
         # websockets package (e.g. local lint without the build venv).
@@ -628,7 +630,7 @@ class HAWebSocket:
         if deadline is None:
             self._ws.send(auth_message)
         else:
-            self._send_with_deadline(
+            self.send_with_deadline(
                 auth_message,
                 deadline=deadline,
                 operation="WebSocket authentication send",
@@ -644,11 +646,12 @@ class HAWebSocket:
 
     def _recv_auth_frame(self, deadline: float | None) -> str | bytes:
         """Receive one authentication frame within an optional deadline."""
+        if self._ws is None:
+            raise ConnectionError("WebSocket is not connected for authentication")
         if deadline is None:
             return self._ws.recv()
-        return self._ws.recv(
-            timeout=_remaining_deadline_budget(deadline, "WebSocket authentication")
-        )
+        budget = _remaining_deadline_budget(deadline, "WebSocket authentication")
+        return self._ws.recv(timeout=budget)
 
     def __exit__(self, *_: object) -> None:
         if self._ws is not None:
@@ -657,7 +660,7 @@ class HAWebSocket:
             except (OSError, RuntimeError) as e:
                 LOG.debug("WS close error (already-closed or transport): %r", e)
 
-    def _refresh_access_token(self, *, timeout: float | None = None) -> None:
+    def refresh_access_token(self, *, timeout: float | None = None) -> None:
         """Exchange the refresh token before opening a replacement WebSocket."""
         form = {
             "client_id": self._base_url,
@@ -665,9 +668,9 @@ class HAWebSocket:
             "refresh_token": self._credentials.refresh_token,
         }
         if timeout is None:
-            token_resp = _http("POST", f"{self._base_url}/auth/token", form=form)
+            token_resp = http("POST", f"{self._base_url}/auth/token", form=form)
         else:
-            token_resp = _http(
+            token_resp = http(
                 "POST",
                 f"{self._base_url}/auth/token",
                 form=form,
@@ -695,7 +698,7 @@ class HAWebSocket:
         authentication, readiness probes, and backoff sleeps all share that
         absolute deadline.
 
-        ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
+        ``wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
         is up before we get here, but Core's WS layer can be accepting
         connections while the ``hassio`` integration is still loading —
         and the ``supervisor/api`` WS command is registered by that
@@ -718,19 +721,19 @@ class HAWebSocket:
             self._ws = None
         self._next_id = 0
         if deadline is None:
-            self._refresh_access_token()
-            self._connect()
-            self._wait_supervisor_api_ready()
+            self.refresh_access_token()
+            self.connect()
+            self.wait_supervisor_api_ready()
             return
-        self._refresh_access_token(
+        self.refresh_access_token(
             timeout=_remaining_deadline_budget(deadline, "OAuth token refresh")
         )
-        self._connect(deadline=deadline)
-        self._wait_supervisor_api_ready(
+        self.connect(deadline=deadline)
+        self.wait_supervisor_api_ready(
             timeout=_remaining_deadline_budget(deadline, "Supervisor API readiness")
         )
 
-    def _wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
+    def wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
         """Poll ``supervisor/api`` until Core's dispatcher accepts it.
 
         Probe with the cheapest read-only Supervisor endpoint
@@ -786,12 +789,7 @@ class HAWebSocket:
             f"within {timeout:.0f}s after Core restart (attempts={attempts})"
         ) from last_error
 
-    def _raise_unknown_send_outcome(
-        self,
-        connection: Any,
-        *,
-        operation: str,
-    ) -> None:
+    def _raise_unknown_send_outcome(self, connection: Any, *, operation: str) -> None:
         """Invalidate a socket after a timed-out send may have been dispatched."""
         try:
             connection.close_socket()
@@ -805,7 +803,7 @@ class HAWebSocket:
             "command outcome is unknown"
         )
 
-    def _send_with_deadline(
+    def send_with_deadline(
         self,
         message: str,
         *,
@@ -883,7 +881,7 @@ class HAWebSocket:
         if data is not None:
             msg["data"] = data
         message = json.dumps(msg)
-        self._send_with_deadline(
+        self.send_with_deadline(
             message,
             deadline=deadline,
             operation=f"supervisor/api {method} {endpoint} send",
@@ -1018,7 +1016,7 @@ def _reload_store(ws: HAWebSocket) -> None:
 _ADDON_INSTALL_RETRY_DELAY = 20.0
 
 # Transient errors while the Supervisor restarts to apply its self-update (see
-# _wait_supervisor_ready). Supervisor self-update restarts Supervisor, and Core
+# wait_supervisor_ready). Supervisor self-update restarts Supervisor, and Core
 # may return a structured WSCommandError OR drop the WS transport during that
 # restart window. websockets lives only in the build venv, so fold its drop
 # exception in lazily.
@@ -1264,7 +1262,7 @@ def _check_core_auth(base_url: str, token: str) -> None:
     we know auth itself is sound and can fail fast on it.
     """
     try:
-        cfg = _http("GET", f"{base_url}/api/config", token=token, timeout=10.0)
+        cfg = http("GET", f"{base_url}/api/config", token=token, timeout=10.0)
         LOG.info(
             "AUTH OK: /api/config version=%s state=%s",
             cfg.get("version"),
@@ -1276,7 +1274,7 @@ def _check_core_auth(base_url: str, token: str) -> None:
             "Auth middleware did not parse the bearer token — token exchange is broken."
         ) from e
     try:
-        states = _http("GET", f"{base_url}/api/states", token=token, timeout=10.0)
+        states = http("GET", f"{base_url}/api/states", token=token, timeout=10.0)
         LOG.info(
             "AUTH OK: /api/states returned %d entities",
             len(states) if isinstance(states, list) else 0,
@@ -1817,7 +1815,7 @@ def _supervisor_readiness_probe_budget(deadline: float, *, delay: bool) -> float
     return min(30.0, remaining)
 
 
-def _wait_supervisor_ready(
+def wait_supervisor_ready(
     ws: HAWebSocket,
     *,
     update_timeout: float = 600.0,
@@ -1913,7 +1911,7 @@ def _wait_supervisor_running(
     has finished its own boot sequence, which continues after Core answers its
     API and restarts after every Supervisor self-update. ``/supervisor/info``
     does not carry the state; the root ``/info`` does. Same transient handling
-    as ``_wait_supervisor_ready``.
+    as ``wait_supervisor_ready``.
     """
     deadline = time.monotonic() + timeout
     last_state: object = None
@@ -1952,7 +1950,7 @@ def _wait_supervisor_running(
     )
 
 
-def _wait_core_version(
+def wait_core_version(
     ws: HAWebSocket,
     expected_version: str,
     *,
@@ -2094,7 +2092,7 @@ def _apply_supervisor_image_update(
 
     while True:
         try:
-            _wait_supervisor_ready(
+            wait_supervisor_ready(
                 ws,
                 update_timeout=max(deadline - time.monotonic(), 0.0),
                 expected_channel=channel,
@@ -2176,8 +2174,8 @@ def _configure_core_image_variant(
     # Updating Core may close the transport after dispatch. Exact-version polling
     # establishes the outcome without blindly retrying an accepted request.
 
-    _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
-    _wait_core_version(ws, core_version, timeout=600.0)
+    wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
+    wait_core_version(ws, core_version, timeout=600.0)
     LOG.info("Requested Core installed: version=%s", core_version)
 
 
@@ -2232,7 +2230,7 @@ def _configure_supervisor_image_variant(
             timeout=timeout,
         )
 
-    if core_version is None:
+    if core_version is None or base_url is None:
         return
 
     _wait_supervisor_running(ws)
@@ -2327,7 +2325,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
 
     Also stages the in-repo ha_mcp_tools + mcp_proxy custom components and
     their config entries — the testcontainer dispatch installs them
-    dynamically via _install_custom_component, but on HAOS we bake them
+    dynamically via install_custom_component, but on HAOS we bake them
     directly into the image at this step so HA Core finds them on first
     boot. The in-process MCP server (#1527) is a second config entry of the
     ha_mcp_tools component, injected DISABLED via
@@ -2348,7 +2346,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
         shutil.copytree(initial_state_path, staging)
 
         # Inject custom components matched to what the testcontainer fixture
-        # installs via _install_custom_component in tests/src/e2e/_conftest_seed.py.
+        # installs via install_custom_component in tests/src/e2e/_conftest_seed.py.
         # Both are config_flow-only integrations, so HA won't pick them up
         # from YAML — a synthetic entry in .storage/core.config_entries is
         # how HA Core learns to set them up on boot.
@@ -2385,7 +2383,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
 
             # Inject a config entry so HA loads the integration on boot.
             # Shape matches the testcontainer path in _conftest_seed.py:
-            # _install_custom_component (entry_id, source=import, version=1).
+            # install_custom_component (entry_id, source=import, version=1).
             ce_path = staging / ".storage" / "core.config_entries"
             ce_data = json.loads(ce_path.read_text())
             # Shape guard: silently creating ``data.entries`` on a malformed
@@ -2547,7 +2545,7 @@ def install_addons(ws: HAWebSocket) -> dict[str, str]:
     Returns a mapping of addon display name → installed slug for downstream
     steps (e.g. canary tests that need to address a specific addon).
     """
-    _wait_supervisor_ready(ws)
+    wait_supervisor_ready(ws)
     _wait_supervisor_running(ws)
     _add_repository(ws, HA_MCP_ADDON_REPO)
     _reload_store(ws)
@@ -2581,7 +2579,7 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
         ws.supervisor_api("/core/restart", method="post", timeout=300.0)
     except ConnectionClosed:
         LOG.info("WS closed during core restart (expected)")
-    _wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
+    wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
     # Reconnect for any subsequent supervisor_api calls (e.g. stop_qemu).
     ws.reconnect()
 

@@ -14,23 +14,23 @@ logger = logging.getLogger(__name__)
 
 
 # Module-level collection of readiness-gate timings, per process. Workers
-# write to ``_READINESS_TIMINGS``; pytest_sessionfinish hands their lists
+# write to ``READINESS_TIMINGS``; pytest_sessionfinish hands their lists
 # to the master via xdist's ``workeroutput`` channel, and the master
-# aggregates into ``_ALL_READINESS_TIMINGS`` in pytest_testnodedown. The
+# aggregates into ``ALL_READINESS_TIMINGS`` in pytest_testnodedown. The
 # pytest_terminal_summary hook then renders the aggregate to the
 # master's terminalreporter, which writes outside the pytest-xdist
 # capture buffer (refs #366).
-_READINESS_TIMINGS: list[dict[str, Any]] = []
-_ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
+READINESS_TIMINGS: list[dict[str, Any]] = []
+ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 # Home Assistant logs taken when a non-fatal gate gives up, routed the same
 # way: a WARNING logged from a session fixture is shown only if the test that
 # set it up fails, so the session would otherwise carry on with no record.
-_READINESS_DIAGNOSTICS: list[str] = []
-_ALL_READINESS_DIAGNOSTICS: list[str] = []
+READINESS_DIAGNOSTICS: list[str] = []
+ALL_READINESS_DIAGNOSTICS: list[str] = []
 
 # The session's Home Assistant container on the testcontainer lanes, so a
 # failing test can attach the Home Assistant log from its own time window.
-_HA_CONTAINER_KEY = pytest.StashKey[DockerContainer]()
+HA_CONTAINER_KEY = pytest.StashKey[DockerContainer]()
 # Bounds the attached log when one fault fails many tests at once.
 _FAILED_TEST_LOG_TAIL = 200
 
@@ -44,7 +44,7 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     going through pytest's own reporting plumbing is the reliable path.
 
     The current ``core_state`` emission includes ``entries_loaded`` /
-    ``entries_total`` / ``snapshot_ok`` from ``_snapshot_config_entries``
+    ``entries_total`` / ``snapshot_ok`` from ``snapshot_config_entries``
     at the trip moment. ``pytest_terminal_summary`` warns when any
     ``snapshot_ok`` sample shows ``entries_loaded < entries_total`` —
     that drift means a slow integration finished ``async_setup_entry``
@@ -54,7 +54,7 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     ``CoreState.RUNNING`` check in the PR referencing #366
     (Ilya0527 2026-05-18 thread for the structural rationale).
     """
-    _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
+    READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
 
 def _container_log(container: DockerContainer, **log_kwargs: Any) -> str:
@@ -76,7 +76,7 @@ def pytest_runtest_makereport(
     # (a webhook 502 names the upstream error there and nowhere else).
     report = yield
     if report.when == "call" and report.failed:
-        container = item.config.stash.get(_HA_CONTAINER_KEY, None)
+        container = item.config.stash.get(HA_CONTAINER_KEY, None)
         if container is not None:
             report.sections.append(
                 (
@@ -97,10 +97,10 @@ def pytest_sessionfinish(session, exitstatus):
     list is read directly by ``pytest_terminal_summary`` instead.
     """
     workeroutput = getattr(session.config, "workeroutput", None)
-    if workeroutput is not None and _READINESS_TIMINGS:
-        workeroutput["readiness_timings"] = list(_READINESS_TIMINGS)
-    if workeroutput is not None and _READINESS_DIAGNOSTICS:
-        workeroutput["readiness_diagnostics"] = list(_READINESS_DIAGNOSTICS)
+    if workeroutput is not None and READINESS_TIMINGS:
+        workeroutput["readiness_timings"] = list(READINESS_TIMINGS)
+    if workeroutput is not None and READINESS_DIAGNOSTICS:
+        workeroutput["readiness_diagnostics"] = list(READINESS_DIAGNOSTICS)
 
 
 def pytest_testnodedown(node, error):
@@ -111,8 +111,8 @@ def pytest_testnodedown(node, error):
     record.
     """
     workeroutput = getattr(node, "workeroutput", {})
-    _ALL_READINESS_TIMINGS.extend(workeroutput.get("readiness_timings", []))
-    _ALL_READINESS_DIAGNOSTICS.extend(workeroutput.get("readiness_diagnostics", []))
+    ALL_READINESS_TIMINGS.extend(workeroutput.get("readiness_timings", []))
+    ALL_READINESS_DIAGNOSTICS.extend(workeroutput.get("readiness_diagnostics", []))
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -121,12 +121,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     Falls back to the local list when running without xdist (no
     ``pytest_testnodedown`` fires in that mode, so ``_ALL_*`` stays empty).
     """
-    diagnostics = _ALL_READINESS_DIAGNOSTICS or _READINESS_DIAGNOSTICS
+    diagnostics = ALL_READINESS_DIAGNOSTICS or READINESS_DIAGNOSTICS
     if diagnostics:
         terminalreporter.section("Readiness gate diagnostics")
         for dump in diagnostics:
             terminalreporter.write_line(dump)
-    timings = _ALL_READINESS_TIMINGS or _READINESS_TIMINGS
+    timings = ALL_READINESS_TIMINGS or READINESS_TIMINGS
     if not timings:
         return
     terminalreporter.section("Readiness gate timings")
@@ -205,7 +205,7 @@ def _wait_for_ha_api_ready(
     return False
 
 
-def _snapshot_config_entries(
+def snapshot_config_entries(
     base_url: str,
     headers: dict[str, str],
     *,
@@ -270,7 +270,7 @@ def _snapshot_config_entries(
 _ENTRIES_LOADED_TIMEOUT = 60
 
 
-def _wait_for_entries_loaded(
+def wait_for_entries_loaded(
     container: DockerContainer,
     base_url: str,
     headers: dict[str, str],
@@ -293,7 +293,7 @@ def _wait_for_entries_loaded(
     """
     start = time.monotonic()
     while True:
-        loaded, total, ok, unloaded = _snapshot_config_entries(base_url, headers)
+        loaded, total, ok, unloaded = snapshot_config_entries(base_url, headers)
         elapsed = time.monotonic() - start
         if ok and total > 0 and loaded >= total:
             _log_readiness_timing(
@@ -305,7 +305,7 @@ def _wait_for_entries_loaded(
             )
             return
         if elapsed >= timeout:
-            _READINESS_DIAGNOSTICS.append(
+            READINESS_DIAGNOSTICS.append(
                 f"entries_loaded gate timed out after {elapsed:.0f}s: "
                 f"{loaded}/{total} loaded"
                 + (f" (not loaded: {unloaded})" if unloaded else "")
@@ -357,7 +357,7 @@ def _wait_for_core_state_running(
     strictly imply ``sun.sun != "unknown"``.
 
     Also captures ``/api/config/config_entries/entry`` at the trip moment
-    via ``_snapshot_config_entries`` to emit ``entries_loaded`` /
+    via ``snapshot_config_entries`` to emit ``entries_loaded`` /
     ``entries_total`` alongside the success signal. The post-merge data
     window then verifies that ``RUNNING`` actually closes the race: any
     run where ``entries_loaded < entries_total`` at trip time means a
@@ -384,7 +384,7 @@ def _wait_for_core_state_running(
                 if state_value == "RUNNING":
                     elapsed = time.monotonic() - start_time
                     entries_loaded, entries_total, snapshot_ok, entries_unloaded = (
-                        _snapshot_config_entries(base_url, headers)
+                        snapshot_config_entries(base_url, headers)
                     )
                     logger.info(
                         f"🏃 CoreState.RUNNING after {elapsed:.1f}s "
@@ -416,7 +416,7 @@ def _wait_for_core_state_running(
     # by this point, so use a tight 2s timeout rather than the default 5s
     # to keep teardown responsive.
     entries_loaded, entries_total, snapshot_ok, entries_unloaded = (
-        _snapshot_config_entries(base_url, headers, timeout=2.0)
+        snapshot_config_entries(base_url, headers, timeout=2.0)
     )
     return (
         False,

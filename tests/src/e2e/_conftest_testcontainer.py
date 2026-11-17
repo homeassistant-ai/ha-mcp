@@ -37,18 +37,18 @@ from ._conftest_readiness import (
     _dump_ha_readiness_diagnostics,
     _log_readiness_timing,
     _wait_for_core_state_running,
-    _wait_for_entries_loaded,
     _wait_for_ha_api_ready,
+    wait_for_entries_loaded,
 )
 from ._conftest_seed import (
     _collect_manifest_requirements,
-    _ensure_hacs_frontend,
-    _install_custom_component,
     _refresh_recorder_timestamps,
     _seed_legacy_yaml_backups,
     _seed_non_yaml_package_file,
     _seed_yaml_package_scene,
     _setup_config_permissions,
+    ensure_hacs_frontend,
+    install_custom_component,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,7 +169,7 @@ def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
     }
 
 
-def _prepare_testcontainer_config(
+def prepare_testcontainer_config(
     embedded: bool, config_path: Path
 ) -> tuple[Path, dict, str | None]:
     """Stage the fresh HA config into ``config_path`` (custom components, seeds, recorder).
@@ -186,7 +186,7 @@ def _prepare_testcontainer_config(
         pytest.fail(f"Initial test state not found at {initial_state_path}")
 
     # Ensure HACS frontend is downloaded (if HACS is present)
-    _ensure_hacs_frontend(initial_state_path)
+    ensure_hacs_frontend(initial_state_path)
 
     # Copy all files from initial_test_state
     shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
@@ -205,7 +205,7 @@ def _prepare_testcontainer_config(
 
     # Install custom components from repo source
     repo_root = Path(__file__).parent.parent.parent.parent
-    if _install_custom_component(
+    if install_custom_component(
         config_path,
         repo_root / "homeassistant-addon-webhook-proxy" / "mcp_proxy",
         "mcp_proxy",
@@ -225,7 +225,7 @@ def _prepare_testcontainer_config(
     # component. The mcp_proxy install above is untouched either way.
     no_tools_entry = _is_no_tools_entry_selected()
     if not no_tools_entry or embedded:
-        _install_custom_component(
+        install_custom_component(
             config_path,
             repo_root / "custom_components" / "ha_mcp_tools",
             "ha_mcp_tools",
@@ -302,7 +302,7 @@ def _hand_back_pip_cache_command(container_dir: str) -> str:
     )
 
 
-def _build_ha_testcontainer(
+def build_ha_testcontainer(
     config_path: Path, embedded: bool, embedded_wheel_name: str | None
 ) -> DockerContainer:
     """Construct the HA DockerContainer with ports, mounts, and preinstall entrypoint."""
@@ -349,7 +349,7 @@ def _build_ha_testcontainer(
 
     # Pre-install custom-component manifest requirements into the HA
     # container's Python env before HA boots. HA's own runtime manifest-
-    # install does not reliably fire when ``_install_custom_component``
+    # install does not reliably fire when ``install_custom_component``
     # pre-injects a config entry via ``.storage/core.config_entries`` —
     # observed on PR #1268 ARM E2E (2026-05-12) where ``ruamel.yaml``
     # was never installed by HA on that run and the integration ended up
@@ -504,7 +504,7 @@ def _wait_for_testcontainer_sun(
         )
 
 
-def _wait_for_testcontainer_ready(
+def wait_for_testcontainer_ready(
     container: DockerContainer,
     base_url: str,
     headers: dict[str, str],
@@ -599,14 +599,14 @@ def _wait_for_testcontainer_ready(
     )
 
     # Follow-up gate: RUNNING does not imply every async_setup_entry finished
-    # (see _wait_for_entries_loaded). Skipped only when the trip-time snapshot
+    # (see wait_for_entries_loaded). Skipped only when the trip-time snapshot
     # POSITIVELY confirmed all-loaded — a failed snapshot (snapshot_ok=False)
     # says nothing about entry state, so it enters the gate too rather than
     # preserving the race behind a transient HTTP/JSON hiccup (Codex review
     # finding on #2040); the gate's own loop keeps polling through snapshot
     # failures and stays bounded by its timeout.
     if entries_unloaded or not snapshot_ok:
-        _wait_for_entries_loaded(container, base_url, headers)
+        wait_for_entries_loaded(container, base_url, headers)
 
     _wait_for_testcontainer_sun(base_url, headers, container, SUN_WAIT)
 
