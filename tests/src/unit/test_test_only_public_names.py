@@ -98,6 +98,59 @@ def test_the_module_state_the_tests_reset_is_exempt(
     assert guard.main(["--repo", str(tmp_path)]) == 0
 
 
+def _files(tmp_path: Path, files: dict[str, str]) -> Path:
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("files", "refused"),
+    [
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "def run(device):\n    device.probe()\n",
+            },
+            True,
+            id="unrelated-attribute-of-the-same-name",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "from . import a\n\na.probe()\n",
+            },
+            False,
+            id="called-through-its-module",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": '__all__ = ["probe"]\ndef probe():\n    pass\n'
+                'globals()["probe"]()\n',
+            },
+            False,
+            id="looked-up-by-a-string-it-also-exports",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/tools/a.py": "def probe():\n    pass\n",
+                "scripts/tool.py": "a = module_from_spec(spec)\na.probe()\n",
+            },
+            False,
+            id="called-through-a-module-a-script-loads-by-path",
+        ),
+    ],
+)
+def test_only_a_use_of_the_definition_itself_counts(
+    guard: ModuleType, tmp_path: Path, files: dict[str, str], refused: bool
+) -> None:
+    repo = _files(tmp_path, {**files, "tests/test_a.py": "from x import probe\n"})
+
+    assert guard.main(["--repo", str(repo)]) == (1 if refused else 0)
+
+
 def test_this_checkout_has_no_public_name_only_the_tests_use(
     guard: ModuleType,
 ) -> None:

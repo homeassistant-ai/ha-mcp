@@ -29,6 +29,7 @@ from ._haos_build_core import build_supervisor as build_supervisor
 from ._haos_build_core import haos as haos
 from ._haos_build_core import haos_booting as haos_booting
 from ._haos_build_core import target_app as target_app
+from ._ws_transport import until
 
 
 async def _assert_disconnected(haos: Haos, ws: HAWebSocket) -> None:
@@ -54,9 +55,20 @@ async def test_frames_skipped_while_waiting_spend_the_commands_receive_budget(
     haos.supervisor.answer("GET", "/info", root_info("running"))
     haos.supervisor.answer("GET", "/supervisor/info", supervisor_info())
     # The first command gives up before Supervisor answers; its result then
-    # arrives while the second command waits for its own.
-    haos.supervisor.when("GET", "/info", lambda: asyncio.sleep(0.5))
-    haos.supervisor.when("GET", "/supervisor/info", lambda: asyncio.sleep(1.5))
+    # arrives while the second command waits for its own, which Supervisor
+    # holds until the builder has received that late frame.
+    second_asked = asyncio.Event()
+    late_frame_received = threading.Event()
+
+    async def answer_once_the_second_command_waits() -> None:
+        await second_asked.wait()
+
+    async def answer_after_the_late_frame() -> None:
+        second_asked.set()
+        await until(late_frame_received.is_set)
+
+    haos.supervisor.when("GET", "/info", answer_once_the_second_command_waits)
+    haos.supervisor.when("GET", "/supervisor/info", answer_after_the_late_frame)
     ws = await haos.connected()
     real_send = ClientConnection.send
 
@@ -76,6 +88,7 @@ async def test_frames_skipped_while_waiting_spend_the_commands_receive_budget(
         timeouts.append(kwargs.get("timeout"))
         frame = real_recv(self, *args, **kwargs)
         haos.clock.advance(1.5)  # Receiving a frame takes time.
+        late_frame_received.set()
         return frame
 
     monkeypatch.setattr(ClientConnection, "recv", timed_recv)

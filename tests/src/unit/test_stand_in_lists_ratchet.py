@@ -47,7 +47,10 @@ disable_error_code = ["import-untyped"]
 module = ["tests.src.unit.test_old"]
 ignore_errors = true
 """
-_WORKFLOW = "run: uv run mypy tests/src/unit/ tests/addon/\n"
+_WORKFLOW = (
+    "jobs:\n  fast:\n    steps:\n"
+    "      - run: |\n          uv run mypy tests/src/unit/ tests/addon/\n"
+)
 
 _BASE = {
     _RULE_PATH: _RULE,
@@ -278,9 +281,35 @@ def _listed(rule: str, entry: str) -> str:
             id="settings-replaced-by-mypy-ini",
         ),
         pytest.param(
-            {".github/workflows/pr.yml": "run: uv run mypy src/\n"},
+            {
+                ".github/workflows/pr.yml": _WORKFLOW.replace(
+                    "tests/src/unit/ tests/addon/", "src/"
+                )
+            },
             "Fast Checks no longer runs `uv run mypy tests/src/unit/ tests/addon/`",
             id="tests-no-longer-type-checked",
+        ),
+        pytest.param(
+            {
+                ".github/workflows/pr.yml": _WORKFLOW.replace(
+                    "          uv run mypy", "          # uv run mypy"
+                )
+            },
+            "Fast Checks no longer runs `uv run mypy tests/src/unit/ tests/addon/`",
+            id="tests-type-check-commented-out",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": _PYPROJECT
+                + '\n[[tool.mypy.overrides]]\nmodule = ["*.unit.*"]\nignore_errors = true\n'
+            },
+            "mypy ignore_errors for the tests changed",
+            id="wildcard-override-reaches-the-tests",
+        ),
+        pytest.param(
+            {"pyproject.toml": '[tool.mypy]\nexclude = ["/unit/"]\n\n' + _PYPROJECT},
+            "mypy exclude gained '/unit/'",
+            id="test-directory-excluded-without-the-word-tests",
         ),
         pytest.param(
             {_RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', "")},

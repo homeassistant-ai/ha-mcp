@@ -38,16 +38,14 @@ def _greeting(repo: LocaleRepo) -> Any:
 
 
 class TestCallGeminiRetry:
-    def test_uses_current_model_without_deprecated_sampling_parameters(
-        self, repo: LocaleRepo
+    def test_uses_the_configured_model_without_deprecated_sampling_parameters(
+        self, repo: LocaleRepo, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("GEMINI_MODEL", "gemini-test-model")
         _replies(repo, _HALLO)
         assert repo.run().code == 0
         [request] = repo.engine.requests
-        assert request.url == (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-3.5-flash-lite:generateContent"
-        )
+        assert request.url.endswith("/models/gemini-test-model:generateContent")
         generation_config = request.body["generationConfig"]
         assert generation_config["response_mime_type"] == "application/json"
         assert {"temperature", "topP", "topK"}.isdisjoint(generation_config)

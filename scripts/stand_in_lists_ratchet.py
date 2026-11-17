@@ -45,10 +45,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import os
+import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -268,8 +271,41 @@ class _MypyState(NamedTuple):
     untyped: set[tuple[str, str]]
 
 
-def _mypy_state(text: str) -> _MypyState:
+def _test_paths(repo: Path) -> list[str]:
+    """The test files mypy checks, and their directories (``dir/``)."""
+    files = sorted(
+        path.relative_to(repo).as_posix()
+        for tree in ("tests/src/unit", "tests/addon")
+        for path in (repo / tree).rglob("*.py")
+    )
+    dirs = {f"{name.rsplit('/', 1)[0]}/" for name in files}
+    return [*files, *sorted(dirs)]
+
+
+def _covers(pattern: str, modules: Sequence[str]) -> bool:
+    """Whether a mypy override's module pattern applies to any of ``modules``."""
+    return any(
+        fnmatch.fnmatchcase(module, pattern)
+        or (pattern.endswith(".*") and module == pattern[:-2])
+        for module in modules
+    )
+
+
+def _excludes(pattern: str, paths: Sequence[str]) -> bool:
+    """Whether a mypy ``exclude`` regex skips any of ``paths``."""
+    try:
+        return any(re.search(pattern, path) for path in paths)
+    except re.error:
+        return True
+
+
+def _mypy_state(text: str, test_paths: Sequence[str] = ()) -> _MypyState:
     mypy = tomllib.loads(text).get("tool", {}).get("mypy", {})
+    test_modules = [
+        path.removesuffix(".py").replace("/", ".")
+        for path in test_paths
+        if path.endswith(".py")
+    ]
     exempt: set[str] = set()
     untyped: set[tuple[str, str]] = set()
     settings = {k: v for k, v in mypy.items() if k not in MYPY_NEUTRAL}
@@ -281,8 +317,15 @@ def _mypy_state(text: str) -> _MypyState:
             for m in modules
             if follow != "normal" and m.split(".")[0] in TYPED_FOR_TESTS
         )
-        if modules != ["tests.*"]:
-            exempt.update(m for m in modules if m == "tests" or m.startswith("tests."))
+        named = [m for m in modules if m == "tests" or m.startswith("tests.")]
+        if modules != ["tests.*"] and named:
+            exempt.update(named)
+            continue
+        # The ``tests.*`` override, or one whose pattern reaches a test module
+        # (``*.unit.*``), sets what mypy applies to the tests.
+        if modules != ["tests.*"] and not any(
+            _covers(m, test_modules) for m in modules
+        ):
             continue
         for key, value in override.items():
             if key in MYPY_GAINED_LOOSENS:
@@ -294,9 +337,31 @@ def _mypy_state(text: str) -> _MypyState:
     excluded = {
         pattern
         for pattern in ([exclude] if isinstance(exclude, str) else exclude)
-        if "tests" in pattern
+        if _excludes(pattern, test_paths)
     }
     return _MypyState(exempt, settings, excluded, untyped)
+
+
+def _runs_mypy_on_tests(workflow: Path) -> bool:
+    """Whether a step of ``workflow`` runs ``MYPY_ON_TESTS`` (not in a comment)."""
+    try:
+        data = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
+    except OSError, yaml.YAMLError:
+        return False
+    if not isinstance(data, dict) or not isinstance(data.get("jobs"), dict):
+        return False
+    scripts = [
+        str(step.get("run", ""))
+        for job in (data.get("jobs") or {}).values()
+        if isinstance(job, dict)
+        for step in job.get("steps") or []
+        if isinstance(step, dict)
+    ]
+    return any(
+        MYPY_ON_TESTS in line and not line.lstrip().startswith("#")
+        for script in scripts
+        for line in script.splitlines()
+    )
 
 
 def _loosened_settings(head: dict[str, Any], base: dict[str, Any]) -> list[str]:
@@ -329,8 +394,9 @@ def _loosened_settings(head: dict[str, Any], base: dict[str, Any]) -> list[str]:
 def _check_mypy(base: Base, repo: Path, problems: list[str]) -> None:
     """mypy checks every test as it did at the base, or more."""
     base_text = base.text(PYPROJECT)
-    head = _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8"))
-    at_base = _mypy_state(base_text or "")
+    test_paths = _test_paths(repo)
+    head = _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8"), test_paths)
+    at_base = _mypy_state(base_text or "", test_paths)
     problems.extend(
         f"{PYPROJECT}: mypy exclude gained {pattern!r}"
         for pattern in sorted(head.excluded - at_base.excluded)
@@ -353,8 +419,7 @@ def _check_mypy(base: Base, repo: Path, problems: list[str]) -> None:
         for name in MYPY_CONFIG_FILES
         if (repo / name).exists()
     )
-    workflow = repo / WORKFLOW
-    if not workflow.exists() or MYPY_ON_TESTS not in workflow.read_text("utf-8"):
+    if not _runs_mypy_on_tests(repo / WORKFLOW):
         problems.append(f"{WORKFLOW}: Fast Checks no longer runs `{MYPY_ON_TESTS}`")
 
 

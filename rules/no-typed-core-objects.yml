@@ -12,13 +12,22 @@ rule:
       - inside:
           kind: assert_statement
           stopBy: end
+      # A registry file Core loads at startup (``hass_storage[key] = ...``): the
+      # only way Core holds a row it would not create at runtime, such as an
+      # entity whose config entry is gone.
+      - inside:
+          kind: assignment
+          stopBy: end
+          has:
+            field: left
+            pattern: hass_storage[$KEY]
       # A trigger, condition or action of an automation or script config: what
       # a user writes, which also names entity_id and a state.
       - has:
           kind: pair
           has:
             field: key
-            regex: '^["''](condition|trigger|platform|service|action)["'']$'
+            regex: '^["''](condition|trigger|service|action)["'']$'
   any:
     # A state: it always carries its attributes or timestamps besides the
     # value (a scene's ``{"entity_id", "state"}`` entry is a user's config).

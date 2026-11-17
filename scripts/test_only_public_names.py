@@ -31,6 +31,7 @@ import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 PRODUCTION = ("src/ha_mcp", "custom_components", "scripts")
@@ -71,8 +72,9 @@ def _production(repo: Path) -> list[Path]:
     ]
 
 
-def _definitions(tree: ast.Module) -> Iterator[str]:
-    """The public names a module defines that the framework does not call."""
+def _definitions(tree: ast.Module) -> Iterator[tuple[str, bool]]:
+    """``(name, is_method)`` of the public names a module defines that the
+    framework does not call."""
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             # A config flow registers through its ``domain=`` class keyword.
@@ -80,17 +82,86 @@ def _definitions(tree: ast.Module) -> Iterator[str]:
                 keyword.arg == "domain" for keyword in node.keywords
             )
             if not node.decorator_list and not registered:
-                yield node.name
+                yield node.name, False
             if isinstance(node, ast.ClassDef) and not node.bases:
                 yield from (
-                    item.name
+                    (item.name, True)
                     for item in node.body
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and not item.decorator_list
                 )
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            yield from (t.id for t in targets if isinstance(t, ast.Name))
+            yield from ((t.id, False) for t in targets if isinstance(t, ast.Name))
+
+
+def _module_name(relative: str) -> str:
+    """The dotted name production imports ``relative`` by (``scripts`` is on
+    the path of the scripts that import each other)."""
+    stem = relative.removesuffix(".py").removesuffix("/__init__")
+    for root in ("src/", "scripts/"):
+        stem = stem.removeprefix(root)
+    return stem.replace("/", ".")
+
+
+class _Uses(NamedTuple):
+    # (module, name) a module reaches: imported from it, read as module.name,
+    # or read inside the module that defines it.
+    qualified: set[tuple[str, str]]
+    # Every attribute read: a method's receiver cannot be resolved statically.
+    attributes: set[str]
+    # Words in strings (``getattr``, registries), ``__all__`` entries aside.
+    strings: set[str]
+
+
+def _dotted(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and (value := _dotted(node.value)):
+        return f"{value}.{node.attr}"
+    return None
+
+
+def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
+    exported = {
+        id(elt)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
+        and isinstance(node.value, (ast.List, ast.Tuple))
+        for elt in node.value.elts
+    }
+    package = module if is_package else module.rpartition(".")[0]
+    aliases: dict[str, str] = {}
+    uses = _Uses(set(), set(), set())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                aliases[bound] = alias.name if alias.asname else bound
+        elif isinstance(node, ast.ImportFrom):
+            parts = package.split(".") if node.level else []
+            base = ".".join(
+                [*parts[: len(parts) - node.level + 1], *filter(None, [node.module])]
+            )
+            for alias in node.names:
+                uses.qualified.add((base, alias.name))
+                aliases[alias.asname or alias.name] = f"{base}.{alias.name}"
+        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
+            uses.qualified.add((module, node.id))
+        elif isinstance(node, ast.Attribute):
+            uses.attributes.add(node.attr)
+            if (owner := _dotted(node.value)) is not None:
+                head, _, rest = owner.partition(".")
+                target = ".".join(filter(None, [aliases.get(head, head), rest]))
+                uses.qualified.add((target, node.attr))
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in exported
+        ):
+            uses.strings.update(WORD.findall(node.value))
+    return uses
 
 
 def _words(paths: list[Path]) -> set[str]:
@@ -103,55 +174,39 @@ def _words(paths: list[Path]) -> set[str]:
     return words
 
 
-def _named(tree: ast.Module) -> set[str]:
-    """Every name a module reads, imports or holds in a string."""
-    listed = {
-        elt.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
-        and isinstance(node.value, (ast.List, ast.Tuple))
-        for elt in node.value.elts
-        if isinstance(elt, ast.Constant)
-    }
-    named: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
-            named.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            named.add(node.attr)
-        elif isinstance(node, ast.alias):
-            named.add((node.asname or node.name).split(".")[-1])
-            named.add(node.name.split(".")[-1])
-        elif (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value not in listed
-        ):
-            named |= set(WORD.findall(node.value))
-    return named
-
-
 def test_only_names(repo: Path) -> list[str]:
     """``path:name`` of every public name only the tests use, EXEMPT aside."""
     trees = {
-        path: ast.parse(path.read_text(encoding="utf-8")) for path in _production(repo)
+        path.relative_to(repo).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
+        for path in _production(repo)
     }
-    used: set[str] = set().union(*map(_named, trees.values()))
-    used |= _words(
-        [
-            path
-            for pattern in NON_PYTHON
-            for path in repo.glob(pattern)
-            if ".venv" not in path.parts and "node_modules" not in path.parts
-        ]
+    uses = _Uses(set(), set(), set())
+    for relative, tree in trees.items():
+        mod = _uses(tree, _module_name(relative), relative.endswith("/__init__.py"))
+        uses.qualified.update(mod.qualified)
+        uses.attributes.update(mod.attributes)
+        uses.strings.update(mod.strings)
+    uses.strings.update(
+        _words(
+            [
+                path
+                for pattern in NON_PYTHON
+                for path in repo.glob(pattern)
+                if ".venv" not in path.parts and "node_modules" not in path.parts
+            ]
+        )
     )
     tested = _words(sorted((repo / "tests").rglob("*.py")))
     found = []
-    for path, tree in trees.items():
-        relative = path.relative_to(repo).as_posix()
-        for name in _definitions(tree):
-            if name.startswith("_") or HA_HOOK.match(name) or name in used:
+    for relative, tree in trees.items():
+        module = _module_name(relative)
+        for name, is_method in _definitions(tree):
+            if name.startswith("_") or HA_HOOK.match(name) or name in uses.strings:
+                continue
+            # A script loads a module by its file path and names it after the
+            # file (``tool_hints = module_from_spec(...)``).
+            reached = {(module, name), (module.rpartition(".")[2], name)}
+            if reached & uses.qualified or (is_method and name in uses.attributes):
                 continue
             if name in tested and f"{relative}:{name}" not in EXEMPT:
                 found.append(f"{relative}:{name}")

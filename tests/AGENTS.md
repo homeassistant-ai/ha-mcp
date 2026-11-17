@@ -228,8 +228,9 @@ Core state, entity or device registry row, or config entry, and the twelfth
 (`rules/no-typed-core-frames.yml`) one shaped like a frame Core sends over its
 WebSocket (a result, the login handshake, an event): set Core up and read it
 back, or let Core send it. A dict in an assert (what our code or Core is
-expected to return) and a user's automation, script or scene config are not
-refused. Neither has a list.
+expected to return), a user's automation, script or scene config, and a
+registry file Core loads at startup (`hass_storage[key] = ...`, the only way
+Core holds a row it refuses at runtime) are not refused. Neither has a list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,

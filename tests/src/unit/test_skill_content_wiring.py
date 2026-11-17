@@ -353,26 +353,27 @@ def _emit_file_refs() -> list[str]:
     return refs
 
 
-def _canonical_files_mappings() -> list[tuple[str, str]]:
+def _canonical_files_mappings() -> list[tuple[str, str, str]]:
     """Statically extract every canonical-file mapping (a ``*_SKILL_FILES``
-    tuple) from the 6 write tools and the modules split out of them."""
-    module_files = [
-        name
-        for module_file, _ in WRITE_TOOLS
-        for name in (module_file, *_ATTACH_SIBLING_MODULES.get(module_file, ()))
-    ]
-    out: list[tuple[str, str]] = []
-    for module_file in module_files:
-        tree = ast.parse((TOOLS_DIR / module_file).read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                name = node.target.id
-                if name.endswith("_SKILL_FILES") and isinstance(node.value, ast.Tuple):
-                    out.extend(
-                        (name, elt.value)
-                        for elt in node.value.elts
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                    )
+    tuple) from the 6 write tools and the modules split out of them, as
+    ``(tool, mapping name, file ref)``."""
+    out: list[tuple[str, str, str]] = []
+    for tool_module, tool in WRITE_TOOLS:
+        for module_file in (tool_module, *_ATTACH_SIBLING_MODULES.get(tool_module, ())):
+            tree = ast.parse((TOOLS_DIR / module_file).read_text())
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id.endswith("_SKILL_FILES")
+                    and isinstance(node.value, ast.Tuple)
+                ):
+                    continue
+                out.extend(
+                    (tool, node.target.id, elt.value)
+                    for elt in node.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                )
     return out
 
 
@@ -428,10 +429,14 @@ def test_anchor_scan_covers_every_ref_a_warning_embeds(config: dict) -> None:
 def test_the_canonical_file_scan_finds_a_mapping_for_every_write_tool() -> None:
     """A mapping renamed away from ``*_SKILL_FILES`` would drop out of the
     existence check below without failing it."""
-    assert len({name for name, _ in _canonical_files_mappings()}) == len(WRITE_TOOLS)
+    mapped = {tool for tool, _, _ in _canonical_files_mappings()}
+    assert mapped == {tool for _, tool in WRITE_TOOLS}
 
 
-@pytest.mark.parametrize(("mapping_name", "file_ref"), _canonical_files_mappings())
+@pytest.mark.parametrize(
+    ("mapping_name", "file_ref"),
+    [(name, ref) for _, name, ref in _canonical_files_mappings()],
+)
 def test_every_canonical_skill_file_exists(mapping_name: str, file_ref: str) -> None:
     """Every per-tool canonical skill file must exist in the real submodule.
 

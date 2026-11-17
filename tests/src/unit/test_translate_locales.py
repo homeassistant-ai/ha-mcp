@@ -94,7 +94,7 @@ class TestValidate:
 
     @pytest.mark.parametrize("bad", ["", "   ", None, 42])
     def test_rejects_empty_and_non_string(self, repo: LocaleRepo, bad: object) -> None:
-        assert _translate(repo, "Hello {name}", bad) is None
+        assert _translate(repo, "Hello", bad) is None
 
     @pytest.mark.parametrize(
         ("english", "translated", "accepted"),
