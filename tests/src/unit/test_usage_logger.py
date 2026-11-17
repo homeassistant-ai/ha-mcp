@@ -239,6 +239,24 @@ def test_shutdown_wakes_the_idle_writer_at_once(
     assert not writer.is_alive()
 
 
+def test_calls_logged_just_before_shutdown_reach_the_disk(tmp_path: Path) -> None:
+    """The writer used to stop at the stop flag with entries still queued, so
+    the calls a server made just before stopping never reached the usage log
+    that bug reports read."""
+    log_path = tmp_path / "usage.jsonl"
+    logger = UsageLogger(str(log_path))
+    for n in range(20):
+        logger.log_tool_usage(
+            tool_name=f"ha_tool_{n}", parameters={}, execution_time_ms=1.0, success=True
+        )
+    logger.shutdown()
+
+    written = [
+        json.loads(line)["tool_name"] for line in log_path.read_text().splitlines()
+    ]
+    assert written == [f"ha_tool_{n}" for n in range(20)]
+
+
 class TestUsageLoggerConstants:
     """Test constants are properly defined."""
 
@@ -508,7 +526,7 @@ class TestParameterRedaction:
                 execution_time_ms=10.0,
                 success=True,
             )
-            logger.log_queue.join()
+            _drain(logger)
         finally:
             logger.shutdown()
 
@@ -527,7 +545,17 @@ def _log_one(logger: UsageLogger, tool_name: str = "ha_get_state") -> None:
         execution_time_ms=1.0,
         success=True,
     )
-    logger.log_queue.join()
+    _drain(logger)
+
+
+def _drain(logger: UsageLogger) -> None:
+    """Wait until the disk writer has handled every queued entry; a writer that
+    stops taking entries fails here instead of hanging the test."""
+    deadline = time.monotonic() + 3
+    while logger.log_queue.unfinished_tasks:
+        if time.monotonic() > deadline:
+            pytest.fail("the usage log writer did not handle the queued entries")
+        time.sleep(0.01)
 
 
 def _disk_disabled_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -754,7 +782,7 @@ class TestLogPathControlledByOthers:
                     execution_time_ms=1.0,
                     success=True,
                 )
-            logger.log_queue.join()
+            _drain(logger)
         finally:
             logger.shutdown()
         [warning] = _disk_disabled_warnings(caplog)
