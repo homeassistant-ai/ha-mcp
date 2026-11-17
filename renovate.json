@@ -61,7 +61,7 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
-      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py, and the vendored fastmcp rule regenerates the FastMCP / MCP SDK trees with scripts/vendor_fastmcp.py, before committing; drift, manifest, and API tests remain merge gates.",
+      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py, and the vendored fastmcp rule regenerates the FastMCP / MCP SDK trees with scripts/vendor_fastmcp.py (run through uv for packaging), before committing; drift, manifest, and API tests remain merge gates.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/ha_mcp/_vendor/requirements\\.txt$/"
@@ -162,7 +162,7 @@
       }
     },
     {
-      "description": "Regenerate the private FastMCP / MCP SDK trees with their pins; grouped because mcp pins mcp-types exactly. The generator also raises the pyproject.toml floors the new versions need, and uv lock re-locks for them, so the published package makes Home Assistant upgrade a dependency the vendored code outgrew.",
+      "description": "Regenerate the private FastMCP / MCP SDK trees with their pins; grouped because mcp pins mcp-types exactly. The generator also raises the pyproject.toml floors the new versions need, and uv lock re-locks for them, so the published package makes Home Assistant upgrade a dependency the vendored code outgrew. Python 3.14.2 because uv lock resolves the dev group's homeassistant, which requires it.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -183,7 +183,7 @@
       },
       "postUpgradeTasks": {
         "commands": [
-          "python3 -I scripts/vendor_fastmcp.py",
+          "uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py",
           "uv lock"
         ],
         "fileFilters": [

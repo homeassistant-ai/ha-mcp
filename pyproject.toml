@@ -28,8 +28,8 @@ classifiers = [
 
 dependencies = [
     # fastmcp/mcp/mcp-types are vendored (scripts/vendor_fastmcp.py) so HA
-    # Core's own mcp 1.x pin can't conflict. Below: their runtime requirements,
-    # whose floors that script raises when a vendored bump needs it.
+    # Core's own mcp 1.x pin can't conflict. Below: their runtime requirements.
+    # That script raises any floor in this array a vendored bump needs.
     "anyio>=4.10",
     "authlib>=1.6.11",
     "certifi>=2026.10.19",
@@ -65,6 +65,8 @@ dependencies = [
     # uv.lock selects standalone versions; HA's own constraints select
     # the embedded versions. Check both the HACS minimum and current Core
     # before raising these floors; standalone lock updates can move independently.
+    # A vendored bump can raise them automatically; Fast Checks' Core constraint
+    # check then fails one that excludes a version either Core pins exactly.
     "httpx[socks]>=0.28.1,<0.29",
     "pydantic[email]>=2.13.4,<3",
     "python-dotenv>=1.2.4,<2",

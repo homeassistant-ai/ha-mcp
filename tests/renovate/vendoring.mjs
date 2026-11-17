@@ -41,13 +41,14 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encodi
 const fixturePython = '3.14.2';
 
 async function exercise({
-  script, depName, pins, bumped, vendorDirs, extraFiles, seedFiles = {}, followUp = [], check,
+  script, command = `python3 -I scripts/${script}`, depName, pins, bumped, vendorDirs, extraFiles,
+  seedFiles = {}, followUp = [], check,
 }) {
   const dependency = {
     depName, packageName: depName, datasource: 'pypi', manager: 'custom.regex', packageFile: pinFile,
   };
   const matched = await applyPackageRules({ ...getConfig(), ...repository, ...dependency });
-  assert.deepEqual(matched.postUpgradeTasks.commands, [`python3 -I scripts/${script}`, ...followUp],
+  assert.deepEqual(matched.postUpgradeTasks.commands, [command, ...followUp],
     `${depName} updates must regenerate source with ${script}`);
   for (const other of [
     { ...dependency, packageFile: 'other/requirements.txt' },
@@ -130,9 +131,10 @@ async function exercise({
       assert.equal(createHash('sha256').update(readFileSync(join(localDir, dir, path))).digest('hex'), digest);
     }
   }
-  assert.ok([...artifacts.keys()].every((path) => vendorDirs.some((dir) => path.startsWith(`${dir}/`))
-    || matched.postUpgradeTasks.fileFilters.includes(path)),
-  'Only vendored outputs and the files the rule names belong in the generated artifacts');
+  const isAllowedArtifact = (path) => vendorDirs.some((dir) => path.startsWith(`${dir}/`))
+    || matched.postUpgradeTasks.fileFilters.includes(path);
+  assert.ok([...artifacts.keys()].every(isAllowedArtifact),
+    'Only vendored outputs and the files the rule names belong in the generated artifacts');
   check(localDir, artifacts);
 
   // A failed regeneration must stay visible, not silently accept a pin-only bump.
@@ -168,6 +170,7 @@ dependencies = [
 
 await exercise({
   script: 'vendor_fastmcp.py',
+  command: 'uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py',
   depName: 'fastmcp-slim',
   pins: 'fastmcp-slim==4.0.2\nmcp==2.2.0\nmcp-types==2.2.0\n',
   bumped: {

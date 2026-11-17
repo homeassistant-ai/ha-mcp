@@ -7,11 +7,11 @@ by absolute name, so every such import is rewritten to the vendored path.
 
 Pins live in ``src/ha_mcp/_vendor/requirements.txt``; Renovate runs this script
 on a bump and ``tests/src/unit/test_vendored_fastmcp.py`` rejects drift. The
-sync also raises the ``pyproject.toml`` floors the new versions need; Renovate
-re-locks afterwards.
+sync also raises the ``pyproject.toml`` floors the new versions need, so run
+``uv lock`` afterwards (Renovate does).
 
 Usage:
-    python scripts/vendor_fastmcp.py
+    uv run --no-project --with packaging python scripts/vendor_fastmcp.py
 """
 
 from __future__ import annotations
@@ -23,10 +23,16 @@ import json
 import re
 import shutil
 import sys
+import tomllib
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _VENDOR_DIR = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
@@ -279,108 +285,135 @@ def runtime_requirements(wheel_payload: bytes, extras: tuple[str, ...]) -> list[
     return sorted(dict.fromkeys(requirements))
 
 
-_PROJECT_DEPENDENCIES_RE = re.compile(
-    r"^\[project\]$.*?^dependencies = \[$(?P<body>.*?)^\]$", re.MULTILINE | re.DOTALL
+_DEPENDENCIES_ARRAY_RE = re.compile(
+    r"^dependencies = \[$(?P<body>.*?)^\]$", re.MULTILINE | re.DOTALL
 )
-_REQUIREMENT_RE = re.compile(
-    r"\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?"
-    r"(?P<specs>[^;]*)(?:;.*)?",
-    re.DOTALL,
-)
-_SPECIFIER_RE = re.compile(r"(===|==|!=|~=|>=|<=|>|<)\s*(\S+)")
+_PYTHON_CLASSIFIER = "Programming Language :: Python :: "
+# sys_platform -> (platform_system, os_name) for the desktop/server platforms.
+_PLATFORMS = {
+    "linux": ("Linux", "posix"),
+    "darwin": ("Darwin", "posix"),
+    "win32": ("Windows", "nt"),
+}
 
 
-def _release(version: str) -> tuple[int, ...] | None:
-    """Comparable release segments of a plain ``X.Y.Z`` version, else None."""
-    if not re.fullmatch(r"\d+(?:\.\d+)*", version):
-        return None
-    parts = [int(part) for part in version.split(".")]
-    while parts and parts[-1] == 0:
-        parts.pop()
-    return tuple(parts)
+def _supported_environments(pyproject: str) -> list[dict[str, str]]:
+    """Marker environments for every supported Python on every platform."""
+    classifiers = tomllib.loads(pyproject)["project"].get("classifiers", [])
+    pythons = [
+        c.removeprefix(_PYTHON_CLASSIFIER)
+        for c in classifiers
+        if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
+    ]
+    return [
+        {
+            "python_version": python,
+            "python_full_version": f"{python}.0",
+            "sys_platform": sys_platform,
+            "platform_system": system,
+            "os_name": os_name,
+        }
+        for python in pythons
+        for sys_platform, (system, os_name) in _PLATFORMS.items()
+    ]
 
 
-def _specifiers(specs: str) -> list[tuple[str, str]] | None:
-    parsed: list[tuple[str, str]] = []
-    for raw in filter(None, (s.strip() for s in specs.split(","))):
-        if (match := _SPECIFIER_RE.fullmatch(raw)) is None:
-            return None
-        parsed.append((match.group(1), match.group(2)))
-    return parsed
+def _needed_floors(
+    requirements: list[str], environments: list[dict[str, str]]
+) -> dict[str, Version]:
+    """Highest ``>=`` floor per package among requirements ha-mcp can meet.
 
-
-def _needed_floors(requirements: list[str]) -> dict[str, str]:
-    floors: dict[str, str] = {}
-    for requirement in requirements:
-        match = _REQUIREMENT_RE.fullmatch(requirement)
-        if match is None:
+    A requirement whose marker matches no supported environment never applies,
+    so it raises nothing.
+    """
+    floors: dict[str, Version] = {}
+    for line in requirements:
+        requirement = Requirement(line)
+        if requirement.marker is not None and not any(
+            requirement.marker.evaluate(environment) for environment in environments
+        ):
             continue
-        name = canonical(match.group("name"))
-        for operator, version in _specifiers(match.group("specs")) or []:
-            release = _release(version)
-            if operator != ">=" or release is None:
-                continue
-            current = floors.get(name)
-            if current is None or release > (_release(current) or ()):
-                floors[name] = version
+        name = canonicalize_name(requirement.name)
+        for specifier in requirement.specifier:
+            if specifier.operator == ">=":
+                version = Version(specifier.version)
+                if name not in floors or version > floors[name]:
+                    floors[name] = version
     return floors
 
 
-def _raise_floor(entry: str, floors: dict[str, str]) -> str:
+def _declared_floor(requirement: Requirement) -> Version | None:
+    versions = [
+        Version(s.version)
+        for s in requirement.specifier
+        if s.operator in {">=", ">", "==", "~="}
+    ]
+    return max(versions, default=None)
+
+
+def _raise_floor(entry: str, floors: dict[str, Version]) -> tuple[str, str | None]:
     """``entry`` with its ``>=`` floor raised to the vendored packages' need.
 
-    Only a ``>=`` floor below the need, under a ceiling that still admits it,
-    is raised. Anything else (an exact pin, a ceiling the need passes, an
-    unparsed version) is left for test_vendored_fastmcp.py to report.
+    Returns the entry and a note on what happened, or None when the entry
+    already meets the need. Only a single ``>=`` floor is raised, and only
+    when the entry's other specifiers still admit the need; any other entry
+    is reported and left for test_vendored_fastmcp.py to fail on.
     """
-    match = _REQUIREMENT_RE.fullmatch(entry)
-    needed = floors.get(canonical(match.group("name"))) if match else None
-    specifiers = _specifiers(match.group("specs")) if match else None
-    if match is None or needed is None or specifiers is None:
-        return entry
-    target = _release(needed)
-    lows = [version for operator, version in specifiers if operator == ">="]
-    if (
-        target is None
-        or len(lows) != 1
-        or any(op not in {">=", "<", "<=", "!="} for op, _ in specifiers)
-    ):
-        return entry
-    low = _release(lows[0])
-    if low is None or low >= target:
-        return entry
-    for operator, version in specifiers:
-        if operator in {"<", "<="}:
-            top = _release(version)
-            if top is None or target > top or (operator == "<" and target == top):
-                return entry
+    requirement = Requirement(entry)
+    target = floors.get(canonicalize_name(requirement.name))
+    declared = _declared_floor(requirement)
+    if target is None or (declared is not None and declared >= target):
+        return entry, None
+    lows = [s for s in requirement.specifier if s.operator == ">="]
+    others = [s for s in requirement.specifier if s.operator != ">="]
+    raised_specifiers = SpecifierSet(
+        ",".join([*(str(s) for s in others), f">={target}"])
+    )
+    if len(lows) != 1 or not raised_specifiers.contains(target, prereleases=True):
+        return entry, f"left {entry!r} alone: the vendored packages need >={target}"
+    specs, separator, marker = entry.partition(";")
     specs = re.sub(
-        rf">=\s*{re.escape(lows[0])}(?![\w.])",
-        f">={needed}",
-        match.group("specs"),
+        rf">=\s*{re.escape(lows[0].version)}(?![\w.+!-])",
+        f">={target}",
+        specs,
         count=1,
     )
-    return entry[: match.start("specs")] + specs + entry[match.end("specs") :]
+    raised = specs + separator + marker
+    return raised, f"raised {entry!r} to {raised!r}"
 
 
-def raise_dependency_floors(pyproject: str, requirements: list[str]) -> str:
-    """Raise ``[project].dependencies`` floors the vendored packages outgrew.
+def raise_dependency_floors(
+    pyproject: str, requirements: list[str]
+) -> tuple[str, list[str]]:
+    """Raise the ``[project].dependencies`` floors the vendored packages outgrew.
 
     ha-mcp declares the vendored packages' requirements itself, and an install
     into Home Assistant keeps any version that meets the published floor, so a
-    floor left behind keeps the older release installed.
+    floor left behind keeps the older release installed. Returns the new text
+    and one note per entry raised or left alone.
     """
-    match = _PROJECT_DEPENDENCIES_RE.search(pyproject)
+    header = re.search(r"^\[project\][ \t]*$", pyproject, re.MULTILINE)
+    match = None
+    if header is not None:
+        following = re.compile(r"^\[", re.MULTILINE).search(pyproject, header.end())
+        section_end = following.start() if following else len(pyproject)
+        match = _DEPENDENCIES_ARRAY_RE.search(pyproject, header.end(), section_end)
     if match is None:
         raise SystemExit("no [project] dependencies array in pyproject.toml")
-    floors = _needed_floors(requirements)
+    floors = _needed_floors(requirements, _supported_environments(pyproject))
+    notes: list[str] = []
+
+    def rewrite(entry: re.Match[str]) -> str:
+        raised, note = _raise_floor(entry.group(2), floors)
+        if note is not None:
+            notes.append(note)
+        return entry.group(1) + raised + entry.group(3)
+
     body = re.sub(
-        r'^(\s*")([^"]+)(")',
-        lambda m: m.group(1) + _raise_floor(m.group(2), floors) + m.group(3),
-        match.group("body"),
-        flags=re.MULTILINE,
+        r'^(\s*")([^"]+)(")', rewrite, match.group("body"), flags=re.MULTILINE
     )
-    return pyproject[: match.start("body")] + body + pyproject[match.end("body") :]
+    text = pyproject[: match.start("body")] + body + pyproject[match.end("body") :]
+    return text, notes
 
 
 def _download(url: str) -> bytes:
@@ -498,22 +531,6 @@ def _promote(staged: dict[Path, Path]) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def _sync_pyproject(vendor_dir: Path, pyproject: Path) -> None:
-    requirements = [
-        line
-        for spec in PACKAGES
-        for line in (vendor_dir / spec.package / REQUIRES_NAME)
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip()
-    ]
-    current = pyproject.read_text(encoding="utf-8")
-    raised = raise_dependency_floors(current, requirements)
-    if raised != current:
-        pyproject.write_text(raised, encoding="utf-8", newline="\n")
-        print(f"raised dependency floors in {pyproject.name}")
-
-
 def main(vendor_dir: Path = _VENDOR_DIR, pyproject: Path = _PYPROJECT) -> int:
     pins = read_pins(vendor_dir / "requirements.txt")
     staged: dict[Path, Path] = {}
@@ -536,12 +553,21 @@ def main(vendor_dir: Path = _VENDOR_DIR, pyproject: Path = _PYPROJECT) -> int:
             counts[spec.package] = stage_package(
                 spec, wheel, license_text, pins, staging
             )
+        requirements: list[str] = []
+        for tree in staged.values():
+            text = (tree / REQUIRES_NAME).read_text(encoding="utf-8")
+            requirements.extend(line for line in text.splitlines() if line.strip())
+        current = pyproject.read_text(encoding="utf-8")
+        raised, notes = raise_dependency_floors(current, requirements)
     except BaseException:
         for staging in staged.values():
             shutil.rmtree(staging, ignore_errors=True)
         raise
     _promote(staged)
-    _sync_pyproject(vendor_dir, pyproject)
+    if raised != current:
+        pyproject.write_text(raised, encoding="utf-8", newline="\n")
+    for note in notes:
+        print(note)
     for spec in PACKAGES:
         print(
             f"vendored {spec.distribution}=={pins[spec.distribution]}: "

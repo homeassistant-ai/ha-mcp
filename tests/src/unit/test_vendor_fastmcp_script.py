@@ -310,7 +310,7 @@ def test_main_leaves_live_trees_untouched_when_a_download_fails(tmp_path, monkey
 
     monkeypatch.setattr(vendor, "_download_wheel", download_wheel)
     with pytest.raises(SystemExit, match="network down"):
-        vendor.main(vendor_dir)
+        vendor.main(vendor_dir, tmp_path / "pyproject.toml")
     assert not list(vendor_dir.glob("*.incoming"))
     for spec in vendor.PACKAGES:
         assert (vendor_dir / spec.package / "live.py").is_file()
@@ -318,16 +318,55 @@ def test_main_leaves_live_trees_untouched_when_a_download_fails(tmp_path, monkey
 
 _PYPROJECT = """[project]
 name = "fixture"
+classifiers = ["Programming Language :: Python :: 3.14"]
 dependencies = [
     # Runtime requirements of the vendored packages.
-    "{entry}",
+{entries}
 ]
 
 [dependency-groups]
 dev = [
-    "{entry}",
+{dev}
 ]
 """
+
+
+def _project(*entries: str, dev: tuple[str, ...] | None = None) -> str:
+    def lines(items: tuple[str, ...]) -> str:
+        return "\n".join(f'    "{item}",' for item in items)
+
+    return _PYPROJECT.format(
+        entries=lines(entries), dev=lines(entries if dev is None else dev)
+    )
+
+
+def _sync(tmp_path, monkeypatch, pyproject_text, requires_by_distribution):
+    """Run the sync with each distribution's wheel declaring the given needs."""
+    vendor_dir = tmp_path / "_vendor"
+    vendor_dir.mkdir()
+    (vendor_dir / "requirements.txt").write_text(
+        "fastmcp-slim==9.9.9\nmcp==8.8.8\nmcp-types==8.8.8\n", encoding="utf-8"
+    )
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(pyproject_text, encoding="utf-8")
+
+    def download_wheel(distribution, version):
+        needs = requires_by_distribution.get(distribution, [])
+        return _wheel(
+            {
+                "fastmcp/__init__.py": _FASTMCP_INIT,
+                "mcp/__init__.py": "",
+                "mcp_types/__init__.py": "",
+                "pkg-9.9.9.dist-info/METADATA": "".join(
+                    f"Requires-Dist: {need}\n" for need in needs
+                ),
+                "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
+            }
+        )
+
+    monkeypatch.setattr(vendor, "_download_wheel", download_wheel)
+    vendor.main(vendor_dir, pyproject)
+    return pyproject.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -339,16 +378,20 @@ dev = [
             "py-key-value-aio>=0.4.6",
             "py-key-value-aio[memory]>=0.4.6,<0.5.0; sys_platform != 'emscripten'",
         ),
+        ("authlib >= 1.6.11, != 1.7.0", "authlib>=1.9.5", "authlib >=1.9.5, != 1.7.0"),
         ("pyjwt[crypto]>=2.12", "pyjwt>=2.10.1", "pyjwt[crypto]>=2.12"),
         ("cryptography>=48.0.0,<51", "cryptography>=51.0", "cryptography>=48.0.0,<51"),
         ("pydantic-monty==0.0.18", "pydantic-monty>=0.0.19", "pydantic-monty==0.0.18"),
+        ("anyio>=4.10", "anyio>=5.0; python_version < '3.14'", "anyio>=4.10"),
     ],
     ids=[
         "raised",
         "keeps-extras-ceiling-marker",
+        "keeps-exclusion-and-spacing",
         "never-lowered",
         "past-ceiling",
         "exact-pin",
+        "unsupported-python",
     ],
 )
 def test_vendor_sync_raises_the_floors_a_bump_needs_so_installs_upgrade(
@@ -360,26 +403,70 @@ def test_vendor_sync_raises_the_floors_a_bump_needs_so_installs_upgrade(
     publishes, so a floor left behind keeps an older release installed.
     Floors it cannot raise safely are left for a person to change.
     """
-    vendor_dir = tmp_path / "_vendor"
-    vendor_dir.mkdir()
-    (vendor_dir / "requirements.txt").write_text(
-        "fastmcp-slim==9.9.9\nmcp==8.8.8\nmcp-types==8.8.8\n", encoding="utf-8"
-    )
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(_PYPROJECT.format(entry=declared), encoding="utf-8")
-    wheel = _wheel(
-        {
-            "fastmcp/__init__.py": _FASTMCP_INIT,
-            "mcp/__init__.py": "",
-            "mcp_types/__init__.py": "",
-            "pkg-9.9.9.dist-info/METADATA": f"Requires-Dist: {needed}\n",
-            "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
-        }
-    )
-    monkeypatch.setattr(vendor, "_download_wheel", lambda distribution, version: wheel)
+    text = _sync(tmp_path, monkeypatch, _project(declared), {"fastmcp-slim": [needed]})
 
-    vendor.main(vendor_dir, pyproject)
-
-    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project = tomllib.loads(text)
     assert project["project"]["dependencies"] == [expected]
     assert project["dependency-groups"]["dev"] == [declared]
+
+
+def test_vendor_sync_changes_only_the_floors_it_raises_and_reports_the_rest(
+    tmp_path, monkeypatch, capsys
+):
+    """The highest need across the vendored packages wins, and nothing else moves.
+
+    A floor the sync declines is named in its output, so the failing coverage
+    test is not the first place a person learns which entry needs them.
+    """
+    declared = (
+        "authlib>=1.6.11",
+        "authlib-extras>=1.0",
+        "pydantic[email]>=2.13.4,<3",
+        "cryptography>=48.0.0,<51",
+    )
+    text = _sync(
+        tmp_path,
+        monkeypatch,
+        _project(*declared),
+        {
+            "fastmcp-slim": ["authlib>=1.9.5", "pydantic>=2.12", "authlib-extras>=0.5"],
+            "mcp": ["authlib>=1.8.0", "pydantic>=2.14.1", "cryptography>=51.0"],
+        },
+    )
+
+    assert text == _project(
+        "authlib>=1.9.5",
+        "authlib-extras>=1.0",
+        "pydantic[email]>=2.14.1,<3",
+        "cryptography>=48.0.0,<51",
+        dev=declared,
+    )
+    assert "cryptography>=48.0.0,<51" in capsys.readouterr().out
+
+
+def test_the_checked_in_pyproject_already_meets_the_vendored_needs():
+    """The sync parses the real pyproject and finds nothing to change.
+
+    A pyproject the sync cannot read would otherwise surface only as an
+    artifact error on the next vendored bump.
+    """
+    pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    vendor_dir = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
+    requirements = [
+        line
+        for spec in vendor.PACKAGES
+        for line in (vendor_dir / spec.package / vendor.REQUIRES_NAME)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert vendor.raise_dependency_floors(pyproject, requirements) == (pyproject, [])
+
+
+def test_vendor_sync_refuses_a_dependencies_array_outside_project():
+    """Another table's ``dependencies`` array is never taken for ha-mcp's own."""
+    pyproject = (
+        '[project]\nname = "x"\n\n[tool.other]\ndependencies = [\n    "a>=1",\n]\n'
+    )
+    with pytest.raises(SystemExit, match=r"no \[project\] dependencies"):
+        vendor.raise_dependency_floors(pyproject, ["a>=2"])
