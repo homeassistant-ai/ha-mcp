@@ -16,8 +16,7 @@ import pytest
 
 from ha_mcp.settings_ui import render_settings_html
 
-from ._astro_setup_wizard import _assert_clean_init
-from ._js_harness import run_script
+from ._js_harness import _assert_clean_init, run_script
 from ._locale_catalogs import catalog_messages
 from ._settings_ui_dom import DEFAULT_FETCHES
 from ._settings_ui_js_helpers import localized_policy_dom, probe

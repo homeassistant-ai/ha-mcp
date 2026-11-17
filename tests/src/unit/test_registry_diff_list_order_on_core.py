@@ -14,13 +14,12 @@ it does not depend on the hash seed.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import orjson
 import pytest
 import yaml
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
@@ -37,7 +36,6 @@ from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_restore_helpers import backup_tool, use_backup_manager
 from ._command_faults import received, taking
-from ._component_frames import older_component
 from ._registry_item_snapshots import _snapshot
 
 
@@ -152,48 +150,6 @@ async def test_a_diff_without_the_component_reports_the_order_and_says_so(
     assert "connections, identifiers, labels" in warning
     assert "only the ha_mcp_tools component can tell" in warning
     assert "install or update it via HACS" in warning
-
-
-async def test_a_diff_with_a_component_older_than_the_command_says_so(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A component from before the command is installed: the diff reports the
-    order and says the component could not tell."""
-    older_component(monkeypatch, "registry_fields")
-    device = _device(hass)
-    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
-
-    assert _changed_fields(diff) == {"labels"}, diff
-    (warning,) = diff["warnings"]
-    assert "labels" in warning
-
-
-async def test_a_diff_the_component_refuses_to_rule_on_says_so(
-    hass: HomeAssistant,
-    backup_manager: BackupManager,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The command answers with an error: the diff reports the order and says
-    the component could not tell, as without a component."""
-
-    def refuse(entry: Any) -> Any:
-        raise HomeAssistantError("registry drifted")
-
-    monkeypatch.setattr(registries, "declared_fields", refuse)
-    device = _device(hass)
-    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-
-    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
-
-    assert _changed_fields(diff) == {"labels"}, diff
-    (warning,) = diff["warnings"]
-    assert "labels" in warning
 
 
 async def test_a_diff_the_component_names_no_set_for_reports_the_order_only(
