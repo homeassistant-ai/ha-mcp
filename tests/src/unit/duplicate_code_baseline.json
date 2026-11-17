@@ -266,13 +266,6 @@
     "homeassistant-addon-webhook-proxy-dev/start.py::_log",
     "homeassistant-addon/start.py::_log_with_timestamp"
   ],
-  "baa8b3f5ae5d": [
-    "tests/src/unit/test_tools_areas.py::TestHomeTopologyMalformedResponseGuard.tools",
-    "tests/src/unit/test_tools_areas.py::TestHomeTopologyPartition.tools",
-    "tests/src/unit/test_tools_areas.py::TestSetAreaFloorReferenceValidation.tools",
-    "tests/src/unit/test_tools_areas.py::TestSetAreaLabels.tools",
-    "tests/src/unit/test_tools_areas.py::TestSetAreaOrFloorCrossKindRejection.tools"
-  ],
   "be61eddea6a0": [
     "custom_components/ha_mcp_tools/repairs.py::LegacyOAuthRestartRepairFlow.async_step_confirm",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/repairs.py::OAuthRestartRepairFlow.async_step_confirm"
@@ -286,11 +279,6 @@
     "tests/src/e2e/workflows/config/test_helper_field_persistence.py::_entity_id_from_create",
     "tests/src/e2e/workflows/config/test_ws_event_waiter.py::_entity_id_from_response",
     "tests/src/e2e/workflows/core/test_service.py::get_entity_id_from_response"
-  ],
-  "ccee7dfe7b8e": [
-    "tests/src/unit/_astro_setup_wizard.py::_assert_clean_init",
-    "tests/src/unit/test_astro_tools_js_behavior.py::_assert_clean_init",
-    "tests/src/unit/test_settings_ui_js_behavior.py::_assert_clean_init"
   ],
   "cf05a2024943": [
     "tests/src/unit/test_config_param_no_string_schema.py::test_list_param_does_not_advertise_string",
