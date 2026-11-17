@@ -462,7 +462,7 @@ async def mcp_server(
     )
 
     yield server
-    # Server cleanup handled by server.close()
+    await client.close()
 
 
 @pytest.fixture(scope="session")

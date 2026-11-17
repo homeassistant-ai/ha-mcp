@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("workers", [0, 2])
-def test_component_installation_is_one_way_per_worker(tmp_path: Path, workers: int) -> None:
+@pytest.mark.parametrize(("workers", "backend", "expected"), [(0, "", 15), (2, "", 15), (2, "embedded", 12)])
+def test_component_installation_is_one_way_per_worker(tmp_path: Path, workers: int, backend: str, expected: int) -> None:
     """Exercise real pytest session parameters and xdist scope dispatch together."""
     root = Path(__file__).resolve().parents[3]
     (tmp_path / "pytest.ini").write_text(
-        "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n"
+        "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n    requires_component_surface\n"
     )
     (tmp_path / "conftest.py").write_text('''
 import os
@@ -41,6 +41,7 @@ def e2e_topology(request):
 ''')
     for name in ("test_first", "test_second", "test_third"):
         (tmp_path / f"{name}.py").write_text('''
+import os
 import pytest
 
 def test_general_coverage_runs_once(e2e_topology):
@@ -53,12 +54,19 @@ def test_privileged_services_run_after_installation(e2e_topology):
 @pytest.mark.component_topology
 def test_component_and_fallback_paths(e2e_topology):
     assert e2e_topology in ("topology_without_tools", "topology_with_tools")
+
+@pytest.mark.requires_component_surface
+def test_shared_surface_runs_when_available(e2e_topology):
+    expected = "topology_without_tools" if os.environ.get("E2E_BACKEND") == "embedded" else "topology_with_tools"
+    assert e2e_topology == expected
 ''')
     env = os.environ | {
         "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(root / "tests"), str(root / "tests/src"))),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTEST_ADDOPTS": "",
         "E2E_COMBINE_TOPOLOGIES": "1",
+        "E2E_BACKEND": backend,
+        "HAOS_TEST_MODE": "",
         "HA_MCP_CONFIG_DIR": str(tmp_path / "settings"),
     }
     result = subprocess.run(
@@ -66,7 +74,7 @@ def test_component_and_fallback_paths(e2e_topology):
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "12 passed" in result.stdout, result.stdout
+    assert f"{expected} passed" in result.stdout, result.stdout
     traces = [path.read_text().splitlines() for path in tmp_path.glob("*.trace")]
     assert traces
     assert all(trace == ["topology_without_tools", "topology_with_tools"] for trace in traces)
