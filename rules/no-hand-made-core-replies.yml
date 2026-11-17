@@ -59,7 +59,6 @@ rule:
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
-ignores:
 message: |
   Do not type in what Home Assistant answered. A replaced client method that
   returns a hand-written reply (or a hand-written client class) asserts against
