@@ -20,11 +20,11 @@ in such a tool by migrating the affected path to the native approach this
 document describes, not by patching it so it keeps working the old way.
 
 This document holds the rules for building tools, not each tool's contract.
-The tool-specific passages already here are worked examples of those rules. A migration
-does not add a section for its own tool: the tool's contract lives in its code,
-its `Field` texts and its tests, and a copy here only duplicates them. Add a
-rule here only when later migrations need it, written as a general rule rather
-than as one tool's behaviour.
+The tool-specific passages already here are worked examples of those rules.
+A migration does not add a section for its own tool: the tool's contract lives
+in its code, its `Field` texts and its tests, and a copy here only duplicates
+them. Add a rule here only when later migrations need it, written as a general
+rule rather than as one tool's behaviour.
 
 ## Choose the authoritative path
 
