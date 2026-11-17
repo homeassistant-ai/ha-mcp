@@ -61,6 +61,11 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="another-function-by-target-keyword",
         ),
         pytest.param(
+            'patch.object(renderer, "label", name="get_update_info", return_value=None)\n',
+            False,
+            id="patch-object-name-keyword-names-the-mock",
+        ),
+        pytest.param(
             "patch.multiple(update_check, get_update_info=AsyncMock(return_value=None))\n",
             True,
             id="patch-multiple-keyword",

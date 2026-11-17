@@ -36,20 +36,16 @@ utils:
         - has:
             kind: keyword_argument
             regex: '^target\s*=\s*\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-  # The function named as an attribute, second or as attribute= / name=:
+  # The function named as an attribute, second:
   # patch.object(mod, "get_update_info", ...),
   # monkeypatch.setattr(mod, "_fetch_x", ...)
-  names-attribute-target:
+  names-second-argument:
     has:
       field: arguments
-      any:
-        - has:
-            nthChild: 2
-            kind: string
-            regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-        - has:
-            kind: keyword_argument
-            regex: '^(attribute|name)\s*=\s*\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+      has:
+        nthChild: 2
+        kind: string
+        regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
 rule:
   any:
     # The function is named where the call names what it replaces, and nowhere
@@ -62,11 +58,31 @@ rule:
                     field: function
                     regex: '^(\w+\.)*(patch|setattr)$'
                 - matches: names-dotted-target
+            # patch.object names the attribute second or as attribute=; its
+            # name= only names the mock.
             - all:
                 - has:
                     field: function
-                    regex: '^(\w+\.)*(patch\.object|setattr)$'
-                - matches: names-attribute-target
+                    regex: '^(\w+\.)*patch\.object$'
+                - any:
+                    - matches: names-second-argument
+                    - has:
+                        field: arguments
+                        has:
+                          kind: keyword_argument
+                          regex: '^attribute\s*=\s*\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+            # setattr names it second or as name=.
+            - all:
+                - has:
+                    field: function
+                    regex: '^(\w+\.)*setattr$'
+                - any:
+                    - matches: names-second-argument
+                    - has:
+                        field: arguments
+                        has:
+                          kind: keyword_argument
+                          regex: '^name\s*=\s*\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
         - matches: typed-in-answer
     # patch.multiple(mod, get_update_info=...): the answer is read from that
     # keyword alone. DEFAULT puts a mock in place that answers for the function.
