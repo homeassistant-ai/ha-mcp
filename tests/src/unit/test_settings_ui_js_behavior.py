@@ -20,7 +20,12 @@ from typing import ClassVar, get_args
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._js_harness import (
+    HarnessResult,
+    _assert_clean_init,
+    extract_script_body,
+    run_script,
+)
 from ._locale_catalogs import catalog_messages
 from ._settings_ui_dom import (
     _TOP_LEVEL_ELEMENT_IDS,
@@ -456,24 +461,6 @@ class TestTranslationHtmlSanitization:
         assert "<code>DISABLED_TOOLS</code>" in result.dom
         assert "&lt;em" in result.dom
         assert "<em onmouseover" not in result.dom
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    """Fail loud on any script-init or transpile error.
-
-    Each test in this file asserts on side effects (fetches, broadcasts,
-    reloads, alerts). When the script throws at init time the side
-    effects come back empty, the side-effect assertion fires with a
-    misleading message ("expected 1 POST, got 0"), and the actual root
-    cause sits in ``result.errors``. Calling this at the top of every
-    test surfaces the real error first.
-    """
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 # ---------------------------------------------------------------------------

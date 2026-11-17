@@ -20,7 +20,12 @@ from ..utils.device_registry_semantics import (
 )
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.entity_membership import normalize_member_entity_ids
-from ..visibility.resolver import VisibilityDataUnavailable, load_hidden_set
+from ..visibility.resolver import (
+    VisibilityDataUnavailable,
+    core_device_list_reply,
+    load_hidden_set,
+)
+from .component_registries import registry_list_reply
 
 logger = logging.getLogger(__name__)
 
@@ -449,9 +454,9 @@ async def _load_topology(client: HomeAssistantClient) -> _Topology:
     results: tuple[Any, Any, Any, Any, Any] = await asyncio.gather(
         client.get_states(),
         client.send_websocket_message({"type": "config/entity_registry/list"}),
-        client.send_websocket_message({"type": "config/device_registry/list"}),
-        client.send_websocket_message({"type": "config/area_registry/list"}),
-        client.send_websocket_message({"type": "config/floor_registry/list"}),
+        core_device_list_reply(client),
+        registry_list_reply(client, "area"),
+        registry_list_reply(client, "floor"),
         return_exceptions=True,
     )
     states, entities, devices, areas, floors = results

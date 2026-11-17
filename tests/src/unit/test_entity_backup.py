@@ -39,6 +39,7 @@ from ._backup_core import backup_settings as backup_settings
 from ._backup_core import place_snapshot
 from ._command_faults import unanswered
 from ._entity_backup_core import (
+    AREA_READS,
     DESK_OPTIONS,
     NOT_RESTORED,
     Desk,
@@ -340,17 +341,21 @@ async def test_an_assistant_the_backup_holds_nothing_for_is_reset(
 async def test_an_unreadable_area_registry_refuses_the_restore(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
+    entity_path: str,
     entity_client: HomeAssistantClient,
     entity_handler: bm.DomainHandler,
     area_registry: ar.AreaRegistry,
     desk: Desk,
 ) -> None:
-    """A deleted area could otherwise pass unchecked."""
+    """A deleted area could otherwise pass unchecked. No read of the area
+    registry is answered: on the component path that is the component's and
+    the list command the restore falls back to."""
     snapshot = await entity_handler.fetch(entity_client, desk.entity_id)
     area_registry.async_delete(desk.office)
 
     with written(hass) as seen:
-        async with unanswered(hass, "config/area_registry/list", monkeypatch):
+        first, *fallbacks = AREA_READS[entity_path]
+        async with unanswered(hass, first, monkeypatch, *fallbacks):
             with pytest.raises(ToolError):
                 await entity_handler.restore(entity_client, desk.entity_id, snapshot)
 

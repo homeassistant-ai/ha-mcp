@@ -18,6 +18,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .component_registries import category_list_reply
 from .helpers import (
     clearable_value,
     core_error_message,
@@ -89,12 +90,7 @@ class CategoryTools:
                     ],
                     context={"action": "get", "scope": scope},
                 )
-            message: dict[str, Any] = {
-                "type": "config/category_registry/list",
-                "scope": scope,
-            }
-
-            result = await self._client.send_websocket_message(message)
+            result = await category_list_reply(self._client, scope)
 
             if not result.get("success"):
                 raise_tool_error(

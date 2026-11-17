@@ -31,6 +31,7 @@ from custom_components.ha_mcp_tools.websocket_api.constants import (
     SCHEMA_VERSION,
     WS_INFO,
     WS_OVERVIEW,
+    WS_REGISTRY_FIELDS,
 )
 from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.server.auth import AccessToken
@@ -57,6 +58,7 @@ from ha_mcp.tools.component_api import (
 
 from ._client_spies import sent_commands
 from ._command_faults import dropped_on, pooled_socket, received
+from ._component_frames import older_component
 
 # ``get_component_caps``: an inconclusive probe holds for 30 seconds, a
 # component found absent for five minutes.
@@ -314,6 +316,24 @@ async def test_a_component_still_starting_after_a_restart_is_found_within_30_sec
 
     assert during is None
     assert isinstance(await get_component_caps(component_core_client), ComponentCaps)
+
+
+async def test_a_command_the_component_does_not_advertise_is_not_sent(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A component from before ``registry_fields`` is installed: the question
+    is answered with None and the component is sent nothing."""
+    older_component(monkeypatch, "registry_fields")
+
+    with received(hass, WS_REGISTRY_FIELDS) as seen:
+        reply = await ask_component(
+            component_core_client, "registry_fields", registry="label"
+        )
+
+    assert reply is None
+    assert not seen[WS_REGISTRY_FIELDS]
 
 
 async def test_a_command_refused_while_starting_leaves_the_short_window(

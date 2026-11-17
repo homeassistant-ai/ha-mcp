@@ -12,6 +12,7 @@ from ...client.rest_client import (
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_api import COMPONENT_INSTALL_HINT, ask_component
+from ..component_registries import fetch_registries_via_component
 from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
 from ..config_write_helpers import apply_entity_category
 from ..helpers import exception_to_structured_error, raise_tool_error
@@ -218,6 +219,38 @@ def _registry_checks(
     return checks
 
 
+# check kind -> (registry kind the component reads, its key in the component's reply)
+_COMPONENT_REGISTRIES = {
+    "area": ("area", "areas"),
+    "labels": ("label", "labels"),
+    "category": ("category", "categories"),
+    "floor": ("floor", "floors"),
+}
+
+
+async def _lookups_via_component(
+    client: Any, checks: list[tuple[str, str, Any, dict[str, Any]]]
+) -> list[tuple[bool, list[dict[str, Any]], Exception | None, str | None]] | None:
+    """Answer every check from one read by the component, in ``checks`` order.
+
+    None when the component cannot be asked, refuses, times out, loses its
+    connection or answers in another shape: the caller sends Core's list
+    commands then.
+    """
+    reply = await fetch_registries_via_component(
+        client,
+        list(dict.fromkeys(_COMPONENT_REGISTRIES[kind][0] for kind, *_ in checks)),
+        category_scopes=[scope for kind, scope, *_ in checks if kind == "category"],
+    )
+    if reply is None:
+        return None
+    results: list[tuple[bool, list[dict[str, Any]], Exception | None, str | None]] = []
+    for kind, scope, *_ in checks:
+        rows = reply[_COMPONENT_REGISTRIES[kind][1]]
+        results.append((True, rows[scope] if kind == "category" else rows, None, None))
+    return results
+
+
 # HA WS error codes that mean the caller's credentials were rejected —
 # preserved by the client's failure envelope (rest_client keeps ``e.code``).
 _AUTH_WS_ERROR_CODES = frozenset({"unauthorized"})
@@ -314,8 +347,10 @@ async def validate_registry_ids(
     so the caller gets a clear error with the available IDs to choose from.
 
     ``categories`` maps a category SCOPE ("helpers", "automation", "script",
-    "scene") to the category_id being assigned in that scope; each distinct
-    scope is a separate registry lookup. Every lookup runs concurrently.
+    "scene") to the category_id being assigned in that scope. With the
+    ``ha_mcp_tools`` component one read answers every check; without it each
+    registry, and each distinct scope, is one of Core's list commands, sent
+    concurrently.
 
     Skips:
       - None values (caller did not pass — no change to apply). Inside
@@ -333,9 +368,11 @@ async def validate_registry_ids(
     if not checks:
         return
 
-    results = await asyncio.gather(
-        *(_ws_registry_lookup(client, message) for *_, message in checks)
-    )
+    results = await _lookups_via_component(client, checks)
+    if results is None:
+        results = await asyncio.gather(
+            *(_ws_registry_lookup(client, message) for *_, message in checks)
+        )
     for (kind, scope, value, _), (ok, items, exc, error_code) in zip(
         checks, results, strict=True
     ):

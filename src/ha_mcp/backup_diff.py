@@ -9,7 +9,7 @@ from __future__ import annotations
 import difflib
 import logging
 from io import StringIO
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,8 @@ class DiffCounts(TypedDict):
 class DiffResponse(TypedDict):
     """Return shape of ``BackupManager.diff_snapshot``. Both the
     entity-present and ``entity_missing`` branches build this through
-    ``_build_diff_response`` so the key set can't drift between them."""
+    ``_build_diff_response`` so the key set can't drift between them;
+    ``warnings`` alone is left out when there is none."""
 
     kind: Literal["dict"]
     backup_name: str
@@ -53,6 +54,7 @@ class DiffResponse(TypedDict):
     counts: DiffCounts
     unchanged: bool
     truncated: bool
+    warnings: NotRequired[list[str]]  # what the comparison could not settle
 
 
 def _build_diff_response(
@@ -65,6 +67,7 @@ def _build_diff_response(
     patch: list[dict[str, Any]],
     counts: DiffCounts,
     truncated: bool,
+    warnings: list[str] | None = None,
 ) -> DiffResponse:
     """Assemble the diff return payload for either branch.
 
@@ -73,7 +76,7 @@ def _build_diff_response(
     ``entity_missing`` it is forced ``False``: the empty patch is an
     artefact of the absent target, not evidence of a match.
     """
-    return {
+    response: DiffResponse = {
         "kind": _DICT_KIND,
         "backup_name": name,
         "domain": domain,
@@ -85,6 +88,9 @@ def _build_diff_response(
         "unchanged": not entity_missing and counts["total"] == 0,
         "truncated": truncated,
     }
+    if warnings:
+        response["warnings"] = warnings
+    return response
 
 
 class DiffResponseText(TypedDict):

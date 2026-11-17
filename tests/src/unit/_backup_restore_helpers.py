@@ -13,8 +13,7 @@ from starlette.testclient import TestClient
 from ha_mcp.config import Settings
 from ha_mcp.settings_ui import build_settings_handlers
 
-from ._astro_setup_wizard import _assert_clean_init
-from ._js_harness import run_script
+from ._js_harness import _assert_clean_init, run_script
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 

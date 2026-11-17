@@ -10,7 +10,7 @@ from pydantic.fields import FieldInfo
 
 from ..errors import ErrorCode, create_error_response
 from .coercion import UNSET
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, validate_identifier_not_empty
 
 
 def resolve_clearable(value: Any) -> str | None:
@@ -27,6 +27,36 @@ def resolve_clearable(value: Any) -> str | None:
     return str(value)
 
 
+def resolve_level(value: Any) -> Any:
+    """Map an omitted level to ``UNSET`` and pass any other value through.
+
+    Core's floor create and update take ``level=None`` as "no level", unlike the
+    params ``resolve_clearable`` maps, which the builders read as None=keep,
+    ""=clear.
+    """
+    if isinstance(value, FieldInfo):
+        return UNSET
+    return value
+
+
+def require_id_not_blank(kind: str, identifier: str | None) -> None:
+    """Refuse an empty id.
+
+    ``None`` is the "create new" sentinel; a blank id would silently route to
+    create and lose the update intent.
+    """
+    if identifier is not None:
+        validate_identifier_not_empty(
+            identifier,
+            "id",
+            suggestions=[
+                "Omit id entirely to create a new entry",
+                "Pass a real area_id/floor_id to update an existing entry",
+            ],
+            context={"kind": kind},
+        )
+
+
 _AREA_PARAMS = (
     "name, id, floor_id, icon, aliases, picture, labels, "
     "temperature_entity_id, humidity_entity_id"
@@ -35,19 +65,22 @@ _AREA_PARAMS = (
 
 def validate_cross_kind_params(
     kind: str,
-    level: int | None,
+    level: Any,
     floor_id: str | None,
     picture: str | None,
     labels: list[str] | None = None,
     temperature_entity_id: str | None = None,
     humidity_entity_id: str | None = None,
 ) -> None:
-    """Reject params that don't belong to *kind* before building a set message."""
+    """Reject params that don't belong to *kind* before building a set message.
+
+    ``level`` is ``UNSET`` when the caller omitted it, else an int or None.
+    """
     # Reject cross-kind params loudly so silent intent loss can't happen
     # (e.g., kind='floor' with picture='...' previously dropped the picture
     # without a diagnostic). Floors have no labels in HA core.
     cross_kind_params: list[str] = []
-    if kind == "area" and level is not None:
+    if kind == "area" and level is not UNSET:
         cross_kind_params.append("level")
     elif kind == "floor":
         if floor_id is not None:
@@ -144,18 +177,21 @@ def build_area_create_message(
 def build_floor_update_message(
     floor_id: str,
     name: str | None,
-    level: int | None,
+    level: Any,
     icon: str | None,
     parsed_aliases: list[str] | None,
 ) -> dict[str, Any]:
-    """Build a WebSocket message for updating an existing floor."""
+    """Build a WebSocket message for updating an existing floor.
+
+    A ``level`` of ``UNSET`` is left out; None clears the level.
+    """
     message: dict[str, Any] = {
         "type": "config/floor_registry/update",
         "floor_id": floor_id,
     }
     if name is not None:
         message["name"] = name
-    if level is not None:
+    if level is not UNSET:
         message["level"] = level
     if icon is not None:
         message["icon"] = icon if icon else None
@@ -166,16 +202,19 @@ def build_floor_update_message(
 
 def build_floor_create_message(
     name: str,
-    level: int | None,
+    level: Any,
     icon: str | None,
     parsed_aliases: list[str] | None,
 ) -> dict[str, Any]:
-    """Build a WebSocket message for creating a new floor."""
+    """Build a WebSocket message for creating a new floor.
+
+    A ``level`` of ``UNSET`` or None is left out.
+    """
     message: dict[str, Any] = {
         "type": "config/floor_registry/create",
         "name": name,
     }
-    if level is not None:
+    if level is not None and level is not UNSET:
         message["level"] = level
     if icon:
         message["icon"] = icon

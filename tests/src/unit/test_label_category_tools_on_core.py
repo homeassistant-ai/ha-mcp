@@ -1,4 +1,4 @@
-"""The label and category tools on real Core, on an install without the component.
+"""The label and category tools on real Core.
 
 Every row, list and refusal here is Core's: the tools talk to a real ``hass``
 through the server's own client, and the tests read the registries back from
@@ -16,9 +16,12 @@ from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_categories import CategoryTools
 from ha_mcp.tools.tools_labels import LabelTools
 
+from ._client_spies import sent_commands
+from ._routing_core import pooled_socket, sent_types
 from ._tool_errors import rejected_call_body
 
 
@@ -30,7 +33,14 @@ async def _config_commands(hass: HomeAssistant) -> None:
 
 @pytest.fixture
 def labels(core_client: HomeAssistantClient) -> LabelTools:
+    """The label tools on an install without the ``ha_mcp_tools`` component."""
     return LabelTools(core_client)
+
+
+@pytest.fixture
+def component_labels(component_core_client: HomeAssistantClient) -> LabelTools:
+    """The label tools on an install whose ``hass`` also answers ``ha_mcp_tools/*``."""
+    return LabelTools(component_core_client)
 
 
 @pytest.fixture
@@ -259,6 +269,49 @@ async def test_label_get_without_core_search_says_usage_is_unknown(
     assert result["label"]["label_id"] == label.label_id
     assert result["related"] is None
     assert result["warnings"] == ["related unavailable: Unknown command."]
+
+
+async def test_labels_are_listed_through_the_component(
+    hass: HomeAssistant,
+    component_labels: LabelTools,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """With the component the label rows come from its registries command, and
+    they are the rows Core's own list command sends."""
+    lr.async_get(hass).async_create("Security", color="red")
+    socket = await pooled_socket(component_core_client)
+    cores_rows = (await socket.send_command("config/label_registry/list"))["result"]
+
+    with sent_commands(socket) as sent:
+        result = await component_labels.ha_config_get_label()
+
+    types = sent_types(sent)
+    assert result["labels"] == cores_rows
+    assert WS_REGISTRIES in types
+    assert "config/label_registry/list" not in types
+
+
+async def test_a_label_is_added_to_an_area_read_through_the_component(
+    hass: HomeAssistant,
+    component_labels: LabelTools,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Adding a label to an area reads the area's current labels first; with
+    the component that read is not Core's list command, and the labels the
+    area already had are kept."""
+    registry = lr.async_get(hass)
+    kept = registry.async_create("Guests")
+    added = registry.async_create("Security")
+    area = ar.async_get(hass).async_create("Hall", labels={kept.label_id})
+    with sent_commands(await pooled_socket(component_core_client)) as sent:
+        await component_labels.ha_config_set_label(
+            label_id=added.label_id, areas=[area.id]
+        )
+
+    stored = ar.async_get(hass).async_get_area(area.id)
+    assert stored is not None
+    assert stored.labels == {kept.label_id, added.label_id}
+    assert "config/area_registry/list" not in sent_types(sent)
 
 
 async def test_category_update_without_a_name_keeps_the_name(

@@ -104,14 +104,14 @@ from .backup_helper_target import (
 from .backup_helper_target import require_holds as _require_holds
 from .backup_helper_target import safety_target as _safety_target
 from .backup_integrations import fetch_integration, restore_integration
-from .backup_registry_items import REGISTRY_ITEM_DOMAINS as _REGISTRY_ITEM_DOMAINS
+from .backup_registry_items import COMPARED_ROW_DOMAINS as _COMPARED_ROW_DOMAINS
+from .backup_registry_items import compared_row as _compared_row
 from .backup_registry_items import fetch_area_or_floor as _fetch_area_or_floor
 from .backup_registry_items import fetch_category as _fetch_category
 from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
-from .backup_registry_items import restored_item as _restored_item
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -1697,24 +1697,12 @@ class BackupManager:
             return todo_current_key(target, data["config"])
         return target
 
-    async def _registry_item_current(
-        self, domain: str, entity_id: str, config: dict[str, Any], current: Any
-    ) -> Any:
-        """The live label, category, area or floor, as a diff compares it."""
-        if current is None:
-            # A restored item can carry another id.
-            return await _restored_item(self._client, domain, entity_id, config)
-        if isinstance(current, dict):
-            # A restore cannot set the timestamps either, so an item that came
-            # back under its own id differs in them by nature.
-            keep = {k: v for k, v in config.items() if k in _REGISTRY_READONLY_KEYS}
-            return {**current, **keep}
-        return current
-
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
-        """Read a snapshot and the live config for its stable target identity."""
+        """Read a snapshot and the live config for its stable target identity.
+        The envelope carries the comparison's ``warnings``, never the file's."""
         data = await asyncio.to_thread(self.read_snapshot, name)
         _validate_snapshot_envelope(data)
+        data["warnings"] = []
         domain = data["domain"]
         if _is_flow_helper_domain(domain):
             snapshot = _validate_flow_snapshot(
@@ -1735,9 +1723,9 @@ class BackupManager:
             live = await _dashboard_resource_like(self._client, data["config"])
             if live is not None:
                 current = {**live, "id": data["config"].get("id")}
-        elif domain in _REGISTRY_ITEM_DOMAINS and isinstance(data["config"], dict):
-            current = await self._registry_item_current(
-                domain, data["entity_id"], data["config"], current
+        elif domain in _COMPARED_ROW_DOMAINS and isinstance(data["config"], dict):
+            current, data["warnings"] = await _compared_row(
+                self._client, domain, data["entity_id"], data["config"], current
             )
         if (
             isinstance(current, dict)
@@ -1811,6 +1799,7 @@ class BackupManager:
             patch=patch,
             counts=_summarize_patch_counts(patch),
             truncated=truncated,
+            warnings=data["warnings"],
         )
 
     # ----- legacy store (pre-#1579 .ha_mcp_tools_backups/) ---------------
@@ -2233,16 +2222,17 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 # Registry read-only fields
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
-# ``modified_at`` their lists return, which snapshots keep; every registry
-# restore strips them.
+# ``modified_at`` their lists return, which snapshots keep. The registry item
+# restores and diffs use this list when the component gives no answer
+# (docs/agents/native-core-contracts.md, the ``registry_fields`` paragraphs);
+# the other restores apply it without asking.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
 def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """Return ``config`` with read-only registry fields removed.
 
-    ``extra`` names per-registry id keys (``label_id``, ...) the update command
-    takes separately (``/create`` has no id) and both refuse inside the payload body.
+    ``extra`` names further keys to remove, such as the row's ``id``.
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}

@@ -190,6 +190,7 @@ async def _diff_backup(
             "success": True,
             "diff": "\n".join(diff),
             "backup_present": current is not None,
+            "warnings": snapshot["warnings"],
         }
     )
 

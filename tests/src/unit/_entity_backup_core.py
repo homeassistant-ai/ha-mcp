@@ -40,6 +40,12 @@ LOOKUP_COMMANDS = {
     "websocket": "config/entity_registry/list",
     "component": "ha_mcp_tools/entity_entry",
 }
+# The reads a restore checks an area id with: the component's first, and Core's
+# list command when that read fails.
+AREA_READS = {
+    "websocket": ("config/area_registry/list",),
+    "component": ("ha_mcp_tools/registries", "config/area_registry/list"),
+}
 WRITE_COMMANDS = (
     "config/entity_registry/update",
     "homeassistant/expose_entity",

@@ -132,6 +132,24 @@ class HarnessResult:
         return out
 
 
+def _assert_clean_init(result: HarnessResult) -> None:
+    """Fail loud on a script-init, transpile, invoke or jsdom error.
+
+    A JS behaviour test asserts on side effects (fetches, broadcasts,
+    reloads, alerts). When the script throws at init time the side
+    effects come back empty, the side-effect assertion fires with a
+    misleading message ("expected 1 POST, got 0"), and the actual root
+    cause sits in ``result.errors``. Calling this at the top of every
+    test surfaces the real error first.
+    """
+    init_errors = [
+        e
+        for e in result.errors
+        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
+    ]
+    assert not init_errors, f"script failed to initialise: {init_errors}"
+
+
 def run_script(
     script: str,
     *,

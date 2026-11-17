@@ -285,6 +285,38 @@ out, so a submit to an options or reconfigure form goes over those values
 (`config_entry_flow_form`). A backup restore is the exception: it replays a
 stored snapshot into the flow's forms and is verified by readback.
 
+A backup diff compares a registry row with a snapshot's, and the restore of a
+label, category, area or floor writes a snapshot's row back. What Core's
+commands take and how Core keeps a row is Core's to say: the component's
+`ha_mcp_tools/registry_fields` bridge (capability `registry_fields`) reads it
+from Core on every call.
+
+- The keys of the schemas Core registered for the registry's update and create
+  commands: the restore sends only those, and names every other stored key in
+  a warning unless Core's row carries the key and neither command takes it
+  (Core sets that one itself). When the component cannot be asked or refuses,
+  it sends the stored row without `created_at` and `modified_at`.
+- The fields of the live entry whose value is a set. Core lists a set in hash
+  order, so a list the bridge names matches in any order; every other list is
+  compared in the order given (a device's `config_entries` is a property, not
+  a field, and holds its one config entry). When the component cannot be asked
+  or refuses, the diff reports the order as a difference and the restore takes
+  the row an earlier restore created, each with a warning that the order could
+  not be judged. When the component does not find the entry, the diff does the same
+  and the restore creates the item again. A list nested inside a row value
+  (the lists in a device's `config_entries_subentries`, the pairs in
+  `identifiers`) is compared by position, with or without the component.
+- The fields of the live entry that hold a point in time and that the update
+  command does not take: Core sets those itself, so the diff does not report
+  them. When the component cannot be asked, refuses or does not find the
+  entry, the diff of a label, category, area or floor leaves out `created_at`
+  and `modified_at`, and the diff of a device reports them with a warning.
+
+A command that was sent and got no answer, and an answer that is not in the
+shape the command documents, count as a component that cannot be asked: the
+[component guide](custom-component.md#compatibility) treats a read the
+component fails as a missing component.
+
 Some API meanings are not discoverable as schemas: Core declares Energy
 statistic references as plain strings. The optional metadata enrichment uses
 Core's `stat_*` / `included_in_stat` naming convention; it is not an authoritative

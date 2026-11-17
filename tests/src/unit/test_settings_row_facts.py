@@ -17,8 +17,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.settings_ui import SETTINGS_ROUTES, build_settings_handlers
 from ha_mcp.tools.tools_dev import DevTools
 
-from ._astro_setup_wizard import _assert_clean_init
-from ._js_harness import run_script
+from ._js_harness import _assert_clean_init, run_script
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 

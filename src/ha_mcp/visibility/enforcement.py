@@ -83,6 +83,7 @@ from .resolver import (
     VisibilityDataUnavailable,
     config_has_active_hide_dimensions,
     config_needs_device_registry,
+    core_device_list_reply,
     load_hidden_set,
 )
 from .result_payloads import result_payloads, serialize_result
@@ -809,9 +810,7 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> _HiddenM
         client.send_websocket_message({"type": "config/entity_registry/list"}),
     ]
     if need_device:
-        coros.append(
-            client.send_websocket_message({"type": "config/device_registry/list"})
-        )
+        coros.append(core_device_list_reply(client))
     fetched = await asyncio.gather(*coros, return_exceptions=True)
     for item in fetched:
         if isinstance(item, BaseException):

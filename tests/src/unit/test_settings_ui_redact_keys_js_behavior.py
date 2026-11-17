@@ -11,8 +11,7 @@ import re
 
 import pytest
 
-from ._astro_setup_wizard import _assert_clean_init
-from ._js_harness import HarnessResult, run_script
+from ._js_harness import HarnessResult, _assert_clean_init, run_script
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
 
 READ_INPUT = """

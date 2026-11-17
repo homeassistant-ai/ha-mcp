@@ -278,13 +278,15 @@ the info handshake carries no capability entry:
   all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
-  the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
-  legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
-  floats via ``.timestamp()``). Only the requested ``registries`` keys are
-  present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
+  the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
+  so a field Core adds is listed without a change here). Only the requested
+  ``registries`` keys are present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported
   function-locally (not needed at module top).
+* ``ha_mcp_tools/registry_fields`` — the fields Core's commands take for a
+  registry, and how Core keeps the fields of one of its entries (see
+  ``registries._do_registry_fields``).
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -389,7 +391,7 @@ from .lookups import (
 )
 from .oauth_callbacks import command_specs as _oauth_callback_specs
 from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
-from .registries import _do_registries
+from .registries import _do_registries, _do_registry_fields
 from .schemas import (
     _blueprint_get_schema,
     _bulk_call_service_schema,
@@ -409,6 +411,7 @@ from .schemas import (
     _overview_schema,
     _reference_data_schema,
     _registries_schema,
+    _registry_fields_schema,
     _registry_lookup_schema,
     _search_schema,
     _server_entry_schema,
@@ -505,6 +508,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_system_snapshot_schema(), _do_system_snapshot, None),
         (_entity_lookup_schema(), _do_entity_lookup, None),
         (_registries_schema(), _do_registries, None),
+        (_registry_fields_schema(), _do_registry_fields, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
