@@ -9,7 +9,7 @@ Use ha_search(query='calendar', domain_filter='calendar') to find calendar entit
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -169,11 +169,47 @@ def _set_fields(**fields: Any) -> dict[str, Any]:
     return {key: value for key, value in fields.items() if value is not None}
 
 
+def _has_offset(bound: str) -> bool:
+    """Whether ``bound`` is a time with an offset, as far as Python reads it.
+
+    A bound Python cannot read counts as without one. Core also reads some
+    such forms, e.g. '2024-1-5T09:00+01:00'; with an offset, the default
+    beside it then has none and Core's view fails comparing the two.
+    """
+    try:
+        return datetime.fromisoformat(bound).tzinfo is not None
+    except ValueError:
+        return False
+
+
 class CalendarTools:
     """Calendar event management tools for Home Assistant."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    async def _local_now(self) -> datetime:
+        """Now on Home Assistant's clock, without an offset.
+
+        Core reads a time without an offset in Home Assistant's time zone,
+        which need not be this server's: a default built in another zone
+        would shift the window by the difference.
+        """
+        ha_timezone, fetch_failed = await fetch_ha_timezone(self._client)
+        if fetch_failed:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Could not get Home Assistant's time zone, which the "
+                    "default bound needs when the other has no offset",
+                    suggestions=[
+                        "Pass both start and end",
+                        "Or give the bound an offset, e.g. '2024-01-01T00:00:00+01:00'",
+                    ],
+                )
+            )
+        local_tz, _ = resolve_local_timezone(ha_timezone)
+        return datetime.now(local_tz).replace(tzinfo=None)
 
     @tool(
         name="ha_config_get_calendar_events",
@@ -219,13 +255,14 @@ class CalendarTools:
         """
         try:
             if start is None or end is None:
-                # Core reads a time without an offset in Home Assistant's time
-                # zone, which need not be this server's. A default without an
-                # offset pairs with a bound given the same way; Core cannot
-                # compare one with an offset against one without.
-                ha_timezone, _ = await fetch_ha_timezone(self._client)
-                local_tz, _ = resolve_local_timezone(ha_timezone)
-                now = datetime.now(local_tz).replace(tzinfo=None)
+                # Core cannot compare a time with an offset against one
+                # without, so a default takes the form Python reads in the
+                # bound given.
+                given = end if start is None else start
+                if given is None or _has_offset(given):
+                    now = datetime.now(UTC)
+                else:
+                    now = await self._local_now()
                 if start is None:
                     start = now.isoformat()
                 if end is None:
