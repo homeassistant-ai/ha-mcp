@@ -182,6 +182,9 @@ async def _download(
 ) -> dict[str, Any]:
     """The file "Download diagnostics" serves for ``entry``, as Core builds it."""
     assert await async_setup_component(hass, "diagnostics", {})
+    # Core registers integration diagnostics platforms in a task it does not
+    # await, so the view answers 404 until that task has run.
+    await hass.async_block_till_done()
     client = await hass_client()
     response = await client.get(f"/api/diagnostics/config_entry/{entry.entry_id}")
     assert response.status == HTTPStatus.OK

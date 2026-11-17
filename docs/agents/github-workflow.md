@@ -315,11 +315,25 @@ Passing the same file as action-global `configurationFile` as well duplicates
 custom managers and dependency-dashboard entries.
 
 The private websockets and FastMCP pins each have a narrowly scoped
-post-upgrade task. Renovate installs Python 3.14, runs
-`python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
-and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
-generated artifacts alongside the pin. The scanner allows only those exact
-commands, with shell execution disabled. These dependencies retain the ordinary
+post-upgrade task. For websockets, Renovate installs Python 3.14, runs
+`python3 -I scripts/vendor_websockets.py` and includes only
+`src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
+For FastMCP, it installs Python 3.14.2 or later and uv (`uv lock` resolves the
+dev group's `homeassistant`, which needs at least 3.14.2), runs
+`uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py`,
+then `uv lock`, and includes the FastMCP / MCP SDK trees plus `pyproject.toml`
+and `uv.lock`. The generator raises each `[project.dependencies]` floor the new
+versions need on a supported Python and platform: Home Assistant keeps any
+installed version that meets the published floor, so a floor left behind would
+keep the older release installed. It prints every floor it raises and every
+entry it leaves alone. An entry without a single `>=` floor, or whose other
+specifiers exclude the need (a ceiling, an exact pin), and a new requirement
+still fail `test_vendored_fastmcp.py` for a person to resolve. Fast Checks runs
+the Core constraint check against current Core and the `hacs.json` minimum, so
+a raised floor that excludes a version Core pins exactly fails there; for a
+package Core constrains loosely, the embedded no-stomp E2E guard is the
+backstop. The scanner allows only those exact commands, with shell execution
+disabled. These dependencies retain the ordinary
 schedule and release-age policy. Source, license, manifest, drift, and API
 checks still gate the update; a failed generator is an artifact error, not an
 accepted pin-only update. The credential-free vendoring fixture exercises the
