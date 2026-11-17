@@ -2223,9 +2223,8 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
 # ``modified_at`` their lists return, which snapshots keep. The registry item
-# restores and diffs use this list when the component gives no answer
-# (docs/agents/native-core-contracts.md, the ``registry_fields`` paragraphs);
-# the other restores apply it without asking.
+# restores and diffs use this list when the component gives no answer; the
+# other restores apply it without asking.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
