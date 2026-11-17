@@ -6,7 +6,8 @@ Through the component, ``ha_call_service`` says the call ran and Core rejected
 its response. Without it, Core's REST POST answers only a server error, so the
 tool's error says the service may have run and sends nothing again. The service is a
 handler in Core's ``hass.services`` registered with an optional response; it
-writes a state and returns nothing.
+writes a state and returns nothing. Core's own ``light`` services take no
+response request at all, so the confirmable one here is ``test.turn_on``.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from ._tool_errors import error_of
 
 
 class Counter:
-    """``light.turn_on`` and ``counter.bump``: each writes ``light.a`` / ``sensor.count``
+    """``test.turn_on`` and ``counter.bump``: each writes ``test.a`` / ``sensor.count``
     and returns no response. ``counter.fail``, ``counter.crash`` and
     ``counter.invalid`` write ``sensor.count``, then raise a ``HomeAssistantError``
     / a ``ValueError`` / a ``vol.Invalid``."""
@@ -45,7 +46,7 @@ class Counter:
         self.hass = hass
         self.calls = 0
         for domain, service in (
-            ("light", "turn_on"),
+            ("test", "turn_on"),
             ("counter", "bump"),
             ("counter", "fail"),
             ("counter", "crash"),
@@ -57,13 +58,13 @@ class Counter:
                 self._handle,
                 supports_response=SupportsResponse.OPTIONAL,
             )
-        hass.states.async_set("light.a", "off")
+        hass.states.async_set("test.a", "off")
         hass.states.async_set("sensor.count", "0")
 
     async def _handle(self, call: ServiceCall) -> ServiceResponse:
         self.calls += 1
         if call.service == "turn_on":
-            self.hass.states.async_set("light.a", "on")
+            self.hass.states.async_set("test.a", "on")
         else:
             self.hass.states.async_set("sensor.count", str(self.calls))
         if call.service == "fail":
@@ -101,11 +102,11 @@ async def test_a_confirmed_call_whose_response_core_rejects_ran_once_and_says_so
     resp = await ServiceTools(
         component_core_client, DeviceControlTools(component_core_client)
     ).ha_call_service(
-        domain="light", service="turn_on", entity_id="light.a", return_response=True
+        domain="test", service="turn_on", entity_id="test.a", return_response=True
     )
 
     _rejected(resp)
-    state = hass.states.get("light.a")
+    state = hass.states.get("test.a")
     assert state is not None and state.state == "on"
     assert counter.calls == 1
 
@@ -156,16 +157,16 @@ async def test_a_failed_response_call_does_not_wait_for_its_target_to_change(
         raise HomeAssistantError("upstream failed")
 
     hass.services.async_register(
-        "light", "toggle", _fail, supports_response=SupportsResponse.OPTIONAL
+        "test", "toggle", _fail, supports_response=SupportsResponse.OPTIONAL
     )
-    hass.states.async_set("light.a", "off")
+    hass.states.async_set("test.a", "off")
     monkeypatch.setattr(websocket_client, "DEFAULT_COMMAND_WAIT_TIMEOUT", 1.0)
 
     with pytest.raises(ToolError) as exc:
         await ServiceTools(
             component_core_client, DeviceControlTools(component_core_client)
         ).ha_call_service(
-            domain="light", service="toggle", entity_id="light.a", return_response=True
+            domain="test", service="toggle", entity_id="test.a", return_response=True
         )
 
     assert SERVICE_FAILED_AFTER_DISPATCH_HINT in error_of(exc)["suggestions"]

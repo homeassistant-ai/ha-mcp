@@ -7,6 +7,8 @@ a response lists the states written under its context the same way.
 
 Every reply below is Core's own: a test service registered on the real
 ``hass`` changes states under the call's context and returns response data.
+Core's own ``light`` services take no response request, so the confirmable
+call is the test's own ``test.turn_on`` on ``test.x``.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from homeassistant.util.json import JsonValueType
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_service import ServiceTools
 
+TARGET = "test.x"
 SHELL_RESPONSE: dict[str, JsonValueType] = {
     "stdout": "abc",
     "stderr": "",
@@ -89,21 +92,21 @@ async def test_the_component_lists_a_confirmed_calls_changed_state_once(
     the target's new state, compacted, beside the response data shipped once."""
 
     async def turn_on(call: ServiceCall) -> ServiceResponse:
-        hass.states.async_set("light.x", "on", {"brightness": 10})
+        hass.states.async_set(TARGET, "on", {"brightness": 10})
         return dict(SHELL_RESPONSE)
 
-    hass.states.async_set("light.x", "off")
+    hass.states.async_set(TARGET, "off")
     hass.services.async_register(
-        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+        "test", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
     )
 
     response = await ServiceTools(component_core_client, None).ha_call_service(
-        domain="light", service="turn_on", entity_id="light.x", return_response=True
+        domain="test", service="turn_on", entity_id=TARGET, return_response=True
     )
 
     assert response["service_response"] == SHELL_RESPONSE
     (record,) = response["result"]
-    assert (record["entity_id"], record["state"]) == ("light.x", "on")
+    assert (record["entity_id"], record["state"]) == (TARGET, "on")
     assert "context" not in record
     assert "last_changed" not in record
     assert _occurrences(response, "stdout") == 1, response
@@ -119,7 +122,7 @@ async def test_a_target_reported_again_after_its_write_is_listed_once(
     async def turn_on(call: ServiceCall) -> ServiceResponse:
         for reported_at in (1_800_000_000.0, 1_800_000_060.0):
             hass.states.async_set(
-                "light.x",
+                TARGET,
                 "on",
                 {"brightness": 10},
                 context=call.context,
@@ -127,16 +130,16 @@ async def test_a_target_reported_again_after_its_write_is_listed_once(
             )
         return dict(SHELL_RESPONSE)
 
-    hass.states.async_set("light.x", "off")
+    hass.states.async_set(TARGET, "off")
     hass.services.async_register(
-        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+        "test", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
     )
 
     response = await ServiceTools(component_core_client, None).ha_call_service(
-        domain="light", service="turn_on", entity_id="light.x", return_response=True
+        domain="test", service="turn_on", entity_id=TARGET, return_response=True
     )
 
-    assert [record["entity_id"] for record in response["result"]] == ["light.x"]
+    assert [record["entity_id"] for record in response["result"]] == [TARGET]
     assert response["verified_state"] == "on"
 
 
@@ -149,19 +152,19 @@ async def test_a_verbose_confirmed_call_keeps_every_write_of_its_target(
     async def turn_on(call: ServiceCall) -> ServiceResponse:
         for level in (10, 200):
             hass.states.async_set(
-                "light.x", "on", {"brightness": level}, context=call.context
+                TARGET, "on", {"brightness": level}, context=call.context
             )
         return dict(SHELL_RESPONSE)
 
-    hass.states.async_set("light.x", "off")
+    hass.states.async_set(TARGET, "off")
     hass.services.async_register(
-        "light", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
+        "test", "turn_on", turn_on, supports_response=SupportsResponse.OPTIONAL
     )
 
     response = await ServiceTools(component_core_client, None).ha_call_service(
-        domain="light",
+        domain="test",
         service="turn_on",
-        entity_id="light.x",
+        entity_id=TARGET,
         return_response=True,
         verbose=True,
     )

@@ -25,8 +25,8 @@ import yaml
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
-_REPO = Path(__file__).resolve().parents[3]
-_RULES = _REPO / "rules"
+from ._rule_scan import REPO, RULES, flagged, scan
+
 _REPLIES = "no-hand-made-core-replies"
 _SHARED = "no-shared-fake-clients"
 _HASS = "no-hand-made-hass"
@@ -34,36 +34,6 @@ _SUPPRESSIONS = "no-stand-in-suppressions"
 _TYPED = "no-untyped-core-fixtures"
 _WS_REPLIES = "no-test-websocket-replies"
 _STORE_WRITES = "no-test-registry-store-writes"
-
-
-def _ast_grep() -> str:
-    found = shutil.which(
-        "ast-grep", path=str(Path(sys.executable).parent)
-    ) or shutil.which("ast-grep")
-    assert found, "ast-grep-cli (dev group) is not installed in this environment"
-    return found
-
-
-def _scan(rule_file: Path, cwd: Path, target: str) -> list[dict[str, Any]]:
-    proc = subprocess.run(
-        [_ast_grep(), "scan", "--rule", str(rule_file), "--json=compact", target],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.stdout.strip(), proc.stderr
-    rows: list[dict[str, Any]] = json.loads(proc.stdout)
-    return rows
-
-
-def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
-    """Whether ``rule`` reports ``source`` written as a new unit test file."""
-    sample = tmp_path / "tests" / "src" / "unit" / "test_sample.py"
-    sample.parent.mkdir(parents=True, exist_ok=True)
-    sample.write_text(source, encoding="utf-8")
-    rows = _scan(_RULES / f"{rule}.yml", tmp_path, "tests/src/unit/test_sample.py")
-    return any(row["ruleId"] == rule for row in rows)
 
 
 @pytest.mark.parametrize(
@@ -207,7 +177,7 @@ def _flagged(rule: str, source: str, tmp_path: Path) -> bool:
 )
 def test_a_typed_in_core_reply_is_refused(source: str, tmp_path: Path) -> None:
     """A new test that mocks the client's reply fails the lint."""
-    assert _flagged(_REPLIES, source, tmp_path)
+    assert flagged(_REPLIES, source, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -252,7 +222,7 @@ def test_a_typed_in_core_reply_is_refused(source: str, tmp_path: Path) -> None:
 )
 def test_a_real_reply_or_no_answer_is_allowed(source: str, tmp_path: Path) -> None:
     """The fixture, and a client that gets no answer, stay usable."""
-    assert not _flagged(_REPLIES, source, tmp_path)
+    assert not flagged(_REPLIES, source, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -313,7 +283,7 @@ def test_only_a_borrowed_fake_client_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
     """Importing a fake client from a grandfathered file does not dodge the rule."""
-    assert _flagged(_SHARED, source, tmp_path) is refused
+    assert flagged(_SHARED, source, tmp_path) is refused
 
 
 @pytest.mark.parametrize(
@@ -353,7 +323,7 @@ def test_only_a_stand_in_for_hass_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
     """A Core stand-in is refused under another name or put into ``hass.data``."""
-    assert _flagged(_HASS, source, tmp_path) is refused
+    assert flagged(_HASS, source, tmp_path) is refused
 
 
 @pytest.mark.parametrize(
@@ -383,7 +353,7 @@ def test_only_a_suppressed_real_core_check_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
     """A comment cannot switch a real-Core check off for a line or a file."""
-    assert _flagged(_SUPPRESSIONS, source, tmp_path) is refused
+    assert flagged(_SUPPRESSIONS, source, tmp_path) is refused
 
 
 @pytest.mark.parametrize(
@@ -427,7 +397,7 @@ def test_only_an_untyped_core_fixture_is_refused(
     source: str, refused: bool, tmp_path: Path
 ) -> None:
     """mypy checks nothing done to a Core fixture without a real annotation."""
-    assert _flagged(_TYPED, source, tmp_path) is refused
+    assert flagged(_TYPED, source, tmp_path) is refused
 
 
 def _regexes(node: Any) -> Iterator[str]:
@@ -444,7 +414,7 @@ def _regexes(node: Any) -> Iterator[str]:
 
 def _method_lists() -> list[set[str]]:
     """The client-method names in each pattern of the rule that lists them."""
-    rule = yaml.safe_load((_RULES / f"{_REPLIES}.yml").read_text(encoding="utf-8"))
+    rule = yaml.safe_load((RULES / f"{_REPLIES}.yml").read_text(encoding="utf-8"))
     lists = []
     for regex in _regexes(rule["rule"]["all"][0]):
         groups = [
@@ -527,14 +497,14 @@ def test_only_a_test_written_websocket_command_or_reply_is_refused(
 ) -> None:
     """A test neither registers its own command nor answers on a connection;
     re-registering a command's own handler, or sending a request, is allowed."""
-    assert _flagged(_WS_REPLIES, source, tmp_path) is refused
+    assert flagged(_WS_REPLIES, source, tmp_path) is refused
 
 
 def test_no_test_writes_a_websocket_command_or_reply() -> None:
     """The rule has no grandfather list: every unit test complies."""
-    rule = yaml.safe_load((_RULES / f"{_WS_REPLIES}.yml").read_text(encoding="utf-8"))
+    rule = yaml.safe_load((RULES / f"{_WS_REPLIES}.yml").read_text(encoding="utf-8"))
     assert "ignores" not in rule
-    assert _scan(_RULES / f"{_WS_REPLIES}.yml", _REPO, "tests") == []
+    assert scan(RULES / f"{_WS_REPLIES}.yml", REPO, "tests") == []
 
 
 @pytest.mark.parametrize(
@@ -599,14 +569,14 @@ def test_only_a_write_into_a_registry_store_is_refused(
 ) -> None:
     """A test changes a registry through Core, never by writing its store;
     reading the store is allowed."""
-    assert _flagged(_STORE_WRITES, source, tmp_path) is refused
+    assert flagged(_STORE_WRITES, source, tmp_path) is refused
 
 
 def test_no_test_writes_into_a_registry_store() -> None:
     """The rule has no grandfather list: every unit test complies."""
-    path = _RULES / f"{_STORE_WRITES}.yml"
+    path = RULES / f"{_STORE_WRITES}.yml"
     assert "ignores" not in yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert _scan(path, _REPO, "tests") == []
+    assert scan(path, REPO, "tests") == []
 
 
 @pytest.mark.parametrize("rule", [_REPLIES, _SHARED, _HASS, _SUPPRESSIONS, _TYPED])
@@ -615,14 +585,14 @@ def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
 ) -> None:
     """A converted file leaves the list, and no clean file can be parked on it;
     a rule whose list is gone is one no file may violate."""
-    config = yaml.safe_load((_RULES / f"{rule}.yml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((RULES / f"{rule}.yml").read_text(encoding="utf-8"))
     listed = set(config.pop("ignores", None) or [])
     config["ignores"] = []
     unlisted_rule = tmp_path / f"{rule}.yml"
     unlisted_rule.write_text(yaml.safe_dump(config), encoding="utf-8")
 
     violating = {
-        row["file"].replace("\\", "/") for row in _scan(unlisted_rule, _REPO, "tests")
+        row["file"].replace("\\", "/") for row in scan(unlisted_rule, REPO, "tests")
     }
 
     assert listed == violating, {
@@ -634,7 +604,7 @@ def test_the_grandfather_list_is_exactly_the_files_that_still_violate(
 def test_no_unlisted_test_suppresses_ast_grep() -> None:
     """``ast-grep-ignore`` can hide a line from the scan itself, so read the comments."""
     config = yaml.safe_load(
-        (_RULES / f"{_SUPPRESSIONS}.yml").read_text(encoding="utf-8")
+        (RULES / f"{_SUPPRESSIONS}.yml").read_text(encoding="utf-8")
     )
     listed = set(config.get("ignores") or [])
 
@@ -646,9 +616,9 @@ def test_no_unlisted_test_suppresses_ast_grep() -> None:
             )
 
     suppressing = {
-        path.relative_to(_REPO).as_posix()
+        path.relative_to(REPO).as_posix()
         for tree in ("tests/src/unit", "tests/addon")
-        for path in (_REPO / tree).rglob("*.py")
+        for path in (REPO / tree).rglob("*.py")
         if suppresses(path)
     }
 
@@ -660,7 +630,7 @@ def test_the_private_access_list_is_exactly_the_files_that_still_violate(
     tree: str,
 ) -> None:
     """A file cleaned of private access leaves the list; none is parked on it."""
-    config = tomllib.loads((_REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
+    config = tomllib.loads((REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
     listed = set(config["lint"]["extend-per-file-ignores"])
     ruff = shutil.which("ruff", path=str(Path(sys.executable).parent)) or shutil.which(
         "ruff"
@@ -677,12 +647,12 @@ def test_the_private_access_list_is_exactly_the_files_that_still_violate(
             "--output-format",
             "json",
         ],
-        cwd=_REPO,
+        cwd=REPO,
         capture_output=True,
         text=True,
         check=False,
     )
-    root = (_REPO / tree).resolve()
+    root = (REPO / tree).resolve()
     violating = {
         Path(row["filename"]).resolve().relative_to(root).as_posix()
         for row in json.loads(proc.stdout)
@@ -848,7 +818,7 @@ def test_private_import_rule_matches_only_private_names_of_the_code(
     sample.parent.mkdir(parents=True, exist_ok=True)
     sample.write_text(source, encoding="utf-8")
 
-    rows = _scan(
+    rows = scan(
         _private_imports_rule(tmp_path), tmp_path, "tests/src/unit/test_sample.py"
     )
 
@@ -858,16 +828,16 @@ def test_private_import_rule_matches_only_private_names_of_the_code(
 def _grandfathered_tests() -> set[str]:
     """Every test file still on one of the real-Core lists."""
     listed: set[str] = set()
-    for rule_file in _RULES.glob("*.yml"):
+    for rule_file in RULES.glob("*.yml"):
         rule = yaml.safe_load(rule_file.read_text(encoding="utf-8"))
         listed.update(rule.get("ignores") or [])
     for tree in ("tests/src/unit", "tests/addon"):
-        lint = tomllib.loads((_REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
+        lint = tomllib.loads((REPO / tree / "ruff.toml").read_text(encoding="utf-8"))
         listed.update(
             f"{tree}/{pattern}"
             for pattern in lint["lint"].get("extend-per-file-ignores", {})
         )
-    mypy = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    mypy = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     for override in mypy["tool"]["mypy"].get("overrides", []):
         modules = override.get("module", [])
         if override.get("ignore_errors"):
@@ -876,7 +846,7 @@ def _grandfathered_tests() -> set[str]:
                 for module in ([modules] if isinstance(modules, str) else modules)
                 if module.startswith("tests.")
             )
-    guard = (_REPO / "tests" / "core_stand_in_guard.py").read_text(encoding="utf-8")
+    guard = (REPO / "tests" / "core_stand_in_guard.py").read_text(encoding="utf-8")
     listed.update(re.findall(r'"(tests/[^"]+\.py)"', guard))
     return listed
 
@@ -886,7 +856,7 @@ def test_a_converted_test_imports_no_private_name(tmp_path: Path) -> None:
     entry points: importing ``_name`` would skip them as ``module._name`` does."""
     violating = {
         row["file"].replace("\\", "/")
-        for row in _scan(_private_imports_rule(tmp_path), _REPO, "tests")
+        for row in scan(_private_imports_rule(tmp_path), REPO, "tests")
     }
 
     assert violating <= _grandfathered_tests(), sorted(

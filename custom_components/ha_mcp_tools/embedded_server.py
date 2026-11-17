@@ -94,6 +94,7 @@ from .embedded_worker_teardown import (
 )
 from .loopback_url import derive_loopback_url
 from .pip_compat import pip_kwargs
+from .purged_modules import release_purged_modules
 from .server_credentials import (
     CredentialNeeded,
     async_release_credentials,
@@ -1878,14 +1879,12 @@ def _purge_ha_mcp_modules() -> None:
     Python and is only ever imported inside worker threads, and the caller's
     gate guarantees no registered worker is mid-import when this runs (a
     worker past its imports keeps its already-bound modules regardless);
-    third-party dependencies are deliberately NOT purged (they are shared
-    with the rest of Home Assistant), so a dependency-version change still
-    needs an HA core restart.
+    third-party dependencies are NOT purged (Home Assistant shares them), so
+    a dependency-version change still needs an HA core restart.
     """
     global _CACHED_IMPORT_VERSION
     _CACHED_IMPORT_VERSION = None
-    # Snapshot the keys: sys.modules can be mutated by concurrent imports on
-    # other threads mid-iteration (HA core is heavily threaded).
+    # Snapshot the keys: imports on other threads can mutate sys.modules.
     purged = [
         name
         for name in list(sys.modules)
@@ -1895,6 +1894,7 @@ def _purge_ha_mcp_modules() -> None:
         return
     for name in purged:
         sys.modules.pop(name, None)
+    release_purged_modules()
     _safe_invalidate_caches()
     _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 

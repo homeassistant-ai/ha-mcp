@@ -1,14 +1,17 @@
 """Unit tests for fields= projection in ha_list_services (issue #1199).
 
 The tool runs on the server's own client against a real ``hass`` that answers
-the component's service catalog command; two light services are registered.
+the component's service catalog command; Core's ``input_boolean`` integration
+supplies the services and their descriptions. (Core's ``light`` descriptions
+filter on supported features, which imports every entity component, ``tts``
+among them, whose requirement the dev group does not install.)
 """
 
 from typing import Any
 
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.service import async_set_service_schema
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -19,23 +22,8 @@ from ha_mcp.tools.tools_services import ServiceDiscoveryTools
 async def list_services_tool(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> Any:
-    """``ha_list_services`` on a ``hass`` with light.turn_on and light.turn_off.
-
-    Each service is described the way an integration describes a service it
-    defines at runtime, so Core reads no services.yaml for it.
-    """
-
-    async def _noop(call: ServiceCall) -> None:
-        return None
-
-    for service, description in (
-        ("turn_on", "Turn on a light"),
-        ("turn_off", "Turn off a light"),
-    ):
-        hass.services.async_register("light", service, _noop)
-        async_set_service_schema(
-            hass, "light", service, {"description": description, "fields": {}}
-        )
+    """``ha_list_services`` on a ``hass`` with Core's ``input_boolean`` services."""
+    assert await async_setup_component(hass, "input_boolean", {})
     return ServiceDiscoveryTools(component_core_client).ha_list_services
 
 

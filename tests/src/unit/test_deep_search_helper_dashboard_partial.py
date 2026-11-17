@@ -61,11 +61,6 @@ MARKER_VIEWS: dict[str, Any] = {"views": [{"title": "marker"}]}
 LOVELACE_CONFIG = "lovelace/config"
 
 
-@pytest.fixture
-def _server_helper_flows() -> None:
-    """The search reads Core's helper flow list and own-helper catalog itself."""
-
-
 class _GateOptions(OptionsFlow):
     """The custom helper's options flow: one field."""
 

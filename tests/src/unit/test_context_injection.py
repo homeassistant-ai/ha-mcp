@@ -30,7 +30,7 @@ from ha_mcp.tools.tools_traces import TraceTools
 from ._deep_search_core import search_tools
 from ._hacs_marketplace import CARD_ID, MAIN, MAIN_ID, set_up_marketplace, stored
 from ._operations import operations_without_listener as operations_without_listener
-from ._switched_states import SwitchedStates
+from ._switched_states import Devices, set_up_devices
 from ._trace_fixtures import automation_run, store_runs
 
 Step = tuple[float, float, str]
@@ -268,10 +268,8 @@ TWO_OPS = [
 
 
 @pytest.fixture
-def devices(hass: HomeAssistant) -> SwitchedStates:
-    hass.states.async_set("light.a", "off")
-    hass.states.async_set("light.b", "on")
-    return SwitchedStates(hass)
+async def devices(hass: HomeAssistant) -> Devices:
+    return await set_up_devices(hass, {"light.a": "off", "light.b": "on"})
 
 
 @pytest.mark.usefixtures("devices")
@@ -314,7 +312,7 @@ async def test_parallel_bulk_reports_only_the_dispatch_and_its_end(
 
 
 async def test_a_component_batch_with_an_unconfirmed_op_is_not_announced_confirmed(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     """Progress counts only the dispatched ops and leaves each op's outcome to
     its result."""

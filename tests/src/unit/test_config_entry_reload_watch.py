@@ -10,7 +10,9 @@ answer into a status is covered in ``test_integration_reconfigure.py``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -25,25 +27,29 @@ from homeassistant.config_entries import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
+    async_fire_time_changed,
     mock_config_flow,
     mock_integration,
     mock_platform,
 )
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import config_entry_reload_watch
-from ha_mcp.tools.config_entry_reload_watch import watch_entry_reload
+from ha_mcp.tools.config_entry_reload_watch import (
+    COMMIT_VISIBLE_TIMEOUT,
+    RELOAD_SETTLE_TIMEOUT,
+    watch_entry_reload,
+)
 
 from ._command_faults import pooled_socket, received
 from ._ws_transport import abort_transport
 
 DOMAIN = "reload_watch"
 
-# Far below the settle budget a broken early exit would sit through.
-PROMPT_S = 5.0
+Settled = dict[str, Any] | None
 
 
 class EntrySetup:
@@ -123,6 +129,37 @@ async def reconfigure(
     assert result["reason"] == "reconfigure_successful"
 
 
+@contextlib.asynccontextmanager
+async def reading(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    settled: Callable[[], Awaitable[Settled]],
+) -> AsyncIterator[asyncio.Future[Settled]]:
+    """The watch's wait, started with every fragment Core pushed already queued.
+
+    Core answers on one socket in the order it sent, so the reply to a command
+    sent now arrives after those fragments. The watch reads them without
+    waiting, and what is left of it is a wait only the clock ends.
+    """
+    await hass.async_block_till_done()
+    assert (await client.send_websocket_message({"type": "config_entries/get"}))[
+        "success"
+    ]
+    waiting = asyncio.ensure_future(settled())
+    try:
+        await hass.async_block_till_done()
+        yield waiting
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+async def after(hass: HomeAssistant, seconds: float) -> None:
+    """Move Core's test clock ``seconds`` on, which fires the timers due by then."""
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+    await hass.async_block_till_done()
+
+
 @pytest.mark.usefixtures("entry_stream")
 async def test_a_reconfigure_whose_reload_loads_reports_loaded(
     hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
@@ -199,46 +236,35 @@ async def test_another_entrys_reload_is_not_taken_for_the_reconfigured_ones(
 
 @pytest.mark.usefixtures("entry_stream")
 async def test_a_resubmit_that_changes_nothing_gives_up_at_the_commit_budget(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    entry_setup: EntrySetup,
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
 ) -> None:
     """Core skips the commit for identical values, so nothing is attributable,
     and waiting out the whole settle budget would only delay that answer."""
-    monkeypatch.setattr(config_entry_reload_watch, "_COMMIT_VISIBLE_TIMEOUT", 0.3)
     entry = await set_up_entry(hass)
-    loop = asyncio.get_running_loop()
 
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "old")
-        started = loop.time()
-        reloaded = await settled()
-        elapsed = loop.time() - started
-
-    assert reloaded is None
-    assert elapsed < PROMPT_S
+        async with reading(hass, core_client, settled) as waiting:
+            assert not waiting.done()
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
+            assert waiting.done(), "still waiting after the commit budget"
+            assert waiting.result() is None
 
 
 @pytest.mark.usefixtures("entry_stream")
 async def test_a_commit_with_no_reload_after_it_reads_as_unobserved_once_the_budget_ends(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    entry_setup: EntrySetup,
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
 ) -> None:
-    monkeypatch.setattr(config_entry_reload_watch, "_RELOAD_SETTLE_TIMEOUT", 0.3)
     entry = await set_up_entry(hass)
-    loop = asyncio.get_running_loop()
 
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "new", reload=False)
-        started = loop.time()
-        reloaded = await settled()
-        elapsed = loop.time() - started
-
-    assert reloaded is None
-    assert elapsed < PROMPT_S
+        async with reading(hass, core_client, settled) as waiting:
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
+            assert not waiting.done(), "gave up before the settle budget"
+            await after(hass, RELOAD_SETTLE_TIMEOUT + 1)
+            assert waiting.done(), "still waiting after the settle budget"
+            assert waiting.result() is None
 
 
 @pytest.mark.usefixtures("entry_stream")
@@ -247,16 +273,12 @@ async def test_a_disabled_entry_reads_as_unobserved_without_waiting(
 ) -> None:
     """Core never reloads a disabled entry, so no transition is coming."""
     entry = await set_up_entry(hass, disabled_by=ConfigEntryDisabler.USER)
-    loop = asyncio.get_running_loop()
 
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "new")
-        started = loop.time()
-        reloaded = await settled()
-        elapsed = loop.time() - started
-
-    assert reloaded is None
-    assert elapsed < PROMPT_S
+        async with reading(hass, core_client, settled) as waiting:
+            assert waiting.done(), "waited for a reload Core never runs"
+            assert waiting.result() is None
 
 
 @pytest.mark.usefixtures("entry_stream")
@@ -266,20 +288,18 @@ async def test_an_entry_disabled_after_the_commit_settles_without_waiting(
     """A disabled entry stays ``not_loaded``; waiting for it to load would
     stall the reconfigure's answer for the whole settle budget."""
     entry = await set_up_entry(hass)
-    loop = asyncio.get_running_loop()
 
     async with watch_entry_reload(core_client, entry.entry_id) as settled:
         await reconfigure(hass, entry, "new", reload=False)
         await hass.config_entries.async_set_disabled_by(
             entry.entry_id, ConfigEntryDisabler.USER
         )
-        started = loop.time()
-        reloaded = await settled()
-        elapsed = loop.time() - started
+        async with reading(hass, core_client, settled) as waiting:
+            assert waiting.done(), "waited for the entry to load"
+            reloaded = waiting.result()
 
     assert reloaded is not None
     assert reloaded["disabled_by"] == "user"
-    assert elapsed < PROMPT_S
 
 
 @pytest.mark.usefixtures("entry_stream")

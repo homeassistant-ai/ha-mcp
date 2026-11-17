@@ -22,8 +22,6 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_config_reads
-from ha_mcp.tools.component_api import ComponentCaps
-from ha_mcp.tools.component_config_reads import CONFIG_REFERENCES
 from ha_mcp.tools.reference_validator import validate_config_references
 
 _CONFIG: dict[str, Any] = {
@@ -153,24 +151,28 @@ async def test_an_outdated_component_is_told_apart_from_an_absent_one(
 
 
 async def test_a_component_that_does_not_know_the_check_is_asked_again_after_update(
-    core_client: HomeAssistantClient,
+    component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Capabilities cached as offering the check, but Core answers the command
-    unknown_command: the check is reported as needing an update, and the cached
-    capabilities are dropped so the next check probes the component again."""
-    served = ComponentCaps(1, "2.2.2", frozenset({CONFIG_REFERENCES}), {})
+    """The component advertises the check, but Core answers the command the
+    server sends unknown_command: the check is reported as needing an update,
+    and the cached capabilities are dropped so the next check probes the
+    component again."""
     monkeypatch.setattr(
-        component_config_reads, "get_component_caps", AsyncMock(return_value=served)
+        component_config_reads,
+        "WS_CONFIG_REFERENCES",
+        "ha_mcp_tools/config_references_retired",
     )
     invalidated = MagicMock(wraps=component_config_reads.invalidate_caps)
     monkeypatch.setattr(component_config_reads, "invalidate_caps", invalidated)
 
-    result = await validate_config_references(core_client, _CONFIG, "automation")
+    result = await validate_config_references(
+        component_core_client, _CONFIG, "automation"
+    )
 
     assert result["warnings"] == []
     assert "update it" in result["references_unchecked"]
-    invalidated.assert_called_once_with(core_client)
+    invalidated.assert_called_once_with(component_core_client)
 
 
 async def test_a_dropped_connection_never_aborts_the_write_and_says_why(

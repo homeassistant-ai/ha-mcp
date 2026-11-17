@@ -6,9 +6,9 @@ case where the frame provably never reached the component, is one REST POST
 followed by the state-change wait. A frame that was sent but never answered is
 reported partial and never sent again (at most once).
 
-The services are handlers in Core's ``hass.services`` that switch entity
-states as a device would (``_switched_states``); the states, events and
-transitions are Core's.
+The lights and the number are devices below Core's own ``light`` and
+``number`` integrations (``_switched_states``); the services, states, events
+and transitions are Core's.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.ws_waiters import wait_for_state_change
 
 from ._command_faults import dropped_on, pooled_socket, received
-from ._switched_states import SwitchedStates
+from ._switched_states import UNAVAILABLE, Devices, set_up_devices
 from ._tool_errors import error_of
 
 CALL_SERVICE = "ha_mcp_tools/call_service"
@@ -55,11 +55,16 @@ def _short_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def devices(hass: HomeAssistant) -> SwitchedStates:
-    hass.states.async_set("light.a", "off")
-    hass.states.async_set("light.b", "off")
-    hass.states.async_set("number.a", "0")
-    return SwitchedStates(hass)
+async def devices(hass: HomeAssistant) -> Devices:
+    return await set_up_devices(
+        hass, {"light.a": "off", "light.b": "off", "number.a": "0"}
+    )
+
+
+async def _unavailable_lamp(hass: HomeAssistant, behaviour: str = "follow") -> None:
+    """``light.a`` out of Core's reach, doing ``behaviour`` when a call names it."""
+    devices = await set_up_devices(hass, {"light.a": UNAVAILABLE})
+    devices.behaviour["light.a"] = behaviour
 
 
 def _tools(client: HomeAssistantClient) -> ServiceTools:
@@ -128,7 +133,9 @@ async def test_a_service_with_no_known_end_state_confirms_on_any_change(
             data={"value": 21},
         )
 
-    assert resp["verified_state"] == "21"
+    number = hass.states.get("number.a")
+    assert number is not None
+    assert resp["verified_state"] == number.state
     assert [frame["expected_state"] for frame in seen[CALL_SERVICE]] == [None]
 
 
@@ -197,10 +204,26 @@ async def test_calls_the_component_cannot_confirm_are_one_rest_post(
     assert seen[CALL_SERVICE] == []
 
 
-@pytest.mark.usefixtures("devices")
 async def test_a_service_response_comes_back_through_the_frame(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
+    """A light service answers no response; a script that stops with one does."""
+    reply = {"answer": 42}
+    assert await async_setup_component(
+        hass,
+        "script",
+        {
+            "script": {
+                "answer": {
+                    "sequence": [
+                        {"variables": {"reply": reply}},
+                        {"stop": "answered", "response_variable": "reply"},
+                    ]
+                }
+            }
+        },
+    )
+
     with (
         received(hass, CALL_SERVICE) as seen,
         _rest(component_core_client) as (
@@ -209,10 +232,10 @@ async def test_a_service_response_comes_back_through_the_frame(
         ),
     ):
         resp = await _tools(component_core_client).ha_call_service(
-            domain="light", service="turn_on", entity_id="light.a", return_response=True
+            domain="script", service="answer", return_response=True
         )
 
-    assert resp["service_response"] == {"changed": ["light.a"]}
+    assert resp["service_response"] == reply
     assert not any(NOT_PROOF in w for w in _warnings(resp))
     assert [frame["return_response"] for frame in seen[CALL_SERVICE]] == [True]
     post.assert_not_awaited()
@@ -237,13 +260,10 @@ async def test_a_target_core_does_not_have_is_not_found_at_once(
 
 
 async def test_a_target_that_stays_unavailable_is_unavailable_after_dispatch(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     """The error says the call went out, so a caller does not repeat it."""
-    hass.states.async_set("light.a", "unavailable")
-    devices.behaviour["light.a"] = "stay"
+    await _unavailable_lamp(hass)
 
     with _rest(component_core_client) as (post, _), pytest.raises(ToolError) as exc:
         await _tools(component_core_client).ha_call_service(
@@ -256,12 +276,9 @@ async def test_a_target_that_stays_unavailable_is_unavailable_after_dispatch(
 
 
 async def test_a_target_removed_during_the_call_is_not_found_not_unavailable(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    hass.states.async_set("light.a", "unavailable")
-    devices.behaviour["light.a"] = "remove"
+    await _unavailable_lamp(hass, "remove")
 
     with pytest.raises(ToolError) as exc:
         await _tools(component_core_client).ha_call_service(
@@ -286,7 +303,7 @@ async def test_the_broadcast_target_all_is_never_not_found(
 
 
 async def test_a_dispatched_call_that_never_confirms_is_partial_and_not_sent_again(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     devices.behaviour["light.a"] = "stay"
 
@@ -320,7 +337,7 @@ async def test_without_the_component_the_call_is_one_rest_post(
 async def test_a_downgraded_component_is_dropped_and_the_call_posted_once(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
@@ -341,7 +358,7 @@ async def test_a_downgraded_component_is_dropped_and_the_call_posted_once(
 
 
 async def test_a_call_core_refuses_through_the_frame_is_posted_once(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     """The service raised inside the component, before it changed anything:
     the REST POST is the call's first and only landing."""
@@ -358,7 +375,7 @@ async def test_a_call_core_refuses_through_the_frame_is_posted_once(
 
 
 async def test_a_socket_that_cannot_connect_sends_one_rest_post(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
     await websocket_manager.disconnect()
@@ -381,7 +398,7 @@ async def test_a_socket_that_cannot_connect_sends_one_rest_post(
 
 
 async def test_a_frame_never_sent_falls_to_one_rest_post(
-    component_core_client: HomeAssistantClient, devices: SwitchedStates
+    component_core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     assert await get_component_caps(component_core_client) is not None
     socket = await pooled_socket(component_core_client)
@@ -406,7 +423,7 @@ async def test_a_frame_never_sent_falls_to_one_rest_post(
 async def test_a_socket_that_drops_after_the_send_is_partial_and_never_posted(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    devices: SwitchedStates,
+    devices: Devices,
 ) -> None:
     """The frame went out, so the call may have landed: re-posting it could apply
     it twice. Its answer is lost too, and the null response says so."""
@@ -453,12 +470,11 @@ async def test_a_rest_404_is_not_found_before_anything_is_posted(
 
 
 async def test_an_unavailable_target_is_posted_and_unavailable_after_the_wait(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """The call may be what reconnects the device, so it goes out; only a
     re-read after the wait that is still unavailable says so."""
-    hass.states.async_set("light.a", "unavailable")
-    devices.behaviour["light.a"] = "stay"
+    await _unavailable_lamp(hass)
 
     with (
         _rest(core_client) as (post, _),
@@ -498,14 +514,12 @@ async def test_a_rest_404_for_the_broadcast_target_all_is_still_posted(
 async def test_an_unavailable_target_that_changed_is_not_reported_unavailable(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    devices: SwitchedStates,
     behaviour: str,
     code: str | None,
 ) -> None:
     """Reconnected to a state other than the one asked for: an unverified
     success. Removed meanwhile: not found."""
-    hass.states.async_set("light.a", "unavailable")
-    devices.behaviour["light.a"] = behaviour
+    await _unavailable_lamp(hass, behaviour)
     call = _tools(core_client).ha_call_service(
         domain="light", service="turn_on", entity_id="light.a"
     )
@@ -521,11 +535,10 @@ async def test_an_unavailable_target_that_changed_is_not_reported_unavailable(
 
 
 async def test_an_unanswered_re_read_after_the_wait_is_not_called_unavailable(
-    hass: HomeAssistant, core_client: HomeAssistantClient, devices: SwitchedStates
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """The re-read after the wait gets no answer: that proves nothing either way."""
-    hass.states.async_set("light.a", "unavailable")
-    devices.behaviour["light.a"] = "stay"
+    await _unavailable_lamp(hass)
 
     with ExitStack() as stack:
 
@@ -553,7 +566,7 @@ async def test_an_unanswered_re_read_after_the_wait_is_not_called_unavailable(
 
 
 async def test_an_unanswered_read_before_the_post_still_posts(
-    core_client: HomeAssistantClient, devices: SwitchedStates
+    core_client: HomeAssistantClient, devices: Devices
 ) -> None:
     with (
         patch.object(

@@ -1,692 +1,574 @@
-"""Unit tests for the consolidated HACS action tools.
+"""The HACS action tools on Core's Marketplace: what each action sends, what it
+returns, and how a refusal, an error or a missing answer reaches the caller.
 
-Exercise the per-action handler success paths (``_hacs_info`` /
-``_hacs_download`` / ``_hacs_remove`` / ``_hacs_update_information`` /
-``_hacs_add_repository``) and the dispatcher's error-routing with a mocked
-WebSocket client. Complements the validation-guard tests in
-``test_identifier_validation_family.py`` and the ctx/progress test in
-``test_context_injection.py``.
+The Marketplace is Core's own (``_hacs_marketplace``). GitHub answers only
+where a test serves it (``_hacs_actions_core``); everywhere else it is
+unreachable, as Core's own replies then show.
 """
 
-from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
+from homeassistant.components.marketplace.exceptions import MarketplaceError
+from homeassistant.components.marketplace.repositories.base import Repository
+from homeassistant.components.marketplace.repositories.plugin import (
+    PluginRepository,
+)
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry, MockUser
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.hacs_backend import HACS_API
-from ha_mcp.tools.tools_hacs import (
-    HACS_ADD_REGISTRATION_TIMEOUT,
-    HACS_RESOLVE_REGISTRATION_TIMEOUT,
-    HacsTools,
+from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
 )
+from ha_mcp.client.websocket_client import (
+    DEFAULT_COMMAND_WAIT_TIMEOUT,
+    HomeAssistantWebSocketClient,
+)
+from ha_mcp.tools.tools_hacs import HacsTools
+
+from ._client_spies import sent_commands
+from ._command_faults import received
+from ._hacs_actions_core import add_connected_marketplace, serve_card
+from ._hacs_marketplace import (
+    CARD_ID,
+    add_marketplace,
+    command_types,
+    core_install,
+    pooled_socket,
+    sent_with,
+    stored,
+)
+from ._held_command import held_command
+from ._oauth_server_core import signed_in
+from ._tools_addons_core import outwait, timers
+
+CARD = "piitaya/lovelace-mushroom"
+STORE_ONLY_ID = "401454435"
+TRACKER_ID = "512345678"
+TRACKER_DOMAIN = "tracker_card_sync"
+REPOSITORIES = {
+    CARD_ID: stored(CARD, "plugin", installed="v4.0.0"),
+    STORE_ONLY_ID: stored("hif2k1/battery_sim", "integration"),
+    TRACKER_ID: stored(
+        "someone/tracker", "integration", installed="v1.0.0", domain=TRACKER_DOMAIN
+    ),
+}
+INFO = "marketplace/info"
+REPO_INFO = "marketplace/repository/info"
+INSTALL = "marketplace/repository/install"
+UNINSTALL = "marketplace/repository/uninstall"
+REFRESH = "marketplace/repository/refresh"
+ADD = "marketplace/repositories/add"
+LIST = "marketplace/repositories/list"
 
 
-def test_resolve_budget_stays_fast() -> None:
-    """A regression back to a slow resolve or post-add budget would re-open the
-    #1515 not-found stall; pin both fast budgets explicitly (the waiter itself
-    has no default budget — every caller supplies its own)."""
-    assert HACS_RESOLVE_REGISTRATION_TIMEOUT <= 10
-    assert HACS_ADD_REGISTRATION_TIMEOUT <= 10
-
-
-async def _identity_timezone(_client, data):
-    """Stand-in for add_timezone_metadata that returns data unchanged."""
-    return data
-
-
-def _ws(result):
-    """A WS client whose send_command returns a successful HACS response."""
-    ws = AsyncMock()
-    ws.send_command = AsyncMock(return_value={"success": True, "result": result})
-    return ws
-
-
-@contextmanager
-def _patched_hacs(ws):
-    """Patch HACS availability, the WS client factory, and tz metadata."""
-    with (
-        patch(
-            "ha_mcp.tools.tools_hacs.detect_store_api",
-            new=AsyncMock(return_value=HACS_API),
-        ),
-        patch(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            new=AsyncMock(return_value=ws),
-        ),
-        patch(
-            "ha_mcp.tools.tools_hacs.add_timezone_metadata",
-            new=_identity_timezone,
-        ),
-    ):
-        yield
+async def _set_up(hass: HomeAssistant, entry: MockConfigEntry) -> MockConfigEntry:
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    return entry
 
 
 @pytest.fixture
-def tools():
-    return HacsTools(MagicMock())
+def tools(core_client: HomeAssistantClient) -> HacsTools:
+    return HacsTools(core_client)
 
 
-async def test_hacs_credentials_follow_each_oauth_request(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.fixture
+async def socket(core_client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
+    return await pooled_socket(core_client)
+
+
+@pytest.fixture
+async def marketplace(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+) -> AsyncIterator[MockConfigEntry]:
+    """The Marketplace with GitHub answering for the card alone."""
+    serve_card(aioclient_mock, CARD, int(CARD_ID))
+    entry = add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
+    yield await _set_up(hass, entry)
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.fixture
+async def accepted(marketplace: MockConfigEntry, tools: HacsTools) -> None:
+    """The server's user accepted the Marketplace's first-run warning."""
+    await tools.ha_manage_hacs(action="accept_warning", confirm=True)
+
+
+def _text(excinfo: pytest.ExceptionInfo[ToolError]) -> str:
+    return str(excinfo.value)
+
+
+def _store_commands(spy: AsyncMock) -> list[str]:
+    """The ``marketplace/*`` commands the spy saw, in order."""
+    return [c for c in command_types(spy) if c.startswith("marketplace/")]
+
+
+def _caller(ha_token: str) -> AccessToken:
+    return AccessToken(
+        token="mcp-access-token",
+        client_id="mcp-client",
+        scopes=[],
+        claims={"ha_token": ha_token},
+    )
+
+
+async def test_each_oauth_caller_reaches_the_store_as_themselves(
+    hass: HomeAssistant,
+    marketplace: MockConfigEntry,
+    core_client: HomeAssistantClient,
+    hass_access_token: str,
+    hass_owner_user: MockUser,
 ) -> None:
-    """One registered HACS tool must use each caller's token, not global settings."""
-    monkeypatch.setenv("HA_VERIFY_SSL", "true")
-    proxy = OAuthProxyClient("https://ha.example.test")
+    """One registered tool serves every OAuth user; each call must carry its
+    own caller's token, or one user's acceptance would act for another."""
+    owner = await hass.auth.async_create_refresh_token(hass_owner_user, "mcp-client")
+    tokens = [hass_access_token, hass.auth.async_create_access_token(owner)]
+    proxy = OAuthProxyClient(core_client.base_url)
     hacs = HacsTools(proxy)
-    ws = _ws({"name": "Example", "full_name": "example/repo"})
     try:
-        with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token"
-            ) as access_token,
-            patch(
-                "ha_mcp.client.websocket_client.get_websocket_client",
-                new_callable=AsyncMock,
-                return_value=ws,
-            ) as connection,
-        ):
-            for token in ("first-user-token", "second-user-token"):
-                access_token.return_value = MagicMock(claims={"ha_token": token})
-                result = await hacs.ha_get_hacs_info(action="info", repository_id="123")
-                assert result["success"] is True
-                connection.assert_awaited_once_with(
-                    url="https://ha.example.test", token=token, verify_ssl=True
-                )
-                connection.reset_mock()
+        with signed_in(_caller(tokens[0])):
+            await hacs.ha_manage_hacs(action="accept_warning", confirm=True)
+        seen = []
+        for token in tokens:
+            with signed_in(_caller(token)):
+                result = await hacs.ha_get_hacs_info(action="search")
+            seen.append(result["data"]["store"]["warning_accepted"])
     finally:
         await proxy.close()
 
-
-class TestGetHacsInfo:
-    async def test_info_returns_repository_detail(self, tools):
-        ws = _ws(
-            {
-                "name": "Mushroom",
-                "full_name": "piitaya/lovelace-mushroom",
-                "category": "plugin",
-                "installed": True,
-                "installed_version": "4.0.0",
-            }
-        )
-        with _patched_hacs(ws):
-            result = await tools.ha_get_hacs_info(
-                action="info", repository_id="441028036"
-            )
-
-        assert result["success"] is True
-        # Echoes the caller's identifier and surfaces the structured fields.
-        assert result["repository_id"] == "441028036"
-        assert result["name"] == "Mushroom"
-        assert result["installed"] is True
-        assert result["installed_version"] == "4.0.0"
-        # A numeric id needs no resolution round-trip — exactly one WS call.
-        ws.send_command.assert_awaited_once()
-        assert ws.send_command.await_args.args[0] == "hacs/repository/info"
-
-    async def test_info_command_error_keeps_command_context(self, tools):
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: kaboom", "unknown_error"
-            )
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_hacs_info(action="info", repository_id="441028036")
-        assert "kaboom" in str(excinfo.value)
-        assert "hacs/repository/info" in str(excinfo.value)
+    assert seen == [True, False]
 
 
-class TestManageHacsDownload:
-    async def test_download_defaults_version_to_latest(self, tools):
-        ws = _ws({"status": "ok"})
-        with _patched_hacs(ws):
-            result = await tools.ha_manage_hacs(
-                action="download", repository_id="441028036"
-            )
+class TestInfo:
+    async def test_a_numeric_id_is_read_without_a_lookup(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with sent_commands(socket) as spy:
+            result = await tools.ha_get_hacs_info(action="info", repository_id=CARD_ID)
 
-        assert result["success"] is True
-        assert result["version"] == "latest"  # no version given -> "latest"
-        assert result["repository"] == "441028036"  # numeric id resolves to itself
-        assert "Successfully installed" in result["message"]
-        assert ws.send_command.await_args.args[0] == "hacs/repository/download"
+        assert _store_commands(spy) == [INFO, REPO_INFO]
+        data = result["data"]
+        assert data["repository_id"] == CARD_ID
+        assert data["full_name"] == CARD
+        assert data["installed"] is True
 
-    async def test_owner_repo_resolve_uses_fast_fail_budget(self, tools):
-        # A GitHub-path download resolves owner/repo -> numeric id via
-        # wait_for_repo_registration. That lookup targets an already-registered
-        # repo, so it must use the short HACS_RESOLVE_REGISTRATION_TIMEOUT, not
-        # the 30 s post-add registration budget — otherwise a not-found path
-        # stalls the caller (and the E2E suite, #1515) for 30 s.
-        ws = _ws({"status": "ok"})
-        registered = {"id": "555", "full_name": "owner/repo", "name": "Repo"}
+    async def test_an_unknown_repository_keeps_the_stores_answer(
+        self, marketplace: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_hacs_info(action="info", repository_id="999999")
+        text = _text(excinfo)
+        assert "The Marketplace does not know the repository with ID 999999" in text
+        assert REPO_INFO in text
+
+    async def test_a_store_answer_is_not_rewrapped_as_an_internal_error(
+        self, marketplace: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_hacs_info(action="info", repository_id="nobody/missing")
+        assert "RESOURCE_NOT_FOUND" in _text(excinfo)
+        assert "INTERNAL_ERROR" not in _text(excinfo)
+
+    async def test_a_lost_connection_names_the_tool_and_action(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
         with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new_callable=AsyncMock,
-            ) as wait_mock,
-        ):
-            wait_mock.return_value = registered
-            result = await tools.ha_manage_hacs(
-                action="download", repository_id="owner/repo"
-            )
-
-        assert result["success"] is True
-        assert result["repository"] == "Repo"  # resolved display name
-        assert (
-            wait_mock.await_args.kwargs.get("timeout")
-            == HACS_RESOLVE_REGISTRATION_TIMEOUT
-        )
-
-    async def test_download_timeout_reports_the_real_budget(self, tools):
-        # Download runs on the same 60 s budget as remove/refresh; without its
-        # own timeout context the classifier claims the 30 s default, and a
-        # false failure invites a blind retry of work HACS finishes anyway.
-        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandTimeout("Command timeout")
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="download", repository_id="441028036")
-        msg = str(excinfo.value)
-        assert "60" in msg
-        assert "Operation 'hacs/repository/download'" in msg
-        assert "may still have completed" in msg
-
-    async def test_download_command_error_keeps_command_context(self, tools):
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: kaboom", "unknown_error"
-            )
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="download", repository_id="441028036")
-        assert "kaboom" in str(excinfo.value)
-        assert "hacs/repository/download" in str(excinfo.value)
-
-    async def test_download_command_timeout_error_reports_real_budget(self, tools):
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: backend timeout", "unknown_error"
-            )
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="download", repository_id="441028036")
-        assert "Operation 'hacs/repository/download' timed out after 60.0s" in str(
-            excinfo.value
-        )
-
-
-class TestManageHacsAddRepository:
-    async def test_add_repository_translates_category_and_returns_registered_id(
-        self, tools
-    ):
-        # HA-MCP's "lovelace" alias must reach HACS as its own name "plugin",
-        # and the returned id comes from the repo
-        # that actually registers — the add ack itself carries no id.
-        ws = _ws({})
-        registered = {"id": "999", "full_name": "owner/my-card", "name": "My Card"}
-        with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new_callable=AsyncMock,
-            ) as wait_mock,
-        ):
-            wait_mock.return_value = registered
-            result = await tools.ha_manage_hacs(
-                action="add_repository",
-                repository="owner/my-card",
-                category="lovelace",
-            )
-
-        assert result["success"] is True
-        assert result["repository_id"] == "999"
-        # The add path confirms registration with the fail-fast budget, not the
-        # 30 s resolve/download default.
-        assert (
-            wait_mock.await_args.kwargs.get("timeout") == HACS_ADD_REGISTRATION_TIMEOUT
-        )
-        ws.send_command.assert_awaited_once()
-        assert ws.send_command.await_args.args[0] == "hacs/repositories/add"
-        assert ws.send_command.await_args.kwargs["category"] == "plugin"
-        assert ws.send_command.await_args.kwargs["repository"] == "owner/my-card"
-
-    async def test_add_repository_errors_when_repo_never_registers(self, tools):
-        # HACS accepts the add command but the repository never appears in the
-        # list (archived / invalid / wrong category). The tool must surface an
-        # error rather than a false "Successfully added".
-        ws = _ws({})
-        with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new=AsyncMock(return_value=None),
+            patch.object(
+                socket,
+                "send_command",
+                AsyncMock(side_effect=HomeAssistantConnectionError("Connection lost")),
             ),
             pytest.raises(ToolError) as excinfo,
         ):
-            await tools.ha_manage_hacs(
-                action="add_repository",
-                repository="owner/archived",
-                category="integration",
-            )
-        assert "SERVICE_CALL_FAILED" in str(excinfo.value)
-        assert "did not register" in str(excinfo.value)
-
-    async def test_add_repository_rejects_slashless_format_before_ws(self, tools):
-        # The "owner/repo" format guard lives after the store detection but
-        # before the WS add; the e2e test for it skips when HACS is
-        # unavailable, so pin it deterministically here.
-        ws = _ws({})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="add_repository",
-                repository="no-slash",
-                category="integration",
-            )
-        assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
-        assert "format" in str(excinfo.value).lower()
-        ws.send_command.assert_not_awaited()
+            await tools.ha_get_hacs_info(action="search")
+        text = _text(excinfo)
+        assert "ha_get_hacs_info" in text
+        assert '"action": "search"' in text
 
 
-def _remove_ws(*, installed: bool = True, remove_response: dict | None = None):
-    """A WS client scripted for the remove path: info probe, then remove."""
-    ws = AsyncMock()
-    ws.send_command = AsyncMock(
-        side_effect=[
-            {"success": True, "result": {"installed": installed}},
-            remove_response or {"success": True, "result": {}},
-        ]
-    )
-    return ws
-
-
-class TestManageHacsRemove:
-    async def test_remove_by_numeric_id_sends_remove_command(self, tools):
-        ws = _remove_ws()
-        with _patched_hacs(ws):
+@pytest.mark.usefixtures("accepted")
+class TestDownload:
+    async def test_no_version_installs_the_latest(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy, core_install() as install:
             result = await tools.ha_manage_hacs(
-                action="remove", repository_id="401454435"
+                action="download", repository_id=CARD_ID
             )
 
-        assert result["success"] is True
-        assert result["repository_id"] == "401454435"
-        assert "Successfully removed" in result["message"]
-        # Loaded-module caveat must reach the caller — file removal alone
-        # does not unload an integration.
-        assert "restart" in result["note"]
-        # A numeric id needs no owner/repo resolution round-trip, so with the
-        # availability probe patched out by the fixture the WS traffic is
-        # exactly the installed-state probe followed by the remove.
-        commands = [c.args[0] for c in ws.send_command.await_args_list]
-        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
-        # HACS's WS API is asymmetric: info takes repository_id, remove takes
-        # repository — pin both so neither regresses (e2e caught the mixup).
-        assert ws.send_command.await_args_list[0].kwargs["repository_id"] == "401454435"
-        assert ws.send_command.await_args.kwargs["repository"] == "401454435"
+        assert [s["repository"] for s in sent_with(spy, INSTALL)] == [CARD_ID]
+        assert install.await_args is not None
+        assert install.await_args.kwargs["ref"] is None
+        data = result["data"]
+        assert data["version"] == "latest"
+        assert "Successfully installed" in data["message"]
 
-    async def test_remove_by_owner_repo_resolves_first(self, tools):
-        ws = _remove_ws()
-        registered = {
-            "id": "555",
-            "full_name": "hif2k1/battery_sim",
-            "name": "Battery Sim",
-        }
+    async def test_an_owner_repo_path_installs_the_listed_repository(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        listed = await socket.send_command(LIST)
+        [row] = [r for r in listed["result"] if r["full_name"] == CARD]
+        with sent_commands(socket) as spy, core_install():
+            result = await tools.ha_manage_hacs(action="download", repository_id=CARD)
+
+        assert [s["repository"] for s in sent_with(spy, INSTALL)] == [CARD_ID]
+        assert result["data"]["repository"] == row["name"]
+
+    async def test_a_refused_install_keeps_the_stores_reason(
+        self, tools: HacsTools
+    ) -> None:
+        failure = MarketplaceError(
+            translation_domain=MARKETPLACE,
+            translation_key="github_failed",
+            translation_placeholders={"error": "502 Bad Gateway"},
+        )
+        with core_install(side_effect=failure), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
+        text = _text(excinfo)
+        assert "502 Bad Gateway" in text
+        assert INSTALL in text
+
+    async def test_a_store_timeout_reports_the_installs_own_budget(
+        self, tools: HacsTools
+    ) -> None:
         with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new_callable=AsyncMock,
-            ) as wait_mock,
+            core_install(side_effect=TimeoutError()),
+            pytest.raises(ToolError) as excinfo,
         ):
-            wait_mock.return_value = registered
+            await tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
+        assert f"Operation '{INSTALL}' timed out after 60.0s" in _text(excinfo)
+
+    async def test_no_answer_says_the_install_may_still_complete(
+        self, hass: HomeAssistant, tools: HacsTools
+    ) -> None:
+        before = timers(hass)
+        with core_install():
+            async with held_command(hass, INSTALL):
+                call = asyncio.create_task(
+                    tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
+                )
+                await outwait(hass, 59, 60, before)
+                await asyncio.wait([call])
+        with pytest.raises(ToolError) as excinfo:
+            call.result()
+        text = _text(excinfo)
+        assert f"Operation '{INSTALL}' timed out after 60.0s" in text
+        assert "may still have completed" in text
+
+
+class TestAddRepository:
+    @pytest.fixture
+    async def connected(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        tools: HacsTools,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+    ) -> AsyncIterator[MockConfigEntry]:
+        """The Marketplace with a GitHub account connected and its warning
+        accepted; GitHub answers for two cards, one of them archived."""
+        serve_card(aioclient_mock, "owner/my-card", 777)
+        serve_card(aioclient_mock, "owner/archived-card", 778, archived=True)
+        entry = add_connected_marketplace(
+            hass, aioclient_mock, hass_storage, REPOSITORIES
+        )
+        await _set_up(hass, entry)
+        await tools.ha_manage_hacs(action="accept_warning", confirm=True)
+        yield entry
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_an_added_repository_returns_the_id_it_registered_under(
+        self,
+        hass: HomeAssistant,
+        connected: MockConfigEntry,
+        tools: HacsTools,
+    ) -> None:
+        with received(hass, ADD) as seen:
             result = await tools.ha_manage_hacs(
-                action="remove", repository_id="hif2k1/battery_sim"
+                action="add_repository", repository="owner/my-card", category="lovelace"
             )
 
-        assert result["success"] is True
-        assert result["repository"] == "Battery Sim"
-        assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
-        assert ws.send_command.await_args.kwargs["repository"] == "555"
+        # HA-MCP's "lovelace" reaches the store as its own "plugin".
+        assert [(m["repository"], m["category"]) for m in seen[ADD]] == [
+            ("owner/my-card", "plugin")
+        ]
+        assert result["data"]["repository_id"] == "777"
 
-    async def test_remove_rejects_empty_repository_id_before_ws(self, tools):
-        ws = _ws({})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+    async def test_an_add_that_never_registers_is_a_failure(
+        self, connected: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        """The store accepts an archived repository's add and registers nothing."""
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="add_repository",
+                repository="owner/archived-card",
+                category="lovelace",
+            )
+        text = _text(excinfo)
+        assert "SERVICE_CALL_FAILED" in text
+        assert "did not register" in text
+
+    async def test_a_path_without_owner_is_refused_before_the_store(
+        self,
+        connected: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="add_repository", repository="no-slash", category="integration"
+            )
+        assert "VALIDATION_INVALID_PARAMETER" in _text(excinfo)
+        assert "owner/repo" in _text(excinfo)
+        assert _store_commands(spy) == [INFO]
+
+
+@pytest.mark.usefixtures("accepted")
+class TestRemove:
+    async def test_the_installed_state_is_checked_before_uninstalling(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy:
+            result = await tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
+
+        assert _store_commands(spy) == [INFO, REPO_INFO, UNINSTALL]
+        # The store's API is asymmetric: info takes repository_id, uninstall
+        # takes repository.
+        assert [s["repository_id"] for s in sent_with(spy, REPO_INFO)] == [CARD_ID]
+        assert [s["repository"] for s in sent_with(spy, UNINSTALL)] == [CARD_ID]
+        # Deleting the files does not unload a loaded integration.
+        assert "restart" in result["data"]["note"]
+
+    async def test_a_numeric_id_is_answered_with_the_repositorys_name(
+        self, tools: HacsTools
+    ) -> None:
+        result = await tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
+        assert result["data"]["repository"] == CARD
+        assert CARD in result["data"]["message"]
+
+    async def test_success_sits_beside_the_timezone_metadata(
+        self, tools: HacsTools
+    ) -> None:
+        result = await tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
+        assert result["success"] is True
+        assert result["data"]["repository_id"] == CARD_ID
+        assert "home_assistant_timezone" in result["metadata"]
+
+    async def test_an_owner_repo_path_uninstalls_the_listed_repository(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy:
+            await tools.ha_manage_hacs(action="remove", repository_id=CARD)
+        assert [s["repository"] for s in sent_with(spy, UNINSTALL)] == [CARD_ID]
+
+    async def test_a_blank_id_sends_nothing(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="remove", repository_id="   ")
-        assert "repository_id" in str(excinfo.value)
-        ws.send_command.assert_not_awaited()
+        assert "repository_id" in _text(excinfo)
+        spy.assert_not_awaited()
 
-    async def test_remove_store_only_repository_raises_not_found(self, tools):
-        # HACS's own remove command reports success for a repository that was
-        # never downloaded (its uninstall no-ops without local files) — the
-        # tool must reject instead of claiming "Successfully removed".
-        ws = _remove_ws(installed=False)
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+    async def test_a_repository_never_downloaded_is_not_reported_removed(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id=STORE_ONLY_ID)
+        assert "RESOURCE_NOT_FOUND" in _text(excinfo)
+        assert "not downloaded" in _text(excinfo)
+        assert UNINSTALL not in _store_commands(spy)
 
-        assert "RESOURCE_NOT_FOUND" in str(excinfo.value)
-        assert "not downloaded" in str(excinfo.value)
-        # The remove command must never be sent for a store-only repo.
-        commands = [c.args[0] for c in ws.send_command.await_args_list]
-        assert commands == ["hacs/repository/info"]
-
-    async def test_remove_surfaces_backend_failure(self, tools):
-        ws = _remove_ws(remove_response={"success": False, "error": "boom"})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
-        # HACS's own error text must survive the wrap — the context command
-        # name alone would satisfy a bare "remove" check.
-        assert "boom" in str(excinfo.value)
-        assert "remove" in str(excinfo.value).lower()
-
-    async def test_remove_proceeds_when_installed_probe_fails(self, tools):
-        # The WS client raises on a failed info frame; the probe must swallow
-        # that and fall through — a rate-limited or transient info lookup
-        # must not make a downloaded repository unremovable, nor misattribute
-        # its own error to the remove (Patch76 review, PR #2124).
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=[
-                HomeAssistantCommandError("Command failed: rate limited", "unknown"),
-                {"success": True, "result": {}},
-            ]
-        )
-        with _patched_hacs(ws):
-            result = await tools.ha_manage_hacs(
-                action="remove", repository_id="401454435"
-            )
+    async def test_a_failed_installed_check_does_not_block_the_removal(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with patch.object(
+            PluginRepository,
+            "update_repository",
+            autospec=True,
+            side_effect=TimeoutError(),
+        ):
+            # Core refuses the info command while its GitHub step fails.
+            with pytest.raises(HomeAssistantCommandError):
+                await socket.send_command(REPO_INFO, repository_id=CARD_ID)
+            with sent_commands(socket) as spy:
+                result = await tools.ha_manage_hacs(
+                    action="remove", repository_id=CARD_ID
+                )
 
         assert result["success"] is True
-        commands = [c.args[0] for c in ws.send_command.await_args_list]
-        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
+        assert _store_commands(spy)[-1] == UNINSTALL
+        info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
+        assert info["result"]["installed"] is False
 
-    async def test_remove_command_error_keeps_command_context(self, tools):
-        # The WS client RAISES HomeAssistantCommandError on a failed result
-        # frame (it never returns success=False), so the raised path is the
-        # one real HACS failures take — the command context must survive it.
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
+    async def test_a_refused_uninstall_keeps_the_stores_reason(
+        self, hass: HomeAssistant, tools: HacsTools
+    ) -> None:
+        MockConfigEntry(domain=TRACKER_DOMAIN).add_to_hass(hass)
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id=TRACKER_ID)
+        text = _text(excinfo)
+        assert "someone/tracker is still set up" in text
+        assert UNINSTALL in text
 
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=[
-                {"success": True, "result": {"installed": True}},
-                HomeAssistantCommandError("Command failed: kaboom", "unknown_error"),
-            ]
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
-        assert "kaboom" in str(excinfo.value)
-        assert "hacs/repository/remove" in str(excinfo.value)
+    async def test_a_store_timeout_reports_the_uninstalls_own_budget(
+        self, tools: HacsTools
+    ) -> None:
+        with (
+            patch.object(
+                Repository, "uninstall", autospec=True, side_effect=TimeoutError()
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
+        assert f"Operation '{UNINSTALL}' timed out after 60.0s" in _text(excinfo)
 
-    async def test_remove_command_timeout_error_reports_real_budget(self, tools):
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=[
-                {"success": True, "result": {"installed": True}},
-                HomeAssistantCommandError(
-                    "Command failed: backend timeout", "unknown_error"
-                ),
-            ]
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
-        assert "Operation 'hacs/repository/remove' timed out after 60.0s" in str(
-            excinfo.value
-        )
-
-    async def test_remove_timeout_says_outcome_is_unknown(self, tools):
-        # HACS force-refreshes from GitHub before uninstalling; when that
-        # blows the WS wait the uninstall usually still completes, so a
-        # plain "failed" would invite a destructive retry. The error must
-        # say the outcome is unverified and point at the info probe.
-        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=[
-                {"success": True, "result": {"installed": True}},
-                HomeAssistantCommandTimeout("Command timeout"),
-            ]
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
-        assert "may still have completed" in str(excinfo.value)
-
-    async def test_remove_numeric_id_reports_real_name_from_info(self, tools):
-        # The resolve short-circuit echoes a numeric id back as the "name";
-        # the installed-state probe carries the real identity, and the
-        # response must use it so the caller can verify WHICH repository
-        # the id meant.
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=[
-                {
-                    "success": True,
-                    "result": {"installed": True, "full_name": "hif2k1/battery_sim"},
-                },
-                {"success": True, "result": {}},
-            ]
-        )
-        with _patched_hacs(ws):
-            result = await tools.ha_manage_hacs(
-                action="remove", repository_id="401454435"
+    async def test_no_answer_says_the_removal_may_still_complete(
+        self, hass: HomeAssistant, tools: HacsTools
+    ) -> None:
+        """The store finishes an uninstall it was slow to answer; a plain
+        failure would invite a retry of a destructive call."""
+        before = timers(hass)
+        async with held_command(hass, UNINSTALL):
+            call = asyncio.create_task(
+                tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
             )
-        assert result["repository"] == "hif2k1/battery_sim"
-        assert "hif2k1/battery_sim" in result["message"]
+            await outwait(hass, 59, 60, before)
+            await asyncio.wait([call])
+        with pytest.raises(ToolError) as excinfo:
+            call.result()
+        assert "may still have completed" in _text(excinfo)
 
-    async def test_foreign_params_are_rejected_not_ignored(self, tools):
-        # A parameter belonging to another action must fail loudly —
-        # ha_manage_hacs(action="remove", version=...) plausibly means
-        # "uninstall this version", which remove cannot honor; silently
-        # dropping it would remove the whole repository.
-        ws = _ws({})
-        cases = [
-            {"action": "remove", "repository_id": "1", "version": "v4.0.0"},
-            {"action": "remove", "repository_id": "1", "repository": "o/r"},
-            {"action": "download", "repository_id": "1", "category": "theme"},
+
+@pytest.mark.parametrize(
+    ("arguments", "foreign"),
+    [
+        # "Uninstall this version" is not something remove can do.
+        ({"action": "remove", "repository_id": "1", "version": "v4.0.0"}, "version"),
+        ({"action": "download", "repository_id": "1", "category": "theme"}, "category"),
+        (
             {
                 "action": "add_repository",
                 "repository": "o/r",
                 "category": "theme",
                 "repository_id": "1",
             },
-        ]
-        for kwargs in cases:
-            with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-                await tools.ha_manage_hacs(**kwargs)
-            assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value), kwargs
-            assert "do not apply" in str(excinfo.value), kwargs
-        ws.send_command.assert_not_awaited()
+            "repository_id",
+        ),
+        (
+            {
+                "action": "update_information",
+                "repository_id": "1",
+                "version": "v1.0.0",
+            },
+            "version",
+        ),
+    ],
+)
+async def test_a_parameter_of_another_action_is_refused_not_dropped(
+    tools: HacsTools,
+    socket: HomeAssistantWebSocketClient,
+    arguments: dict[str, Any],
+    foreign: str,
+) -> None:
+    with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
+        await tools.ha_manage_hacs(**arguments)
+    text = _text(excinfo)
+    assert "VALIDATION_INVALID_PARAMETER" in text
+    assert f"'{foreign}'" in text
+    assert "do not apply" in text
+    spy.assert_not_awaited()
 
-    async def test_remove_returns_top_level_success_envelope(self, tools):
-        # .gemini/styleguide.md response contract: {"success": True, "data": ...} at the
-        # TOP level. add_timezone_metadata wraps its payload under "data", so
-        # the handler must hoist success above the wrapper — with the real
-        # wrapper shape (not the identity stand-in) the envelope holds.
-        async def _wrapping_timezone(_client, data):
-            return {"data": data, "metadata": {"home_assistant_timezone": "UTC"}}
 
-        ws = _remove_ws()
-        with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.add_timezone_metadata",
-                new=_wrapping_timezone,
-            ),
-        ):
+class TestUpdateInformation:
+    async def test_a_numeric_id_refreshes_without_a_lookup(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with sent_commands(socket) as spy:
             result = await tools.ha_manage_hacs(
-                action="remove", repository_id="401454435"
+                action="update_information", repository_id=CARD_ID
             )
 
-        assert result["success"] is True
-        assert result["data"]["repository_id"] == "401454435"
-        assert "metadata" in result
+        assert _store_commands(spy) == [INFO, REFRESH]
+        [sent] = sent_with(spy, REFRESH)
+        # Refresh takes repository, like uninstall, not info's repository_id.
+        assert sent["repository"] == CARD_ID
+        # The store re-fetches from GitHub first: the call waits longer.
+        assert sent["_wait_timeout"] > DEFAULT_COMMAND_WAIT_TIMEOUT
+        assert "Refreshed repository information" in result["data"]["message"]
 
+    async def test_an_owner_repo_path_refreshes_the_listed_repository(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with sent_commands(socket) as spy:
+            await tools.ha_manage_hacs(action="update_information", repository_id=CARD)
+        assert [s["repository"] for s in sent_with(spy, REFRESH)] == [CARD_ID]
 
-class TestManageHacsUpdateInformation:
-    async def test_update_information_numeric_id_sends_refresh(self, tools):
-        ws = _ws({})
-        with _patched_hacs(ws):
-            result = await tools.ha_manage_hacs(
-                action="update_information", repository_id="441028036"
-            )
-
-        assert result["success"] is True
-        # A numeric id needs no resolution round-trip — exactly one WS call.
-        ws.send_command.assert_awaited_once()
-        assert ws.send_command.await_args.args[0] == "hacs/repository/refresh"
-        # HACS's WS API is asymmetric: refresh takes repository (like remove),
-        # not repository_id (like info). The 60 s budget covers HACS's forced
-        # GitHub re-fetch, which the 30 s default would report as a false
-        # failure.
-        assert ws.send_command.await_args.kwargs["repository"] == "441028036"
-        assert ws.send_command.await_args.kwargs["_wait_timeout"] == 60.0
-
-    async def test_update_information_path_resolves_then_refreshes(self, tools):
-        ws = _ws({})
-        registered = {"id": 123, "name": "lovelace-mushroom"}
-        with (
-            _patched_hacs(ws),
-            patch(
-                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new_callable=AsyncMock,
-            ) as wait_mock,
-        ):
-            wait_mock.return_value = registered
-            result = await tools.ha_manage_hacs(
-                action="update_information",
-                repository_id="piitaya/lovelace-mushroom",
-            )
-
-        assert result["success"] is True
-        assert result["repository"] == "lovelace-mushroom"  # resolved display name
-        assert ws.send_command.await_args.args[0] == "hacs/repository/refresh"
-        # The resolved numeric id, not the owner/repo path, reaches HACS.
-        assert ws.send_command.await_args.kwargs["repository"] == "123"
-
-    async def test_update_information_empty_id_raises(self, tools):
-        ws = _ws({})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="update_information", repository_id="")
-        assert "repository_id" in str(excinfo.value)
-        ws.send_command.assert_not_awaited()
-
-    async def test_update_information_missing_id_raises(self, tools):
-        ws = _ws({})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+    async def test_a_missing_id_sends_nothing(
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+    ) -> None:
+        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="update_information")
-        assert "repository_id" in str(excinfo.value)
-        ws.send_command.assert_not_awaited()
+        assert "repository_id" in _text(excinfo)
+        spy.assert_not_awaited()
 
-    async def test_update_information_rejects_foreign_params(self, tools):
-        # update_information takes only repository_id; a download-only
-        # parameter must fail loudly rather than be silently dropped.
-        ws = _ws({})
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+    async def test_a_failed_refresh_keeps_the_stores_reason(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """GitHub is unreachable for this repository, and Core refuses the refresh."""
+        with pytest.raises(HomeAssistantCommandError) as refused:
+            await socket.send_command(REFRESH, repository=STORE_ONLY_ID)
+        with pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(
-                action="update_information",
-                repository_id="1",
-                version="v1.0.0",
+                action="update_information", repository_id=STORE_ONLY_ID
             )
-        assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
-        assert "version" in str(excinfo.value)
-        assert "do not apply" in str(excinfo.value)
-        ws.send_command.assert_not_awaited()
+        text = _text(excinfo)
+        assert str(refused.value) in text
+        assert REFRESH in text
 
-    async def test_update_information_timeout_reports_the_real_budget(self, tools):
-        # The generic timeout classifier defaults to a 30 s message; the
-        # refresh handler must attach its actual 60 s budget instead.
-        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandTimeout("Command timeout")
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="update_information", repository_id="441028036"
+    async def test_no_answer_reports_the_refreshs_own_budget(
+        self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        before = timers(hass)
+        async with held_command(hass, REFRESH):
+            call = asyncio.create_task(
+                tools.ha_manage_hacs(action="update_information", repository_id=CARD_ID)
             )
-        assert "60" in str(excinfo.value)
-        assert "hacs/repository/refresh" in str(excinfo.value)
-        # The rendered message must name the command that timed out. Without
-        # the command fallback in the classifier it reads "Operation
-        # 'operation' timed out", which no other assertion here would catch.
-        assert "Operation 'hacs/repository/refresh'" in str(excinfo.value)
-
-    async def test_update_information_command_error_keeps_command_context(self, tools):
-        # The raised path is the one real HACS failures take; the dict branch
-        # below it only serves stubbed clients.
-        from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            side_effect=HomeAssistantCommandError(
-                "Command failed: kaboom", "unknown_error"
-            )
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="update_information", repository_id="441028036"
-            )
-        assert "kaboom" in str(excinfo.value)
-        assert "hacs/repository/refresh" in str(excinfo.value)
-
-    async def test_update_information_failed_response_raises(self, tools):
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(
-            return_value={"success": False, "error": {"message": "boom"}}
-        )
-        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="update_information", repository_id="441028036"
-            )
-        # HACS's own error text must survive the wrap, alongside the command
-        # context that names which call failed.
-        assert "boom" in str(excinfo.value)
-        assert "hacs/repository/refresh" in str(excinfo.value)
-
-
-class TestDispatcherErrorRouting:
-    async def test_unexpected_handler_error_is_wrapped_with_action_context(self, tools):
-        # A non-ToolError escaping a handler must be converted to a structured
-        # ToolError carrying the tool + action context (Pattern A wrap branch).
-        with (
-            patch.object(
-                HacsTools,
-                "_hacs_search",
-                new=AsyncMock(side_effect=RuntimeError("boom")),
-            ),
-            pytest.raises(ToolError) as excinfo,
-        ):
-            await tools.ha_get_hacs_info(action="search")
-        msg = str(excinfo.value)
-        assert "ha_get_hacs_info" in msg
-        assert "search" in msg
-
-    async def test_structured_toolerror_passes_through_unwrapped(self, tools):
-        # A structured ToolError raised inside a handler must propagate with its
-        # original error code intact, not be re-wrapped as INTERNAL_ERROR.
-        sentinel = ToolError('{"error": {"code": "RESOURCE_NOT_FOUND"}}')
-        with (
-            patch.object(HacsTools, "_hacs_info", new=AsyncMock(side_effect=sentinel)),
-            pytest.raises(ToolError) as excinfo,
-        ):
-            await tools.ha_get_hacs_info(action="info", repository_id="123")
-        assert "RESOURCE_NOT_FOUND" in str(excinfo.value)
-        assert "INTERNAL_ERROR" not in str(excinfo.value)
+            await outwait(hass, 59, 60, before)
+            await asyncio.wait([call])
+        with pytest.raises(ToolError) as excinfo:
+            call.result()
+        assert f"Operation '{REFRESH}' timed out after 60.0s" in _text(excinfo)
