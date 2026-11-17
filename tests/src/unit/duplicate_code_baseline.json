@@ -15,11 +15,6 @@
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token"
   ],
-  "0de4d0fa03a6": [
-    "tests/src/unit/test_usage_logger.py::TestLogToolUsageDecorator.reset_global_logger",
-    "tests/src/unit/test_usage_logger.py::TestParameterRedaction.reset_global_logger",
-    "tests/src/unit/test_usage_logger.py::TestUsageLoggerGlobalFunctions.reset_global_logger"
-  ],
   "11e11ce8f9fb": [
     "tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py::_set_options",
     "tests/src/e2e/haos_only/test_webhook_proxy_addon.py::_set_options"
@@ -71,10 +66,6 @@
   "36579b7ba470": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_resolve_public_addresses",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_resolve_public_addresses"
-  ],
-  "366a0fb56767": [
-    "tests/src/unit/test_build_skill_content.py::TestDegradedPaths.test_nothing_requested",
-    "tests/src/unit/test_build_skill_content.py::TestIncludeSkillOff.test_canonical_suppressed_when_off"
   ],
   "3678766f4bda": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::stable_translation_origin",
@@ -193,6 +184,10 @@
   "8878c3561656": [
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersIdempotent.teardown_method",
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersReplacesStaleGeneration.teardown_method"
+  ],
+  "88f781cc9eb7": [
+    "tests/src/unit/test_build_skill_content.py::TestDegradedPaths.test_nothing_requested",
+    "tests/src/unit/test_build_skill_content.py::TestIncludeSkillOff.test_canonical_suppressed_when_off"
   ],
   "89b0fce0a9fd": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_parse_cimd",
@@ -342,7 +337,6 @@
   ],
   "fb4c92e7dc7f": [
     "tests/src/unit/test_ws_connect_auth_classification.py::manager",
-    "tests/src/unit/test_ws_pool_loop_change_1994.py::manager",
     "tests/src/unit/test_ws_pool_stale_client_2127.py::manager"
   ],
   "fbca60b1fbf8": [
