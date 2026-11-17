@@ -223,11 +223,11 @@ function (`wraps=real_fn`) and a failure (`side_effect=SomeError`) stay; a
 which would hide a replacement from the rule. The test sets
 up the real component or integration, uses Core's Supervisor test support, or
 serves PyPI's JSON from a local server. It has no list.
-The eleventh (`rules/no-typed-core-objects.yml`) refuses a dict shaped like a
-Core state, entity or device registry row, or config entry, and the twelfth
+The eleventh (`rules/no-typed-core-objects.yml`) refuses a dict, as a literal
+or `dict(...)`, shaped like a Core state, entity or device registry row, or config entry, and the twelfth
 (`rules/no-typed-core-frames.yml`) one shaped like a frame Core sends over its
-WebSocket (a result, the login handshake, an event): set Core up and read it
-back, or let Core send it. A dict in an assert (what our code or Core is
+WebSocket (a result, the login handshake, an event, a pong): set Core up and read it
+back, or let Core send it. A dict an assert compares (what our code or Core is
 expected to return), a user's automation, script or scene config, and a
 registry file Core loads at startup (`hass_storage[key] = ...`, the only way
 Core holds a row it refuses at runtime) are not refused. Neither has a list.
@@ -272,7 +272,7 @@ rules, and mypy has none:
   user reaches: go through the public command or tool. Importing the name
   (`from module import _name`, or any name from a private module such as
   `ha_mcp._internal`) skips the entry point the same way and SLF001 does not
-  see it, so the same test fails a file that is on none of these lists and
+  see it, so `src/unit/test_core_reply_rules.py` also fails a file that is on none of these lists and
   still imports one. The vendored packages' import path (`ha_mcp._vendor`) and
   the test trees' own helper modules are exempt; a private name inside a
   vendored package is not. A file still on a

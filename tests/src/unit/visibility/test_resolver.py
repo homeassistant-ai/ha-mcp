@@ -37,7 +37,7 @@ from ha_mcp.visibility.resolver import (
     config_has_active_hide_dimensions,
     hidden_entity_ids,
     load_hidden_set,
-    visibility_filter_active,
+    visibility_state_and_wire,
 )
 
 from .._visibility_config import visibility_config as _cfg
@@ -305,7 +305,8 @@ def test_an_unknown_category_alone_activates_nothing() -> None:
 
 def _active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> bool:
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    return asyncio.run(visibility_filter_active())
+    active, _wire = asyncio.run(visibility_state_and_wire())
+    return active
 
 
 @pytest.mark.parametrize(

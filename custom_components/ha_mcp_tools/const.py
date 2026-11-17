@@ -277,8 +277,8 @@ CHANNEL_STABLE = "stable"
 CHANNEL_DEV = "dev"
 
 # Options-flow keys (stored in entry.options).
-# Retired: entries saved before the paired-release change may still carry
-# ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
+# Retired keys, no longer defined here: entries saved before the
+# paired-release change may still carry ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
 # / server_entry_update WS commands still echo ``channel`` for older servers.
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"

@@ -504,7 +504,8 @@ class UsageLogger:
                         # only taken off the queue.
                         self._log_queue.task_done()
                 elif self._stop_event.is_set():
-                    # Only once the entries queued before shutdown() are written.
+                    # Only once the queue is empty, so every entry queued
+                    # before shutdown() is written.
                     return
                 else:
                     # Wait briefly to avoid busy waiting; shutdown() wakes it at once.
@@ -613,7 +614,7 @@ class UsageLogger:
             return list(reversed(buffer_list[-count:]))
 
     def shutdown(self) -> None:
-        """Gracefully shutdown logger."""
+        """Stop the writer once it has drained the queue, waiting up to 2 s."""
         self._stop_event.set()
         if self._logger_thread and self._logger_thread.is_alive():
             self._logger_thread.join(timeout=2.0)

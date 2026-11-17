@@ -159,6 +159,59 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
             False,
             id="alias-bound-again-inside-a-function",
         ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'def run():\n    """Calls ``probe``."""\n',
+            },
+            True,
+            id="named-only-in-a-docstring",
+        ),
+        pytest.param(
+            {"src/ha_mcp/a.py": '__all__ = ["probe"]\n\n\ndef probe():\n    pass\n'},
+            True,
+            id="named-only-in-all",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "from . import a\n\nHANDLERS = {'x': a}\n\n\n"
+                "def run(kind):\n    handler = HANDLERS[kind]\n    handler.probe()\n",
+            },
+            False,
+            id="read-through-a-receiver-holding-its-imported-module",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/x/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/y/b.py": "from ..x import a\n\na.probe()\n",
+            },
+            False,
+            id="imported-two-packages-up",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "homeassistant-addon/start.py": "from ha_mcp.a import probe\n\nprobe()\n",
+            },
+            False,
+            id="called-by-an-app",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "pyproject.toml": '[project.scripts]\nx = "ha_mcp.a:probe"\n',
+            },
+            False,
+            id="named-by-a-file-production-reads",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "class Tool(Base):\n    def probe(self):\n        pass\n"
+            },
+            False,
+            id="method-of-a-class-with-a-base",
+        ),
     ],
 )
 def test_only_a_use_of_the_definition_itself_counts(

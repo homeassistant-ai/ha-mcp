@@ -639,6 +639,26 @@ def test_no_test_writes_into_a_registry_store() -> None:
             False,
             id="registry-file-core-loads",
         ),
+        pytest.param(
+            'S = dict(entity_id="light.a", state="on", attributes={})\n',
+            True,
+            id="state-built-by-dict",
+        ),
+        pytest.param(
+            'assert summary({"entity_id": "light.a", "state": "on", "context": c})\n',
+            True,
+            id="state-an-assert-hands-to-a-call",
+        ),
+        pytest.param(
+            'assert got == dict(entity_id="light.a", state="on", attributes={})\n',
+            False,
+            id="expected-built-by-dict",
+        ),
+        pytest.param(
+            'set_entity(entity_id="light.a", unique_id="a")\n',
+            False,
+            id="keywords-of-another-call",
+        ),
     ],
 )
 def test_only_a_typed_core_object_is_refused(
@@ -670,6 +690,20 @@ def test_only_a_typed_core_object_is_refused(
             False,
             id="expected-in-an-assert",
         ),
+        pytest.param(
+            'R = dict(id=1, type="result", success=True)\n', True, id="built-by-dict"
+        ),
+        pytest.param(
+            'assert handle({"type": "event", "event": {}})\n',
+            True,
+            id="frame-an-assert-hands-to-a-call",
+        ),
+        pytest.param(
+            'assert answer == dict(success=True, type="pong")\n',
+            False,
+            id="expected-built-by-dict",
+        ),
+        pytest.param('send(type="result")\n', False, id="keyword-of-another-call"),
     ],
 )
 def test_only_a_typed_core_frame_is_refused(

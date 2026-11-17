@@ -6,12 +6,14 @@ A test reaches the code through the entry point a user reaches (tests/AGENTS.md,
 or a public name whose last production caller is gone, lets a test skip that
 entry point; this finds both. A name is defined at module level (def, class,
 assignment) or as a method, without a leading underscore, in ``src/ha_mcp``,
-``custom_components`` or ``scripts``. Production uses it when:
+``custom_components`` or ``scripts``. Production, which also counts the apps'
+Python (``homeassistant-addon*``), uses it when:
 
 - production Python names it (a name, an attribute, an import), its own
-  definition aside;
+  definition aside, or reads it as an attribute of a receiver no import names
+  in a module that imports its module;
 - production Python holds it in a string (``getattr``, a registry), an
-  ``__all__`` entry aside;
+  ``__all__`` entry or a docstring aside;
 - a file production reads names it (pyproject, workflows, manifests, YAML,
   shell);
 - the framework calls it by convention: a decorated function or method, a Home
@@ -20,7 +22,8 @@ assignment) or as a method, without a leading underscore, in ``src/ha_mcp``,
   ``register_*_tools``, ``main``.
 
 A name production does not use and a test names is refused, unless it is one
-of ``EXEMPT``: the module state the tests reset between tests.
+of ``EXEMPT``: the module state the tests reset between tests, and the
+cleanup of a server process a test started.
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 PRODUCTION = ("src/ha_mcp", "custom_components", "scripts")
+# Python that calls production names; its own names follow the apps' release flow.
+CALLERS = (*PRODUCTION, "homeassistant-addon*")
 NON_PYTHON = (
     "pyproject.toml",
     ".github/**/*.yml",
@@ -51,7 +56,8 @@ HA_HOOK = re.compile(
     r"async_get_.*_flow|async_create_fix_flow|register_.*_tools|main|setup|run)$"
 )
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-# Module state the tests reset between tests; production never needs to.
+# Module state the tests reset between tests, and the cleanup of a server
+# process a test started; production needs neither.
 EXEMPT = frozenset(
     {
         "src/ha_mcp/config.py:reset_embedded_connection",
@@ -59,15 +65,17 @@ EXEMPT = frozenset(
         "src/ha_mcp/policy/value_sources.py:clear_value_source_cache",
         "custom_components/ha_mcp_tools/llm_api.py:reset_schema_converter",
         "src/ha_mcp/utils/usage_logger.py:shutdown_usage_logger",
+        "src/ha_mcp/stdio_settings_sidecar.py:retire_sidecar",
     }
 )
 
 
-def _production(repo: Path) -> list[Path]:
+def _python(repo: Path, patterns: tuple[str, ...]) -> list[Path]:
     return [
         path
-        for tree in PRODUCTION
-        for path in sorted((repo / tree).rglob("*.py"))
+        for pattern in patterns
+        for tree in sorted(repo.glob(pattern))
+        for path in sorted(tree.rglob("*.py"))
         if "_vendor" not in path.parts and "skills-vendor" not in path.parts
     ]
 
@@ -123,6 +131,7 @@ def _dotted(node: ast.expr) -> str | None:
 
 
 def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
+    # ``__all__`` entries and docstrings name a function without using it.
     exported = {
         id(elt)
         for node in tree.body
@@ -130,14 +139,26 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
         and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
         and isinstance(node.value, (ast.List, ast.Tuple))
         for elt in node.value.elts
+    } | {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, _DOCUMENTED)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
     }
     package = module if is_package else module.rpartition(".")[0]
     uses = _Uses(set(), set(), set())
+    # Modules this one imports, and attributes read through a receiver no
+    # import names (``handler = HANDLERS[radio]``, a parameter).
+    imported: set[str] = set()
+    unresolved: set[str] = set()
 
     def walk(scope: ast.AST, enclosing: dict[str, str]) -> None:
         # A scope's imports bind for its whole body, wherever they stand.
         nodes = list(_scope_nodes(scope))
         aliases = {**enclosing, **_bindings(nodes, package)}
+        imported.update(aliases.values())
         for node in nodes:
             if isinstance(node, _SCOPES):
                 walk(node, aliases)
@@ -148,8 +169,11 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 uses.qualified.add((module, node.id))
             elif isinstance(node, ast.Attribute):
                 uses.attributes.add(node.attr)
-                if (owner := _dotted(node.value)) is not None:
-                    head, _, rest = owner.partition(".")
+                owner = _dotted(node.value)
+                head, _, rest = (owner or "").partition(".")
+                if head not in aliases:
+                    unresolved.add(node.attr)
+                if owner is not None:
                     target = ".".join(filter(None, [aliases.get(head, head), rest]))
                     uses.qualified.add((target, node.attr))
             elif (
@@ -160,10 +184,13 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 uses.strings.update(WORD.findall(node.value))
 
     walk(tree, {})
+    # Such a receiver may hold a module this one imports.
+    uses.qualified.update((m, name) for m in imported for name in unresolved)
     return uses
 
 
 _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
@@ -230,8 +257,9 @@ def test_only_names(repo: Path) -> list[str]:
     """``path:name`` of every public name only the tests use, EXEMPT aside."""
     trees = {
         path.relative_to(repo).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
-        for path in _production(repo)
+        for path in _python(repo, CALLERS)
     }
+    defining = {path.relative_to(repo).as_posix() for path in _python(repo, PRODUCTION)}
     uses = _Uses(set(), set(), set())
     for relative, tree in trees.items():
         mod = _uses(tree, _module_name(relative), relative.endswith("/__init__.py"))
@@ -250,9 +278,9 @@ def test_only_names(repo: Path) -> list[str]:
     )
     tested = _words(sorted((repo / "tests").rglob("*.py")))
     found = []
-    for relative, tree in trees.items():
+    for relative in sorted(defining):
         module = _module_name(relative)
-        for name, is_method in _definitions(tree):
+        for name, is_method in _definitions(trees[relative]):
             if name.startswith("_") or HA_HOOK.match(name) or name in uses.strings:
                 continue
             loaded = f"{_LOADED}{module.rpartition('.')[2]}"

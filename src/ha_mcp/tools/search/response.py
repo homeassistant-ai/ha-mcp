@@ -393,7 +393,9 @@ def _merge_payload_metadata(
     True) marks it, and ``partial_reason`` is appended.
 
     Other keys use first-wins shadow-protect so orchestrator-owned fields
-    (``success``, ``query``, ``search_types``, ...) survive payload echoes.
+    (``success``, ``query``, ``search_types``, ``errors``, ...) survive payload
+    echoes. A surface that fails raises; ``_finalize_partial_state`` records
+    that in ``errors``.
     """
     for key, value in payload.items():
         if key in skip_keys:

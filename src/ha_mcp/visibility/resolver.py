@@ -783,36 +783,12 @@ def config_has_active_hide_dimensions(config: VisibilityConfig) -> bool:
     )
 
 
-async def visibility_filter_active() -> bool:
-    """Load the visibility config off-loop; report whether the filter can hide.
-
-    ``ha_search`` routing gates the component fast path on this: a query search
-    must NOT route through the ha_mcp_tools component while the filter is active,
-    because the component does not apply the server's opt-in visibility filter
-    and would leak entities the legacy path hides. Reuses the same loader the
-    legacy filter uses (``load_visibility_config`` over ``get_data_dir()``), so a
-    test that redirects ``resolver.get_data_dir`` steers both.
-
-    Fails **closed** to ``True`` (keep the legacy, filter-applying path) on a load
-    error: a missing config file returns a disabled default (not an error, → the
-    component), but a *malformed* enabled config raising here would otherwise
-    silently route to the unfiltered component — so on any exception keep legacy,
-    where ``load_hidden_set`` surfaces the load-failure warning.
-    """
-    try:
-        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:  # noqa: BLE001
-        return True
-    return config_has_active_hide_dimensions(config)
-
-
 async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None]:
     """Load the visibility config once and report both ``(active, wire)``.
 
     The component ``search_visibility`` gate needs both values from one config
-    snapshot. Fails **closed** to ``(True, None)`` on a load error, mirroring
-    ``visibility_filter_active``'s fail-closed-to-legacy policy: keep the legacy
-    path, and there is no config to serialize.
+    snapshot. Fails **closed** to ``(True, None)`` on a load error: keep the
+    legacy, filter-applying path, and there is no config to serialize.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())

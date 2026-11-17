@@ -93,12 +93,12 @@ class Relay:
         self._server: asyncio.Server | None = None
         self._pairs: list[tuple[asyncio.StreamWriter, asyncio.StreamWriter]] = []
         self.port = 0
-        # The request line of every connection the builder opened, in order.
+        # The method and path of each connection's first request, in order.
         self.requests: list[str] = []
 
     @property
     def websockets(self) -> int:
-        """WebSocket logins the builder opened through the relay."""
+        """WebSocket connections the builder opened through the relay."""
         return self.requests.count("GET /api/websocket")
 
     async def start(self) -> None:

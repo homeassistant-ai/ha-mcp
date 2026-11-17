@@ -48,9 +48,19 @@ module = ["tests.src.unit.test_old"]
 ignore_errors = true
 """
 _WORKFLOW = (
-    "jobs:\n  fast:\n    steps:\n"
-    "      - run: |\n          uv run mypy tests/src/unit/ tests/addon/\n"
+    "jobs:\n  fast-checks:\n    steps:\n"
+    "      - if: success() || failure()\n"
+    "        run: |\n          status=0\n"
+    "          uv run mypy tests/src/unit/ tests/addon/ || status=1\n"
+    '          exit "$status"\n'
 )
+_NOT_RUN = "no longer runs `uv run mypy tests/src/unit/ tests/addon/ || status=1`"
+
+
+def _workflow(old: str, new: str) -> dict[str, str | None]:
+    assert old in _WORKFLOW
+    return {".github/workflows/pr.yml": _WORKFLOW.replace(old, new)}
+
 
 _BASE = {
     _RULE_PATH: _RULE,
@@ -281,22 +291,54 @@ def _listed(rule: str, entry: str) -> str:
             id="settings-replaced-by-mypy-ini",
         ),
         pytest.param(
-            {
-                ".github/workflows/pr.yml": _WORKFLOW.replace(
-                    "tests/src/unit/ tests/addon/", "src/"
-                )
-            },
-            "Fast Checks no longer runs `uv run mypy tests/src/unit/ tests/addon/`",
+            _workflow("tests/src/unit/ tests/addon/", "src/"),
+            _NOT_RUN,
             id="tests-no-longer-type-checked",
         ),
         pytest.param(
-            {
-                ".github/workflows/pr.yml": _WORKFLOW.replace(
-                    "          uv run mypy", "          # uv run mypy"
-                )
-            },
-            "Fast Checks no longer runs `uv run mypy tests/src/unit/ tests/addon/`",
+            _workflow("          uv run mypy", "          # uv run mypy"),
+            _NOT_RUN,
             id="tests-type-check-commented-out",
+        ),
+        pytest.param(
+            _workflow("|| status=1", "|| true"), _NOT_RUN, id="errors-swallowed"
+        ),
+        pytest.param(
+            _workflow("addon/ ||", "addon/ --follow-imports=skip ||"),
+            _NOT_RUN,
+            id="flag-added",
+        ),
+        pytest.param(
+            _workflow("      - if: success() || failure()", "      - if: false"),
+            "step does not always run or fail",
+            id="step-skipped",
+        ),
+        pytest.param(
+            _workflow(
+                "        run: |", "        continue-on-error: true\n        run: |"
+            ),
+            "step does not always run or fail",
+            id="step-allowed-to-fail",
+        ),
+        pytest.param(
+            _workflow("  fast-checks:\n", "  fast-checks:\n    if: false\n"),
+            "job is gone or does not always run",
+            id="job-skipped",
+        ),
+        pytest.param(
+            _workflow("fast-checks:", "lint:"),
+            "job is gone or does not always run",
+            id="command-moved-to-another-job",
+        ),
+        pytest.param(
+            _workflow('          exit "$status"\n', ""),
+            "step does not exit on the status",
+            id="status-never-returned",
+        ),
+        pytest.param(
+            {".github/workflows/pr.yml": "jobs: [\n"},
+            "pr.yml: cannot be read:",
+            id="workflow-not-yaml",
         ),
         pytest.param(
             {

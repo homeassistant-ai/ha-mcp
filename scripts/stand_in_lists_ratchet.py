@@ -36,7 +36,7 @@ removing or renaming a rule (except one named in ``RETIRED_RULES`` whose list
 is empty), turning ``SLF001`` off in a test ``ruff.toml``, and for mypy: a
 setting that checks the tests less, a test path excluded, Core's or our own
 imports skipped, a ``mypy.ini`` that would replace ``pyproject.toml``'s
-settings, and a workflow that no longer runs ``MYPY_ON_TESTS``. The
+settings, and a Fast Checks step that no longer fails on ``MYPY_ON_TESTS``. The
 in-file switches (``# mypy:`` comments, ``no_type_check``) are the ast-grep
 rule ``no-stand-in-suppressions``.
 """
@@ -64,11 +64,15 @@ PYPROJECT = "pyproject.toml"
 WORKFLOW = ".github/workflows/pr.yml"
 # The Fast Checks command that runs mypy on the tests; it stays in the workflow.
 MYPY_ON_TESTS = "uv run mypy tests/src/unit/ tests/addon/"
+FAST_CHECKS = "fast-checks"
+# A step condition that runs the step after an earlier one failed too.
+ALWAYS = "success() || failure()"
 # mypy reads either of these instead of pyproject.toml.
 MYPY_CONFIG_FILES = ("mypy.ini", ".mypy.ini")
 # The value of each setting that checks the most. The tests' value of one of
 # these may only change to it; any other setting may not change at all, except
-# the lists below and the settings that decide nothing mypy reports.
+# the lists below and ``MYPY_NEUTRAL`` (``exclude`` and ``overrides`` are
+# checked on their own).
 MYPY_STRICT: dict[str, object] = {
     "ignore_errors": False,
     "ignore_missing_imports": False,
@@ -342,26 +346,34 @@ def _mypy_state(text: str, test_paths: Sequence[str] = ()) -> _MypyState:
     return _MypyState(exempt, settings, excluded, untyped)
 
 
-def _runs_mypy_on_tests(workflow: Path) -> bool:
-    """Whether a step of ``workflow`` runs ``MYPY_ON_TESTS`` (not in a comment)."""
+def _mypy_step_problem(workflow: Path) -> str | None:
+    """Why Fast Checks does not fail on ``MYPY_ON_TESTS``'s errors, if it does not.
+
+    The step must run the command as it is, fail the job on its exit status,
+    and run whenever the job does.
+    """
     try:
-        data = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
-    except OSError, yaml.YAMLError:
-        return False
-    if not isinstance(data, dict) or not isinstance(data.get("jobs"), dict):
-        return False
-    scripts = [
-        str(step.get("run", ""))
-        for job in (data.get("jobs") or {}).values()
-        if isinstance(job, dict)
-        for step in job.get("steps") or []
-        if isinstance(step, dict)
-    ]
-    return any(
-        MYPY_ON_TESTS in line and not line.lstrip().startswith("#")
-        for script in scripts
-        for line in script.splitlines()
-    )
+        data = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as err:
+        return f"cannot be read: {err}"
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    job = jobs.get(FAST_CHECKS) if isinstance(jobs, dict) else None
+    # A condition or ``continue-on-error`` of any value (``false`` included) is
+    # one an edit can turn on.
+    if not isinstance(job, dict) or {"if", "continue-on-error"} & job.keys():
+        return f"the {FAST_CHECKS} job is gone or does not always run"
+    for step in job.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        lines = [line.strip() for line in str(step.get("run", "")).splitlines()]
+        if f"{MYPY_ON_TESTS} || status=1" not in lines:
+            continue
+        if step.get("if", ALWAYS) != ALWAYS or "continue-on-error" in step:
+            return f"its `{MYPY_ON_TESTS}` step does not always run or fail"
+        if [line for line in lines if line][-1] != 'exit "$status"':
+            return f"its `{MYPY_ON_TESTS}` step does not exit on the status"
+        return None
+    return f"Fast Checks no longer runs `{MYPY_ON_TESTS} || status=1`"
 
 
 def _loosened_settings(head: dict[str, Any], base: dict[str, Any]) -> list[str]:
@@ -426,8 +438,8 @@ def _check_mypy(base: Base, repo: Path, problems: list[str]) -> None:
         for name in MYPY_CONFIG_FILES
         if (repo / name).exists()
     )
-    if not _runs_mypy_on_tests(repo / WORKFLOW):
-        problems.append(f"{WORKFLOW}: Fast Checks no longer runs `{MYPY_ON_TESTS}`")
+    if (problem := _mypy_step_problem(repo / WORKFLOW)) is not None:
+        problems.append(f"{WORKFLOW}: {problem}")
 
 
 def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:

@@ -422,7 +422,7 @@ def _log_file() -> Path:
 
 
 async def _stopped_log() -> str:
-    """Stop the usage logger, as the server does on exit, and read its file."""
+    """Stop the usage logger, which writes what is queued first, and read its file."""
     await asyncio.to_thread(shutdown_usage_logger)
     return await asyncio.to_thread(_log_file().read_text)
 
