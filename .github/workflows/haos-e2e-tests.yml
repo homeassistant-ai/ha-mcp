@@ -1,29 +1,9 @@
 name: HAOS E2E Tests
 
-# Every PR-triggered HAOS lane lives in this file (#2292 / #2302). Each lane
-# used to be its own workflow, and each of those carried an identical copy of
-# the "Detect relevant changes" classifier job — so a single PR push started
-# six checkouts on six runners to compute the same docs-only answer six times.
-# One `changes` job now feeds all six lanes.
-#
-# The lanes themselves are unchanged: same job ids, same job NAMES (they are
-# required status checks, so the names are a branch-protection contract), same
-# steps, same env, same timeouts, and the same shared ``haos-image-*`` cache
-# key. The external `haos-e2e` lane is still the sole writer of that cache;
-# every other lane restores only.
-#
-# One behavioral change comes with the merge: a manual dispatch now runs ALL
-# SIX lanes, where dispatching a single lane's file previously ran that lane
-# alone. Narrow a dispatch with the `pytest_args` / `pytest_paths` inputs
-# rather than by picking a file.
-#
-# Image resolution strategy (per lane, per run):
-#   1. Try GitHub Actions cache (keyed on HAOS version + build inputs)
-#   2. On a cache miss, build locally (build_image.py); only `haos-e2e` saves
-#
-# One job per lane on purpose: the qcow2 stays on that runner's local disk
-# through build -> test, so there's no cross-job upload+download of the ~7 GB
-# image (previously cost ~5 min per PR).
+# PR updates run external, embedded and app lanes. Embedded and app workers
+# add File & YAML Tools during the session and then run its relevant tests.
+# The separate no-tools and stdio jobs are retained for explicit manual use.
+# All variants share the baked image; external remains its sole cache writer.
 
 on:
   # No workflow-level `paths:` filter on purpose. These checks are REQUIRED
@@ -37,6 +17,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      lane:
+        description: Automatic lanes, or one lane including the retained manual-only variants
+        type: choice
+        options: [all, external, embedded, inaddon, stdio, embedded-no-tools, inaddon-no-tools]
+        default: all
       pytest_args:
         description: 'Extra pytest args (e.g. "-k test_simple_connection") for targeted iteration'
         type: string
@@ -56,7 +41,7 @@ on:
 permissions:
   contents: read
 
-# Cancel the previous commit's lanes when a PR is pushed again — six HAOS
+# Cancel the previous commit's lanes when a PR is pushed again — three HAOS
 # runners per push is the most expensive fan-out in the repo, and nothing
 # merges on a superseded commit's result. Non-PR events (dispatch) fall back
 # to the unique run id, so they are never cancelled. The image cache is
@@ -156,7 +141,7 @@ jobs:
     # through untested); and an empty `run` — which is what a non-success
     # classifier leaves behind — read the same as "docs-only". Any value other
     # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') && (github.event_name != 'workflow_dispatch' || inputs.lane == 'all' || inputs.lane == 'external') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -396,14 +381,10 @@ jobs:
     # through untested); and an empty `run` — which is what a non-success
     # classifier leaves behind — read the same as "docs-only". Any value other
     # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') && (github.event_name != 'workflow_dispatch' || inputs.lane == 'all' || inputs.lane == 'embedded') }}
     runs-on: ubuntu-22.04
-    # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
-    # session-setup cost the others don't — enabling the entry kicks off a runtime
-    # pip install of the whole fastmcp tree INSIDE the resource-constrained QEMU
-    # guest (~minutes) before the webhook answers, and both xdist workers pay it in
-    # parallel at the front of the run. The extra headroom covers that bring-up.
-    timeout-minutes: 60
+    # Includes the live tools-entry transition and Core restart on each worker.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -546,6 +527,7 @@ jobs:
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
+          E2E_COMBINE_TOPOLOGIES: "1"
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: embedded
@@ -640,9 +622,9 @@ jobs:
     # through untested); and an empty `run` — which is what a non-success
     # classifier leaves behind — read the same as "docs-only". Any value other
     # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') && (github.event_name != 'workflow_dispatch' || inputs.lane == 'all' || inputs.lane == 'inaddon') }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -804,6 +786,7 @@ jobs:
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
+          E2E_COMBINE_TOPOLOGIES: "1"
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: inaddon
@@ -911,13 +894,8 @@ jobs:
   haos-e2e-stdio:
     name: HAOS E2E Tests (stdio)
     needs: changes
-    # A skipped job reports Success to the required status check. Skipping
-    # therefore requires the classifier to have succeeded and explicitly said
-    # false. The status function is also deliberate: without !cancelled(), an
-    # implicit success() can skip this suite when the classifier fails, while an
-    # empty output can otherwise look like docs-only and fail open. Any result
-    # except an explicit successful false runs the lane.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    # Retained for explicit manual comparison; never allocates a PR runner.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.lane == 'stdio' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -1097,16 +1075,8 @@ jobs:
   haos-e2e-embedded-no-tools:
     name: HAOS E2E Tests (embedded, no tools entry)
     needs: changes
-    # A skipped job reports Success to the required status check (unlike a
-    # workflow-level path-skip, which never reports). See the `changes` job.
-    # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
-    # Two ways this used to fail open: an `if:` with no status-check function
-    # implicitly ANDs with success(), so a failed classifier skipped this suite
-    # and reported Success (a runner hiccup in a 5-minute filter job waving code
-    # through untested); and an empty `run` — which is what a non-success
-    # classifier leaves behind — read the same as "docs-only". Any value other
-    # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    # Retained for explicit manual comparison; never allocates a PR runner.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.lane == 'embedded-no-tools' }}
     runs-on: ubuntu-22.04
     # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
     # session-setup cost the others don't — enabling the entry kicks off a runtime
@@ -1349,16 +1319,8 @@ jobs:
   haos-e2e-inaddon-no-tools:
     name: HAOS E2E Tests (inaddon, no tools entry)
     needs: changes
-    # A skipped job reports Success to the required status check (unlike a
-    # workflow-level path-skip, which never reports). See the `changes` job.
-    # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
-    # Two ways this used to fail open: an `if:` with no status-check function
-    # implicitly ANDs with success(), so a failed classifier skipped this suite
-    # and reported Success (a runner hiccup in a 5-minute filter job waving code
-    # through untested); and an empty `run` — which is what a non-success
-    # classifier leaves behind — read the same as "docs-only". Any value other
-    # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    # Retained for explicit manual comparison; never allocates a PR runner.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.lane == 'inaddon-no-tools' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -1453,7 +1415,7 @@ jobs:
 
       # No cache-save step here on purpose. The external lane (``haos-e2e``)
       # computes the same cache key (#1407) and always tries to save the
-      # same qcow2; all six HAOS lanes start in
+      # same qcow2; automatic HAOS lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with

@@ -80,6 +80,12 @@ from ._conftest_testcontainer import (
     _reset_ha_in_process_caches,
     _wait_for_testcontainer_ready,
 )
+from ._conftest_topology import (
+    e2e_topology,  # noqa: F401 (pytest fixture)
+    pytest_configure,  # noqa: F401 (pytest hook)
+    pytest_generate_tests,  # noqa: F401 (pytest hook)
+    pytest_xdist_make_scheduler,  # noqa: F401 (pytest hook)
+)
 
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
@@ -383,6 +389,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
 @pytest.fixture(scope="session")
 async def ha_client(
     ha_container_with_fresh_config,
+    e2e_topology,
 ) -> AsyncGenerator[HomeAssistantClient]:
     """Create Home Assistant client connected to the container or HAOS QEMU."""
     container_info = ha_container_with_fresh_config
@@ -412,6 +419,7 @@ async def ha_client(
 @pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
+    e2e_topology,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer | None]:
     """Create MCP server instance connected to the container or HAOS QEMU.
 
@@ -459,7 +467,7 @@ async def mcp_server(
 
 @pytest.fixture(scope="session")
 async def mcp_client(
-    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir
+    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir, e2e_topology
 ) -> AsyncGenerator[Client]:
     """Create FastMCP client — in-memory for in-process server, HTTP otherwise.
 

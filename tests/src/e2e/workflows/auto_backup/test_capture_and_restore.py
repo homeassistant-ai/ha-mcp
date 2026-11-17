@@ -769,6 +769,7 @@ async def _assert_template_degraded_scrub_refused(
 @pytest.mark.helper
 @pytest.mark.cleanup
 class TestTemplateHelperCaptureRestore:
+    @pytest.mark.component_topology
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
     async def test_template_options_full_loop(  # noqa: PLR0915
         self, mcp_client, ha_client, ha_container_with_fresh_config, template_type: str

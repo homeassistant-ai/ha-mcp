@@ -20,6 +20,7 @@ from ...utilities.wait_helpers import wait_for_tool_result
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_card_fields_come_from_the_card_editor(mcp_client):
     mcp = MCPAssertions(mcp_client)
@@ -62,6 +63,7 @@ async def test_card_fields_come_from_the_card_editor(mcp_client):
     assert "tile" in failure["error"]["suggestion"]
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_saved_card_problems_come_back_as_warnings(mcp_client):
     """A write still succeeds; the warnings name each card the frontend rejects."""
@@ -147,6 +149,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_custom_cards_are_checked_and_described_from_their_resource(
     mcp_client: Client,
@@ -339,6 +342,7 @@ async def test_custom_cards_are_checked_and_described_from_their_resource(
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_componentless_writes_keep_static_card_guidance(mcp_client):
     if component_surface_available():
@@ -362,6 +366,7 @@ async def test_componentless_writes_keep_static_card_guidance(mcp_client):
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "card_type,options",
@@ -430,6 +435,7 @@ async def test_common_card_coverage_tracks_the_installed_frontend(
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_described_fields_match_stored_card_configuration(mcp_client):
     """Forms must describe stored config, including editor-translated fields."""
@@ -514,6 +520,7 @@ async def test_described_fields_match_stored_card_configuration(mcp_client):
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_editor_metadata_includes_subeditors_and_declares_partial_coverage(
     mcp_client,
@@ -561,6 +568,7 @@ async def test_editor_metadata_includes_subeditors_and_declares_partial_coverage
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_editor_advice_does_not_claim_valid_runtime_options_are_invalid(
     mcp_client,

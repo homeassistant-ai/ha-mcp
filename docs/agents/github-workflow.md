@@ -246,7 +246,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
 | `mirror-python-base.yml` | Push touching a Dockerfile or the workflow, weekly, or manual | Copy the Dockerfiles' pinned `python` base digests unchanged to `ghcr.io/homeassistant-ai/ha-mcp-python-base`, which CI image builds and the HAOS bake pull first. |
 | `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
-| `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
+| `haos-e2e-tests.yml` | Pull request or manual | Three automatic HAOS lanes against a baked qcow2; app and embedded cover both tool-entry states. Stdio and the separate no-tools variants are manual-only through `lane`. Existing check names are retained. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |

@@ -394,6 +394,7 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
     )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     """Test that successful fuzzy search returns no warning or partial flag.

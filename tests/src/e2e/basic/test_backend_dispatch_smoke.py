@@ -66,7 +66,7 @@ from typing import Any
 import pytest
 
 from ..utilities.assertions import safe_call_tool
-from ..utilities.topology import tools_entry_absent
+from ..utilities.topology import item_topology, tools_entry_absent
 
 # Floor for total collected tests across all lanes. As of 2026-05-22
 # container lanes collect 912 and HAOS lanes collect 915 (small per-mode
@@ -424,7 +424,10 @@ def test_session_collected_test_count_above_floor(request: Any) -> None:
     modes (parametrize/fixture-driven — currently 912 container vs
     915 HAOS lanes); the floor sits well below all three lanes' actuals.
     """
-    total = len(request.session.items)
+    total = sum(
+        item_topology(item) == item_topology(request.node)
+        for item in request.session.items
+    )
     assert total >= _COLLECTION_FLOOR, (
         f"Only {total} tests collected, expected >= {_COLLECTION_FLOOR}. "
         f"A test file likely failed to import, dropping coverage. Check "
@@ -468,7 +471,8 @@ def test_session_skipped_count_below_ceiling(
     skipped = sum(
         1
         for item in request.session.items
-        if any(m.name == "skip" for m in item.iter_markers())
+        if item_topology(item) == item_topology(request.node)
+        and any(m.name == "skip" for m in item.iter_markers())
     )
     assert skipped <= ceiling, (
         f"{skipped} tests have skip markers on the {lane} lane, "

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ master ]
   workflow_dispatch:
+    inputs:
+      legacy_lanes:
+        description: Also run the separate no-component and server-entry-only lanes
+        type: boolean
+        default: false
 
 # A new push to a PR makes the previous commit's lanes dead weight: nothing
 # merges on their result, so cancel them instead of paying for a full second
@@ -192,17 +197,14 @@ jobs:
           echo "e2e-validation-embedded result: $embedded_result"
           echo "e2e-validation-embedded-server-only result: $server_only_result"
           echo "e2e-validation-update-path result: $update_path_result"
-          # The container-backend matrix, the component-absent container lane,
-          # the in-process MCP server lane, the server-entry-only embedded lane,
-          # AND the update-path lane must all pass. Any one failing wedges the
-          # required gate.
-          if [ "$container_result" != "success" ] || [ "$no_component_result" != "success" ] || [ "$embedded_result" != "success" ] || [ "$server_only_result" != "success" ] || [ "$update_path_result" != "success" ]; then
-            # `skipped` here is NOT the docs-only skip (that exited 0 above): the
-            # lanes never started, e.g. the run was cancelled.
-            case "$container_result$no_component_result$embedded_result$server_only_result$update_path_result" in
-              *skipped*) echo "::error::E2E Validation lanes did not start (results: container=$container_result, no-component=$no_component_result, embedded=$embedded_result, embedded-server-only=$server_only_result, update-path=$update_path_result) — the run may have been cancelled." ;;
-              *) echo "::error::E2E Validation did not succeed (container=$container_result, no-component=$no_component_result, embedded=$embedded_result, embedded-server-only=$server_only_result, update-path=$update_path_result)." ;;
-            esac
+          # Legacy lanes are intentionally manual-only. Only an explicit
+          # manual opt-in makes them part of this run's required results.
+          legacy_expected="skipped"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.legacy_lanes }}" = "true" ]; then
+            legacy_expected="success"
+          fi
+          if [ "$container_result" != "success" ] || [ "$no_component_result" != "$legacy_expected" ] || [ "$embedded_result" != "success" ] || [ "$server_only_result" != "$legacy_expected" ] || [ "$update_path_result" != "success" ]; then
+            echo "::error::E2E Validation did not satisfy its required results (container=$container_result, no-component=$no_component_result, embedded=$embedded_result, embedded-server-only=$server_only_result, update-path=$update_path_result; legacy expected=$legacy_expected)."
             exit 1
           fi
 
@@ -756,11 +758,8 @@ jobs:
     # if they diverge, the gate demands success from a lane that never ran.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
-    # 20 (was 15): headroom for the in-process-server e2e test that runs on
-    # THIS lane (workflows/embedded/test_embedded_server.py) - its first
-    # bring-up pip-installs the wheel's dependency tree inside the test's HA
-    # container. Not about the separate e2e-validation-embedded job.
-    timeout-minutes: 20
+    # x64 includes live component installation and Core restarts.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -834,10 +833,12 @@ jobs:
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
+          --maxfail=0 \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
       env:
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -854,13 +855,8 @@ jobs:
   e2e-validation-no-component:
     name: E2E Validation (no component)
     needs: changes
-    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
-    # gate waiting on this lane (mirrors e2e-validation).
-    # Skipping requires a classifier that succeeded and said `false` out loud;
-    # anything else (a failed classifier leaves `run` empty) runs this lane.
-    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
-    # if they diverge, the gate demands success from a lane that never ran.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    # Retained for manual comparison; automatic runs use the combined sibling.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_lanes }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -959,7 +955,7 @@ jobs:
     # if they diverge, the gate demands success from a lane that never ran.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -1033,11 +1029,13 @@ jobs:
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
+          --maxfail=0 \
           --tb=short \
           -v
         echo "✅ Full E2E test suite (embedded backend) passed"
       env:
         E2E_BACKEND: "embedded"
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1054,13 +1052,8 @@ jobs:
   e2e-validation-embedded-server-only:
     name: E2E Validation (embedded, server entry only)
     needs: changes
-    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
-    # gate waiting on this lane (mirrors e2e-validation).
-    # Skipping requires a classifier that succeeded and said `false` out loud;
-    # anything else (a failed classifier leaves `run` empty) runs this lane.
-    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
-    # if they diverge, the gate demands success from a lane that never ran.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    # Retained for manual comparison; automatic runs use the combined sibling.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_lanes }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 

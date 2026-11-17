@@ -55,7 +55,7 @@ topology = _load_topology()
 @pytest.fixture(autouse=True)
 def _clear_lane_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every parser test from a lane-less environment."""
-    for name in ("E2E_NO_TOOLS_ENTRY", "E2E_BACKEND", "HAOS_TEST_MODE"):
+    for name in ("E2E_NO_TOOLS_ENTRY", "E2E_COMBINE_TOPOLOGIES", "E2E_BACKEND", "HAOS_TEST_MODE"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -355,7 +355,7 @@ def test_no_tools_lane_selects_its_own_backend_topology(
 def test_ordinary_lane_does_not_carry_the_no_tools_env(
     workflow: str, job_id: str
 ) -> None:
-    """The component-present sibling must stay component-present."""
+    """A retained lane must not be pinned permanently to its absent phase."""
     job = _job(workflow, job_id)
     job_env = job.get("env") or {}
     assert "E2E_NO_TOOLS_ENTRY" not in job_env, f"{workflow}::{job_id} job env"
@@ -367,6 +367,30 @@ def test_ordinary_lane_does_not_carry_the_no_tools_env(
             "component entry, so the lane no longer covers the ordinary "
             "topology it is paired against"
         )
+
+
+@pytest.mark.parametrize(
+    ("workflow", "legacy", "retained"),
+    [
+        (_PR, "e2e-validation-no-component", "e2e-validation"),
+        (_PR, "e2e-validation-embedded-server-only", "e2e-validation-embedded"),
+        (_HAOS, "haos-e2e-embedded-no-tools", "haos-e2e-embedded"),
+        (_HAOS, "haos-e2e-inaddon-no-tools", "haos-e2e-inaddon"),
+    ],
+)
+def test_retiring_a_runner_preserves_its_topology_in_the_retained_job(
+    workflow: str, legacy: str, retained: str
+) -> None:
+    condition = _job(workflow, legacy)["if"]
+    assert "github.event_name == 'workflow_dispatch'" in condition
+    assert "inputs." in condition
+    assert _step_env(_pytest_step(workflow, retained)).get("E2E_COMBINE_TOPOLOGIES")
+
+
+def test_stdio_lane_requires_an_explicit_manual_selection() -> None:
+    condition = _job(_HAOS, "haos-e2e-stdio")["if"]
+    assert "github.event_name == 'workflow_dispatch'" in condition
+    assert "inputs.lane == 'stdio'" in condition
 
 
 @pytest.mark.parametrize(("workflow", "job_id"), _AUDIT_LANES, ids=lambda v: v)

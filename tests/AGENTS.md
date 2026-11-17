@@ -30,6 +30,7 @@ before adding a gate:
 | `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
 | `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
 | `requires_component_surface` | every lane that starts with an active component config entry (`src/e2e/utilities/topology.py::component_surface_available`) — skips the two no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled) |
+| `component_topology` | tests whose assertions exercise different component and fallback behavior; both states on combined external lanes, once on embedded lanes whose server already provides the shared surface |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
@@ -74,7 +75,37 @@ In production the component is optional (it ships via HACS), so server code
 reading component-only data must degrade honestly for installs without it
 rather than assume the e2e's always-present case.
 
-## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
+## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)
+
+The x64 container external and embedded jobs and the HAOS app and embedded
+jobs reuse each worker's HA instance across two ordered phases. They boot
+without File & YAML Tools and run the general suite first. Then they add the
+tools entry through its config flow, restart Core, recreate the test clients,
+and run only the tests that need the newly available capabilities:
+
+- `requires_tools_entry` runs after installation.
+- `requires_component_surface` runs before installation on embedded backends,
+  whose server entry already provides that surface, and afterwards externally.
+- `component_topology` runs both before and after installation externally;
+  embedded backends run it once, since their shared surface never disappears.
+- Other tests run once, before installation, including `no_tools_only`.
+
+The external container initially has no component files. The transition copies
+the checked-out component and restarts Core before opening its setup flow.
+HAOS already has the component files in its image. The app is restarted after
+Core so its cached absence verdict does not carry into the installed phase.
+
+Use `--dist loadscope` (or `-n0`). The topology scheduler keeps module/class
+scopes together within each phase and preserves absent-before-present order
+on every worker. Do not add an unrelated test to `component_topology` just to
+make it run twice. Its assertions must cover a component-dependent branch.
+
+The separate no-tools jobs and HAOS stdio job remain available manually:
+`pr.yml` has `legacy_lanes`; `haos-e2e-tests.yml` has a `lane` selector. Normal
+PR updates use eight E2E jobs. ARM64, update-path, HAOS external, and the
+post-merge stable/beta workflows retain their existing coverage.
+
+## No-tools topology (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
 The rest of the suite always has the "HA-MCP File & YAML Tools" config entry.
 `E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry. The lanes that keep the

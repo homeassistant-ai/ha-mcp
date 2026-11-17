@@ -9,9 +9,29 @@ re-deriving the env logic. See the "No-tools lanes" section of
 from __future__ import annotations
 
 import os
+from typing import Any
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def combined_topologies() -> bool:
+    """Whether this session covers absence followed by live installation."""
+    value = os.environ.get("E2E_COMBINE_TOPOLOGIES", "").strip().lower()
+    if value not in _TRUE_VALUES | _FALSE_VALUES:
+        raise RuntimeError(f"Unrecognized E2E_COMBINE_TOPOLOGIES value: {value!r}")
+    return value in _TRUE_VALUES
+
+
+def item_topology(item: Any) -> str | None:
+    """Return a collected item's phase, before fixtures have changed state."""
+    callspec = getattr(item, "callspec", None)
+    return callspec.params.get("e2e_topology") if callspec is not None else None
+
+
+def item_tools_entry_absent(item: Any) -> bool:
+    phase = item_topology(item)
+    return phase == "topology_without_tools" if phase else tools_entry_absent()
 
 
 def tools_entry_absent() -> bool:
@@ -39,7 +59,7 @@ def tools_entry_absent() -> bool:
     )
 
 
-def component_surface_available() -> bool:
+def component_surface_available(*, no_tools_entry: bool | None = None) -> bool:
     """True wherever a live ha_mcp_tools component surface can answer.
 
     The ordinary lanes all have the component's tools entry, and the embedded
@@ -58,7 +78,7 @@ def component_surface_available() -> bool:
     # differently-cased env value can't make this predicate disagree with
     # the dispatch that actually selects the embedded backend.
     return (
-        not tools_entry_absent()
+        not (tools_entry_absent() if no_tools_entry is None else no_tools_entry)
         or os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded"
         or os.environ.get("HAOS_TEST_MODE", "").strip().lower() == "embedded"
     )

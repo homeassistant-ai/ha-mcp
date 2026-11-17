@@ -421,6 +421,7 @@ markers = [
     "haos_embedded_only: HAOS embedded mode only (HAOS_TEST_MODE=embedded) - the server shares Home Assistant's process and event loop; #2357",
     "not_on_embedded: skip on the embedded backend (E2E_BACKEND=embedded) - provably redundant with the lane's own in-process ha_mcp_server session backend; #1527",
     "not_on_haos_embedded: skip on the haos_embedded backend (HAOS_TEST_MODE=embedded) - provably redundant with the lane's own session backend, which enables the entry once and drives the in-process server for the whole suite; #1527",
+    "component_topology: exercises different component and fallback behavior; run in both states of combined external lanes",
     "requires_tools_entry: needs the File & YAML Tools config entry - skipped on E2E_NO_TOOLS_ENTRY=1 lanes (#2292)",
     "no_tools_only: runs only on E2E_NO_TOOLS_ENTRY=1 lanes (#2292)",
     "requires_component_surface: needs an active ha_mcp_tools config entry - skipped on the no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled); #2584",
