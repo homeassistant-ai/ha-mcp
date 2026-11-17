@@ -180,15 +180,6 @@ def test_pyproject_declares_no_shared_fastmcp_or_mcp():
     assert not declared & _VENDORED_DISTRIBUTIONS
 
 
-def _floor(requirement: Requirement) -> Version | None:
-    versions = [
-        Version(s.version)
-        for s in requirement.specifier
-        if s.operator in {">=", ">", "==", "~="}
-    ]
-    return max(versions, default=None)
-
-
 def _ceiling(requirement: Requirement) -> Version | None:
     versions = [
         Version(s.version)
@@ -241,9 +232,15 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
         if not candidates:
             problems.append(f"{needed} is not declared")
             continue
-        floor, ceiling = _floor(needed), _ceiling(needed)
+        floor, ceiling = vendor_fastmcp.requirement_floor(needed), _ceiling(needed)
         ok = any(
-            (floor is None or ((own := _floor(c)) is not None and own >= floor))
+            (
+                floor is None
+                or (
+                    (own := vendor_fastmcp.requirement_floor(c)) is not None
+                    and own >= floor
+                )
+            )
             and (
                 ceiling is None or ((top := _ceiling(c)) is not None and top <= ceiling)
             )

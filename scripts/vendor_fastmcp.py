@@ -342,7 +342,8 @@ def _needed_floors(
     return floors
 
 
-def _declared_floor(requirement: Requirement) -> Version | None:
+def requirement_floor(requirement: Requirement) -> Version | None:
+    """The lowest version ``requirement`` admits, by its highest lower bound."""
     versions = [
         Version(s.version)
         for s in requirement.specifier
@@ -361,7 +362,7 @@ def _raise_floor(entry: str, floors: dict[str, Version]) -> tuple[str, str | Non
     """
     requirement = Requirement(entry)
     target = floors.get(canonicalize_name(requirement.name))
-    declared = _declared_floor(requirement)
+    declared = requirement_floor(requirement)
     if target is None or (declared is not None and declared >= target):
         return entry, None
     lows = [s for s in requirement.specifier if s.operator == ">="]
