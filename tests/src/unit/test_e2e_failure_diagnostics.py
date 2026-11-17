@@ -3,67 +3,74 @@
 A tool call that fails with a webhook 502, or a HACS entry that never loads,
 names its cause only in the Home Assistant container log. Without these hooks
 that log is lost when the session container is removed.
+
+The session fixture runs for real (``_e2e_session``) against the unit tests'
+Home Assistant, so the container the hooks read is the one the fixture keeps
+for the session, and the gate that gives up is the fixture's own.
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import docker
 import pytest
-from docker.models.containers import Container
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
-from testcontainers.core.container import DockerContainer
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ..e2e import _conftest_readiness as readiness
+from ._e2e_session import Session, plain_container_session, running_home_assistant
 
 
-class _DockerSide(Container):
-    """What Docker holds for the session container: its log, or the error
-    reading it."""
+class _MinuteHand:
+    """The readiness gates' clock, half a minute on at every reading: a gate
+    with a minute's budget gives up after its second look, without waiting."""
 
-    def __init__(self, log: bytes = b"", error: Exception | None = None) -> None:
-        super().__init__()
-        self.log = log
-        self.error = error
-        self.log_kwargs: dict[str, Any] = {}
+    def __init__(self) -> None:
+        self.now = 0.0
 
-    def logs(self, **kwargs: Any) -> bytes:
-        self.log_kwargs = kwargs
-        if self.error is not None:
-            raise self.error
-        return self.log
+    def monotonic(self) -> float:
+        self.now += 30
+        return self.now
 
-
-class _SessionContainer(DockerContainer):
-    """The session's Home Assistant container, without a Docker daemon."""
-
-    def __init__(self, docker_side: _DockerSide) -> None:
-        self.docker_side = docker_side
-
-    def get_wrapped_container(self) -> Container:
-        return self.docker_side
+    def sleep(self, seconds: float) -> None:
+        return None
 
 
 @pytest.fixture
-def item(request: pytest.FixtureRequest) -> Iterator[pytest.Item]:
-    """This test's own item, whose config stash holds the container."""
-    node = request.node
-    assert isinstance(node, pytest.Item)
-    yield node
-    if readiness.HA_CONTAINER_KEY in node.config.stash:
-        del node.config.stash[readiness.HA_CONTAINER_KEY]
+async def running_session(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> AsyncIterator[Session]:
+    """The session fixture, set up and not yet torn down."""
+    session = plain_container_session(
+        monkeypatch,
+        request,
+        tmp_path,
+        home_assistant_url=core_client.base_url,
+        token=core_client.token,
+    )
+    generator = session.fixture()
+    async with running_home_assistant(hass):
+        await hass.async_add_executor_job(next, generator)
+    try:
+        yield session
+    finally:
+        generator.close()
+        await hass.async_add_executor_job(session.request.finalize)
 
 
-def _run_makereport(
-    item: pytest.Item, docker_side: _DockerSide | None, *, failed: bool
+def _makereport(
+    request: pytest.FixtureRequest, *, failed: bool
 ) -> tuple[pytest.TestReport, pytest.CallInfo[None]]:
-    if docker_side is not None:
-        item.config.stash[readiness.HA_CONTAINER_KEY] = _SessionContainer(docker_side)
+    """Run the hook on this test's own item, for a call phase that passed or failed."""
+    item = request.node
+    assert isinstance(item, pytest.Item)
     call = pytest.CallInfo.from_call(lambda: None, when="call")
     report = pytest.TestReport(
         nodeid=item.nodeid,
@@ -81,11 +88,13 @@ def _run_makereport(
 
 
 def test_failed_test_shows_the_home_assistant_log_from_its_own_run(
-    item: pytest.Item,
+    running_session: Session, request: pytest.FixtureRequest
 ) -> None:
-    docker_side = _DockerSide(b"MCP webhook: upstream request failed: reset\n")
+    running_session.container.logs.return_value = (
+        b"MCP webhook: upstream request failed: reset\n"
+    )
 
-    report, call = _run_makereport(item, docker_side, failed=True)
+    report, call = _makereport(request, failed=True)
 
     assert report.sections == [
         (
@@ -93,28 +102,36 @@ def test_failed_test_shows_the_home_assistant_log_from_its_own_run(
             "MCP webhook: upstream request failed: reset\n",
         )
     ]
-    assert docker_side.log_kwargs["since"] == call.start
+    assert running_session.container.logs.call_args.kwargs["since"] == call.start
 
 
-@pytest.mark.parametrize(
-    ("docker_side", "failed"),
-    [
-        pytest.param(_DockerSide(b"noise"), False, id="passing-test"),
-        pytest.param(None, True, id="haos-lane-has-no-container"),
-    ],
-)
-def test_no_home_assistant_log_is_attached(
-    item: pytest.Item, docker_side: _DockerSide | None, failed: bool
+def test_a_passing_test_gets_no_home_assistant_log(
+    running_session: Session, request: pytest.FixtureRequest
 ) -> None:
-    report, _ = _run_makereport(item, docker_side, failed=failed)
+    running_session.container.logs.return_value = b"noise"
+
+    report, _ = _makereport(request, failed=False)
 
     assert report.sections == []
 
 
-def test_unreadable_log_still_reports_the_failure(item: pytest.Item) -> None:
-    docker_side = _DockerSide(error=docker.errors.NotFound("container gone"))
+def test_a_lane_without_a_session_container_attaches_nothing(
+    request: pytest.FixtureRequest,
+) -> None:
+    """The HAOS lanes boot a VM, not a container, so there is no log to read."""
+    report, _ = _makereport(request, failed=True)
 
-    report, _ = _run_makereport(item, docker_side, failed=True)
+    assert report.sections == []
+
+
+def test_unreadable_log_still_reports_the_failure(
+    running_session: Session, request: pytest.FixtureRequest
+) -> None:
+    running_session.container.logs.side_effect = docker.errors.NotFound(
+        "container gone"
+    )
+
+    report, _ = _makereport(request, failed=True)
 
     assert "docker logs failed: NotFound" in report.sections[0][1]
 
@@ -123,32 +140,30 @@ async def test_timed_out_entries_gate_shows_the_home_assistant_log_in_the_summar
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
 ) -> None:
-    for name in (
-        "READINESS_TIMINGS",
-        "ALL_READINESS_TIMINGS",
-        "READINESS_DIAGNOSTICS",
-        "ALL_READINESS_DIAGNOSTICS",
-    ):
-        monkeypatch.setattr(readiness, name, [])
-    assert await async_setup_component(hass, "config", {})
-    MockConfigEntry(domain="hacs", title="HACS").add_to_hass(hass)
-    container = _SessionContainer(
-        _DockerSide(b"Setup failed for custom integration 'hacs'\n")
+    session = plain_container_session(
+        monkeypatch,
+        request,
+        tmp_path,
+        home_assistant_url=core_client.base_url,
+        token=core_client.token,
     )
+    session.container.logs.return_value = (
+        b"Setup failed for custom integration 'hacs'\n"
+    )
+    monkeypatch.setattr(readiness, "time", _MinuteHand())
+    generator = session.fixture()
 
-    # Worker side: the gate gives up and the session hands its records over.
-    await hass.async_add_executor_job(
-        readiness.wait_for_entries_loaded,
-        container,
-        core_client.base_url,
-        {"Authorization": f"Bearer {core_client.token}"},
-        0,
-    )
+    # Worker side: HACS never loads, the gate gives up and the session goes on.
+    async with running_home_assistant(hass):
+        MockConfigEntry(domain="hacs", title="HACS").add_to_hass(hass)
+        await hass.async_add_executor_job(next, generator)
+    generator.close()
+    await hass.async_add_executor_job(session.request.finalize)
     worker = SimpleNamespace(config=SimpleNamespace(workeroutput={}))
     readiness.pytest_sessionfinish(worker, 0)
-    monkeypatch.setattr(readiness, "READINESS_DIAGNOSTICS", [])
-    monkeypatch.setattr(readiness, "READINESS_TIMINGS", [])
 
     # Controller side: collect the worker's output and render the summary.
     readiness.pytest_testnodedown(

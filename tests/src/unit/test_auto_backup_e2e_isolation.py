@@ -20,6 +20,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils import data_paths
 
 from ..e2e import conftest as e2e_fixtures
+from ..e2e.utilities.assertions import parse_mcp_result
 from ..e2e.workflows.auto_backup import conftest as backup_fixtures
 from ..e2e.workflows.auto_backup.test_capture_and_restore import _enable_auto_backup
 
@@ -95,22 +96,40 @@ def test_backup_fixture_preserves_out_of_process_environment(
     assert not (tmp_path / "backups").exists()
 
 
-def test_stdio_environment_pins_backups_inside_its_disposable_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    config_dir = tmp_path / "stdio"
+@pytest.fixture
+def developer_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A developer's home holding a pre-#2372 backup store, and their own
+    backup directory setting."""
+    home = tmp_path / "home"
+    legacy = home / ".local" / "share" / "ha_mcp" / "backups"
+    legacy.mkdir(parents=True)
+    (legacy / "existing.yaml").write_text("existing backup", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "developer-backups"))
-    env = e2e_fixtures.stdio_env(
-        {"base_url": "http://homeassistant.invalid:8123", "token": "test-token"},
-        config_dir,
+
+
+@pytest.mark.usefixtures("developer_home")
+async def test_the_stdio_server_keeps_its_backups_in_its_disposable_directory(
+    core_client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    """The stdio lanes run the installed ``ha-mcp`` with an environment of its
+    own: the developer's backup setting does not reach it, and its config
+    directory alone would still let the legacy store in their home be chosen."""
+    config_dir = tmp_path / "stdio"
+    fixture = inspect.unwrap(e2e_fixtures.stdio_mcp_client)
+    clients = fixture(
+        {"base_url": core_client.base_url, "token": core_client.token}, config_dir
     )
-    assert env["HAMCP_BACKUP_DIR"] == str(config_dir / "backups")
-    # The developer's legacy history is not where the stdio server writes.
-    _legacy_history(monkeypatch, tmp_path)
-    manager = bm.BackupManager(
-        SimpleNamespace(auto_backup_dir=env["HAMCP_BACKUP_DIR"]), SimpleNamespace()
-    )
-    assert manager.backup_dir == config_dir / "backups"
+
+    client = await anext(clients)
+    try:
+        result = await client.call_tool(
+            "ha_manage_backup", {"scope": "edits", "action": "list"}
+        )
+    finally:
+        await clients.aclose()
+
+    assert parse_mcp_result(result)["data"]["backup_dir"] == str(config_dir / "backups")
 
 
 async def test_in_process_server_keeps_every_write_out_of_the_developer_home(

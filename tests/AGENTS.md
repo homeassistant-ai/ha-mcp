@@ -2,7 +2,7 @@
 
 ## Custom Component (ha_mcp_tools)
 
-- Component is installed into the Docker container by `install_custom_component` in `src/e2e/_conftest_seed.py`
+- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/_conftest_seed.py`
 - HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}`. Most tools unwrap it with `unwrap_service_response()` (`src/ha_mcp/tools/util_helpers.py`); `ha_call_service` instead *splits* it, projecting `changed_states` into `result` and surfacing `service_response` once at the top level (issue #2085)
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
@@ -47,7 +47,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
 - **The File & YAML Tools entry** (the privileged filesystem and YAML
-  services) is set up on every lane by `install_custom_component` EXCEPT the
+  services) is set up on every lane by `_install_custom_component` EXCEPT the
   no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see below), where that config entry
   is absent and the privileged services never register. A test that
   relies on tools-entry behaviour must carry `requires_tools_entry`;
@@ -84,12 +84,12 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 
 | Lane | Topology |
 |---|---|
-| container (`E2E_BACKEND` unset) | **no component at all** — `install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
+| container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
 | container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
 | HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot, and the baked server entry stays disabled until a test enables it (`haos_only/test_embedded_server_haos.py` does, on every HAOS lane but `embedded`) |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
-The staging lives in `_conftest_testcontainer.prepare_testcontainer_config` (container) and
+The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
 refreshers, and raises rather than warning: a silent no-op would leave the
@@ -174,8 +174,17 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   reruns it on every Core bump. One whose requirements are not installed with
   Core (`cloud`) cannot be imported here; the component reaches it through a
   small function of its own that the test replaces.
+- The frontend is the installed `home-assistant-frontend` (pinned through
+  `INTEGRATIONS` like any requirement): a test reads what `hass_frontend.where()`
+  names and never writes a frontend build of its own.
+- A unit test has no Supervisor: `src/unit/_tools_addons_core.py` serves its
+  REST API over real HTTP behind Core's `hassio` integration. What it answers
+  is built from Supervisor's own client models (`aiohasupervisor.models`, as
+  `app_info()` does) with only the fields the test is about changed, never a
+  dict typed into the test. A body the models cannot express is one Supervisor
+  never sends.
 
-Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Twelve ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
@@ -214,6 +223,13 @@ function (`wraps=real_fn`) and a failure (`side_effect=SomeError`) stay; a
 which would hide a replacement from the rule. The test sets
 up the real component or integration, uses Core's Supervisor test support, or
 serves PyPI's JSON from a local server. It has no list.
+The eleventh (`rules/no-typed-core-objects.yml`) refuses a dict shaped like a
+Core state, entity or device registry row, or config entry, and the twelfth
+(`rules/no-typed-core-frames.yml`) one shaped like a frame Core sends over its
+WebSocket (a result, the login handshake, an event): set Core up and read it
+back, or let Core send it. A dict in an assert (what our code or Core is
+expected to return) and a user's automation, script or scene config are not
+refused. Neither has a list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
@@ -236,11 +252,15 @@ older files. The script also fails a rule that is removed (unless the script
 names it as retired and its list is empty), renamed or made to scan fewer
 files.
 
-A listed file is exempt for what it already holds, not for what is added to
-it. For each file on an ast-grep rule's list or a `SLF001` list that the pull
-request changes, the same script counts what the check refuses at the base
-and in the pull request, and fails when the count rises. A test added to a listed file goes in
-a new file on real Core, or the file is converted.
+A listed file is exempt for what it already holds, and an edit to it could add
+a faked test. A listed file the pull request changes is therefore converted:
+the same script fails when it is still on any list.
+
+Production code has no public name that only the tests use
+(`scripts/test_only_public_names.py`, in Fast Checks): a helper made public for
+a test lets it skip the entry point a user reaches. Call the tool, the command
+or the script's `main`, and make the name private or delete it. The script
+names the few that reset module state between tests.
 
 Two more checks run on these trees; `SLF001` has its lists under the same
 rules, and mypy has none:

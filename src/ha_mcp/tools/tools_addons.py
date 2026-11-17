@@ -2111,7 +2111,7 @@ def _addon_config_for_http_hint(addon: dict[str, Any]) -> dict[str, Any]:
     """Return the app settings that can explain direct-access failures."""
     return {
         "options": addon.get("options"),
-        "ports": addon.get("network") or addon.get("ports") or None,
+        "ports": addon.get("network") or None,
         "host_network": addon.get("host_network"),
         "ingress_port": addon.get("ingress_port"),
     }
@@ -2187,11 +2187,12 @@ def _add_http_error_hints(
                 else:
                     result["suggestion"] = _direct_port_rejection_suggestion()
             else:
-                ports_dict = addon.get("network") or addon.get("ports") or {}
+                # Supervisor keys the map "<port>" or "<port>/<tcp|udp>".
+                ports_dict = addon.get("network") or {}
                 unmapped = sorted(k for k, v in ports_dict.items() if v is None)
-                example_proto = unmapped[0] if unmapped else ""
-                example_port = example_proto.split("/", 1)[0] if example_proto else ""
-                if unmapped and example_port.isdigit():
+                if unmapped:
+                    example_proto = unmapped[0]
+                    example_port = example_proto.split("/", 1)[0]
                     addon_label = addon.get("name") or slug_val
                     result["suggestion"] = (
                         f"Map {example_proto} to a host port in the HA UI "

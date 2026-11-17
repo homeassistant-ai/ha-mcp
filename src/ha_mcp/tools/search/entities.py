@@ -374,7 +374,7 @@ def _state_matches(record: dict[str, Any], state_filter: str) -> bool:
     return (record.get("state") or "").lower() == state_filter
 
 
-def validate_entity_search_params(
+def _validate_entity_search_params(
     query: str | None,
     domain_filter: str | None,
     area_filter: str | None,

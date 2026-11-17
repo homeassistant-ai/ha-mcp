@@ -43,7 +43,7 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
 # caller has the input they passed); ``area_name`` is per-entity
 # decoration that belongs inside the entity record; ``note`` is a
 # redundant mode-label string already conveyed by ``search_type``. None
-# are in ``ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys
+# are in ``_ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys
 # docstring, so leaking them would advertise undocumented keys via the
 # typo-guard while a real ``fields=`` projection silently strips them.
 #
@@ -53,7 +53,7 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
 # pins their presence (search_type at 17+ sites, domain_filter at 6,
 # area_filter at 1, message at 2), so callers verifiably depend on them.
 # All are documented as top-level keys + retained in
-# ``ALWAYS_KEEP_PROJECTION``. Public so the fields-docstring drift test can
+# ``_ALWAYS_KEEP_PROJECTION``. Public so the fields-docstring drift test can
 # require every emitted entities-branch key to be stripped or documented.
 ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
     "results",
@@ -73,7 +73,7 @@ ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
 _VALID_SEARCH_TYPES: frozenset[str] = frozenset(b[:-1] for b in _CONFIG_BUCKETS)
 
 
-def validate_search_types(parsed: list[str] | None) -> None:
+def _validate_search_types(parsed: list[str] | None) -> None:
     """Reject unknown or empty ``search_types`` values with a structured error.
 
     ``parse_string_list_param`` only verifies the *shape* (string / list /
@@ -112,7 +112,7 @@ def validate_search_types(parsed: list[str] | None) -> None:
 # itself; this set extends the protection to orchestrator-specific echoes
 # (query, search_types), the error / partial diagnostics, and the
 # pagination axis.
-ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
+_ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
     {
         "query",
         "search_types",
@@ -168,7 +168,7 @@ ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
 )
 
 
-def mirror_partial_to_warnings(response: dict[str, Any]) -> None:
+def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
     """Mirror ``partial_reason`` into ``warnings[]`` so agents see truncation.
 
     The re-review's BAT data showed agents reliably read ``warnings`` but
@@ -201,12 +201,12 @@ def _omit_empty_warnings(response: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
-def project_response_fields(
+def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:
     """Project the orchestrator response to the caller-requested top-level
     keys, retaining the diagnostic / pagination contract via
-    ``ALWAYS_KEEP_PROJECTION``.
+    ``_ALWAYS_KEEP_PROJECTION``.
 
     Inlined rather than delegated to ``response_helpers.project_fields`` so the
     pre-parsed list passes through end-to-end — the orchestrator already
@@ -221,7 +221,7 @@ def project_response_fields(
     """
     if parsed_fields is None:
         return response
-    always_keep: set[str] = {"success", "warnings"} | set(ALWAYS_KEEP_PROJECTION)
+    always_keep: set[str] = {"success", "warnings"} | set(_ALWAYS_KEEP_PROJECTION)
     requested = set(parsed_fields)
     keep = requested | always_keep
     result = {k: v for k, v in response.items() if k in keep}
@@ -238,7 +238,7 @@ def project_response_fields(
     return result
 
 
-INTENT_SKIP_WARNING: str = (
+_INTENT_SKIP_WARNING: str = (
     "config-body search skipped: domain_filter / area_filter / "
     "state_filter signals entity-only intent. To search config bodies, "
     "use the corresponding get/list tool or repeat the query without "
@@ -246,7 +246,7 @@ INTENT_SKIP_WARNING: str = (
 )
 
 
-def emit_intent_skip_warning(
+def _emit_intent_skip_warning(
     response: dict[str, Any], body_skipped_by_intent_gate: bool
 ) -> None:
     """Append the caller-facing warning when the entity-intent gate fires.
@@ -257,10 +257,10 @@ def emit_intent_skip_warning(
     are preserved.
     """
     if body_skipped_by_intent_gate:
-        response.setdefault("warnings", []).append(INTENT_SKIP_WARNING)
+        response.setdefault("warnings", []).append(_INTENT_SKIP_WARNING)
 
 
-def synthesize_combined_pagination(response: dict[str, Any]) -> None:
+def _synthesize_combined_pagination(response: dict[str, Any]) -> None:
     """Set the flat ``has_more`` / ``next_offset`` from per-surface keys.
 
     The flat keys give callers a "iterate normally" surface; per-surface
@@ -279,7 +279,7 @@ def synthesize_combined_pagination(response: dict[str, Any]) -> None:
     )
 
 
-def finalize_partial_state(
+def _finalize_partial_state(
     response: dict[str, Any],
     *,
     partial_local: bool,
@@ -287,11 +287,9 @@ def finalize_partial_state(
 ) -> None:
     """Apply the orchestrator-local partial state to the response.
 
-    Sets ``partial: True`` when a branch raised, AND extends ``errors[]``
-    with the orchestrator-tagged surface errors — extending, not clobbering,
-    so any payload-side errors already accumulated by
-    ``merge_payload_metadata`` survive. Extracted from the orchestrator
-    so the no-clobber contract is unit-testable.
+    Sets ``partial: True`` when a branch raised, adds the orchestrator-tagged
+    surface errors to ``errors[]``, and appends their reason after any reason
+    a surface already gave, rather than writing over it.
     """
     if partial_local:
         response["partial"] = True
@@ -304,7 +302,7 @@ def finalize_partial_state(
         )
 
 
-def compute_eligibility(
+def _compute_eligibility(
     *,
     query_text: str,
     domain_filter_text: str,
@@ -381,7 +379,7 @@ async def _prefetch_shared_search_snapshots(
     return shared_states, shared_registry
 
 
-def merge_payload_metadata(
+def _merge_payload_metadata(
     response: dict[str, Any],
     payload: dict[str, Any],
     *,
@@ -390,10 +388,9 @@ def merge_payload_metadata(
     """Shallow-merge non-conflicting metadata from a sub-helper payload into the
     orchestrator response.
 
-    Accumulating keys — extend / OR-merge across branches so neither side's
-    diagnostic data is silently dropped: ``warnings`` (list[str], extend),
-    ``errors`` (list[dict], extend), ``partial`` (bool, OR),
-    ``partial_reason`` (str, separator-concat with de-dup).
+    Accumulating keys, so neither surface's diagnostics are dropped:
+    ``warnings`` extends the response's list, ``partial`` (only ever sent as
+    True) marks it, and ``partial_reason`` is appended.
 
     Other keys use first-wins shadow-protect so orchestrator-owned fields
     (``success``, ``query``, ``search_types``, ...) survive payload echoes.
@@ -401,21 +398,14 @@ def merge_payload_metadata(
     for key, value in payload.items():
         if key in skip_keys:
             continue
-        if key == "warnings" and isinstance(value, list):
-            _merge_list_key(response, key, value)
-            continue
-        if key == "errors" and isinstance(value, list):
-            _merge_list_key(response, key, value)
-            continue
-        if key == "partial" and isinstance(value, bool):
-            response["partial"] = bool(response.get("partial")) or value
-            continue
-        if key == "partial_reason" and isinstance(value, str) and value:
+        if key == "warnings":
+            response["warnings"].extend(value)
+        elif key == "partial":
+            response["partial"] = True
+        elif key == "partial_reason":
             _merge_partial_reason(response, value)
-            continue
-        if key in response:
-            continue
-        response[key] = value
+        elif key not in response:
+            response[key] = value
 
 
 def _build_pagination_metadata(
@@ -442,28 +432,10 @@ _project_records = project_records
 _result_fields_warning = result_fields_warning
 
 
-def _merge_list_key(response: dict[str, Any], key: str, value: list[Any]) -> None:
-    """Extend an existing list key or replace a non-list value with a new list.
-
-    The non-list branch handles a broken upstream state where ``key`` is already
-    present but not a list — that violates the ``list[str]`` contract.  Replace
-    with the payload's well-typed list rather than crash on ``.extend``.
-    """
-    current = response.get(key)
-    if isinstance(current, list):
-        current.extend(value)
-    else:
-        response[key] = list(value)
-
-
 def _merge_partial_reason(response: dict[str, Any], value: str) -> None:
-    """Concatenate a new partial_reason string with de-duplication."""
+    """Append a partial_reason fragment after any reason already set."""
     current = response.get("partial_reason")
-    if isinstance(current, str) and current:
-        if value not in current:
-            response["partial_reason"] = f"{current} ; {value}"
-    else:
-        response["partial_reason"] = value
+    response["partial_reason"] = f"{current} ; {value}" if current else value
 
 
 def _format_search_diagnostics(diagnostics: dict[str, Any]) -> str | None:
@@ -520,7 +492,7 @@ def _apply_search_outcome(
         response["entity_total_matches"] = payload.get("total_matches", 0)
         response["entity_has_more"] = bool(payload.get("has_more", False))
         response["entity_next_offset"] = payload.get("next_offset")
-        merge_payload_metadata(
+        _merge_payload_metadata(
             response,
             payload,
             skip_keys=ENTITIES_BRANCH_SKIP_KEYS,
@@ -532,7 +504,7 @@ def _apply_search_outcome(
         response["config_total_matches"] = payload.get("total_matches", 0)
         response["config_has_more"] = bool(payload.get("has_more", False))
         response["config_next_offset"] = payload.get("next_offset")
-        merge_payload_metadata(
+        _merge_payload_metadata(
             response,
             payload,
             skip_keys=(
@@ -674,7 +646,7 @@ def _parse_component_result_fields(result_fields: Any) -> list[str] | None:
     """Parse ``result_fields`` for the component path (mirrors the entity branch).
 
     The legacy entity branch parses ``result_fields`` inside
-    ``validate_entity_search_params``; the component path re-uses the identical
+    ``_validate_entity_search_params``; the component path re-uses the identical
     parse + validation so a bad ``result_fields`` raises the same structured
     error on either path.
     """
@@ -704,7 +676,7 @@ def _as_record_list(value: Any) -> list[dict[str, Any]]:
 def _normalized_domain_filter(raw: str | None) -> str | None:
     """Strip + lowercase a domain filter to the entity branch's canonical form.
 
-    Matches ``validate_entity_search_params`` so the component request and the
+    Matches ``_validate_entity_search_params`` so the component request and the
     ``domain_filter`` echo agree with the legacy path.
     """
     return ((raw or "").strip().lower()) or None

@@ -21,7 +21,7 @@ Locales listed in ``BEST_EFFORT_LOCALES`` are deliberately excluded from both
 authored surfaces. They remain hand-editable and use the normal English
 fallback without consuming translation quota or making this job fail.
 
-The engine is one function (``call_gemini``): the Gemini API free tier,
+The engine is one function (``_call_gemini``): the Gemini API free tier,
 keyed by ``GEMINI_API_KEY``, with ``GEMINI_MODEL`` / ``GEMINI_API_URL``
 overrides for any Gemini-compatible endpoint. The fallback when the engine is
 down is a HUMAN: hand-edit the translations, run
@@ -29,9 +29,9 @@ down is a HUMAN: hand-edit the translations, run
 ``python scripts/update_locale_baseline.py``, and push — the next pipeline
 run sees nothing stale and no-ops. Hand-edits always win; the machine only
 touches strings whose English changed.
-Every returned string is validated (placeholder parity, the settings UI markup
-allowlist, formatting-tag parity, panel-link parity, and the on-screen names
-Python hardcodes staying untranslated) before it is written; a failure
+Every returned string is validated (placeholder parity, formatting-tag parity
+with English, and the on-screen names Python hardcodes staying untranslated)
+before it is written; a failure
 leaves that string unwritten and the run red rather than shipping a broken
 translation.
 
@@ -73,12 +73,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import generate_locales  # type: ignore[import-not-found]  # noqa: E402
 import locale_rules  # type: ignore[import-not-found]  # noqa: E402
 from update_locale_baseline import (  # type: ignore[import-not-found]  # noqa: E402
-    load_test_module,
+    _load_test_module,
 )
 
 from ha_mcp.settings_ui.i18n import (  # noqa: E402
-    _ALLOWED_TAGS_RE,
-    _PANEL_LINK_RE,
     _PLACEHOLDER_RE,
     _TAG_LIKE_RE,
 )
@@ -105,16 +103,16 @@ _SECONDS_BETWEEN_REQUESTS = 7.0
 # marked failed, finished work written, progress recorded, resumable — where
 # a job-level cancellation would lose everything uncommitted.
 _TIME_BUDGET_SECONDS = float(os.environ.get("TRANSLATE_TIME_BUDGET_SECONDS", "2400"))
-DEADLINE: float | None = None
+_DEADLINE: float | None = None
 
 
 def _out_of_time() -> bool:
-    return DEADLINE is not None and time.monotonic() > DEADLINE
+    return _DEADLINE is not None and time.monotonic() > _DEADLINE
 
 
 # Chunks are bounded by source characters, not string count — help texts run
 # to ~1500 characters each.
-MAX_CHARS_PER_REQUEST = 6000
+_MAX_CHARS_PER_REQUEST = 6000
 
 # The style samples are the only signal the engine gets about how a catalog
 # addresses its reader — du/Sie, tu/vous, 你/您 — and nothing downstream can
@@ -181,14 +179,14 @@ def _text_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def progress_load() -> dict[str, Any]:
+def _progress_load() -> dict[str, Any]:
     if not PROGRESS_PATH.exists():
         return {}
     data: dict[str, Any] = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
     return data
 
 
-def progress_done(
+def _progress_done(
     progress: dict[str, Any], section: str, key: str, english: str, locale: str
 ) -> bool:
     """Whether ``locale`` already received ``key`` for the CURRENT English."""
@@ -200,12 +198,12 @@ def progress_done(
     )
 
 
-def record_progress(completed: dict[tuple[str, str], set[str]], plan: Plan) -> None:
+def _record_progress(completed: dict[tuple[str, str], set[str]], plan: Plan) -> None:
     """Persist which locales received each changed string this partial run."""
     english_by_ref: dict[tuple[str, str], str] = {
         (item.section, item.key): item.english for item in plan.items if item.changed
     }
-    progress = progress_load()
+    progress = _progress_load()
     for (section, key), locales in completed.items():
         english = english_by_ref.get((section, key))
         if english is None:
@@ -225,7 +223,7 @@ def record_progress(completed: dict[tuple[str, str], set[str]], plan: Plan) -> N
     print(f"recorded partial progress in {PROGRESS_PATH.relative_to(REPO_ROOT)}")
 
 
-def clear_progress() -> None:
+def _clear_progress() -> None:
     if PROGRESS_PATH.exists():
         PROGRESS_PATH.unlink()
         print(f"cleared {PROGRESS_PATH.relative_to(REPO_ROOT)}")
@@ -245,7 +243,7 @@ def _changed_keys(module: Any) -> dict[str, set[str]]:
     }
 
 
-def target_locales() -> list[str]:
+def _target_locales() -> list[str]:
     return sorted(
         p.stem
         for p in LOCALES_DIR.glob("*.json")
@@ -253,10 +251,10 @@ def target_locales() -> list[str]:
     )
 
 
-def flatten(value: Any, prefix: str = "") -> dict[str, str]:
+def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
     """Flatten a catalog to dotted keys, refusing shapes it cannot round-trip.
 
-    ``apply_component`` rewrites whole files through this flatten/unflatten
+    ``_apply_component`` rewrites whole files through this flatten/unflatten
     pair, so a silently dropped leaf (a list-valued selector option, say)
     would be silently DELETED from every translated catalog by an unattended
     CI run. Fail loudly instead; extend the round-trip when a non-string leaf
@@ -265,7 +263,7 @@ def flatten(value: Any, prefix: str = "") -> dict[str, str]:
     flat: dict[str, str] = {}
     if isinstance(value, dict):
         for key, item in value.items():
-            flat.update(flatten(item, f"{prefix}.{key}" if prefix else key))
+            flat.update(_flatten(item, f"{prefix}.{key}" if prefix else key))
     elif isinstance(value, str):
         flat[prefix] = value
     else:
@@ -276,7 +274,7 @@ def flatten(value: Any, prefix: str = "") -> dict[str, str]:
     return flat
 
 
-def unflatten(flat: dict[str, str]) -> dict[str, Any]:
+def _unflatten(flat: dict[str, str]) -> dict[str, Any]:
     root: dict[str, Any] = {}
     for dotted, value in flat.items():
         node = root
@@ -287,7 +285,7 @@ def unflatten(flat: dict[str, str]) -> dict[str, Any]:
     return root
 
 
-def plan_locale_messages(
+def _plan_locale_messages(
     plan: Plan,
     locale: str,
     en_messages: dict[str, str],
@@ -304,7 +302,7 @@ def plan_locale_messages(
             plan.deletions.append(ItemRef(locale=locale, section="messages", key=key))
 
 
-def plan_locale_tools(
+def _plan_locale_tools(
     plan: Plan,
     locale: str,
     catalog: dict[str, Any],
@@ -332,7 +330,7 @@ def plan_locale_tools(
             plan.deletions.append(ItemRef(locale=locale, section="tools", key=name))
 
 
-def plan_locale_groups(
+def _plan_locale_groups(
     plan: Plan, locale: str, catalog: dict[str, Any], groups: frozenset[str]
 ) -> None:
     tool_groups: dict[str, str] = catalog.get("tool_groups", {})
@@ -346,7 +344,7 @@ def plan_locale_groups(
             )
 
 
-def plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None:
+def _plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None:
     en_messages: dict[str, str] = _load_json(LOCALES_DIR / "en.json")["messages"]
     changed_messages = {
         key.removeprefix("messages.")
@@ -358,7 +356,7 @@ def plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None
     # parsed-only change is no translation work — retranslating would
     # overwrite every locale with a fresh translation of the unchanged stub.
     # It IS review work (both renderings reach readers, flag-dependent), so
-    # repin_baseline deliberately keeps such keys stale until a human
+    # _repin_baseline deliberately keeps such keys stale until a human
     # confirms the stub and repins manually.
     changed_tools = {
         key
@@ -368,8 +366,8 @@ def plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None
     tool_texts: dict[str, str] = dict(module._english_tool_texts())
     groups, tool_names = module._renderable_groups_and_tools()
 
-    progress = progress_load()
-    for locale in target_locales():
+    progress = _progress_load()
+    for locale in _target_locales():
         catalog = _load_json(LOCALES_DIR / f"{locale}.json")
         # A changed key a previous partial run already translated for this
         # locale (same English) is not re-queued — resumability after a
@@ -377,34 +375,34 @@ def plan_settings(plan: Plan, module: Any, changed: dict[str, set[str]]) -> None
         loc_changed_messages = {
             key
             for key in changed_messages
-            if not progress_done(progress, "messages", key, en_messages[key], locale)
+            if not _progress_done(progress, "messages", key, en_messages[key], locale)
         }
         loc_changed_tools = {
             key
             for key in changed_tools
-            if not progress_done(progress, "tools", key, tool_texts[key], locale)
+            if not _progress_done(progress, "tools", key, tool_texts[key], locale)
         }
-        plan_locale_messages(
+        _plan_locale_messages(
             plan, locale, en_messages, catalog.get("messages", {}), loc_changed_messages
         )
-        plan_locale_tools(
+        _plan_locale_tools(
             plan, locale, catalog, loc_changed_tools, tool_texts, tool_names
         )
-        plan_locale_groups(plan, locale, catalog, groups)
+        _plan_locale_groups(plan, locale, catalog, groups)
 
 
-def plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
-    en_flat = flatten(_load_json(COMPONENT_DIR / "en.json"))
+def _plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
+    en_flat = _flatten(_load_json(COMPONENT_DIR / "en.json"))
     changed_component = changed.get(COMPONENT_SURFACE, set())
-    progress = progress_load()
+    progress = _progress_load()
     for path in sorted(COMPONENT_DIR.glob("*.json")):
         if path.stem == "en" or is_best_effort_locale(path.stem):
             continue
-        flat = flatten(_load_json(path))
+        flat = _flatten(_load_json(path))
         loc_changed = {
             key
             for key in changed_component
-            if not progress_done(progress, "component", key, en_flat[key], path.stem)
+            if not _progress_done(progress, "component", key, en_flat[key], path.stem)
         }
         for key, text in en_flat.items():
             if key in loc_changed or key not in flat:
@@ -423,8 +421,8 @@ def plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
 def build_plan(module: Any) -> Plan:
     plan = Plan()
     changed = _changed_keys(module)
-    plan_settings(plan, module, changed)
-    plan_component(plan, changed)
+    _plan_settings(plan, module, changed)
+    _plan_component(plan, changed)
     return plan
 
 
@@ -485,7 +483,7 @@ def _untranslatable_name_dropped(english: str, translated: str) -> str | None:
     return None
 
 
-def validate(item: WorkItem, translated: Any) -> str | None:
+def _validate(item: WorkItem, translated: Any) -> str | None:
     """The reason a translation is unusable for this item, or None."""
     if not isinstance(translated, str) or not translated.strip():
         return "empty or non-string translation"
@@ -499,20 +497,14 @@ def validate(item: WorkItem, translated: Any) -> str | None:
         _PLACEHOLDER_RE.findall(translated)
     ):
         return "placeholder set differs from English"
-    if item.section == "messages":
-        for tag in _TAG_LIKE_RE.findall(translated):
-            if _ALLOWED_TAGS_RE.fullmatch(tag) is None:
-                return f"markup {tag!r} not in the settings UI allowlist"
-        # Multiset parity, like panel links: a dropped </strong> or an
-        # invented <code> is all-allowlisted yet malforms what tHtml restores.
-        if Counter(_TAG_LIKE_RE.findall(translated)) != Counter(
-            _TAG_LIKE_RE.findall(item.english)
-        ):
-            return "formatting-tag set differs from English"
-        if Counter(_PANEL_LINK_RE.findall(translated)) != Counter(
-            _PANEL_LINK_RE.findall(item.english)
-        ):
-            return "panel-link targets differ from English"
+    # The same tags as English, as a multiset: a dropped </strong> or an
+    # invented <code> malforms what tHtml restores. English passed the settings
+    # UI's markup allowlist when i18n loaded it, and panel links are tags, so
+    # equal tags also keep the markup allowlisted and the panel links the same.
+    if item.section == "messages" and Counter(
+        _TAG_LIKE_RE.findall(translated)
+    ) != Counter(_TAG_LIKE_RE.findall(item.english)):
+        return "formatting-tag set differs from English"
     # The same comparison the merge gate runs, so the engine cannot produce
     # what that gate will later refuse. Without it a single dropped
     # identifier is accepted, lands as a backfilled key no later run
@@ -520,7 +512,7 @@ def validate(item: WorkItem, translated: Any) -> str | None:
     # push is held back whole, the progress file is discarded, and the run
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
-    fault = locale_rules._parity_fault(item.english, translated)
+    fault = locale_rules.parity_fault(item.english, translated)
     if fault:
         return f"contradicts the English source: {fault}"
     return None
@@ -532,7 +524,7 @@ def _language_label(locale: str) -> str:
     return f"{native} ({locale})"
 
 
-def style_sample_keys(
+def _style_sample_keys(
     english: dict[str, str],
     translated: dict[str, str],
     exclude: Container[str] = frozenset(),
@@ -551,7 +543,7 @@ def style_sample_keys(
     right-hand side into the prompt, so the pair it contributes shows the model
     nothing to imitate while still counting against the sample budget — and on
     a catalog whose register rests on a single key, that is the whole signal.
-    An engine answer this shape is rejected (`validate`), and a hand-committed
+    An engine answer this shape is rejected (`_validate`), and a hand-committed
     one no longer survives a catalog load (`_validate_string_map`) — but this
     script reads the catalogs with `json.loads` rather than through
     `load_catalogs`, so one still reaches here out of a working tree the app has
@@ -572,7 +564,7 @@ def style_sample_keys(
     )[:_STYLE_SAMPLE_COUNT]
 
 
-def surface_catalogs(
+def _surface_catalogs(
     locale: str, surface: Section
 ) -> tuple[dict[str, str], dict[str, str]]:
     """The (english, translated) pair a request of this section samples from.
@@ -584,8 +576,8 @@ def surface_catalogs(
     """
     if surface == "component":
         return (
-            flatten(_load_json(COMPONENT_DIR / "en.json")),
-            flatten(_load_json(COMPONENT_DIR / f"{locale}.json"))
+            _flatten(_load_json(COMPONENT_DIR / "en.json")),
+            _flatten(_load_json(COMPONENT_DIR / f"{locale}.json"))
             if (COMPONENT_DIR / f"{locale}.json").exists()
             else {},
         )
@@ -599,10 +591,10 @@ def surface_catalogs(
 def _style_samples(
     locale: str, surface: Section, exclude: Container[str] = frozenset()
 ) -> str:
-    english, translated = surface_catalogs(locale, surface)
+    english, translated = _surface_catalogs(locale, surface)
     return "\n\n".join(
         f"EN: {english[key]}\n{locale.upper()}: {translated[key]}"
-        for key in style_sample_keys(english, translated, exclude)
+        for key in _style_sample_keys(english, translated, exclude)
     )
 
 
@@ -665,7 +657,7 @@ def _prompt(
     )
 
 
-def call_gemini(prompt: str) -> dict[str, Any]:
+def _call_gemini(prompt: str) -> dict[str, Any]:
     """One engine call. The single place a provider swap would touch."""
     # Deadline-guarded at entry AND before every retry sleep: a worst-case call
     # (five 180s timeouts plus 200s of backoff) runs ~18 minutes, past the time
@@ -774,12 +766,12 @@ def _describe_unusable(payload: dict[str, Any], exc: Exception, body: str) -> st
     )
 
 
-def chunk_batch(batch: dict[str, str]) -> list[dict[str, str]]:
+def _chunk(batch: dict[str, str]) -> list[dict[str, str]]:
     chunks: list[dict[str, str]] = []
     current: dict[str, str] = {}
     size = 0
     for key, text in batch.items():
-        if current and size + len(text) > MAX_CHARS_PER_REQUEST:
+        if current and size + len(text) > _MAX_CHARS_PER_REQUEST:
             chunks.append(current)
             current, size = {}, 0
         current[key] = text
@@ -805,12 +797,12 @@ def _accept_or_retry(
     queued_keys: Container[str],
 ) -> None:
     """Validate one string, retrying once with the reason while the budget lasts."""
-    reason = validate(item, translated)
-    if reason is not None and _out_of_time():  # call_gemini would refuse the retry
+    reason = _validate(item, translated)
+    if reason is not None and _out_of_time():  # _call_gemini would refuse the retry
         reason += " (time budget exhausted; not retrying)"
     elif reason is not None:
         try:
-            retry = call_gemini(
+            retry = _call_gemini(
                 _prompt(locale, {_string_id(item): item.english}, surface, queued_keys)
                 + f"\n\nYour previous attempt was rejected: {reason}. "
                 "Fix that and return the corrected JSON."
@@ -822,7 +814,7 @@ def _accept_or_retry(
                 reason += " (retry failed; time budget exhausted)"
         else:
             translated = retry.get(_string_id(item))
-            reason = validate(item, translated)
+            reason = _validate(item, translated)
         if not _out_of_time():  # past the deadline the wait paces no request
             time.sleep(_SECONDS_BETWEEN_REQUESTS)
     if reason is None:
@@ -880,7 +872,7 @@ def _translate_surface(
     # The register anchor is the one input to a run that nothing downstream
     # can check, and on same-repo PRs the workflow commits without a human in
     # the loop — so the log is the only place its choice is inspectable.
-    sample_keys = style_sample_keys(*surface_catalogs(locale, surface), queued_keys)
+    sample_keys = _style_sample_keys(*_surface_catalogs(locale, surface), queued_keys)
     if sample_keys:
         print(f"  {locale}/{surface}: register samples {sample_keys}")
     else:
@@ -890,12 +882,12 @@ def _translate_surface(
             file=sys.stderr,
         )
 
-    for chunk in chunk_batch(batch):
+    for chunk in _chunk(batch):
         if _out_of_time():
             failures.append(f"{locale}: time budget exhausted — stopping this run")
             return True, consecutive_engine_failures
         try:
-            response = call_gemini(_prompt(locale, chunk, surface, queued_keys))
+            response = _call_gemini(_prompt(locale, chunk, surface, queued_keys))
             consecutive_engine_failures = 0
         except SystemExit as exc:
             consecutive_engine_failures += 1
@@ -924,7 +916,7 @@ def _translate_surface(
     return False, consecutive_engine_failures
 
 
-def translate_locale(
+def _translate_locale(
     locale: str, items: list[WorkItem]
 ) -> tuple[dict[tuple[str, str], str], list[str], set[tuple[str, str]], bool]:
     """Translate one locale's strings with their keys as context.
@@ -994,7 +986,7 @@ def _delete_from_settings(
         elif section == "tool_groups":
             catalog.get("tool_groups", {}).pop(key, None)
         elif section == "component":
-            pass  # applied by apply_component
+            pass  # applied by _apply_component
         else:
             raise ValueError(f"unknown section {section!r} for deletion {key!r}")
 
@@ -1011,12 +1003,12 @@ def _write_into_settings(
             name, fld = key.rsplit(".", 1)
             catalog.setdefault("tools", {}).setdefault(name, {})[fld] = value
         elif section == "component":
-            pass  # applied by apply_component
+            pass  # applied by _apply_component
         else:
             raise ValueError(f"unknown section {section!r} for key {key!r}")
 
 
-def apply_settings(
+def _apply_settings(
     locale: str,
     translations: dict[tuple[str, str], str],
     deletions: list[ItemRef],
@@ -1040,7 +1032,7 @@ def apply_settings(
         print(f"updated {path.relative_to(REPO_ROOT)}")
 
 
-def apply_component(
+def _apply_component(
     locale: str,
     translations: dict[tuple[str, str], str],
     deletions: list[ItemRef],
@@ -1048,7 +1040,7 @@ def apply_component(
     path = COMPONENT_DIR / f"{locale}.json"
     if not path.exists():
         return
-    flat = flatten(_load_json(path))
+    flat = _flatten(_load_json(path))
     before = dict(flat)
     for ref in deletions:
         if ref.locale == locale and ref.section == "component":
@@ -1056,10 +1048,10 @@ def apply_component(
     for (target_section, target_key), value in translations.items():
         if target_section == "component":
             flat[target_key] = value
-    en_flat = flatten(_load_json(COMPONENT_DIR / "en.json"))
+    en_flat = _flatten(_load_json(COMPONENT_DIR / "en.json"))
     ordered = {key: flat[key] for key in en_flat if key in flat}
     if ordered != before:
-        _dump_json(path, unflatten(ordered))
+        _dump_json(path, _unflatten(ordered))
         print(f"updated {path.relative_to(REPO_ROOT)}")
 
 
@@ -1092,7 +1084,7 @@ def _reuse_existing_authored_shared(
         existing.update(
             {
                 ("component", key): value
-                for key, value in flatten(_load_json(component_path)).items()
+                for key, value in _flatten(_load_json(component_path)).items()
                 if value
             }
         )
@@ -1112,7 +1104,7 @@ def _reuse_existing_authored_shared(
         }
         if len(current_values) == 1:
             value = next(iter(current_values))
-            if all(validate(planned[ref], value) is None for ref in planned_refs):
+            if all(_validate(planned[ref], value) is None for ref in planned_refs):
                 for ref in planned_refs:
                     reused[ref] = value
                 continue
@@ -1172,7 +1164,7 @@ def _align_authored_shared(
             results[affected[0]],
         )
         if any(
-            validate(WorkItem(locale, section, key, english), value) is not None
+            _validate(WorkItem(locale, section, key, english), value) is not None
             for section, key in refs
         ):
             # Do not let a looser component-only partial result bypass the
@@ -1184,7 +1176,7 @@ def _align_authored_shared(
             results[ref] = value
 
 
-def translate_and_apply(
+def _translate_and_apply(
     plan: Plan, by_locale: dict[str, list[WorkItem]], module: Any
 ) -> tuple[list[str], dict[tuple[str, str], set[str]]]:
     """Translate every locale's planned work and write the catalogs.
@@ -1197,7 +1189,7 @@ def translate_and_apply(
     completed: dict[tuple[str, str], set[str]] = {}
     engine_dead = False
     try:
-        for locale in target_locales():
+        for locale in _target_locales():
             locale_items = by_locale.get(locale, [])
             results, remaining = _reuse_existing_authored_shared(
                 locale, locale_items, module
@@ -1208,7 +1200,7 @@ def translate_and_apply(
                     "the engine was declared unavailable earlier in this run"
                 )
             elif remaining:
-                translated, locale_failures, _failed, engine_dead = translate_locale(
+                translated, locale_failures, _failed, engine_dead = _translate_locale(
                     locale, remaining
                 )
                 results.update(translated)
@@ -1220,8 +1212,8 @@ def translate_and_apply(
                         completed.setdefault((item.section, item.key), set()).add(
                             locale
                         )
-            apply_settings(locale, results, plan.deletions)
-            apply_component(locale, results, plan.deletions)
+            _apply_settings(locale, results, plan.deletions)
+            _apply_component(locale, results, plan.deletions)
     finally:
         # Whatever happened above — full success, partial fill, engine death,
         # or a crash — the derived catalogs must match the canonical store as
@@ -1232,7 +1224,7 @@ def translate_and_apply(
     return failures, completed
 
 
-def repin_baseline(module: Any) -> None:
+def _repin_baseline(module: Any) -> None:
     """Rewrite the baseline — except keys awaiting a human's stub review.
 
     A change to the PARSED docstring of a feature-gated tool is editorial
@@ -1266,8 +1258,8 @@ def repin_baseline(module: Any) -> None:
 
 
 def main() -> int:
-    global DEADLINE
-    DEADLINE = time.monotonic() + _TIME_BUDGET_SECONDS
+    global _DEADLINE
+    _DEADLINE = time.monotonic() + _TIME_BUDGET_SECONDS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dry-run",
@@ -1276,7 +1268,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    module = load_test_module()
+    module = _load_test_module()
     plan = build_plan(module)
     by_locale: dict[str, list[WorkItem]] = {}
     for item in plan.items:
@@ -1295,10 +1287,10 @@ def main() -> int:
             print(f"  delete {locale}/{section}/{key}")
         return 0
 
-    failures, completed = translate_and_apply(plan, by_locale, module)
+    failures, completed = _translate_and_apply(plan, by_locale, module)
 
     if failures:
-        record_progress(completed, plan)
+        _record_progress(completed, plan)
         print(
             "translation failures (baseline left stale so the run stays red):",
             file=sys.stderr,
@@ -1307,8 +1299,8 @@ def main() -> int:
             print(f"  {failure}", file=sys.stderr)
         return 2
 
-    clear_progress()
-    repin_baseline(load_test_module())
+    _clear_progress()
+    _repin_baseline(_load_test_module())
     return 0
 
 

@@ -1,31 +1,25 @@
-"""A built Home Assistant frontend on disk, and the card index read from it.
+"""Home Assistant's real frontend, the card index built from it, and custom cards.
 
-The card index reads the frontend files ``hass_frontend`` serves; the package
-is not installed with Core's test kit, so these helpers write a small build
-with the same shape (webpack chunks, a registered editor per card, lovelace
-translations) and a ``hass_frontend`` package that names it. The index, the
-``dashboard_cards`` command and the describe tool then run for real on it.
+The card index reads the frontend Core serves: the ``home-assistant-frontend``
+package (the dev group pins it), which ``hass_frontend.where()`` names. These
+helpers give a test that real build and the real custom-card sandbox; nothing of
+the frontend is written by a test.
 """
 
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
-import sys
-from collections.abc import (
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    Iterator,
-    Mapping,
-    Sequence,
-)
+import re
+import threading
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
+import hass_frontend
+import homeassistant
 import pytest
 from aiohttp import web
 from homeassistant.core import HomeAssistant
@@ -41,19 +35,22 @@ from ._component_core import ws_result
 
 __all__ = [
     "MINIMAL_DOM",
-    "FrontendOnDisk",
-    "build_definitions",
+    "CardIndex",
+    "card_description",
     "card_file",
+    "card_name",
+    "constrained_core",
     "counted_full_collections",
     "cc",
     "cd",
     "custom_cards",
     "dcw",
+    "definitions",
     "describe_mod",
-    "frontend",
-    "idle_custom_cards",
+    "fresh_card_state",
+    "frontend_strings",
+    "real_definitions",
     "stalled_card_download",
-    "write_frontend",
 ]
 
 # What the sandbox needs of linkedom to run a card file. The real DOM is
@@ -66,99 +63,39 @@ globalThis.__linkedom = {
 """
 
 _I18N = "ui.panel.lovelace.editor.card."
-_STRINGS = {
-    f"{_I18N}tile.name": "Tile",
-    f"{_I18N}tile.description": "An entity at a glance.",
-    f"{_I18N}entities.name": "Entities",
-}
-
-# Module 6: a small struct library. ``object`` validates a config the way the
-# frontend's superstruct does: an unlisted key fails as ``never``, a value
-# outside ``enums`` fails as ``enums``, a nested object is checked in turn.
-_STRUCT_LIB = (
-    "6(m,e,r){"
-    "function check(schema,c,path,out){Object.keys(c).forEach((k)=>{"
-    'const at=path.concat(k),child=schema[k],where=at.join(".");'
-    'if(!child){out.push({path:at,type:"never",message:"At path: "+where+'
-    '" -- Expected a value of type `never`, but received: `"+'
-    'JSON.stringify(c[k])+"`"});return}'
-    "if(child.values&&child.values.indexOf(c[k])<0){out.push({path:at,"
-    'type:"enums",message:"At path: "+where+" -- Expected one of `"+'
-    'child.values.map((v)=>JSON.stringify(v)).join("|")+"`, but received: `"+'
-    'JSON.stringify(c[k])+"`"});return}'
-    'if(child.schema&&c[k]&&typeof c[k]==="object")check(child.schema,c[k],at,out)'
-    "})}"
-    "r.d(e,{},{"
-    'string:{type:"string"},'
-    'enums:(values)=>({type:"enums",values}),'
-    "memo:(fn)=>fn,"
-    "assert:(c,s)=>{},"
-    'object:(schema)=>({type:"object",schema,validate:(c)=>{'
-    "const out=[];check(schema,c,[],out);"
-    "return out.length?[{failures:()=>out}]:[undefined,c]}})"
-    "})}"
-)
-
-# A struct-checked editor: ``setConfig`` asserts the config against ``v``.
-TILE_EDITOR = (
-    "var s=r(6),v=(0,s.object)({type:s.string,entity:s.string,color:s.string,"
-    'tap_action:(0,s.object)({action:(0,s.enums)(["none"])})});'
-    "class C{setConfig(c){(0,s.assert)(c,v)}}"
-)
-ENTITIES_EDITOR = (
-    "var s=r(6),v=(0,s.object)({type:s.string,title:s.string});"
-    "class C{setConfig(c){(0,s.assert)(c,v)}}"
-)
 
 
-def write_frontend(
-    root: Path,
-    editors: Mapping[str, str] | None = None,
-    *,
-    cards: Sequence[str] = (),
-    modules: str = "",
-    files: Mapping[str, str] | None = None,
-) -> None:
-    """Write a frontend build under ``root`` (``frontend_latest`` and the
-    translations): the ``tile`` and ``entities`` cards, plus ``cards``.
-
-    ``editors`` maps a card type to the body of its editor module (it replaces
-    the default editor of ``tile`` and ``entities``); ``modules`` is more
-    chunk text (``100(m,e,r){...}``); ``files`` are further built files.
-    """
-    editor_bodies = {
-        "tile": TILE_EDITOR,
-        "entities": ENTITIES_EDITOR,
-        **(editors or {}),
-    }
-    listed: list[str] = [
-        f'{8 + i}(e){{(0,e.EM)("hui-{card}-card");class A{{setConfig(c){{}}}}}}'
-        for i, card in enumerate(("tile", "entities", *cards))
-    ]
-    listed.append(_STRUCT_LIB)
-    listed.extend(
-        f'{20 + i}(m,e,r){{(0,e.EM)("hui-{card}-card-editor");{body}}}'
-        for i, (card, body) in enumerate(editor_bodies.items())
+def frontend_strings() -> dict[str, str]:
+    """The English lovelace strings the installed frontend ships."""
+    translations = hass_frontend.where() / "static" / "translations" / "lovelace"
+    [path] = (
+        p
+        for p in translations.glob("en-*.json")
+        if re.fullmatch(r"en-[0-9a-f]+\.json", p.name)
     )
-    if modules:
-        listed.append(modules)
-    frontend_dir = root / "frontend_latest"
-    frontend_dir.mkdir(parents=True, exist_ok=True)
-    (frontend_dir / "cards.js").write_text(
-        "export const __webpack_modules__={" + ",".join(listed) + "};",
-        encoding="utf-8",
-    )
-    for name, text in (files or {}).items():
-        (frontend_dir / name).write_text(text, encoding="utf-8")
-    translations = root / "static" / "translations" / "lovelace"
-    translations.mkdir(parents=True, exist_ok=True)
-    (translations / "en-abc123.json").write_text(json.dumps(_STRINGS), encoding="utf-8")
+    strings: dict[str, str] = json.loads(path.read_text(encoding="utf-8"))
+    return strings
 
 
-def build_definitions(root: Path, *args: Any, **kwargs: Any) -> cd.CardDefinitions:
-    """The card index of a frontend written under ``root`` (see ``write_frontend``)."""
-    write_frontend(root, *args, **kwargs)
-    return cd.CardDefinitions(root)
+def card_name(card_type: str) -> str:
+    """The name the installed frontend gives a built-in card type."""
+    return frontend_strings()[f"{_I18N}{card_type}.name"]
+
+
+def card_description(card_type: str) -> str:
+    """The description the installed frontend gives a built-in card type."""
+    return frontend_strings()[f"{_I18N}{card_type}.description"]
+
+
+def real_definitions() -> cd.CardDefinitions:
+    """The card index of the installed frontend (its engine stops with the test)."""
+    return cd.CardDefinitions(hass_frontend.where())
+
+
+@pytest.fixture
+def definitions() -> cd.CardDefinitions:
+    """The card index of the installed frontend."""
+    return real_definitions()
 
 
 def card_file(path: Path, tag: str, set_config: str = "") -> Path:
@@ -166,6 +103,22 @@ def card_file(path: Path, tag: str, set_config: str = "") -> Path:
     ``set_config`` (JavaScript over ``c``, the config)."""
     path.write_text(
         f"class Card extends HTMLElement {{ setConfig(c) {{ {set_config} }} }}\n"
+        f"customElements.define({tag!r}, Card);\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def card_file_with_editor(
+    path: Path, tag: str, set_config: str = "", editor_set_config: str = ""
+) -> Path:
+    """A custom card's resource file whose ``getConfigElement`` returns an editor
+    (``editor_set_config`` runs in its ``setConfig``); see ``card_file``."""
+    path.write_text(
+        "class Card extends HTMLElement {\n"
+        f"  setConfig(c) {{ {set_config} }}\n"
+        f"  static getConfigElement() {{ return {{ setConfig(c) {{ {editor_set_config} }} }}; }}\n"
+        "}\n"
         f"customElements.define({tag!r}, Card);\n",
         encoding="utf-8",
     )
@@ -183,93 +136,103 @@ def custom_cards() -> Iterator[cc.CustomCards]:
 
 
 @pytest.fixture
-def idle_custom_cards(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No refresh of dashboard resources is running or has failed."""
-    for name in ("_custom", "_refresh_task", "_dom_failed_at", "_resource_error"):
-        monkeypatch.setattr(cc, name, None)
+def fresh_card_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No card index, index build, custom-card refresh or download failure from
+    another test is held, and none this test makes outlives it.
+
+    The component has no public way to drop this state: unloading its config
+    entries leaves ``card_definitions`` and ``custom_cards`` untouched, so this
+    fixture is the one place a test still sets their module state.
+    """
+    for module, names in (
+        (cd, ("_definitions", "_build_task", "_build_failed_at")),
+        (cc, ("_custom", "_refresh_task", "_dom_failed_at", "_resource_error")),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, None)
 
 
-_PACKAGE = '''\
-"""Names a built frontend, as the hass_frontend package does."""
+class FrontendLocation:
+    """A spy on ``hass_frontend.where()`` that calls through to the real one.
 
-import threading
-from pathlib import Path
+    The index build asks ``where()`` for the frontend. ``hold`` keeps that
+    question waiting until ``release``; ``unreadable`` and ``without_cards``
+    make the answer a failure the installed frontend cannot be made to give.
+    """
 
-ROOT = Path({root!r})
-RELEASE = threading.Event()
-RELEASE.set()
-BROKEN = False
-CALLS = []
+    def __init__(self, without_cards: Path) -> None:
+        self._where: Callable[[], Path] = hass_frontend.where
+        self._empty = without_cards
+        self._gate = threading.Event()
+        self._gate.set()
+        self._unreadable = False
+        self._empty_answer = False
+        self.calls = 0
 
-
-def where():
-    CALLS.append(1)
-    RELEASE.wait()
-    if BROKEN:
-        raise RuntimeError("the frontend files cannot be read")
-    return ROOT
-'''
-
-
-class FrontendOnDisk:
-    """The frontend ``hass_frontend`` names, and the build that reads it."""
-
-    def __init__(self, root: Path, package: Any, runtime: AsyncMock) -> None:
-        self.root = root
-        self.runtime = runtime
-        self._package = package
-
-    def write(self, *args: Any, **kwargs: Any) -> None:
-        """Replace the build before the index is first read (see ``write_frontend``)."""
-        write_frontend(self.root, *args, **kwargs)
+    def where(self) -> Path:
+        self.calls += 1
+        self._gate.wait()
+        if self._unreadable:
+            raise OSError("the frontend files cannot be read")
+        return self._empty if self._empty_answer else self._where()
 
     def hold(self) -> None:
-        """The build stays in ``hass_frontend.where()`` until ``release``."""
-        self._package.RELEASE.clear()
+        self._gate.clear()
 
     def release(self) -> None:
-        self._package.RELEASE.set()
+        self._gate.set()
 
-    def break_files(self) -> None:
-        """The frontend cannot be read: the index build fails."""
-        self._package.BROKEN = True
+    def unreadable(self) -> None:
+        self._unreadable = True
 
-    @property
-    def builds(self) -> int:
-        """How many times the index build asked where the frontend is."""
-        return len(self._package.CALLS)
+    def without_cards(self) -> None:
+        self._empty_answer = True
+
+    def readable(self) -> None:
+        self._unreadable = self._empty_answer = False
+
+
+class CardIndex:
+    """What a test of the shared card index watches: the frontend lookups and
+    the QuickJS runtime checks (a call-through spy on the real check)."""
+
+    def __init__(self, location: FrontendLocation, runtime: AsyncMock) -> None:
+        self.frontend = location
+        self.runtime = runtime
 
 
 @pytest.fixture
-async def frontend(
-    hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[FrontendOnDisk]:
-    """A frontend the component's card index reads, on a real ``hass``.
+async def card_index(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_card_state: None,
+) -> AsyncIterator[CardIndex]:
+    """The component's card index over the real frontend, not built yet.
 
-    The index starts unbuilt. The quickjs runtime check (which looks for the
-    version the component installs on a real board) answers that it is ready.
+    The runtime check is the real one (QuickJS is installed in the dev group, so
+    it answers without downloading); the spy only counts its awaits.
     """
-    root = tmp_path / "frontend"
-    write_frontend(root)
-    site = tmp_path / "site"
-    package = site / "hass_frontend"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text(
-        _PACKAGE.format(root=str(root)), encoding="utf-8"
-    )
-    monkeypatch.syspath_prepend(str(site))
-    sys.modules.pop("hass_frontend", None)
-    runtime = AsyncMock(return_value=True)
+    location = FrontendLocation(tmp_path / "no-frontend")
+    monkeypatch.setattr(hass_frontend, "where", location.where)
+    runtime = AsyncMock(wraps=cd.async_ensure_runtime)
     monkeypatch.setattr(cd, "async_ensure_runtime", runtime)
-    for name in ("_definitions", "_build_task", "_build_failed_at"):
-        monkeypatch.setattr(cd, name, None)
-    served = FrontendOnDisk(root, importlib.import_module("hass_frontend"), runtime)
     try:
-        yield served
+        yield CardIndex(location, runtime)
     finally:
-        served.release()
+        location.release()
         await hass.async_block_till_done(wait_background_tasks=True)
-        sys.modules.pop("hass_frontend", None)
+
+
+@contextmanager
+def constrained_core(
+    monkeypatch: pytest.MonkeyPatch, root: Path, constraints: str
+) -> Iterator[None]:
+    """Home Assistant's package constraints are ``constraints``."""
+    (root / "package_constraints.txt").write_text(constraints, encoding="utf-8")
+    with monkeypatch.context() as patch:
+        patch.setattr(homeassistant, "__file__", str(root / "__init__.py"))
+        yield
 
 
 @pytest.fixture
@@ -279,7 +242,7 @@ async def stalled_card_download(
     aiohttp_client: ClientSessionGenerator,
     socket_enabled: None,
     monkeypatch: pytest.MonkeyPatch,
-    idle_custom_cards: None,
+    fresh_card_state: None,
 ) -> AsyncIterator[None]:
     """A dashboard resource names a custom card, and the DOM library it needs is
     still downloading: the refresh of custom cards is running and not finishing."""
@@ -305,30 +268,6 @@ async def stalled_card_download(
         await hass.async_block_till_done(wait_background_tasks=True)
 
 
-def card_file_with_editor(
-    path: Path, tag: str, set_config: str = "", editor_set_config: str = ""
-) -> Path:
-    """A custom card's resource file whose ``getConfigElement`` returns an editor
-    (``editor_set_config`` runs in its ``setConfig``); see ``card_file``."""
-    path.write_text(
-        "class Card extends HTMLElement {\n"
-        f"  setConfig(c) {{ {set_config} }}\n"
-        f"  static getConfigElement() {{ return {{ setConfig(c) {{ {editor_set_config} }} }}; }}\n"
-        "}\n"
-        f"customElements.define({tag!r}, Card);\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def add_card_names(root: Path, names: Mapping[str, str]) -> None:
-    """Give cards a translated name in a frontend written under ``root``."""
-    translations = root / "static" / "translations" / "lovelace" / "en-abc123.json"
-    strings = json.loads(translations.read_text(encoding="utf-8"))
-    strings.update({f"{_I18N}{card}.name": name for card, name in names.items()})
-    translations.write_text(json.dumps(strings), encoding="utf-8")
-
-
 InstallCustomCard = Callable[..., Awaitable[None]]
 
 
@@ -336,7 +275,7 @@ InstallCustomCard = Callable[..., Awaitable[None]]
 async def installed_custom_card(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
-    idle_custom_cards: None,
+    fresh_card_state: None,
 ) -> AsyncIterator[InstallCustomCard]:
     """``install(tag, set_config="")``: a custom card file under ``www`` that a
     dashboard resource names, with the DOM library already in the component's

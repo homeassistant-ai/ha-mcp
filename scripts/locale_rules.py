@@ -2,7 +2,7 @@
 
 Two callers ask the same question and must not answer it differently. The
 merge-time check in ``tests/src/unit/test_locale_parity.py`` asks it of the
-catalogs already on disk; ``translate_locales.validate`` asks it of every
+catalogs already on disk; ``translate_locales._validate`` asks it of every
 string the engine produces, before it is accepted.
 
 Keeping one implementation is not tidiness. The CI check exists because the
@@ -500,7 +500,7 @@ def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
     return sorted(".".join(groups) for groups in counted.elements())
 
 
-def _parity_fault(
+def parity_fault(
     english: str,
     translated: str,
     *,

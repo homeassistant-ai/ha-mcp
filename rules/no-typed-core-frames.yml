@@ -1,0 +1,28 @@
+# What Core sends over its WebSocket comes from Core in a unit test (tests/AGENTS.md,
+# "Unit Tests Run on Real Home Assistant Core"). A frame typed into the test as a
+# dict (a command result, a login answer, an event) is a guess of Core's protocol.
+# A dict in an assert is what a reply from the real Core is expected to be.
+id: no-typed-core-frames
+language: python
+rule:
+  kind: pair
+  not:
+    inside:
+      kind: assert_statement
+      stopBy: end
+  all:
+    - has:
+        field: key
+        regex: '^["'']type["'']$'
+    - has:
+        field: value
+        regex: '^["''](result|auth_required|auth_ok|auth_invalid|event|pong)["'']$'
+files:
+  - "tests/src/unit/**"
+  - "tests/addon/**"
+message: |
+  Do not type a frame Home Assistant Core sends over its WebSocket (a command
+  result, a login answer, an event). Connect to the real Core in the test
+  (`core_client`, `hass_ws_client`) and let it answer. See tests/AGENTS.md,
+  "Unit Tests Run on Real Home Assistant Core".
+severity: error

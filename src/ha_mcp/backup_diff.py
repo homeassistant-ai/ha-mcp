@@ -7,11 +7,8 @@ Split out of ``backup_manager``, which imports what it uses from here.
 from __future__ import annotations
 
 import difflib
-import logging
 from io import StringIO
 from typing import Any, Literal, NotRequired, TypedDict
-
-logger = logging.getLogger(__name__)
 
 # Discriminator values for the snapshot ``kind`` marker and the
 # DiffResponse/DiffResponseText union. Typed as ``Literal`` so they satisfy
@@ -22,7 +19,7 @@ _DICT_KIND: Literal["dict"] = "dict"
 # Output cap for the text (file/YAML) diff. Bounded like the manager's ``_MAX_PATCH_OPS``
 # so a pathological whole-file rewrite stays token-friendly; the response
 # sets ``truncated`` and points the caller at the full snapshot via view.
-MAX_DIFF_LINES = 400
+_MAX_DIFF_LINES = 400
 
 
 # --------------------------- diff helpers -----------------------------------
@@ -30,7 +27,7 @@ MAX_DIFF_LINES = 400
 
 class DiffCounts(TypedDict):
     """Per-op-class tallies for a diff patch. ``total`` is the op count;
-    ``add + remove + replace`` equals it today (see ``summarize_patch_counts``)."""
+    ``add + remove + replace`` equals it: those are the only ops the diff emits."""
 
     add: int
     remove: int
@@ -112,7 +109,7 @@ class DiffResponseText(TypedDict):
     truncated: bool
 
 
-def build_text_diff_response(
+def _build_text_diff_response(
     name: str,
     domain: str,
     entity_id: str,
@@ -127,7 +124,7 @@ def build_text_diff_response(
     the diff is empty (mirrors the dict branch's missing-target handling).
     The diff recovers ``stored`` *from* ``current`` (snapshot is the target
     state), consistent with the JSON-Patch direction. Output is bounded by
-    ``MAX_DIFF_LINES``; overflow sets ``truncated``.
+    ``_MAX_DIFF_LINES``; overflow sets ``truncated``.
     """
     if current is None:
         return {
@@ -152,9 +149,9 @@ def build_text_diff_response(
         lines.append(line.removesuffix("\n"))
         if not line.endswith("\n"):
             lines.append("\\ No newline at end of file")
-    truncated = len(lines) > MAX_DIFF_LINES
+    truncated = len(lines) > _MAX_DIFF_LINES
     if truncated:
-        lines = lines[:MAX_DIFF_LINES]
+        lines = lines[:_MAX_DIFF_LINES]
     return {
         "kind": _TEXT_KIND,
         "backup_name": name,
@@ -168,7 +165,7 @@ def build_text_diff_response(
     }
 
 
-def compute_json_patch(
+def _compute_json_patch(
     stored: Any, current: Any, max_ops: int, out: list[dict[str, Any]]
 ) -> bool:
     """Generate an RFC 6902 JSON-Patch from ``current`` to ``stored``.
@@ -192,7 +189,7 @@ def compute_json_patch(
 def json_equal(expected: Any, current: Any) -> bool:
     """Equal as the restore preview compares them: type-sensitive (False is not 0)."""
     patch: list[dict[str, Any]] = []
-    compute_json_patch(expected, current, 1, patch)
+    _compute_json_patch(expected, current, 1, patch)
     return not patch
 
 
@@ -226,7 +223,7 @@ def _diff_node(
     # a different state for HA toggles. The different-type branch
     # forces a replace unconditionally. No post-append length guard here
     # (unlike the loop sites in the dict/list walkers below): this append is terminal, and
-    # ``compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
+    # ``_compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
     # one final overflow op before trimming.
     out.append({"op": "replace", "path": path or "", "value": stored})
 
@@ -297,24 +294,11 @@ def _pointer_segment(key: str) -> str:
     return key.replace("~", "~0").replace("/", "~1")
 
 
-def summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
-    """Tally op classes. ``add + remove + replace == total`` holds today
-    because ``_diff_node`` only emits those three ops; if a future change
-    starts emitting ``move``/``copy``/``test``, the class counts would sum
-    to less than ``total``. Warn on any unrecognized op so that drift is
-    visible instead of silently undercounting.
-    """
+def _summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
+    """Tally op classes; ``_diff_node`` emits only add, remove and replace."""
     classes: dict[str, int] = {"add": 0, "remove": 0, "replace": 0}
     for op in patch:
-        op_type = op.get("op")
-        if isinstance(op_type, str) and op_type in classes:
-            classes[op_type] += 1
-        else:
-            logger.warning(
-                "diff: unrecognized JSON-Patch op %r — not reflected in "
-                "per-class counts (add/remove/replace)",
-                op_type,
-            )
+        classes[op["op"]] += 1
     return {
         "add": classes["add"],
         "remove": classes["remove"],

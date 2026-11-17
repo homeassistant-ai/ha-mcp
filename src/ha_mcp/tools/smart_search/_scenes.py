@@ -54,7 +54,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         Assumption — caveat for downstream callers: when ``registry_failed``
         is ``False``, the returned ``homeassistant_scene_uids`` set is
         assumed to be COMPLETE — every HA-managed scene the registry knows
-        about appears in the set. ``select_scene_ids_to_fetch`` relies on
+        about appears in the set. ``_select_scene_ids_to_fetch`` relies on
         this to classify out-of-set UIDs as integration-managed. If HA ever
         returns a successful-but-truncated ``entity_registry/list`` response
         (no current known case), genuinely-HA-managed scenes whose UIDs are
@@ -134,7 +134,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             slug_to_storage_id[slug] = uid
 
     @staticmethod
-    def select_scene_ids_to_fetch(
+    def _select_scene_ids_to_fetch(
         scored: list[tuple[str, str, str | None, int]],
         homeassistant_scene_uids: set[str],
         registry_failed: bool,
@@ -395,7 +395,7 @@ class SceneSearchMixin(ConfigFetchMixin):
 
         # Attempt C: parallel per-id fetch with a wall-clock budget so a few
         # slow scenes don't tank the whole search.
-        sids_to_fetch, integration_skipped = self.select_scene_ids_to_fetch(
+        sids_to_fetch, integration_skipped = self._select_scene_ids_to_fetch(
             scored, homeassistant_scene_uids, registry_failed, slug_to_storage_id
         )
 
@@ -466,7 +466,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         integration-managed scenes intentionally skip the per-id fetch and never
         raise ``partial`` on their own (the count is informational).
 
-        Wording uses the same forceful triad as ``apply_per_type_partial_flag``
+        Wording uses the same forceful triad as ``_apply_per_type_partial_flag``
         (``not scanned`` / ``match status is unknown`` / ``not exhaustive``)
         so blind agents can't rationalise scene incompleteness any more easily
         than automation/script incompleteness — the softer prior phrasing was
@@ -507,7 +507,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             # registry-failed attempt-all path integration-managed scenes reach
             # the fetch and 404 the same way. Name both so the reader knows
             # where the definition actually lives. Mirrors the
-            # automation/script fragment in ``apply_per_type_partial_flag``
+            # automation/script fragment in ``_apply_per_type_partial_flag``
             # (#2292).
             reason_parts.append(
                 f"{yaml_skipped} scene(s) not scanned (per-id config endpoint "
@@ -566,5 +566,5 @@ class SceneSearchMixin(ConfigFetchMixin):
                 "not resolve for a scene that was renamed in the UI."
             )
         # Use the standardised " ; " separator (matches
-        # ``merge_payload_metadata`` and ``apply_per_type_partial_flag``).
+        # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).
         response["partial_reason"] = " ; ".join(reason_parts)

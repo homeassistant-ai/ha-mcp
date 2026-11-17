@@ -19,7 +19,7 @@ the e2e suite itself, because every failure mode they guard degrades into a
   which concurrent results are regressions. Too strict and healthy bulk
   batches fail the suite; too loose and real tool errors ride through.
 
-No Docker and no HA instance: every input here is a plain object.
+No Docker and no HA instance: the results are the real MCP result types.
 """
 
 from __future__ import annotations
@@ -27,7 +27,10 @@ from __future__ import annotations
 import json
 
 import pytest
+from mcp import types as sdk_types
 
+from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.fastmcp.client.client import CallToolResult
 from tests.src.e2e.error_handling.test_network_errors import _hard_failures
 from tests.src.e2e.utilities.assertions import (
     assert_mcp_failure,
@@ -52,34 +55,22 @@ def test_pending_restart_does_not_override_an_error_field() -> None:
         assert_mcp_success({"status": "pending_restart", "error": "config rejected"})
 
 
-class _TextBlock:
-    """Minimal stand-in for an MCP text content block."""
-
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
-class _FastmcpResult:
-    """Stand-in for fastmcp's ``CallToolResult`` (flag spelled ``is_error``).
-
-    Deliberately a plain class rather than a ``MagicMock``: attribute
-    auto-creation would make *every* flag spelling read truthy and hide
-    exactly the bug these tests exist to catch.
-    """
-
-    def __init__(self, text: str, is_error: bool = False) -> None:
-        self.content = [_TextBlock(text)]
-        self.structured_content = None
-        self.is_error = is_error
+def _FastmcpResult(text: str, is_error: bool = False) -> CallToolResult:
+    """fastmcp's real ``CallToolResult`` (flag spelled ``is_error``)."""
+    return CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=text)],
+        structured_content=None,
+        meta=None,
+        is_error=is_error,
+    )
 
 
-class _RawMcpResult:
-    """Stand-in for the raw MCP ``CallToolResult`` (flag spelled ``isError``)."""
-
-    def __init__(self, text: str, error_flag: bool = False) -> None:
-        self.content = [_TextBlock(text)]
-        self.structured_content = None
-        self.isError = error_flag
+def _RawMcpResult(text: str, error_flag: bool = False) -> sdk_types.CallToolResult:
+    """The MCP SDK's ``CallToolResult`` (flag spelled ``isError``)."""
+    return sdk_types.CallToolResult(
+        content=[sdk_types.TextContent(type="text", text=text)],
+        isError=error_flag,
+    )
 
 
 class TestParsedDictPassthrough:

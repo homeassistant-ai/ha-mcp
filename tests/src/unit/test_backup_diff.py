@@ -1,273 +1,392 @@
-"""Snapshot diffs: the JSON patch for config snapshots and the unified diff
-for text snapshots (``ha_mcp.backup_diff``)."""
+"""What ``ha_manage_backup(action="diff")`` reports, on real Core.
 
+A config snapshot is compared as a JSON patch: the operations that turn what
+Home Assistant holds now back into the snapshot. A file snapshot is compared
+as a unified diff from the live file to the snapshot. Each test takes a
+snapshot of what Core holds through the server's own client, changes Core or
+the snapshot file, and reads the comparison through the tool. The unchanged,
+renamed, deleted and over-the-cap cases of the patch, and the changed and
+unchanged file, are in ``test_backup_manager.py``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
+from homeassistant.core import HomeAssistant
 
-from ha_mcp.backup_diff import (
-    MAX_DIFF_LINES,
-    build_text_diff_response,
-    compute_json_patch,
-    summarize_patch_counts,
-)
+from ha_mcp import backup_manager as bm
+from ha_mcp.client.rest_client import HomeAssistantClient
 
+from ._backup_core import HEADER, manage_backup
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import file_snapshot_manager as file_snapshot_manager
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._config_dir_yaml import write_config_files
+from ._helper_tool_core import create_item, set_up
 
-class TestDiffNode:
-    """``compute_json_patch`` patch shape against representative configs."""
-
-    def test_identical_configs_produce_empty_patch(self) -> None:
-        out: list[dict[str, Any]] = []
-        truncated = compute_json_patch({"a": 1}, {"a": 1}, 50, out)
-        assert out == []
-        assert truncated is False
-
-    def test_scalar_change_is_replace(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a": 2}, {"a": 1}, 50, out)
-        assert out == [{"op": "replace", "path": "/a", "value": 2}]
-
-    def test_missing_key_in_current_is_add(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a": 1, "b": 2}, {"a": 1}, 50, out)
-        assert out == [{"op": "add", "path": "/b", "value": 2}]
-
-    def test_extra_key_in_current_is_remove(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a": 1}, {"a": 1, "b": 2}, 50, out)
-        assert out == [{"op": "remove", "path": "/b"}]
-
-    def test_bool_vs_int_does_not_collapse(self) -> None:
-        # ``True == 1`` in Python but they represent different states for
-        # HA-side toggles; the diff must treat the type change as a
-        # replace, not silently equate them.
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"enabled": True}, {"enabled": 1}, 50, out)
-        assert out == [{"op": "replace", "path": "/enabled", "value": True}]
-
-    def test_list_length_grew_in_current_emits_remove_in_reverse(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch([1, 2], [1, 2, 3, 4], 50, out)
-        # Removes in reverse index order so each op stays valid against
-        # the document state it gets applied to.
-        assert out == [
-            {"op": "remove", "path": "/3"},
-            {"op": "remove", "path": "/2"},
-        ]
-
-    def test_list_length_shrunk_in_current_emits_append(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch([1, 2, 3], [1, 2], 50, out)
-        assert out == [{"op": "add", "path": "/-", "value": 3}]
-
-    def test_nested_change_uses_pointer_path(self) -> None:
-        stored = {"trigger": [{"platform": "state", "entity_id": "binary_sensor.x"}]}
-        current = {"trigger": [{"platform": "time", "entity_id": "binary_sensor.x"}]}
-        out: list[dict[str, Any]] = []
-        compute_json_patch(stored, current, 50, out)
-        assert out == [
-            {"op": "replace", "path": "/trigger/0/platform", "value": "state"}
-        ]
-
-    def test_key_with_slash_gets_escaped(self) -> None:
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a/b": 2}, {"a/b": 1}, 50, out)
-        assert out == [{"op": "replace", "path": "/a~1b", "value": 2}]
-
-    def test_root_type_swap_emits_root_replace(self) -> None:
-        # When the captured shape is a dict but HA now returns a list
-        # (schema migration, integration replaced), the only sane patch
-        # is "replace whole doc" — JSON-Pointer ``""`` per RFC 6901 §6.
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a": 1}, [1, 2], 50, out)
-        assert out == [{"op": "replace", "path": "", "value": {"a": 1}}]
-
-    def test_truncation_flag_set_when_max_ops_reached(self) -> None:
-        # Build a config that produces > max_ops change ops.
-        stored = {f"k{i}": i for i in range(10)}
-        current: dict[str, Any] = {}
-        out: list[dict[str, Any]] = []
-        truncated = compute_json_patch(stored, current, 3, out)
-        assert truncated is True
-        assert len(out) == 3
-        # All three are adds since current is empty.
-        assert {op["op"] for op in out} == {"add"}
-
-    def test_patch_exactly_at_cap_is_not_truncated(self) -> None:
-        # A patch that lands on exactly ``max_ops`` ops is complete, not
-        # cut short — ``len(out) >= max_ops`` would have flagged it as a
-        # false-positive truncation. The generator collects one beyond
-        # the cap to tell "exactly full" from "overflowed".
-        stored = {f"k{i}": i for i in range(3)}
-        current: dict[str, Any] = {}
-        out: list[dict[str, Any]] = []
-        truncated = compute_json_patch(stored, current, 3, out)
-        assert truncated is False
-        assert len(out) == 3
-        assert {op["op"] for op in out} == {"add"}
-
-    def test_nested_list_of_dicts_grows_emits_append(self) -> None:
-        # A real trigger add: the stored automation has two triggers, the
-        # live one only has the first — recovering ``stored`` means
-        # appending the second trigger.
-        stored = {
-            "trigger": [
-                {"platform": "state", "entity_id": "binary_sensor.a"},
-                {"platform": "time", "at": "12:00:00"},
-            ]
-        }
-        current = {"trigger": [{"platform": "state", "entity_id": "binary_sensor.a"}]}
-        out: list[dict[str, Any]] = []
-        compute_json_patch(stored, current, 50, out)
-        assert out == [
-            {
-                "op": "add",
-                "path": "/trigger/-",
-                "value": {"platform": "time", "at": "12:00:00"},
-            }
-        ]
-
-    def test_nested_list_of_dicts_shrinks_emits_reverse_remove(self) -> None:
-        # A real action removal: the stored script has one action, the
-        # live one grew a second — recovering ``stored`` means removing
-        # the extra tail entry.
-        stored = {"action": [{"service": "light.turn_on"}]}
-        current = {
-            "action": [
-                {"service": "light.turn_on"},
-                {"service": "light.turn_off"},
-            ]
-        }
-        out: list[dict[str, Any]] = []
-        compute_json_patch(stored, current, 50, out)
-        assert out == [{"op": "remove", "path": "/action/1"}]
-
-    def test_tilde_in_key_escapes_end_to_end(self) -> None:
-        # ``~`` in a dict key must be escaped to ``~0`` in the pointer path.
-        out: list[dict[str, Any]] = []
-        compute_json_patch({"a~b": 2}, {"a~b": 1}, 50, out)
-        assert out == [{"op": "replace", "path": "/a~0b", "value": 2}]
+FILE = "www/x.css"
 
 
-class TestSummarizePatchCounts:
-    def test_counts_each_op_class_and_total(self) -> None:
-        patch: list[dict[str, Any]] = [
-            {"op": "add", "path": "/x", "value": 1},
-            {"op": "remove", "path": "/y"},
-            {"op": "replace", "path": "/z", "value": 2},
-            {"op": "add", "path": "/q", "value": 3},
-        ]
-        assert summarize_patch_counts(patch) == {
-            "add": 2,
-            "remove": 1,
-            "replace": 1,
-            "total": 4,
-        }
-
-    def test_empty_patch_zero_counts(self) -> None:
-        assert summarize_patch_counts([]) == {
-            "add": 0,
-            "remove": 0,
-            "replace": 0,
-            "total": 0,
-        }
-
-    def test_unrecognized_op_warns_and_undercounts_classes(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # ``_diff_node`` only emits add/remove/replace today; if a future
-        # op type (move/copy/test) ever appears, the class counts sum to
-        # less than ``total``. The warning makes that drift visible.
-        patch: list[dict[str, Any]] = [
-            {"op": "add", "path": "/x", "value": 1},
-            {"op": "move", "from": "/a", "path": "/b"},
-        ]
-        with caplog.at_level("WARNING"):
-            counts = summarize_patch_counts(patch)
-        assert counts == {"add": 1, "remove": 0, "replace": 0, "total": 2}
-        assert counts["add"] + counts["remove"] + counts["replace"] < counts["total"]
-        assert any(
-            "unrecognized JSON-Patch op" in r.message and "move" in r.message
-            for r in caplog.records
-        )
-
-
-class TestBuildTextDiffResponse:
-    def test_changed_emits_unified_diff(self) -> None:
-        r = build_text_diff_response(
-            "snap", "file", "www/x.css", "t0", "a\nb\nc\n", "a\nB\nc\n"
-        )
-        assert r["kind"] == "text"
-        assert r["entity_missing"] is False
-        assert r["unchanged"] is False
-        assert r["truncated"] is False
-        assert "-B" in r["diff"] and "+b" in r["diff"]
-
-    @pytest.mark.parametrize("text", ["", "same", "same\n"])
-    def test_unchanged_when_identical(self, text: str) -> None:
-        r = build_text_diff_response("snap", "file", "p", "t0", text, text)
-        assert r["unchanged"] is True
-        assert r["diff"] == ""
-
-    @pytest.mark.parametrize(
-        ("stored", "current", "expected_changes"),
-        [
-            (
-                "name: demo\n",
-                "name: demo",
-                "-name: demo\n\\ No newline at end of file\n+name: demo",
-            ),
-            (
-                "name: demo",
-                "name: demo\n",
-                "-name: demo\n+name: demo\n\\ No newline at end of file",
-            ),
-            (
-                "name: saved",
-                "name: live",
-                "-name: live\n\\ No newline at end of file\n+name: saved\n\\ No newline at end of file",
-            ),
-        ],
-        ids=[
-            "restore-final-newline",
-            "remove-final-newline",
-            "neither-has-final-newline",
-        ],
+async def _diff(client: HomeAssistantClient, snapshot: Path) -> dict[str, Any]:
+    """The tool's answer for ``snapshot``."""
+    result: dict[str, Any] = await manage_backup(
+        client, scope="edits", action="diff", backup_name=snapshot.name
     )
-    def test_missing_final_newline_is_visible_in_diff(
-        self, stored: str, current: str, expected_changes: str
-    ) -> None:
-        """A text backup must expose EOF changes on the correct side of the diff."""
-        r = build_text_diff_response("snap", "file", "p", "t0", stored, current)
-        assert r["unchanged"] is False
-        assert (
-            r["diff"] == "--- current\n+++ snapshot\n@@ -1 +1 @@\n" + expected_changes
-        )
+    assert result["success"] is True, result
+    return result
 
-    def test_unicode_separator_is_content_not_a_new_line(self) -> None:
-        r = build_text_diff_response(
-            "snap", "file", "p", "t0", "first\nsecond\n", "first\u2028second\n"
-        )
-        assert r["unchanged"] is False
-        assert r["diff"] == (
-            "--- current\n+++ snapshot\n@@ -1 +1,2 @@\n"
-            "-first\u2028second\n+first\n+second"
-        )
 
-    def test_missing_newline_marker_counts_toward_output_cap(self) -> None:
-        stored = "\n".join(f"line{i}" for i in range(MAX_DIFF_LINES - 3))
-        r = build_text_diff_response("snap", "file", "p", "t0", stored, "")
-        assert r["truncated"] is True
-        assert len(r["diff"].split("\n")) <= MAX_DIFF_LINES
+async def _select(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    options: list[str],
+) -> tuple[str, Path]:
+    """An input_select holding ``options``, and a snapshot of it."""
+    await set_up(hass, "input_select")
+    item_id = await create_item(client, "input_select", {"options": options})
+    snapshot = await manager.maybe_snapshot("helper_input_select", item_id, force=True)
+    assert snapshot is not None
+    return item_id, snapshot
 
-    def test_missing_target(self) -> None:
-        r = build_text_diff_response("snap", "file", "p", "t0", "x\n", None)
-        assert r["entity_missing"] is True
-        assert r["unchanged"] is False
-        assert r["diff"] == ""
 
-    def test_truncates_at_cap(self) -> None:
-        stored = "".join(f"s{i}\n" for i in range(MAX_DIFF_LINES + 50))
-        r = build_text_diff_response("snap", "file", "p", "t0", stored, "current\n")
-        assert r["truncated"] is True
-        assert len(r["diff"].splitlines()) == MAX_DIFF_LINES
+async def _set_options(
+    client: HomeAssistantClient, snapshot: Path, item_id: str, options: list[str]
+) -> None:
+    """Give the select ``options``; its name stays the one ``snapshot`` holds."""
+    updated = await client.send_websocket_message(
+        {
+            "type": "input_select/update",
+            "input_select_id": item_id,
+            "name": _held(snapshot)["name"],
+            "options": options,
+        }
+    )
+    assert updated["success"], updated
+
+
+def _edit_snapshot(snapshot: Path, config: Any) -> None:
+    """Make the snapshot hold ``config``, as a hand edit of the file would."""
+    stored = yaml.safe_load(snapshot.read_text())
+    stored["config"] = config
+    snapshot.write_text(HEADER + yaml.safe_dump(stored, sort_keys=False))
+
+
+def _held(snapshot: Path) -> dict[str, Any]:
+    config: dict[str, Any] = yaml.safe_load(snapshot.read_text())["config"]
+    return config
+
+
+# --------------------------------------------------------------------------
+# A config snapshot: the JSON patch back to it
+# --------------------------------------------------------------------------
+
+
+async def test_a_field_only_the_snapshot_holds_is_added_with_its_name_escaped(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    """A field name holding ``/`` or ``~`` is one JSON Pointer token: both are
+    escaped (RFC 6901), so the patch addresses that field and no other."""
+    _, snapshot = await _select(hass, core_client, snapshot_manager, ["a", "b"])
+    _edit_snapshot(snapshot, {**_held(snapshot), "a/b~c": 2})
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [{"op": "add", "path": "/a~1b~0c", "value": 2}]
+
+
+async def test_a_field_only_core_holds_is_removed(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    _, snapshot = await _select(hass, core_client, snapshot_manager, ["a", "b"])
+    held = _held(snapshot)
+    del held["options"]
+    _edit_snapshot(snapshot, held)
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [{"op": "remove", "path": "/options"}]
+
+
+async def test_true_and_1_are_a_difference(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    """Python counts ``True == 1``; a toggle holding 1 is still not one holding
+    true, so the patch puts the snapshot's value back."""
+    await set_up(hass, "input_boolean")
+    item_id = await create_item(core_client, "input_boolean", {"initial": True})
+    snapshot = await snapshot_manager.maybe_snapshot(
+        "helper_input_boolean", item_id, force=True
+    )
+    assert snapshot is not None
+    held = _held(snapshot)
+    assert held["initial"] is True
+    _edit_snapshot(snapshot, {**held, "initial": 1})
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [
+        {"op": "replace", "path": "/initial", "value": 1}
+    ]
+
+
+async def test_entries_core_added_to_a_list_are_removed_last_first(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    """Each removal renumbers what follows it, so the highest index goes first
+    and every operation still points at the entry it names."""
+    item_id, snapshot = await _select(hass, core_client, snapshot_manager, ["a", "b"])
+    await _set_options(core_client, snapshot, item_id, ["a", "b", "c", "d"])
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [
+        {"op": "remove", "path": "/options/3"},
+        {"op": "remove", "path": "/options/2"},
+    ]
+
+
+async def test_entries_core_dropped_from_a_list_are_appended(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    item_id, snapshot = await _select(
+        hass, core_client, snapshot_manager, ["a", "b", "c"]
+    )
+    await _set_options(core_client, snapshot, item_id, ["a"])
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [
+        {"op": "add", "path": "/options/-", "value": "b"},
+        {"op": "add", "path": "/options/-", "value": "c"},
+    ]
+
+
+async def test_a_snapshot_of_another_shape_replaces_the_whole_config(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    """When the snapshot holds a list where Core holds a mapping, no field can
+    be patched: the one operation replaces the whole document (pointer ``""``)."""
+    _, snapshot = await _select(hass, core_client, snapshot_manager, ["a", "b"])
+    _edit_snapshot(snapshot, ["a", "b"])
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["patch"] == [
+        {"op": "replace", "path": "", "value": ["a", "b"]}
+    ]
+
+
+async def test_the_counts_tally_the_patch(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    item_id, snapshot = await _select(hass, core_client, snapshot_manager, ["a", "b"])
+    await _set_options(core_client, snapshot, item_id, ["z", "b", "c", "d"])
+    held = _held(snapshot)
+    del held["name"]
+    _edit_snapshot(snapshot, {**held, "extra": True})
+
+    data = (await _diff(core_client, snapshot))["data"]
+
+    ops = [op["op"] for op in data["patch"]]
+    assert data["counts"] == {
+        "add": ops.count("add"),
+        "remove": ops.count("remove"),
+        "replace": ops.count("replace"),
+        "total": len(ops),
+    }
+    assert {"add", "remove", "replace"} <= set(ops)
+
+
+async def _shrunk_select_patch(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    dropped: int,
+) -> dict[str, Any]:
+    """The diff of a select that lost ``dropped`` options: one add each."""
+    options = [f"option {i}" for i in range(dropped + 1)]
+    item_id, snapshot = await _select(hass, client, manager, options)
+    await _set_options(client, snapshot, item_id, options[:1])
+    return await _diff(client, snapshot)
+
+
+async def test_a_patch_that_fills_the_cap_exactly_is_complete(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    """A patch of exactly as many operations as the cap allows lost nothing,
+    so it is neither flagged nor cut. The cap is read from a patch that
+    overflowed it."""
+    overflowed = await _shrunk_select_patch(hass, core_client, snapshot_manager, 1000)
+    assert overflowed["data"]["truncated"] is True
+    cap = len(overflowed["data"]["patch"])
+
+    full = await _shrunk_select_patch(hass, core_client, snapshot_manager, cap)
+
+    assert full["data"]["truncated"] is False
+    assert len(full["data"]["patch"]) == cap
+    assert "warnings" not in full
+
+
+# --------------------------------------------------------------------------
+# A file snapshot: the unified diff back to it
+# --------------------------------------------------------------------------
+
+
+async def _file_snapshot(
+    hass: HomeAssistant, manager: bm.BackupManager, body: str
+) -> Path:
+    await write_config_files(hass, {FILE: body})
+    snapshot = await manager.maybe_snapshot("file", FILE, force=True)
+    assert snapshot is not None
+    return snapshot
+
+
+@pytest.mark.parametrize(
+    ("stored", "current", "expected_changes"),
+    [
+        (
+            "name: demo\n",
+            "name: demo",
+            "-name: demo\n\\ No newline at end of file\n+name: demo",
+        ),
+        (
+            "name: demo",
+            "name: demo\n",
+            "-name: demo\n+name: demo\n\\ No newline at end of file",
+        ),
+        (
+            "name: saved",
+            "name: live",
+            "-name: live\n\\ No newline at end of file\n+name: saved\n\\ No newline at end of file",
+        ),
+    ],
+    ids=[
+        "restore-final-newline",
+        "remove-final-newline",
+        "neither-has-final-newline",
+    ],
+)
+async def test_a_missing_final_newline_shows_on_its_side_of_the_diff(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    file_snapshot_manager: bm.BackupManager,
+    stored: str,
+    current: str,
+    expected_changes: str,
+) -> None:
+    """A restore that adds or drops the final newline changes the file, so the
+    diff shows it on the side that lacks one."""
+    snapshot = await _file_snapshot(hass, file_snapshot_manager, stored)
+    await write_config_files(hass, {FILE: current})
+
+    data = (await _diff(core_client, snapshot))["data"]
+
+    assert data["unchanged"] is False
+    assert data["diff"] == (
+        "--- current\n+++ snapshot\n@@ -1 +1 @@\n" + expected_changes
+    )
+
+
+async def test_a_unicode_line_separator_is_content_not_a_new_line(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    file_snapshot_manager: bm.BackupManager,
+) -> None:
+    snapshot = await _file_snapshot(hass, file_snapshot_manager, "first\nsecond\n")
+    await write_config_files(hass, {FILE: "first second\n"})
+
+    data = (await _diff(core_client, snapshot))["data"]
+
+    assert data["diff"] == (
+        "--- current\n+++ snapshot\n@@ -1 +1,2 @@\n-first second\n+first\n+second"
+    )
+
+
+async def test_a_deleted_file_is_flagged_missing_not_unchanged(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    file_snapshot_manager: bm.BackupManager,
+) -> None:
+    """With no live file there is nothing to diff; the empty diff is no match."""
+    snapshot = await _file_snapshot(hass, file_snapshot_manager, "x\n")
+    await hass.async_add_executor_job(Path(hass.config.path(FILE)).unlink)
+
+    result = await _diff(core_client, snapshot)
+
+    assert result["data"]["entity_missing"] is True
+    assert result["data"]["unchanged"] is False
+    assert result["data"]["diff"] == ""
+    assert any("missing" in warning for warning in result["warnings"])
+
+
+async def _long_diff(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    stored: str,
+) -> dict[str, Any]:
+    """The diff from an empty file to ``stored``."""
+    snapshot = await _file_snapshot(hass, manager, stored)
+    await write_config_files(hass, {FILE: ""})
+    return await _diff(client, snapshot)
+
+
+async def test_a_long_diff_is_cut_and_says_so(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    file_snapshot_manager: bm.BackupManager,
+) -> None:
+    """A whole-file rewrite must not flood the tool response."""
+    stored = "".join(f"s{i}\n" for i in range(1000))
+
+    result = await _long_diff(hass, core_client, file_snapshot_manager, stored)
+
+    assert result["data"]["truncated"] is True
+    assert len(result["data"]["diff"].splitlines()) < 1000
+    assert any("truncated" in warning for warning in result["warnings"])
+
+
+async def test_the_missing_newline_marker_counts_toward_the_cap(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    file_snapshot_manager: bm.BackupManager,
+) -> None:
+    """A diff that fits the cap only without its no-final-newline marker is
+    cut and flagged, not sent one line over. The cap is read from a diff that
+    overflowed it."""
+    overflowed = await _long_diff(
+        hass,
+        core_client,
+        file_snapshot_manager,
+        "".join(f"s{i}\n" for i in range(1000)),
+    )
+    cap = len(overflowed["data"]["diff"].split("\n"))
+    # Three header lines and one line per stored line fill the cap; the
+    # marker for the missing final newline is one line more.
+    stored = "\n".join(f"line{i}" for i in range(cap - 3))
+
+    result = await _long_diff(hass, core_client, file_snapshot_manager, stored)
+
+    assert result["data"]["truncated"] is True
+    assert len(result["data"]["diff"].split("\n")) <= cap

@@ -137,11 +137,6 @@ def schema(addon_dir: Path) -> dict[str, str]:
     return {key: str(value) for key, value in config["schema"].items()}
 
 
-def schema_keys(addon_dir: Path) -> list[str]:
-    """The option keys of one flavor's ``config.yaml``, in schema order."""
-    return list(schema(addon_dir))
-
-
 def range_sentence(
     messages: dict[str, str], english: dict[str, str], schema_type: str
 ) -> str:

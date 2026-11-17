@@ -525,7 +525,7 @@ def update_path_ha(request):
       tag (git-archive export) — proves a new server release won't break existing
       installs.
     - ``head``: the working tree's ``custom_components/ha_mcp_tools`` (the same
-      source ``_conftest_seed.install_custom_component`` copies) — proves the PR's
+      source ``_conftest_seed._install_custom_component`` copies) — proves the PR's
       own component update machinery still works.
 
     Both containers run sequentially in one job. Yields a context dict once the
@@ -553,7 +553,7 @@ def update_path_ha(request):
             component_src = _export_released_component(work_dir / "released")
         else:
             # Working-tree component, sourced the same way
-            # _conftest_seed.install_custom_component does (the copytree in _seed_config below
+            # _conftest_seed._install_custom_component does (the copytree in _seed_config below
             # installs it into the container's custom_components).
             component_src = _REPO_ROOT / "custom_components" / _DOMAIN
             if not component_src.is_dir():

@@ -1,13 +1,14 @@
 """Regressions reported by Patch76 and reproduced on embedded HA 2026.10.
 
-The card index runs on a small frontend build written to disk, the index
-build on a real ``hass``, and custom cards through their real QuickJS sandbox.
+The card index runs on the installed frontend, the index build on a real
+``hass``, and custom cards through their real QuickJS sandbox.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -15,25 +16,15 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from ._card_definitions_core import (
-    FrontendOnDisk,
-    build_definitions,
+    CardIndex,
     cc,
     cd,
+    constrained_core,
 )
+from ._card_definitions_core import card_index as card_index
 from ._card_definitions_core import custom_cards as custom_cards
-from ._card_definitions_core import frontend as frontend
-from ._card_definitions_core import idle_custom_cards as idle_custom_cards
-
-
-def _struct_editor(struct: str, form: str) -> str:
-    """An editor module asserting its config against ``struct`` and showing ``form``."""
-    return (
-        "var s=r(6),v="
-        + struct
-        + ";class C{constructor(){this._schema=(0,s.memo)(e=>"
-        + form
-        + ")}setConfig(c){(0,s.assert)(c,v)}}"
-    )
+from ._card_definitions_core import definitions as definitions
+from ._card_definitions_core import fresh_card_state as fresh_card_state
 
 
 def _card_source(tag: str, *members: str) -> str:
@@ -52,119 +43,47 @@ def _write_card(path: Path, source: str) -> Path:
 
 
 def _custom_warnings(
-    tmp_path: Path, custom_cards: cc.CustomCards, tags: list[str]
+    definitions: cd.CardDefinitions, custom_cards: cc.CustomCards, tags: list[str]
 ) -> list[str]:
     """What a dashboard save says about one custom card per tag."""
-    definitions = build_definitions(tmp_path)
     cards = [{"type": f"custom:{tag}", "entities": 5} for tag in tags]
     return definitions.validate({"views": [{"cards": cards}]}, custom_cards)
-
-
-@pytest.mark.parametrize(
-    ("severity", "kept"),
-    [
-        pytest.param('{type:"object"}', ["green", "yellow", "red"], id="open object"),
-        pytest.param(
-            "(0,s.object)({green:s.string})", ["green"], id="object with listed keys"
-        ),
-    ],
-)
-def test_open_object_struct_keeps_editor_threshold_fields(
-    tmp_path: Path, severity: str, kept: list[str]
-) -> None:
-    """A struct that takes any object under ``severity`` does not drop the
-    threshold fields the editor shows; one that lists keys still does."""
-    struct = (
-        "{schema:{type:s.string,severity:" + severity + "},validate:()=>[void 0,{}]}"
-    )
-    form = '[{name:"severity",schema:[{name:"green"},{name:"yellow"},{name:"red"}]}]'
-    editor = _struct_editor(struct, form)
-    definitions = build_definitions(tmp_path, {"tile": editor})
-
-    described = definitions.describe("tile")
-
-    assert described is not None
-    assert described["fields"] == [
-        {"name": "severity", "schema": [{"name": name} for name in kept]}
-    ]
-
-
-def test_alarm_form_can_describe_options_without_selected_states(
-    tmp_path: Path,
-) -> None:
-    editor = (
-        "class E{constructor(){this._schema=(0,m.A)((localize,stateObj,states)=>"
-        '[{name:"states",selector:{select:{options:["armed_home"].map('
-        "o=>({value:o,disabled:!states.includes(o)}))}}}])}}"
-    )
-    definitions = build_definitions(tmp_path, {"tile": editor})
-
-    described = definitions.describe("tile")
-
-    assert described is not None
-    assert described["fields"][0]["selector"]["select"]["options"] == [
-        {"value": "armed_home", "disabled": True}
-    ]
-
-
-def test_form_defaults_are_not_overridden_by_empty_selected_options(
-    tmp_path: Path,
-) -> None:
-    editor = (
-        "class E{constructor(){this._schema=(0,m.A)("
-        "(localize,entity,icon='mdi:link')=>"
-        "[{name:'icon',selector:{icon:{placeholder:icon}}}])}}"
-    )
-    definitions = build_definitions(tmp_path, {"tile": editor})
-
-    described = definitions.describe("tile")
-
-    assert described is not None
-    assert described["fields"][0]["selector"]["icon"]["placeholder"] == "mdi:link"
 
 
 @pytest.mark.parametrize("failure", ["runtime", "index"])
 async def test_failed_initialization_retries_after_cooldown(
     hass: HomeAssistant,
-    frontend: FrontendOnDisk,
+    card_index: CardIndex,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
     """A card index that failed to start is not rebuilt on every request; once
     the cooldown ends, concurrent callers share one new build."""
-    if failure == "runtime":
-        frontend.runtime.side_effect = [False, True]
-    else:
-        (frontend.root / "frontend_latest" / "cards.js").unlink()
+    with ExitStack() as failing:
+        if failure == "runtime":
+            # Home Assistant pins another QuickJS provider: the real check refuses.
+            failing.enter_context(
+                constrained_core(monkeypatch, tmp_path, "quickjs-ng==0.0.0\n")
+            )
+        else:
+            card_index.frontend.without_cards()
 
-    assert await cd.async_get_definitions(hass) is None
-    assert await cd.async_get_definitions(hass) is None
-    frontend.runtime.assert_awaited_once()
+        assert await cd.async_get_definitions(hass) is None
+        assert await cd.async_get_definitions(hass) is None
+        card_index.runtime.assert_awaited_once()
 
+    card_index.frontend.readable()
     monkeypatch.setattr(cd, "_BUILD_RETRY_SECONDS", 0)
-    if failure == "index":
-        frontend.write()
     first, second = await asyncio.gather(
         cd.async_get_definitions(hass), cd.async_get_definitions(hass)
     )
 
     assert first is not None
     assert second is first
-    assert frontend.runtime.await_count == 2
+    assert card_index.runtime.await_count == 2
     assert await cd.async_get_definitions(hass) is first
-    assert frontend.runtime.await_count == 2
-
-
-def test_missing_builtin_form_has_no_field_coverage_claim(tmp_path: Path) -> None:
-    """A card with no editor lists no fields, and says nothing about coverage."""
-    definitions = build_definitions(tmp_path, cards=("alert",))
-
-    described = definitions.describe("alert")
-
-    assert described is not None
-    assert described["fields"] is None
-    assert "field_coverage" not in described
-    assert "note" not in described
+    assert card_index.runtime.await_count == 2
 
 
 _BROKEN_EDITORS = {
@@ -235,9 +154,9 @@ def test_looping_editor_cannot_consume_later_cards_budget(
     assert custom_cards.check("looping-editor-card", {}) == looping
 
 
-@pytest.mark.usefixtures("idle_custom_cards")
+@pytest.mark.usefixtures("fresh_card_state")
 def test_looping_editors_do_not_exhaust_the_custom_save_budget(
-    tmp_path: Path, custom_cards: cc.CustomCards
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
 ) -> None:
     """One editor that never returns cannot use up the time a save gives all
     its custom cards: every card is still checked."""
@@ -252,7 +171,7 @@ def test_looping_editors_do_not_exhaust_the_custom_save_budget(
     )
     custom_cards.refresh([_write_card(tmp_path / "cards.js", source)])
 
-    warnings = _custom_warnings(tmp_path, custom_cards, tags)
+    warnings = _custom_warnings(definitions, custom_cards, tags)
 
     assert warnings == [
         f"views[0].cards[{i}] (custom:{tag}): card verdict"
@@ -280,7 +199,7 @@ def test_synchronous_editor_form_does_not_drain_unrelated_timers(
     assert described["fields"] == [{"name": "entity", "selector": {"entity": {}}}]
 
 
-@pytest.mark.usefixtures("idle_custom_cards")
+@pytest.mark.usefixtures("fresh_card_state")
 @pytest.mark.parametrize(
     "body",
     [
@@ -290,12 +209,15 @@ def test_synchronous_editor_form_does_not_drain_unrelated_timers(
     ],
 )
 def test_type_errors_are_inconclusive_instead_of_silently_discarded(
-    tmp_path: Path, custom_cards: cc.CustomCards, body: str
+    tmp_path: Path,
+    custom_cards: cc.CustomCards,
+    definitions: cd.CardDefinitions,
+    body: str,
 ) -> None:
     source = _card_source("type-error-card", f"setConfig(c) {{{body}}}")
     custom_cards.refresh([_write_card(tmp_path / "card.js", source)])
 
-    [warning] = _custom_warnings(tmp_path, custom_cards, ["type-error-card"])
+    [warning] = _custom_warnings(definitions, custom_cards, ["type-error-card"])
 
     assert warning.startswith("views[0].cards[0] (custom:type-error-card): ")
     assert "configuration check inconclusive (TypeError: " in warning
@@ -348,23 +270,22 @@ def test_source_growth_after_stat_is_bounded_before_runtime_creation(
 @pytest.mark.parametrize(
     ("card_type", "key", "other"),
     [
+        # Options the installed frontend's editor does not list, beside a similar
+        # one it does: the frontend's ``show_camera`` and ``item_tap_action``.
         ("area", "show_name", "show_camera"),
         ("todo-list", "tap_action", "item_tap_action"),
     ],
 )
 def test_advice_does_not_rename_options_with_different_semantics(
-    tmp_path: Path, card_type: str, key: str, other: str
+    definitions: cd.CardDefinitions, card_type: str, key: str, other: str
 ) -> None:
     """An option the editor does not list is reported as not listed, even when
     the editor lists a similarly named option that means something else."""
-    struct = f"(0,s.object)({{type:s.string,{other}:s.string}})"
-    editor = _struct_editor(struct, f'[{{name:"{other}"}}]')
-    definitions = build_definitions(tmp_path, {card_type: editor}, cards=(card_type,))
     cards = [{"type": card_type, key: "x"}, {"type": card_type, other: "x"}]
 
     warnings = definitions.validate({"views": [{"cards": cards}]})
 
-    assert warnings == [
+    assert [w for w in warnings if "not listed" in w] == [
         f"views[0].cards[0] ({card_type}): editor schema advisory; runtime "
         f"support may differ: '{key}' is not listed in the {card_type} editor schema"
     ]

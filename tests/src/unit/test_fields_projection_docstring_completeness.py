@@ -150,7 +150,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "config_has_more",
                 "config_next_offset",
                 # Toggle-gated entity-branch feature output — kept at top
-                # level + in ``ALWAYS_KEEP_PROJECTION`` so a caller using
+                # level + in ``_ALWAYS_KEEP_PROJECTION`` so a caller using
                 # ``group_by_domain=True`` can pair it with ``fields=``.
                 "by_domain",
                 # Conditional diagnostic (fuzzy + state_filter) — kept so
@@ -568,7 +568,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
 
     The parametrized ``ha_search`` drift-check runs in manifest mode and
     is structurally blind to keys the entities branch emits but that
-    ``merge_payload_metadata`` then propagates into the orchestrator
+    ``_merge_payload_metadata`` then propagates into the orchestrator
     response. A new key added to ``_ha_search_entities``'s sub-payload
     builders would silently land at the top level of ``ha_search`` and
     pass the manifest check (the manifest is hand-maintained, doesn't
@@ -587,7 +587,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     - in the ``documented_must_equal`` manifest for ``ha_search``
       (intentionally surfaced at the top level + listed in the
       ``fields=`` ``Available keys`` enumeration + retained in
-      ``ALWAYS_KEEP_PROJECTION``).
+      ``_ALWAYS_KEEP_PROJECTION``).
 
     Adding a new key to either bucket forces the contract decision
     explicitly; landing in neither raises this test.
@@ -625,7 +625,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
         f"ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
         f"`Available keys:` enumeration / documented_must_equal manifest). "
         f"Either add to ENTITIES_BRANCH_SKIP_KEYS to strip, or add to the "
-        f"manifest + docstring + ALWAYS_KEEP_PROJECTION to surface."
+        f"manifest + docstring + _ALWAYS_KEEP_PROJECTION to surface."
     )
 
 

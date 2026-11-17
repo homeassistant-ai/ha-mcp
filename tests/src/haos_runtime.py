@@ -1482,9 +1482,8 @@ def get_home_assistant_http_config(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict):
-        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
-    return result
+    config: dict[str, Any] = result
+    return config
 
 
 def configure_home_assistant_http(
@@ -1508,11 +1507,8 @@ def configure_home_assistant_http(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
-        raise RuntimeError(
-            f"http/config/configure returned an invalid result: {result!r}"
-        )
-    return result["restart"]
+    restart: bool = result["restart"]
+    return restart
 
 
 def promote_home_assistant_http_config(
@@ -1523,17 +1519,13 @@ def promote_home_assistant_http_config(
     verify_ssl: bool = True,
 ) -> None:
     """Promote Core's live pending HTTP config to the stable slot."""
-    result = _home_assistant_ws_command(
+    _home_assistant_ws_command(
         base_url,
         token,
         {"type": "http/config/promote"},
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if result is not None:
-        raise RuntimeError(
-            f"http/config/promote returned an unexpected result: {result!r}"
-        )
 
 
 def enable_config_entry(

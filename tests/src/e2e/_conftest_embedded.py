@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Selected with ``E2E_BACKEND=embedded``; ``mcp_client`` then speaks Streamable
 # HTTP to the entry's ingress webhook instead of using an in-memory transport. The
 # component is installed once (for all testcontainer backends) by
-# ``install_custom_component``; the embedded backend additionally seeds the
+# ``_install_custom_component``; the embedded backend additionally seeds the
 # server entry via ``_install_embedded_server``.
 _EMBEDDED_DOMAIN = "ha_mcp_tools"
 _EMBEDDED_ENTRY_ID = "e2e_embedded_ha_mcp_server_entry"
@@ -114,7 +114,7 @@ def _is_no_tools_entry_selected() -> bool:
     On these lanes the component's "HA-MCP File & YAML Tools" config entry is
     absent, so the privileged filesystem / YAML services never register. It is
     orthogonal to the backend selectors: each backend has its own no-tools
-    shape (see ``prepare_testcontainer_config`` / ``_prepare_haos_image``).
+    shape (see ``_prepare_testcontainer_config`` / ``_prepare_haos_image``).
 
     Delegates to ``utilities.topology.tools_entry_absent`` — the staging here
     and the markers / assertions there must never disagree about which
@@ -159,7 +159,7 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     """Seed the ha_mcp_tools "server" config entry + feature-flag overrides.
 
     The ha_mcp_tools component itself is already copied by
-    ``install_custom_component`` (which also seeds the "tools" services entry);
+    ``_install_custom_component`` (which also seeds the "tools" services entry);
     the in-process server is a SECOND config entry of that same component,
     discriminated by ``data.entry_type == "server"``. Three pieces here, laid
     down before the container boots (so a post-boot host write to the bind
@@ -189,7 +189,7 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     data = json.loads(storage_file.read_text())
     entries = data.setdefault("data", {}).setdefault("entries", [])
     # Dedupe by entry_id, not domain: the domain (ha_mcp_tools) is shared with the
-    # tools services entry seeded by install_custom_component.
+    # tools services entry seeded by _install_custom_component.
     if not any(
         isinstance(e, dict) and e.get("entry_id") == _EMBEDDED_ENTRY_ID for e in entries
     ):

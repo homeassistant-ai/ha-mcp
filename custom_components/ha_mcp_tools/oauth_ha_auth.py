@@ -91,7 +91,7 @@ CIMD_CACHE_TTL = 300.0
 # caller cannot force a fresh resolution+fetch per request, while a transient
 # failure still recovers quickly.
 CIMD_NEGATIVE_TTL = 60.0
-CIMD_CACHE_MAX = 64
+_CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
 # client_id URL -> (expires_monotonic, redirect_uris). Draft -00 section 4.4.3
 # forbids caching error responses and invalid documents; both return with
@@ -381,10 +381,10 @@ def _cache_cimd(client_id: str, now: float, result: list[str] | None) -> None:
     (#2217 review).
     """
     _cimd_cache.pop(client_id, None)
-    if len(_cimd_cache) >= CIMD_CACHE_MAX:
+    if len(_cimd_cache) >= _CIMD_CACHE_MAX:
         for key in [k for k, (exp, _) in _cimd_cache.items() if exp <= now]:
             del _cimd_cache[key]
-    while len(_cimd_cache) >= CIMD_CACHE_MAX:
+    while len(_cimd_cache) >= _CIMD_CACHE_MAX:
         del _cimd_cache[next(iter(_cimd_cache))]
     ttl = CIMD_CACHE_TTL if result is not None else CIMD_NEGATIVE_TTL
     _cimd_cache[client_id] = (now + ttl, result)

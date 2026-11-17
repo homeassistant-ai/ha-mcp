@@ -80,10 +80,10 @@ from .backup_diff import (
     DiffResponse,
     DiffResponseText,
     _build_diff_response,
-    build_text_diff_response,
-    compute_json_patch,
+    _build_text_diff_response,
+    _compute_json_patch,
+    _summarize_patch_counts,
     json_equal,
-    summarize_patch_counts,
 )
 from .backup_entities import (
     current_entity_id,
@@ -1775,7 +1775,7 @@ class BackupManager:
         stored = data["config"]
         captured_at = data.get("captured")
         if data.get("kind") == _TEXT_KIND:
-            return build_text_diff_response(
+            return _build_text_diff_response(
                 name, domain, entity_id, captured_at, str(stored), current
             )
         if current is None:
@@ -1786,11 +1786,11 @@ class BackupManager:
                 captured_at,
                 entity_missing=True,
                 patch=[],
-                counts=summarize_patch_counts([]),
+                counts=_summarize_patch_counts([]),
                 truncated=False,
             )
         patch: list[dict[str, Any]] = []
-        truncated = compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
+        truncated = _compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
         return _build_diff_response(
             name,
             domain,
@@ -1798,7 +1798,7 @@ class BackupManager:
             captured_at,
             entity_missing=False,
             patch=patch,
-            counts=summarize_patch_counts(patch),
+            counts=_summarize_patch_counts(patch),
             truncated=truncated,
             warnings=data["warnings"],
         )
@@ -1906,7 +1906,7 @@ class BackupManager:
         current: Any = None
         if file_path and not info.get("path_ambiguous", True):
             current = await _fetch_file(self._client, file_path)
-        return build_text_diff_response(
+        return _build_text_diff_response(
             f"{LEGACY_PREFIX}{filename}",
             "yaml_file",
             file_path or filename,

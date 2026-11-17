@@ -150,6 +150,26 @@ def _governing_annotation(annotation: ast.expr | None) -> ast.expr | None:
     return None
 
 
+def _declared_tool_name(node: ast.AsyncFunctionDef) -> str | None:
+    """The ``ha_*`` name a ``@mcp.tool(...)`` / ``@tool(...)`` decorator gives
+    a function: its ``name=`` when it passes one, else the function's own."""
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        func = decorator.func
+        if not (
+            (isinstance(func, ast.Attribute) and func.attr == "tool")
+            or (isinstance(func, ast.Name) and func.id == "tool")
+        ):
+            continue
+        name = node.name
+        for keyword in decorator.keywords:
+            if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                name = str(keyword.value.value)
+        return name if name.startswith("ha_") else None
+    return None
+
+
 def _constraints_declared_in_source() -> dict[tuple[str, str], set[str]]:
     """Resolvable non-description Field kwargs, per (tool name, parameter).
 
@@ -165,7 +185,7 @@ def _constraints_declared_in_source() -> dict[tuple[str, str], set[str]]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            _, tool_name = extract_tools.find_tool_decorator(node)
+            tool_name = _declared_tool_name(node)
             if tool_name is None:
                 continue
             for arg in node.args.args:
@@ -197,7 +217,7 @@ def _params_documented_in_source() -> set[tuple[str, str]]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            _, tool_name = extract_tools.find_tool_decorator(node)
+            tool_name = _declared_tool_name(node)
             if tool_name is None:
                 continue
             for arg in node.args.args:

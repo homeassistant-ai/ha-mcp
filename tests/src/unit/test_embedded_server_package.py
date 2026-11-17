@@ -23,7 +23,6 @@ from custom_components.ha_mcp_tools.const import (
     DATA_REINSTALL_REQUESTED,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
-    OPT_CHANNEL,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
 )
@@ -118,7 +117,7 @@ async def test_the_retired_channel_option_is_ignored(
     pin(hass, PIN)
     package_index.dists[DEV] = "8.6.0.dev2893"
     mgr, _ = await new_manager(
-        hass, options={OPT_CHANNEL: CHANNEL_DEV, "auto_update": False}
+        hass, options={"channel": CHANNEL_DEV, "auto_update": False}
     )
 
     await package_step(mgr)

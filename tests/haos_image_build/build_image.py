@@ -559,15 +559,11 @@ def onboard(base_url: str) -> OAuthCredentials:
             "code": auth_code,
         },
     )
-    access_token = token_resp.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise RuntimeError("OAuth authorization exchange returned no access token")
-    refresh_token = token_resp.get("refresh_token")
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise RuntimeError("OAuth authorization exchange returned no refresh token")
+    # Core answers an authorization code it accepted with both tokens; a code
+    # it refuses is an HTTP error, raised by ``http``.
     return OAuthCredentials(
-        access_token=access_token,
-        refresh_token=refresh_token,
+        access_token=token_resp["access_token"],
+        refresh_token=token_resp["refresh_token"],
     )
 
 
@@ -676,15 +672,9 @@ class HAWebSocket:
                 form=form,
                 timeout=timeout,
             )
-        access_token = token_resp.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise RuntimeError("OAuth refresh returned no access token")
-        rotated_refresh_token = token_resp.get("refresh_token")
-        if rotated_refresh_token is not None:
-            if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
-                raise RuntimeError("OAuth refresh returned an invalid refresh token")
-            self._credentials.refresh_token = rotated_refresh_token
-        self._credentials.access_token = access_token
+        # Core answers a refresh with a new access token and keeps the refresh
+        # token; a revoked refresh token is an HTTP error, raised by ``http``.
+        self._credentials.access_token = token_resp["access_token"]
 
     def reconnect(self, *, deadline: float | None = None) -> None:
         """Tear down the current WS and re-establish + re-auth.
@@ -935,48 +925,24 @@ def _parse_supervisor_api_frame(
     method: str,
     endpoint: str,
 ) -> dict[str, Any] | None:
-    """Validate one WebSocket frame and return a matching command result."""
-    try:
-        resp = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"supervisor/api {method} {endpoint} returned an invalid "
-            f"WebSocket result: {exc} (raw={raw!r})"
-        ) from exc
-    if not isinstance(resp, dict):
-        raise RuntimeError(
-            f"supervisor/api {method} {endpoint} returned an invalid "
-            f"WebSocket result: expected an object, got {resp!r}"
-        )
+    """Return the command's result from one of Core's frames, or None for another.
+
+    Core sends every frame as a JSON object, and the one for a command as
+    ``{"id": N, "type": "result", "success": bool, ...}``: on success
+    ``result`` is Supervisor's data object, on failure ``error`` carries
+    Core's ``code`` and ``message``.
+    """
+    resp = json.loads(raw)
     if resp.get("id") != msg_id:
         return None
-    if resp.get("type") != "result" or not isinstance(resp.get("success"), bool):
-        raise RuntimeError(
-            f"supervisor/api {method} {endpoint} returned an invalid "
-            f"WebSocket result frame: {resp!r}"
-        )
     if not resp["success"]:
-        err = resp.get("error") or {}
-        raw_code = err.get("code") if isinstance(err, dict) else None
-        code = raw_code if isinstance(raw_code, str) else None
-        supervisor_message = (
-            err.get("message")
-            if isinstance(err, dict) and isinstance(err.get("message"), str)
-            else None
-        )
+        err = resp["error"]
         raise WSCommandError(
             f"supervisor/api {method} {endpoint} failed: {err}",
-            code=code,
-            supervisor_message=supervisor_message,
+            code=err["code"],
+            supervisor_message=err["message"],
         )
-    result = resp.get("result")
-    if result is None:
-        return {}
-    if not isinstance(result, dict):
-        raise RuntimeError(
-            f"supervisor/api {method} {endpoint} returned an invalid "
-            f"WebSocket result payload: {result!r}"
-        )
+    result: dict[str, Any] = resp["result"]
     return result
 
 
@@ -2090,36 +2056,13 @@ def _apply_supervisor_image_update(
         # restart; readiness polling below establishes the actual outcome.
         LOG.info("Supervisor update outcome inconclusive during restart: %r", exc)
 
-    while True:
-        try:
-            wait_supervisor_ready(
-                ws,
-                update_timeout=max(deadline - time.monotonic(), 0.0),
-                expected_channel=channel,
-                minimum_version=minimum_version,
-            )
-            return
-        except _SupervisorReadinessTimeout:
-            raise
-        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-            if not _is_transient_supervisor_readiness_error(exc):
-                raise
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "Supervisor did not reconnect before the beta-image deadline"
-                ) from exc
-            LOG.debug("Supervisor still restarting after update: %r", exc)
-            _reconnect_during_supervisor_update(
-                ws,
-                context="after Supervisor update",
-                deadline=deadline,
-            )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    "Supervisor did not reconnect before the beta-image deadline"
-                ) from exc
-            time.sleep(min(5.0, remaining))
+    # The readiness wait rides out the restart itself (reconnects included).
+    wait_supervisor_ready(
+        ws,
+        update_timeout=max(deadline - time.monotonic(), 0.0),
+        expected_channel=channel,
+        minimum_version=minimum_version,
+    )
 
 
 def _request_core_image_update(ws: HAWebSocket, core_version: str) -> None:
@@ -2325,7 +2268,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
 
     Also stages the in-repo ha_mcp_tools + mcp_proxy custom components and
     their config entries — the testcontainer dispatch installs them
-    dynamically via install_custom_component, but on HAOS we bake them
+    dynamically via _install_custom_component, but on HAOS we bake them
     directly into the image at this step so HA Core finds them on first
     boot. The in-process MCP server (#1527) is a second config entry of the
     ha_mcp_tools component, injected DISABLED via
@@ -2346,7 +2289,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
         shutil.copytree(initial_state_path, staging)
 
         # Inject custom components matched to what the testcontainer fixture
-        # installs via install_custom_component in tests/src/e2e/_conftest_seed.py.
+        # installs via _install_custom_component in tests/src/e2e/_conftest_seed.py.
         # Both are config_flow-only integrations, so HA won't pick them up
         # from YAML — a synthetic entry in .storage/core.config_entries is
         # how HA Core learns to set them up on boot.
@@ -2383,7 +2326,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
 
             # Inject a config entry so HA loads the integration on boot.
             # Shape matches the testcontainer path in _conftest_seed.py:
-            # install_custom_component (entry_id, source=import, version=1).
+            # _install_custom_component (entry_id, source=import, version=1).
             ce_path = staging / ".storage" / "core.config_entries"
             ce_data = json.loads(ce_path.read_text())
             # Shape guard: silently creating ``data.entries`` on a malformed

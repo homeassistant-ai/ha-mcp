@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 # Scripts attach the same files as automations: a script sequence uses
 # actions, conditions and ``wait_for_trigger``. The actions file comes first
 # because the strict-mode block error names the first entry.
-SCRIPT_SKILL_FILES: tuple[str, ...] = (
+_SCRIPT_SKILL_FILES: tuple[str, ...] = (
     "references/automation-actions.md",
     "references/triggers-and-conditions.md",
     "references/template-guidelines.md",
@@ -839,7 +839,7 @@ class ConfigScriptTools:
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCRIPT_SKILL_FILES,
+            canonical_files=_SCRIPT_SKILL_FILES,
             referenced_files=None,
         )
         return response
@@ -1002,13 +1002,13 @@ class ConfigScriptTools:
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
+        merge_validation_meta(response, references)
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCRIPT_SKILL_FILES,
+            canonical_files=_SCRIPT_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
-        merge_validation_meta(response, references)
         return response
 
     async def _take_control_config(self, script_id: str) -> TakenControl:
@@ -1060,11 +1060,11 @@ class ConfigScriptTools:
             response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so hint lands at
         # position 0 of the FINAL response (see BAT history in
-        # config_write_helpers.SKILL_CONTENT_OPTOUT_HINT).
+        # config_write_helpers._SKILL_CONTENT_OPTOUT_HINT).
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCRIPT_SKILL_FILES,
+            canonical_files=_SCRIPT_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
         return response

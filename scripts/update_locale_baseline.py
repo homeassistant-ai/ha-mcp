@@ -20,7 +20,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TEST_MODULE = _REPO_ROOT / "tests" / "src" / "unit" / "test_locale_parity.py"
 
 
-def load_test_module() -> ModuleType:
+def _load_test_module() -> ModuleType:
     """Import the check's own helpers so both sides hash identically."""
     spec = importlib.util.spec_from_file_location("_locale_parity", _TEST_MODULE)
     if spec is None or spec.loader is None:  # pragma: no cover - path guard
@@ -31,7 +31,7 @@ def load_test_module() -> ModuleType:
 
 
 def main() -> int:
-    module = load_test_module()
+    module = _load_test_module()
     module.BASELINE_PATH.write_text(
         json.dumps(module.english_sources(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

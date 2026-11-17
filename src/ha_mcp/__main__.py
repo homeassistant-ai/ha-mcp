@@ -281,7 +281,7 @@ def _get_show_banner() -> bool:
     return fastmcp.settings.show_server_banner
 
 
-def setup_standard_mode() -> None:
+def _setup_standard_mode() -> None:
     """Validate credentials and configure logging for standard (non-OAuth) modes."""
     from ha_mcp.config import get_settings
 
@@ -414,7 +414,7 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     ``preserve_startup_collector`` detaches the collector before
     ``basicConfig`` runs, the default guards against FOREIGN root handlers —
     a test runner's or a dependency's. At the two call sites that use the
-    default (``main`` and ``setup_standard_mode``) the only root handler
+    default (``main`` and ``_setup_standard_mode``) the only root handler
     attached anywhere in ``src/`` is the collector, which the wrapper detaches
     first — so today the default is defensive rather than load-bearing. The
     OAuth/OIDC entry points pass ``force=True`` explicitly and never exercise
@@ -1392,7 +1392,7 @@ def main_web() -> None:
     - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the web
       settings UI at all
     """
-    setup_standard_mode()
+    _setup_standard_mode()
     _run_http_server(default_port=8086)
 
 

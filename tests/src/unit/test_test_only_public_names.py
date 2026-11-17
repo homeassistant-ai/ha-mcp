@@ -1,0 +1,104 @@
+"""Production code has no public name that only the tests use.
+
+``scripts/test_only_public_names.py`` runs here on a small repository written
+for each test, and once on this checkout.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "test_only_public_names.py"
+
+
+@pytest.fixture(scope="module")
+def guard() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("test_only_public_names", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _repo(tmp_path: Path, production: str, test: str) -> Path:
+    for name, text in {
+        "src/ha_mcp/tools/helpers.py": production,
+        "src/ha_mcp/tools/caller.py": "from .helpers import used\n\nused()\n",
+        "tests/src/unit/test_helpers.py": test,
+    }.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("production", "refused"),
+    [
+        pytest.param("def helper():\n    pass\n", True, id="function"),
+        pytest.param("class Helper:\n    pass\n", True, id="class"),
+        pytest.param(
+            "class Tools:\n    def helper(self):\n        pass\n", True, id="method"
+        ),
+        pytest.param("HELPER = 1\n", True, id="constant"),
+        pytest.param("def _helper():\n    pass\n", False, id="private"),
+        pytest.param("def used():\n    pass\n", False, id="called-by-production"),
+        pytest.param(
+            "def register_helper_tools(mcp):\n    pass\n", False, id="tool-registration"
+        ),
+        pytest.param(
+            "async def async_setup_entry(hass, entry):\n    pass\n", False, id="ha-hook"
+        ),
+        pytest.param("@decorator\ndef helper():\n    pass\n", False, id="decorated"),
+        pytest.param(
+            "class Flow(Base, domain='x'):\n    pass\n", False, id="config-flow"
+        ),
+    ],
+)
+def test_a_public_name_only_the_tests_use_is_refused(
+    guard: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    production: str,
+    refused: bool,
+) -> None:
+    test = (
+        "from ha_mcp.tools.helpers import helper, Helper, HELPER, _helper, used\n"
+        "Tools().helper()\nregister_helper_tools\nasync_setup_entry\nFlow\n"
+    )
+    repo = _repo(tmp_path, production, test)
+
+    assert guard.main(["--repo", str(repo)]) == (1 if refused else 0)
+    output = capsys.readouterr().out
+    assert ("src/ha_mcp/tools/helpers.py:" in output) is refused
+
+
+def test_a_name_no_test_uses_is_left_to_the_dead_code_checks(
+    guard: ModuleType, tmp_path: Path
+) -> None:
+    repo = _repo(tmp_path, "def unused():\n    pass\n", "")
+
+    assert guard.main(["--repo", str(repo)]) == 0
+
+
+def test_the_module_state_the_tests_reset_is_exempt(
+    guard: ModuleType, tmp_path: Path
+) -> None:
+    path = tmp_path / "src/ha_mcp/config.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("def reset_embedded_connection():\n    pass\n", encoding="utf-8")
+    test = tmp_path / "tests/test_config.py"
+    test.parent.mkdir(parents=True)
+    test.write_text("config.reset_embedded_connection()\n", encoding="utf-8")
+
+    assert guard.main(["--repo", str(tmp_path)]) == 0
+
+
+def test_this_checkout_has_no_public_name_only_the_tests_use(
+    guard: ModuleType,
+) -> None:
+    assert guard.main([]) == 0

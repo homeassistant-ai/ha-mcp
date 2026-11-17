@@ -14,8 +14,10 @@ from typing import Any
 import httpx
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import FEATURE_FLAG_FIELDS, reset_global_settings
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
+from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import FEATURE_GATED_TOOLS, dump_tool_metadata_cache
 
 from ._settings_ui_app import app_server, settings_http, with_env
@@ -24,7 +26,7 @@ from ._settings_ui_app import settings_world as settings_world
 TOOLS = "/api/settings/tools"
 
 
-async def _tools(server: Any = None) -> dict[str, Any]:
+async def _tools(server: HomeAssistantSmartMCPServer | None = None) -> dict[str, Any]:
     async with settings_http(server) as http:
         response = await http.get(TOOLS)
     assert response.status_code == 200
@@ -43,16 +45,22 @@ def _saved(tmp_path: Path) -> dict[str, Any]:
 
 
 class TestToolRows:
-    async def test_the_retired_resource_tools_are_not_listed(self) -> None:
+    async def test_the_retired_resource_tools_are_not_listed(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
         """#1134 folded ha_list_resources / ha_read_resource into the skill guide."""
-        names = {row["name"] for row in (await _tools(app_server()))["tools"]}
+        body = await _tools(app_server(monkeypatch, core_client))
+        names = {row["name"] for row in body["tools"]}
 
         assert "ha_list_resources" not in names
         assert "ha_read_resource" not in names
 
-    async def test_a_tool_whose_feature_is_off_is_listed_with_its_switch(self) -> None:
+    async def test_a_tool_whose_feature_is_off_is_listed_with_its_switch(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
         """Users discover a gated tool, and the flag that turns it on, from its row."""
-        rows = {row["name"]: row for row in (await _tools(app_server()))["tools"]}
+        body = await _tools(app_server(monkeypatch, core_client))
+        rows = {row["name"]: row for row in body["tools"]}
 
         assert rows["ha_manage_custom_tool"]["disabled_by"] == "enable_code_mode"
         assert rows["ha_manage_custom_tool"]["primary_tag"] == "System"
@@ -75,15 +83,21 @@ class TestToolRows:
         for name, meta in FEATURE_GATED_TOOLS.items():
             assert meta["disabled_by"] in flags, name
 
-    async def test_the_security_policy_row_is_not_labelled_beta(self) -> None:
+    async def test_the_security_policy_row_is_not_labelled_beta(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
         """#2148: its gate is a non-beta safety toggle, and the page picks its
         "how to enable" copy from the label."""
-        rows = {row["name"]: row for row in (await _tools(app_server()))["tools"]}
+        body = await _tools(app_server(monkeypatch, core_client))
+        rows = {row["name"]: row for row in body["tools"]}
 
         assert rows["ha_manage_security_policy"]["disabled_by_beta"] is False
 
-    async def test_a_beta_gated_row_is_labelled_beta(self) -> None:
-        rows = {row["name"]: row for row in (await _tools(app_server()))["tools"]}
+    async def test_a_beta_gated_row_is_labelled_beta(
+        self, monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+    ) -> None:
+        body = await _tools(app_server(monkeypatch, core_client))
+        rows = {row["name"]: row for row in body["tools"]}
 
         assert rows["ha_write_file"]["disabled_by_beta"] is True
 

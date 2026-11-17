@@ -267,16 +267,16 @@ class StartupLogCollector(logging.Handler):
 
 
 # Global startup log collector - initialized at module import
-startup_collector: StartupLogCollector | None = None
+_startup_collector: StartupLogCollector | None = None
 
 
 def _init_startup_collector() -> None:
     """Initialize startup log collector and attach to root logger."""
-    global startup_collector
-    if startup_collector is None:
-        startup_collector = StartupLogCollector()
-        startup_collector.setLevel(logging.DEBUG)
-        logging.getLogger().addHandler(startup_collector)
+    global _startup_collector
+    if _startup_collector is None:
+        _startup_collector = StartupLogCollector()
+        _startup_collector.setLevel(logging.DEBUG)
+        logging.getLogger().addHandler(_startup_collector)
 
 
 # Initialize on module load
@@ -285,9 +285,9 @@ _init_startup_collector()
 
 def get_startup_logs() -> list[dict[str, Any]]:
     """Get startup logs collected during the first minute."""
-    if startup_collector is None:
+    if _startup_collector is None:
         return []
-    return startup_collector.get_logs()
+    return _startup_collector.get_logs()
 
 
 @contextmanager
@@ -300,7 +300,7 @@ def preserve_startup_collector() -> Iterator[None]:
     the duration of the block — leaving nothing for the sweep to close — and
     re-attached afterwards.
     """
-    collector = startup_collector
+    collector = _startup_collector
     root = logging.getLogger()
     if collector is None or collector not in root.handlers:
         yield
@@ -347,8 +347,8 @@ _SENSITIVE_PARAM_KEYS = frozenset(
 # the exact ``code``/``pin``/``api_key`` entries above already cover the real
 # Home Assistant service-call surface.
 _SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
-REDACTED_VALUE = "[REDACTED]"
-MAX_REDACT_DEPTH = 6
+_REDACTED_VALUE = "[REDACTED]"
+_MAX_REDACT_DEPTH = 6
 _JSON_CONTAINER_START = re.compile(r"\s*[\[{]")
 # A name written as a JSON member, as in "code": or, inside an escaped
 # string, \"code\":
@@ -370,7 +370,7 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
     Never mutates the input: it is the live tool ``kwargs`` dict, still
     referenced by the caller after this returns. Recurses through nested
     dicts/lists/tuples so secrets nested under non-sensitive keys are caught
-    (a tuple is returned as a list). Fails closed past ``MAX_REDACT_DEPTH`` —
+    (a tuple is returned as a list). Fails closed past ``_MAX_REDACT_DEPTH`` —
     a subtree too deep to walk is masked wholesale rather than returned verbatim.
 
     A JSON object or array sent as a string (a stringified ``data``, an MQTT
@@ -379,8 +379,8 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
     JSON member, such as a truncated or otherwise malformed object, is left
     out whole, because its value cannot be told apart from the rest.
     """
-    if _depth > MAX_REDACT_DEPTH:
-        return REDACTED_VALUE
+    if _depth > _MAX_REDACT_DEPTH:
+        return _REDACTED_VALUE
     if isinstance(value, str):
         if _JSON_CONTAINER_START.match(value):
             try:
@@ -393,7 +393,7 @@ def _redact_parameters(value: Any, _depth: int = 0) -> Any:
     if isinstance(value, dict):
         return {
             key: (
-                REDACTED_VALUE
+                _REDACTED_VALUE
                 if _is_sensitive_key(key)
                 else _redact_parameters(item, _depth + 1)
             )
@@ -478,7 +478,7 @@ class UsageLogger:
         self._buffer_lock = threading.Lock()
 
         # Thread-safe queue for disk writes
-        self.log_queue: Queue[ToolUsageLog] = Queue()
+        self._log_queue: Queue[ToolUsageLog] = Queue()
         self._logger_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         if self._disk_enabled:
@@ -495,14 +495,14 @@ class UsageLogger:
         """Background thread worker for writing logs to disk."""
         while True:
             try:
-                if not self.log_queue.empty():
-                    log_entry = self.log_queue.get(timeout=1.0)
+                if not self._log_queue.empty():
+                    log_entry = self._log_queue.get(timeout=1.0)
                     try:
                         self._write_log_entry(log_entry)
                     finally:
                         # Lets a caller wait until the entry is written, not
                         # only taken off the queue.
-                        self.log_queue.task_done()
+                        self._log_queue.task_done()
                 elif self._stop_event.is_set():
                     # Only once the entries queued before shutdown() are written.
                     return
@@ -592,7 +592,7 @@ class UsageLogger:
                 self._ring_buffer.append(entry_dict)
 
             if self._disk_enabled:
-                self.log_queue.put(log_entry)
+                self._log_queue.put(log_entry)
         except Exception:  # noqa: BLE001
             # Silent error handling to never break MCP server
             pass

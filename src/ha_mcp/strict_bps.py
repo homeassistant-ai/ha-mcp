@@ -52,13 +52,13 @@ logger = logging.getLogger(__name__)
 # _BETA_GATE_LOGGED): strict_bps_effective() runs on every gated write and
 # every best-practices skill read, so an unguarded warning would flood the
 # logs for the whole life of a misconfigured install.
-DEGRADE_WARNED: set[str] = set()
+_DEGRADE_WARNED: set[str] = set()
 
 
 def _warn_degraded_once(branch: str, message: str, *, exc_info: bool = False) -> None:
-    if branch in DEGRADE_WARNED:
+    if branch in _DEGRADE_WARNED:
         return
-    DEGRADE_WARNED.add(branch)
+    _DEGRADE_WARNED.add(branch)
     logger.warning(message, exc_info=exc_info)
 
 
@@ -133,14 +133,14 @@ BestPracticeKeyParam = Annotated[
 
 # The six gated write tools mapped to the first canonical skill reference file
 # the block error should direct the model to read. Each value is the FIRST
-# entry of that module's canonical ``*_SKILL_FILES`` constant (kept in sync by
+# entry of that module's canonical ``_*_SKILL_FILES`` constant (kept in sync by
 # tests/src/unit/test_strict_bps.py):
-#   ha_config_set_automation → AUTOMATION_SKILL_FILES[0]
-#   ha_config_set_script     → SCRIPT_SKILL_FILES[0]
-#   ha_config_set_scene      → SCENE_SKILL_FILES[0]
-#   ha_config_set_helper     → HELPER_SKILL_FILES[0]
-#   ha_config_set_dashboard  → DASHBOARD_SKILL_FILES[0]
-#   ha_config_set_yaml       → YAML_SKILL_FILES[0]
+#   ha_config_set_automation → _AUTOMATION_SKILL_FILES[0]
+#   ha_config_set_script     → _SCRIPT_SKILL_FILES[0]
+#   ha_config_set_scene      → _SCENE_SKILL_FILES[0]
+#   ha_config_set_helper     → _HELPER_SKILL_FILES[0]
+#   ha_config_set_dashboard  → _DASHBOARD_SKILL_FILES[0]
+#   ha_config_set_yaml       → _YAML_SKILL_FILES[0]
 STRICT_BPS_GATED_TOOLS: dict[str, str] = {
     "ha_config_set_automation": "references/triggers-and-conditions.md",
     "ha_config_set_script": "references/automation-actions.md",

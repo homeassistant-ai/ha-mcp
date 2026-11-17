@@ -319,6 +319,16 @@ def test_an_exempted_test_is_reported(
         ),
         pytest.param(
             {
+                _OLD: "print()\n",
+                _RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', ""),
+                _GUARD_PATH: "_GRANDFATHERED = frozenset()\n",
+                _RUFF_PATH: _ADDON_RUFF,
+                "pyproject.toml": _PYPROJECT.split("\n\n", maxsplit=1)[0] + "\n",
+            },
+            id="changed-file-converted-and-removed-from-every-list",
+        ),
+        pytest.param(
+            {
                 _RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', ""),
                 _GUARD_PATH: "_CORE_ROOTS = frozenset()\n",
                 _RUFF_PATH: _ADDON_RUFF,
@@ -343,47 +353,18 @@ def test_converting_a_file_or_widening_a_rule_passes(
     assert ratchet.problems_since(_pull_request(tmp_path, changes), "HEAD") == []
 
 
-@pytest.mark.parametrize(
-    ("before", "after", "reported"),
-    [
-        pytest.param("a = 1\n", "a = 1\nb = 2\n", True, id="gains-a-match"),
-        pytest.param("a = 1\nb = 2\n", "b = 2\nc = 3\n", False, id="same-count"),
-        pytest.param("a = 1\nb = 2\n", "a = 1\n", False, id="loses-a-match"),
-        pytest.param("a = 1\n", "a = 1\nprint()\n", False, id="unmatched-edit"),
-    ],
-)
-def test_a_listed_file_cannot_gain_what_its_list_excuses(
-    ratchet: ModuleType, tmp_path: Path, before: str, after: str, reported: bool
+def test_a_listed_file_the_pull_request_changes_must_be_converted(
+    ratchet: ModuleType, tmp_path: Path
 ) -> None:
-    """The list exempts what the file held, not a faked test added to it."""
-    repo = _pull_request(tmp_path, {_OLD: after}, {**_BASE, _OLD: before})
+    """The lists exempt what a file held: an edit to a listed file could add a
+    faked test, so the edited file is converted and leaves every list."""
+    repo = _pull_request(tmp_path, {_OLD: "print()\n"})
 
-    expected = [
-        f"rules: {_OLD} has 2 of what no-hand-made-core-replies refuses, "
-        "1 at the base; a listed file may not gain any"
+    assert ratchet.problems_since(repo, "HEAD") == [
+        f"{_OLD} changed but is still on no-hand-made-core-replies, "
+        f"pyproject.toml (mypy), {_GUARD_PATH}, {_RUFF_PATH}; a listed file a "
+        "pull request changes is converted and comes off every list"
     ]
-    assert ratchet.problems_since(repo, "HEAD") == (expected if reported else [])
-
-
-@pytest.mark.parametrize(
-    ("before", "after", "reported"),
-    [
-        pytest.param("x._a\n", "x._a\nx._b\n", True, id="gains-a-private-access"),
-        pytest.param("x._a\n", "x._b\n", False, id="same-count"),
-        pytest.param("x._a\nx._b\n", "x._a\n", False, id="loses-one"),
-    ],
-)
-def test_a_file_on_the_private_access_list_cannot_gain_any(
-    ratchet: ModuleType, tmp_path: Path, before: str, after: str, reported: bool
-) -> None:
-    """The SLF001 list exempts the private access a file held, not a new one."""
-    repo = _pull_request(tmp_path, {_OLD: after}, {**_BASE, _OLD: before})
-
-    expected = [
-        f"{_RUFF_PATH}: {_OLD} has 2 private accesses (SLF001), 1 at the base; "
-        "a listed file may not gain any"
-    ]
-    assert ratchet.problems_since(repo, "HEAD") == (expected if reported else [])
 
 
 def test_mypy_may_check_the_tests_more(ratchet: ModuleType, tmp_path: Path) -> None:

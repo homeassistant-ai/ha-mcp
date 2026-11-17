@@ -280,7 +280,6 @@ CHANNEL_DEV = "dev"
 # Retired: entries saved before the paired-release change may still carry
 # ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
 # / server_entry_update WS commands still echo ``channel`` for older servers.
-OPT_CHANNEL = "channel"
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"

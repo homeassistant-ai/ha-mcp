@@ -66,6 +66,7 @@ from ._tools_meta import (
     _get_tool_metadata,
     apply_tool_visibility,
     effective_mandatory_tools,
+    primary_tag,
 )
 from .i18n import (
     LOCALE_COOKIE,

@@ -23,11 +23,9 @@ Two rules decide every added entry:
   rule's definition changed. A wider rule matches older files it did not
   match before; nothing else justifies a longer list.
 
-A listed file is exempt as a whole, so a pull request could also add a new
-faked test to one. For every file on an ast-grep rule's list or a ``SLF001``
-list that the pull request changes, the script counts what the check refuses
-in the file at the base and in the checkout: the count may fall or stay, never
-rise.
+A listed file is exempt as a whole, so a pull request that edits one could
+add a new faked test to it. A listed file the pull request changes is
+therefore converted, which takes it off every list.
 
 A file the pull request takes off any list is converted, and a converted file
 is on no list: one taken off an ast-grep rule's list but left on ``SLF001``
@@ -47,12 +45,9 @@ from __future__ import annotations
 
 import argparse
 import ast
-import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -394,69 +389,6 @@ def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:
                 problems.append(f"rules: {rule_id} lists the new file {entry}")
             elif not widened:
                 problems.append(f"rules: {entry} was added to {rule_id}'s list")
-    _check_listed_files(base, repo, head, problems)
-
-
-def _ast_grep() -> str:
-    found = shutil.which(
-        "ast-grep", path=str(Path(sys.executable).parent)
-    ) or shutil.which("ast-grep")
-    if not found:
-        raise RuntimeError("ast-grep-cli (dev group) is not installed")
-    return found
-
-
-def _match_counts(rule: dict[str, Any], root: Path, files: list[str]) -> dict[str, int]:
-    """How often ``rule`` matches each of ``files`` under ``root``, with the
-    rule's own ``files`` and ``ignores`` set aside."""
-    scanned = {k: v for k, v in rule.items() if k not in ("files", "ignores")}
-    with tempfile.TemporaryDirectory() as directory:
-        rule_file = Path(directory) / "rule.yml"
-        rule_file.write_text(yaml.safe_dump(scanned), encoding="utf-8")
-        proc = subprocess.run(
-            [_ast_grep(), "scan", "--rule", str(rule_file), "--json=compact", *files],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-    try:
-        rows = json.loads(proc.stdout)
-    except ValueError as err:
-        raise RuntimeError(f"ast-grep failed on {rule['id']}: {proc.stderr}") from err
-    counts = dict.fromkeys(files, 0)
-    for row in rows:
-        counts[Path(row["file"]).as_posix()] += 1
-    return counts
-
-
-def _check_listed_files(
-    base: Base, repo: Path, rules: dict[str, dict[str, Any]], problems: list[str]
-) -> None:
-    """A listed file may change, but not gain what its list excuses."""
-    changed = base.changed()
-    for rule_id, rule in sorted(rules.items()):
-        files = sorted(
-            entry
-            for entry in map(str, rule.get("ignores") or [])
-            if entry in changed and (repo / entry).is_file() and base.has(entry)
-        )
-        if not files:
-            continue
-        now = _match_counts(rule, repo, files)
-        with tempfile.TemporaryDirectory() as directory:
-            for entry in files:
-                target = Path(directory) / entry
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(base.text(entry) or "", encoding="utf-8")
-            before = _match_counts(rule, Path(directory), files)
-        problems.extend(
-            f"rules: {entry} has {now[entry]} of what {rule_id} refuses, "
-            f"{before[entry]} at the base; a listed file may not gain any"
-            for entry in files
-            if now[entry] > before[entry]
-        )
 
 
 def _check_file_list(
@@ -467,58 +399,6 @@ def _check_file_list(
             problems.append(f"{path}: lists the new file {entry}")
         elif before is not None:
             problems.append(f"{path}: {entry} was added to the list")
-
-
-def _ruff() -> str:
-    found = shutil.which("ruff", path=str(Path(sys.executable).parent)) or shutil.which(
-        "ruff"
-    )
-    if not found:
-        raise RuntimeError("ruff (dev group) is not installed")
-    return found
-
-
-def _private_accesses(repo: Path, entry: str, text: str) -> int:
-    """How often SLF001 refuses ``text`` as a file beside ``entry``.
-
-    The text goes in under a name no per-file entry matches, so the folder's
-    own ``ruff.toml`` applies with the file's exemption set aside.
-    """
-    probe = f"{entry.rsplit('/', 1)[0]}/slf001-count-probe.py"
-    proc = subprocess.run(
-        [_ruff(), "check", "-", "--stdin-filename", probe, "--select", "SLF001"]
-        + ["--output-format", "json", "--no-cache", "--exit-zero"],
-        cwd=repo,
-        input=text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    try:
-        return len(json.loads(proc.stdout))
-    except ValueError as err:
-        raise RuntimeError(f"ruff failed on {entry}: {proc.stderr}") from err
-
-
-def _check_private_access(
-    base: Base, repo: Path, listed: dict[str, set[str]], problems: list[str]
-) -> None:
-    """A file on a ``SLF001`` list may change, but not gain private access."""
-    changed = base.changed()
-    for path in RUFF_FILES:
-        for entry in sorted(listed.get(path, set()) & changed):
-            if not (repo / entry).is_file() or not base.has(entry):
-                continue
-            now = _private_accesses(
-                repo, entry, (repo / entry).read_text(encoding="utf-8")
-            )
-            before = _private_accesses(repo, entry, base.text(entry) or "")
-            if now > before:
-                problems.append(
-                    f"{path}: {entry} has {now} private accesses (SLF001), "
-                    f"{before} at the base; a listed file may not gain any"
-                )
 
 
 def _lists(base: Base, repo: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
@@ -579,6 +459,21 @@ def _check_full_conversion(
             )
 
 
+def _check_changed_listed(
+    base: Base, repo: Path, head: dict[str, set[str]], problems: list[str]
+) -> None:
+    """A listed file the pull request changes is converted: it is on no list."""
+    changed = base.changed()
+    listed = {entry for entries in head.values() for entry in entries}
+    for entry in sorted(listed & changed):
+        if (repo / entry).is_file() and base.has(entry):
+            still = sorted(name for name, entries in head.items() if entry in entries)
+            problems.append(
+                f"{entry} changed but is still on {', '.join(still)}; a listed "
+                "file a pull request changes is converted and comes off every list"
+            )
+
+
 def problems_since(repo: Path, commit: str) -> list[str]:
     """Every way the checkout exempts a test that the base did not."""
     base = Base(repo, commit)
@@ -604,7 +499,7 @@ def problems_since(repo: Path, commit: str) -> list[str]:
         )
     _check_mypy(base, repo, problems)
     head_lists, base_lists = _lists(base, repo)
-    _check_private_access(base, repo, head_lists, problems)
+    _check_changed_listed(base, repo, head_lists, problems)
     _check_full_conversion(head_lists, base_lists, problems)
     return problems
 
@@ -630,9 +525,8 @@ def main(argv: list[str] | None = None) -> int:
             "'Unit Tests Run on Real Home Assistant Core'). Write the new test "
             "against real Core instead: take the core_client fixture, do not reach "
             "into private members, and fix its type errors. A renamed file counts "
-            "as new. A listed file is exempt for what it already holds: a test added "
-            "to it goes in a new file, or the file is converted, which takes it off "
-            "every list."
+            "as new. A listed file the pull request changes is converted, which "
+            "takes it off every list."
         )
         return 1
     print("No test was exempted from the real-Core checks.")

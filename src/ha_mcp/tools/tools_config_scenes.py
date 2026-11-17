@@ -67,7 +67,7 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 # from when authoring scenes. Scenes have NO actions/conditions/triggers
 # (only an ``entities`` state-snapshot dict) so the automation/script
 # reference files don't apply.
-SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
+_SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -866,7 +866,7 @@ class ConfigSceneTools:
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCENE_SKILL_FILES,
+            canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
         return response
@@ -1042,13 +1042,13 @@ class ConfigSceneTools:
             "python_expression": python_transform,
             "message": f"Scene {resolved_id} updated via Python transform",
         }
+        merge_validation_meta(response, references)
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCENE_SKILL_FILES,
+            canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
-        merge_validation_meta(response, references)
         return response
 
     @staticmethod
@@ -1324,11 +1324,11 @@ class ConfigSceneTools:
         }
         # attach AFTER the outer dict is built so hint lands at
         # position 0 of the FINAL response (see
-        # config_write_helpers.SKILL_CONTENT_OPTOUT_HINT).
+        # config_write_helpers._SKILL_CONTENT_OPTOUT_HINT).
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=SCENE_SKILL_FILES,
+            canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
         return response

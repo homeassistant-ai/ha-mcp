@@ -754,16 +754,6 @@ _BOOT_HTML = f"""<!doctype html>
 """
 
 
-def render_boot_script() -> str:
-    """Return the boot-page script source (used by the JS-parse tests)."""
-    return _BOOT_JS
-
-
-def render_boot_page() -> str:
-    """Return the boot-page HTML (used by the tests)."""
-    return _BOOT_HTML
-
-
 def panel_config() -> ConfigType:
     """Return the sidebar-panel registration parameters (registration + tests)."""
     return {

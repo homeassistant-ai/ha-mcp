@@ -1,224 +1,216 @@
-"""Unit tests for the inline dashboard-resource codec."""
+"""How the dashboard-resource tools read and write inline resource URLs.
 
-import json
+Inline JS/CSS lives in Core's lovelace resource collection as a base64
+``data:`` URL (older releases wrote a legacy worker URL). Each test sets up
+Core's ``lovelace`` in storage resource mode and runs the tools on the
+server's own client connected to it; a URL another client or another release
+of this server wrote is registered with Core directly, over its WebSocket
+command. The tools' wider contract is in ``test_tools_resources.py``.
+"""
+
+from __future__ import annotations
+
+import base64
+from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.resource_codec import (
-    ALLOWED_DATA_URI_PREFIXES,
-    LEGACY_WORKER_BASE_URL,
-    MAX_CONTENT_SIZE,
-    data_uri_for,
-    decode_data_uri,
-    decode_inline_content,
-    decode_legacy_worker_url,
-    is_data_url,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.resource_codec import LEGACY_WORKER_BASE_URL, MAX_CONTENT_SIZE
+from ha_mcp.tools.tools_resources import ResourceTools
 
+from ._component_core import ws_result
 from ._legacy_resource_urls import legacy_url
+from ._tool_errors import rejected_call_body
+
+CONTENT = "export const x = 1;"
 
 
-class TestHelperFunctions:
-    """Test helper functions."""
-
-    def test_data_uri_roundtrip(self):
-        """Content encodes to a data: URI that decodes back byte-identical."""
-        content = "export const x = 'ünïcode';"
-        url = data_uri_for(content, "module")
-
-        assert url.startswith("data:text/javascript;base64,")
-        assert decode_data_uri(url) == content
-
-    def test_data_uri_css_roundtrip_with_charset(self):
-        """CSS gets an explicit UTF-8 charset and round-trips non-ASCII."""
-        content = '.card::before { content: "ünïcode ✓"; }'
-        url = data_uri_for(content, "css")
-
-        assert url.startswith("data:text/css;charset=utf-8;base64,")
-        assert decode_data_uri(url) == content
-
-    def test_data_uri_mime_by_type(self):
-        """module → text/javascript, css → text/css with charset."""
-        assert data_uri_for(".x {}", "css").startswith(
-            "data:text/css;charset=utf-8;base64,"
-        )
-        assert data_uri_for("1;", "module").startswith("data:text/javascript;base64,")
-
-    def test_data_uri_for_rejects_non_inline_type(self):
-        """The runtime guard is exercised directly, not only via the caller.
-
-        _set_inline_resource rejects 'js' earlier, so this branch is
-        statically unreachable through the tool; the test keeps it honest
-        as defence for any future dynamic caller.
-        """
-        with pytest.raises(ToolError) as exc_info:
-            data_uri_for("x", "js")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "js" in error_data["error"]["message"]
-
-    def test_data_uri_deterministic(self):
-        """Same content always maps to the same URL."""
-        assert data_uri_for("const a = 1;", "module") == data_uri_for(
-            "const a = 1;", "module"
-        )
-
-    def test_data_uri_roundtrip_at_max_size(self):
-        """A payload at exactly MAX_CONTENT_SIZE survives the round-trip."""
-        content = "x" * MAX_CONTENT_SIZE
-        assert decode_data_uri(data_uri_for(content, "module")) == content
-
-    def test_decode_data_uri_rejects_non_data(self):
-        """Non-data: URLs decode to None."""
-        assert decode_data_uri("/local/card.js") is None
-        assert decode_data_uri("https://cdn.example.com/card.js") is None
-
-    def test_decode_data_uri_rejects_percent_encoded_form(self):
-        """Percent-encoded (non-base64) data: URIs are not claimed as ours."""
-        assert decode_data_uri("data:text/javascript,console.log(1)") is None
-
-    def test_decode_data_uri_rejects_foreign_media_type(self):
-        """data: URLs with media types we never write are not claimed."""
-        assert decode_data_uri("data:image/png;base64,aGVsbG8=") is None
-        assert decode_data_uri("data:text/html;base64,aGVsbG8=") is None
-
-    def test_decode_data_uri_rejects_corrupt_payload(self):
-        """Non-alphabet bytes in the payload decode to None, not silently
-        truncated content — the browser's forgiving-base64 rejects them, so
-        reporting 'valid' content would point diagnosis away from the cause."""
-        good = data_uri_for("console.log(1)", "module")
-        assert decode_data_uri(good + "!!junktail") is None
-
-    def test_decode_data_uri_scheme_case_insensitive(self):
-        """Scheme/media type match case-insensitively; payload case preserved."""
-        content = "const CasePreserved = 1;"
-        url = data_uri_for(content, "module")
-        upper_head = url[: len("data:text/javascript;base64,")].upper()
-        payload = url[len("data:text/javascript;base64,") :]
-        assert decode_data_uri(upper_head + payload) == content
-
-    def test_decode_inline_content_data_uri(self):
-        """Our data: URIs decode as non-legacy inline content."""
-        content = "export const x = 1;"
-        assert decode_inline_content(data_uri_for(content, "module")) == (
-            content,
-            False,
-        )
-        assert decode_inline_content(data_uri_for(".x {}", "css")) == (".x {}", False)
-
-    def test_decode_inline_content_legacy_worker(self):
-        """Legacy worker URLs decode and are flagged as legacy."""
-        content = "export const legacy = 1;"
-        assert decode_inline_content(legacy_url(content)) == (content, True)
-
-    def test_decode_inline_content_non_inline(self):
-        """Foreign and undecodable URLs yield no content.
-
-        This is the single source of truth for the list tool's inline_count
-        AND its per-resource markers, so anything returning None here must
-        also be left unmarked and uncounted.
-        """
-        for url in (
-            "/local/card.js",
-            "https://cdn.example.com/card.js",
-            "data:image/png;base64,aGVsbG8=",
-            "data:text/javascript,console.log(1)",
-            "data:text/css;charset=utf-8;base64,",
-            "data:text/javascript;base64,!!not-base64!!",
-        ):
-            assert decode_inline_content(url) is None, url
-
-    def test_decode_inline_content_lookalike_host(self):
-        """Detection is anchored — lookalike hosts embedding the worker host
-        string are neither decoded nor flagged."""
-        lookalike = LEGACY_WORKER_BASE_URL.replace(
-            "https://", "https://evil.example.com/"
-        )
-        assert decode_inline_content(f"{lookalike}/YWJj?type=module") is None
-        suffixed = f"{LEGACY_WORKER_BASE_URL}.evil.example.com/YWJj"
-        assert decode_inline_content(suffixed) is None
-
-    def test_is_data_url_normalizes_like_a_browser(self):
-        """Leading C0/space and embedded tab/newline are stripped before the
-        scheme check, matching WHATWG URL parsing — otherwise a padded
-        data: URL slips past the url= guard and still loads in a browser."""
-        assert is_data_url("data:text/javascript;base64,YWJj") is True
-        assert is_data_url("DATA:text/javascript;base64,YWJj") is True
-        assert is_data_url(" data:text/javascript,x") is True
-        assert is_data_url("\tdata:text/javascript,x") is True
-        assert is_data_url("\n data:text/javascript,x") is True
-        assert is_data_url("\x00data:text/javascript,x") is True
-        assert is_data_url("da\tta:text/javascript,x") is True
-        assert is_data_url("/local/card.js") is False
-        assert is_data_url("https://cdn.example.com/data:x") is False
-
-    @pytest.mark.parametrize("prefix", ALLOWED_DATA_URI_PREFIXES)
-    def test_decode_data_uri_accepts_every_generated_prefix(self, prefix):
-        """All four accepted prefixes decode, including the two read-compat
-        forms the writer never emits (js-with-charset, css-without).
-
-        Dropping them as 'dead' would silently stop recognizing resources
-        written by a differently-versioned ha-mcp: they would lose _inline,
-        fall out of inline_count, and — critically — escape the truncated
-        preview guard, so an agent could overwrite them with a preview.
-        """
-        import base64 as _b64
-
-        content = "export const x = 1;"
-        url = prefix + _b64.b64encode(content.encode()).decode()
-        assert decode_data_uri(url) == content
-
-    def test_decode_data_uri_rejects_invalid_utf8(self):
-        """Valid base64 that is not valid UTF-8 decodes to None.
-
-        Distinct code path from the corrupt-alphabet case (UnicodeDecodeError
-        rather than binascii.Error).
-        """
-        import base64 as _b64
-
-        payload = _b64.b64encode(bytes([255, 254, 0]) + b"abc").decode()
-        assert decode_data_uri("data:text/javascript;base64," + payload) is None
-
-    def test_decode_legacy_worker_url_rejects_corrupt_payload(self):
-        """The legacy decoder is as strict as the data: one.
-
-        urlsafe_b64decode silently DISCARDS non-alphabet characters, so
-        without an explicit check a junk path could decode to plausible text
-        and be masked as inline content.
-        """
-        assert (
-            decode_legacy_worker_url(f"{LEGACY_WORKER_BASE_URL}/$$$$aGVsbG8=") is None
-        )
-        assert (
-            decode_legacy_worker_url(f"{LEGACY_WORKER_BASE_URL}/some-random-path")
-            is None
-        )
-
-    def test_decode_legacy_worker_url_case_insensitive_origin(self):
-        """Scheme/host case does not lose a legacy resource its migration path."""
-        content = "export const legacy = 1;"
-        url = legacy_url(content)
-        shouty = url.replace("https://", "HTTPS://", 1)
-        assert decode_legacy_worker_url(shouty) == content
-
-    def test_decode_legacy_worker_url(self):
-        """Test decoding legacy worker URL (pure local base64)."""
-        content = "export const x = 1;"
-        assert decode_legacy_worker_url(legacy_url(content)) == content
-
-    def test_decode_legacy_worker_url_non_worker(self):
-        """Test decoding non-worker URL returns None."""
-        assert decode_legacy_worker_url("/local/card.js") is None
+@pytest.fixture(autouse=True)
+async def lovelace(hass: HomeAssistant) -> None:
+    """Core's lovelace, whose resources are kept in storage by default."""
+    assert await async_setup_component(hass, "lovelace", {})
 
 
-class TestConstants:
-    """Test module constants."""
+@pytest.fixture
+async def ws(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> MockHAClientWebSocket:
+    return await hass_ws_client(hass)
 
-    def test_max_content_size_pinned(self):
-        """Pin the cap at 128KB — sized to fit established single-file card
-        bundles. The registered URL ships to every browser on each dashboard
-        load and auto-backup snapshots it whole per edit, so changing this
-        needs a deliberate decision."""
-        assert MAX_CONTENT_SIZE == 128_000
+
+@pytest.fixture
+def tools(core_client: HomeAssistantClient) -> ResourceTools:
+    return ResourceTools(core_client)
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+async def _listed(
+    tools: ResourceTools, ws: MockHAClientWebSocket, url: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Register ``url`` with Core as another client would; list it back.
+
+    Returns the listing and its one row.
+    """
+    await ws_result(ws, "lovelace/resources/create", res_type="module", url=url)
+    listing = await tools.ha_config_list_dashboard_resources(include_content=True)
+    (row,) = listing["resources"]
+    return listing, row
+
+
+@pytest.mark.parametrize(
+    ("content", "resource_type"),
+    [
+        ("export const x = 'ünïcode';", "module"),
+        ('.card::before { content: "ünïcode ✓"; }', "css"),
+        ("x" * MAX_CONTENT_SIZE, "module"),
+    ],
+    ids=["module-non-ascii", "css-non-ascii", "module-at-the-cap"],
+)
+async def test_saved_inline_content_lists_back_unchanged(
+    tools: ResourceTools, content: str, resource_type: str
+) -> None:
+    """What an agent saves is what it reads back to edit; a changed byte breaks the card."""
+    await tools.ha_config_set_dashboard_resource(
+        content=content, resource_type=resource_type
+    )
+
+    listing = await tools.ha_config_list_dashboard_resources(include_content=True)
+
+    (row,) = listing["resources"]
+    assert row["_content"] == content
+    assert row["url"] == "[inline]"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"data:text/javascript;base64,{_b64(CONTENT.encode())}",
+        f"data:text/javascript;charset=utf-8;base64,{_b64(CONTENT.encode())}",
+        f"data:text/css;base64,{_b64(CONTENT.encode())}",
+        f"data:text/css;charset=utf-8;base64,{_b64(CONTENT.encode())}",
+        f"DATA:TEXT/JAVASCRIPT;BASE64,{_b64(CONTENT.encode())}",
+    ],
+    ids=["js", "js-charset", "css", "css-charset", "upper-case-head"],
+)
+async def test_inline_urls_of_every_form_are_shown_decoded(
+    tools: ResourceTools, ws: MockHAClientWebSocket, url: str
+) -> None:
+    """A resource another release wrote, with or without a charset, or with the
+    scheme in capitals, stays an inline resource: one not recognized would
+    escape the truncated-preview guard, so an agent could overwrite it with a
+    preview."""
+    listing, row = await _listed(tools, ws, url)
+
+    assert row["_content"] == CONTENT
+    assert "_legacy_worker" not in row
+    assert listing["inline_count"] == 1
+
+
+async def test_legacy_worker_url_with_a_capitalized_origin_is_shown_decoded(
+    tools: ResourceTools, ws: MockHAClientWebSocket
+) -> None:
+    """Scheme and host case must not cost a legacy resource its migration path."""
+    url = legacy_url(CONTENT).replace("https://", "HTTPS://", 1)
+
+    _, row = await _listed(tools, ws, url)
+
+    assert row["_content"] == CONTENT
+    assert row["_legacy_worker"] is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/local/card.js",
+        "https://cdn.example.com/card.js",
+        "data:text/javascript,console.log(1)",
+        "data:text/html;base64,aGVsbG8=",
+        LEGACY_WORKER_BASE_URL.replace("https://", "https://evil.example.com/")
+        + "/YWJj?type=module",
+        f"{LEGACY_WORKER_BASE_URL}.evil.example.com/YWJj",
+    ],
+    ids=[
+        "local",
+        "cdn",
+        "percent-encoded-data",
+        "html-data",
+        "lookalike-path",
+        "lookalike-host",
+    ],
+)
+async def test_resources_this_server_did_not_write_are_listed_as_they_are(
+    tools: ResourceTools, ws: MockHAClientWebSocket, url: str
+) -> None:
+    """A URL that is not one of ours keeps its URL and claims no inline content,
+    even when it embeds the legacy worker's host."""
+    listing, row = await _listed(tools, ws, url)
+
+    assert row["url"] == url
+    assert "_inline" not in row
+    assert "_decode_error" not in row
+    assert listing["inline_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # A lenient decoder skips the junk and reads the content back.
+        f"data:text/javascript;base64,{_b64(CONTENT.encode())}!!",
+        f"data:text/javascript;base64,{_b64(bytes([255, 254, 0]) + b'abc')}",
+        f"{LEGACY_WORKER_BASE_URL}/$$$$aGVsbG8=",
+        f"{LEGACY_WORKER_BASE_URL}/some-random-path",
+    ],
+    ids=["junk-after-payload", "not-utf8", "legacy-junk", "legacy-not-utf8"],
+)
+async def test_inline_url_that_does_not_decode_is_flagged_not_shown(
+    tools: ResourceTools, ws: MockHAClientWebSocket, url: str
+) -> None:
+    """A payload the browser would reject is never shown as content: reading it
+    as valid points diagnosis of a dead card away from the cause."""
+    listing, row = await _listed(tools, ws, url)
+
+    assert row["url"] == url
+    assert row["_decode_error"] is True
+    assert "_content" not in row
+    assert listing["inline_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        " data:text/javascript,x",
+        "\tdata:text/javascript,x",
+        "\n data:text/javascript,x",
+        "\x00data:text/javascript,x",
+        "da\tta:text/javascript,x",
+    ],
+    ids=["space", "tab", "newline", "nul", "tab-inside"],
+)
+async def test_padded_data_url_cannot_bypass_the_inline_guards(
+    tools: ResourceTools, ws: MockHAClientWebSocket, url: str
+) -> None:
+    """A browser strips leading controls and embedded tabs before it reads the
+    scheme, so these still load as ``data:`` and must be refused like one."""
+    body = await rejected_call_body(tools.ha_config_set_dashboard_resource(url=url))
+
+    assert "content=" in body["error"]["message"]
+    assert await ws_result(ws, "lovelace/resources") == []
+
+
+async def test_url_with_data_in_its_path_is_registered(
+    tools: ResourceTools, ws: MockHAClientWebSocket
+) -> None:
+    """Only the scheme makes a ``data:`` URL; a path that contains one is a URL."""
+    url = "https://cdn.example.com/data:x"
+
+    result = await tools.ha_config_set_dashboard_resource(url=url)
+
+    assert result["action"] == "created"
+    assert [row["url"] for row in await ws_result(ws, "lovelace/resources")] == [url]

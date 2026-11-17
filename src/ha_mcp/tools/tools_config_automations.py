@@ -80,6 +80,7 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
+from .reference_validator import ValidationMeta
 from .reference_validator import validate_config_references as ref_check
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
@@ -95,7 +96,7 @@ logger = logging.getLogger(__name__)
 
 # Attached with MandatoryBPS=True and on any best-practice hit; paths are
 # relative to the home-assistant-best-practices skill directory.
-AUTOMATION_SKILL_FILES: tuple[str, ...] = (
+_AUTOMATION_SKILL_FILES: tuple[str, ...] = (
     "references/triggers-and-conditions.md",
     "references/automation-actions.md",
     "references/template-guidelines.md",
@@ -651,7 +652,7 @@ class AutomationConfigTools:
                 attach_skill_content(
                     runtime_only_response,
                     MandatoryBPS=MandatoryBPS,
-                    canonical_files=AUTOMATION_SKILL_FILES,
+                    canonical_files=_AUTOMATION_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
                 return runtime_only_response
@@ -718,11 +719,11 @@ class AutomationConfigTools:
                 wait,
                 bp_warnings,
                 MandatoryBPS,
+                references,
                 detached_blueprint,
                 enabled,
                 run_actions=run_actions,
             )
-            merge_validation_meta(response, references)
             return response
 
         except ToolError as te:
@@ -1206,13 +1207,13 @@ class AutomationConfigTools:
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
+        merge_validation_meta(response, references)
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=AUTOMATION_SKILL_FILES,
+            canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
-        merge_validation_meta(response, references)
         return response, bp_warnings
 
     async def _read_back_hash(
@@ -1238,6 +1239,7 @@ class AutomationConfigTools:
         wait: bool,
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
+        references: ValidationMeta,
         detached_blueprint: str | None = None,
         enabled: bool | None = None,
         *,
@@ -1330,12 +1332,13 @@ class AutomationConfigTools:
         }
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
+        merge_validation_meta(response, references)
         # Attached last so skill_content_hint leads the final response: BAT
         # showed small models miss it behind success/automation_id.
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=AUTOMATION_SKILL_FILES,
+            canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
         return response

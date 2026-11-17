@@ -1494,6 +1494,7 @@ dev = [
     { name = "ha-silabs-firmware-client" },
     { name = "hamcp-test-env" },
     { name = "hassil" },
+    { name = "home-assistant-frontend" },
     { name = "home-assistant-intents" },
     { name = "homeassistant" },
     { name = "ical" },
@@ -1587,6 +1588,7 @@ dev = [
     { name = "ha-silabs-firmware-client", specifier = "==0.4.0" },
     { name = "hamcp-test-env", editable = "tests/test-env" },
     { name = "hassil", specifier = "==3.12.1" },
+    { name = "home-assistant-frontend", specifier = "==20261028.6" },
     { name = "home-assistant-intents", specifier = "==2026.10.27" },
     { name = "homeassistant", specifier = "==2026.11.2" },
     { name = "ical", specifier = "==14.3.1" },
@@ -1733,6 +1735,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/bc/6f/914fd8086f502748907751766e26e3f7fe5204347a679703ee9954e55e4d/home_assistant_bluetooth-2.0.0.tar.gz", hash = "sha256:3febd16b194812b156024d9bc8ce8ec7622cdd8d159047cac504cc77ca034ea1", size = 7604, upload-time = "2025-07-09T18:01:47.541Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/15/3e/2ed9e59da8fc26c43cbd9d6abbd27217138a31c608b1d334cc5e680e4069/home_assistant_bluetooth-2.0.0-py3-none-any.whl", hash = "sha256:8d7c2ac48c303adacad73cb6cdfe7710f2fccd2a367d4c3106acf301b0d22b91", size = 7907, upload-time = "2025-07-09T18:01:46.506Z" },
+]
+
+[[package]]
+name = "home-assistant-frontend"
+version = "20261028.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/c4/94a0e14f0390d7229e14521b0870abf44cd039a9cbe53c0408ac41f8fabf/home_assistant_frontend-20261028.6.tar.gz", hash = "sha256:30d3dea0a939ac64b0d454b2e9a496cd03ea588d41d6036ff87ca4031e0fee73", size = 116656175, upload-time = "2026-11-13T15:04:51.81Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/85/b17f6763dc60a7f2191f6a2b1c58c6ba3f93b698368cfe64bf288c48eeea/home_assistant_frontend-20261028.6-py3-none-any.whl", hash = "sha256:8b113579212f36ef74e76cd998e5690422d108f486c7ea4395fe2f5aa21206ac", size = 117356834, upload-time = "2026-11-13T15:04:40.768Z" },
 ]
 
 [[package]]

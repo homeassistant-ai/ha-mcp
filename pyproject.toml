@@ -496,6 +496,7 @@ dev = [
     "gazetteer-matcher==1.1.0",
     "ha-silabs-firmware-client==0.4.0",
     "hassil==3.12.1",
+    "home-assistant-frontend==20261028.6",
     "home-assistant-intents==2026.10.27",
     "ical==14.3.1",
     "infrared-protocols==10.5.0",
