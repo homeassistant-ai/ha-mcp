@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ..e2e.workflows.auto_backup.test_capture_and_restore import (
+from ..e2e.workflows.auto_backup.test_template_capture_restore import (
     TestTemplateHelperCaptureRestore as TemplateHelperScenario,
 )
 
