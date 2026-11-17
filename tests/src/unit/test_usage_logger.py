@@ -240,9 +240,8 @@ def test_shutdown_wakes_the_idle_writer_at_once(
 
 
 def test_calls_logged_just_before_shutdown_reach_the_disk(tmp_path: Path) -> None:
-    """The writer used to stop at the stop flag with entries still queued, so
-    the calls a server made just before stopping never reached the usage log
-    that bug reports read."""
+    """``shutdown()`` used to stop the writer at the stop flag with entries
+    still queued, so calls logged just before it never reached the log file."""
     log_path = tmp_path / "usage.jsonl"
     logger = UsageLogger(str(log_path))
     for n in range(20):

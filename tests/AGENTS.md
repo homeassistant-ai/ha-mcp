@@ -186,10 +186,10 @@ HTTP transport, or a hand-written client class
 (`rules/no-hand-made-core-replies.yml`), an import from another test module or
 from the old fake-client helpers, or the `mock_client` fixture, each of which
 hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
-and a comment that switches one of these checks off for a line or a file
-(`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
-bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
-`assignment`, `attr-defined` or `misc`). The seventh
+and a switch that turns one of these checks off for a line, a function or a
+file (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`,
+a bare `noqa`, any `# mypy:` setting comment, `no_type_check`, a bare
+`type: ignore` or one for `assignment`, `attr-defined` or `misc`). The seventh
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
 The eighth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
