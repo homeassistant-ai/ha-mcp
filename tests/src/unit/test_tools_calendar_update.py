@@ -193,8 +193,8 @@ async def test_a_user_who_may_not_change_the_calendar_is_told_so(
     core_client: HomeAssistantClient,
     read_only_client: HomeAssistantClient,
 ) -> None:
-    """Core refuses a non-admin's write as unauthorized, which no parameter
-    change can fix."""
+    """Core refuses a read-only user's write as unauthorized, which no
+    parameter change can fix."""
     event = await _one_off(ws, core_client)
 
     error = await _refused(read_only_client, uid=event["uid"])
