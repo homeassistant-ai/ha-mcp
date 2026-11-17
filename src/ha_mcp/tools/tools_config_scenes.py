@@ -57,8 +57,10 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references as ref_check
+from .scene_capture import capture_scene_states
 from .scene_discovery import discover_scenes
 from .tool_hints import read_only_hints, write_hints
+from .util_helpers import search_related
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 
 # No scene-specific reference file exists in home-assistant-best-practices;
@@ -142,6 +144,36 @@ def _skip_scene_activation_backup(kwargs: dict[str, Any]) -> bool:
         and kwargs.get("config") is None
         and kwargs.get("python_transform") is None
     )
+
+
+def _guard_scene_id(config: dict[str, Any], storage_key: Any, action: str) -> None:
+    """Refuse a config whose ``id`` moves the scene off ``storage_key``.
+
+    Core writes the body over the entry at the URL key but keeps the body's
+    ``id``, so a different id moves the scene to it: the registry entry under
+    the old key is orphaned and the scene reloads as a new entity (#1168).
+    Renaming is remove + create. ``id`` is optional and ``None`` means the
+    same as leaving it out, but Core refuses ``None``, so it is dropped.
+    """
+    if "id" in config and config["id"] is None:
+        del config["id"]
+    if "id" in config and config["id"] != storage_key:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"config['id'] {config['id']!r} differs from the scene's storage "
+                f"key {storage_key!r}; Core would store the scene under the new id",
+                suggestions=[
+                    f"Keep config['id'] as {storage_key!r}, or leave it out",
+                    "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
+                ],
+                context={
+                    "action": action,
+                    "scene_id": storage_key,
+                    "attempted_id": config["id"],
+                },
+            )
+        )
 
 
 class ConfigSceneTools:
@@ -529,8 +561,8 @@ class ConfigSceneTools:
     ) -> tuple[dict[str, Any], str | None]:
         """Parse and validate scene config, returning ``(config_dict, effective_category)``.
 
-        Parses JSON string config, validates it is a dict, checks for the
-        required ``entities`` field, and extracts category.
+        Parses JSON string config, requires a JSON object, and extracts
+        category. Core's config API validates the scene itself.
         """
         try:
             parsed_config = parse_json_param(config, "config")
@@ -564,33 +596,6 @@ class ConfigSceneTools:
         # Parameter takes precedence over config dict value.
         config_category = config_dict.pop("category", None)
         effective_category = category if category is not None else config_category
-
-        # Required field check. ``entities`` must be a dict keyed by entity_id.
-        if "entities" not in config_dict:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "config must include an 'entities' field (a dict keyed by entity_id)",
-                    context={"scene_id": scene_id, "required_fields": ["entities"]},
-                )
-            )
-
-        if not isinstance(config_dict["entities"], dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Scene 'entities' must be a dict keyed by entity_id, not a list",
-                    suggestions=[
-                        "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
-                        "Automations use a list of actions; scenes do not",
-                    ],
-                    context={
-                        "scene_id": scene_id,
-                        "provided_type": type(config_dict["entities"]).__name__,
-                    },
-                )
-            )
-
         return config_dict, effective_category
 
     @tool(
@@ -620,8 +625,11 @@ class ConfigSceneTools:
             Field(
                 description=(
                     "Scene configuration dictionary. Must include 'entities' "
-                    "(a dict keyed by entity_id, NOT a list). Optional fields: "
-                    "'name' (defaults to scene_id), 'icon', 'id'. "
+                    "(a dict keyed by entity_id, NOT a list) unless "
+                    "capture_entities supplies them. Optional fields: "
+                    "'name' (defaults to scene_id), 'icon', 'id' (the storage "
+                    "key; must equal the scene's), 'metadata' (per-entity "
+                    "editor hints, e.g. {'light.x': {'entity_only': true}}). "
                     "Mutually exclusive with python_transform."
                 ),
                 default=None,
@@ -640,6 +648,19 @@ class ConfigSceneTools:
                     "Remove entity: python_transform=\"del config['entities']['light.kitchen']\" "
                     "\n\n" + get_security_documentation()
                 ),
+            ),
+        ] = None,
+        capture_entities: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Entity IDs whose current state and attributes are written "
+                    "into config's 'entities', as the scene editor captures "
+                    "them; a captured state replaces that entity's entry in "
+                    "config. Requires config."
+                ),
+                default=None,
             ),
         ] = None,
         config_hash: Annotated[
@@ -708,7 +729,8 @@ class ConfigSceneTools:
         WHEN TO USE:
         - ``python_transform``: surgical edits to an existing scene
           (add/remove/update a single entity entry).
-        - ``config``: creating a new scene, or wholesale replacement.
+        - ``config``: creating a new scene, or wholesale replacement; with
+          ``capture_entities``, from the entities' current states.
         - ``activate`` (with scene_id, no config): activate any scene,
           e.g. ha_config_set_scene(scene_id="scene.movie_night", activate=True).
 
@@ -766,6 +788,18 @@ class ConfigSceneTools:
                     )
                 )
 
+            if capture_entities and config is None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "capture_entities requires config",
+                        suggestions=[
+                            "To recapture a stored scene, pass the config and "
+                            "config_hash from ha_config_get_scene with capture_entities",
+                        ],
+                        context={"action": "set", "scene_id": scene_id},
+                    )
+                )
             if activate and config is None and python_transform is None:
                 return await self._activate_scene_only(scene_id, category, MandatoryBPS)
 
@@ -796,6 +830,7 @@ class ConfigSceneTools:
             return await self._run_scene_config_replace(
                 scene_id,
                 config,
+                capture_entities,
                 config_hash,
                 category,
                 wait,
@@ -816,8 +851,7 @@ class ConfigSceneTools:
                 e,
                 context={"scene_id": scene_id},
                 suggestions=[
-                    "Ensure config includes an 'entities' field (a dict keyed by entity_id)",
-                    "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
+                    "Scene shape: {'name': 'Movie', 'entities': {'light.kitchen': {'state': 'on'}}}",
                     "Use ha_search(domain_filter='scene') to find scenes",
                     "Use ha_get_skill_guide for help",
                 ],
@@ -909,10 +943,7 @@ class ConfigSceneTools:
         *,
         activate: bool = False,
     ) -> dict[str, Any]:
-        """Execute ``ha_config_set_scene``'s python_transform mode.
-
-        Extracted verbatim from the inline branch; returns the tool response.
-        """
+        """Execute ``ha_config_set_scene``'s python_transform mode."""
         if config_hash is None:
             raise_tool_error(
                 create_error_response(
@@ -955,7 +986,7 @@ class ConfigSceneTools:
                 )
             )
 
-        self._validate_transformed_scene(transformed_config, resolved_id, original_id)
+        _guard_scene_id(transformed_config, original_id, "python_transform")
         self._prune_scene_metadata(transformed_config, resolved_id)
 
         # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
@@ -1052,102 +1083,10 @@ class ConfigSceneTools:
         return response
 
     @staticmethod
-    def _validate_transformed_scene(
-        transformed_config: Any,
-        resolved_id: str | None,
-        original_id: Any,
-    ) -> None:
-        """Validate a python_transform result still matches the scene shape.
-
-        Rejects a ``None`` rebind, a missing/non-dict ``entities`` field, and an
-        in-place ``id`` change (rename). Raises a structured ToolError on any
-        violation; returns normally when the transformed config is valid.
-        Extracted verbatim from ``ha_config_set_scene``'s python_transform branch.
-        """
-        # Issue #1168 R5 blocker 8: a transform that reassigns
-        # config to ``None`` (or returns ``None`` from a list-comp
-        # mistake) used to crash the next ``in`` check with a
-        # ``TypeError`` that surfaced as ``INTERNAL_ERROR``. Catch
-        # the rebind here so the user gets the same VALIDATION
-        # signal the dict-shape checks below produce.
-        if transformed_config is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transform must not reassign config to None",
-                    suggestions=[
-                        "The transform must produce a dict matching the scene config shape",
-                        "Mutate ``config`` in-place rather than reassigning it",
-                    ],
-                    context={
-                        "action": "python_transform",
-                        "scene_id": resolved_id,
-                    },
-                )
-            )
-
-        # Validate transformed config still has the required shape.
-        if "entities" not in transformed_config:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transformed config must still include 'entities'",
-                    suggestions=[
-                        "The transform may have removed the required field",
-                        "Ensure the config still has an 'entities' key",
-                    ],
-                    context={
-                        "action": "python_transform",
-                        "scene_id": resolved_id,
-                    },
-                )
-            )
-        if not isinstance(transformed_config["entities"], dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transformed 'entities' must remain a dict keyed by entity_id",
-                    context={
-                        "action": "python_transform",
-                        "scene_id": resolved_id,
-                        "resulting_type": type(transformed_config["entities"]).__name__,
-                    },
-                )
-            )
-
-        # A transform that changes ``config['id']`` would leave a duplicate
-        # scene under the new key and orphan the original (#1168): Core accepts
-        # the upsert. Renaming is remove + create through the tools. Dropping
-        # the id is no rename: ``id`` is optional, and ``None`` means the same
-        # as ``del`` but Core refuses it, so it is removed. Compared with the
-        # scene's own ``id``; ``resolved_id`` can be None.
-        if transformed_config.get("id", original_id) is None:
-            del transformed_config["id"]
-        if "id" in transformed_config and transformed_config["id"] != original_id:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transform must not change ``config['id']``",
-                    suggestions=[
-                        f"Original scene_id is {original_id!r} — keep it unchanged",
-                        "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
-                    ],
-                    context={
-                        "action": "python_transform",
-                        "scene_id": original_id,
-                        "attempted_id": transformed_config.get("id"),
-                    },
-                )
-            )
-
-    @staticmethod
     def _prune_scene_metadata(
         transformed_config: dict[str, Any], resolved_id: str | None
     ) -> None:
-        """Drop orphan ``metadata`` keys whose entity was removed by the transform.
-
-        Extracted verbatim from ``ha_config_set_scene``'s python_transform branch.
-        """
+        """Drop orphan ``metadata`` keys whose entity was removed by the transform."""
         # Issue #1168 R3 blocker 5: prune orphan ``metadata`` keys
         # whose entity was deleted by the transform (e.g. a list
         # comprehension that filters ``entities`` doesn't touch
@@ -1155,9 +1094,10 @@ class ConfigSceneTools:
         # Full-replace via ``config=`` clears metadata cleanly; the
         # transform path needs to mirror that contract.
         metadata = transformed_config.get("metadata")
-        if isinstance(metadata, dict):
-            valid_keys = set(transformed_config["entities"].keys())
-            pruned_keys = sorted(k for k in metadata if k not in valid_keys)
+        entities = transformed_config.get("entities")
+        # A missing or non-dict ``entities`` is left for Core to refuse.
+        if isinstance(metadata, dict) and isinstance(entities, dict):
+            pruned_keys = sorted(k for k in metadata if k not in entities)
             if pruned_keys:
                 # Issue #1168 R5 blocker 12: a buggy transform that
                 # accidentally drops entities used to silently
@@ -1169,13 +1109,14 @@ class ConfigSceneTools:
                     f"metadata key(s) from scene {resolved_id}: {pruned_keys}"
                 )
             transformed_config["metadata"] = {
-                k: v for k, v in metadata.items() if k in valid_keys
+                k: v for k, v in metadata.items() if k in entities
             }
 
     async def _run_scene_config_replace(
         self,
         scene_id: str,
         config: dict[str, Any],
+        capture_entities: list[str] | None,
         config_hash: str | None,
         category: str | None,
         wait: bool,
@@ -1183,15 +1124,14 @@ class ConfigSceneTools:
         *,
         activate: bool = False,
     ) -> dict[str, Any]:
-        """Execute ``ha_config_set_scene``'s full-config replacement mode.
-
-        Extracted verbatim from the inline branch; returns the tool response.
-        """
+        """Execute ``ha_config_set_scene``'s full-config replacement mode."""
         config_dict, effective_category = self._validate_scene_config(
             config,
             scene_id,
             category,
         )
+        if capture_entities:
+            await capture_scene_states(self._client, config_dict, capture_entities)
 
         # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
         # the hash check + upsert commits. Same partial-state hazard as
@@ -1250,6 +1190,7 @@ class ConfigSceneTools:
                 resolved_id
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
+        _guard_scene_id(config_dict, resolved_id, "set")
 
         references = await ref_check(self._client, config_dict, "scene")
         # ``resolved_id`` is already the storage key (from the hash-verify
@@ -1359,13 +1300,14 @@ class ConfigSceneTools:
 
         EXAMPLE: ha_config_remove_scene("old_scene")
 
-        Only scenes created via the Home Assistant UI can be deleted. Scenes
-        defined in YAML configuration files (scenes.yaml or configuration.yaml)
-        cannot be deleted through the API and return a 405 Method Not Allowed
-        error; edit the configuration file directly instead.
+        Only scenes in Home Assistant's editable scene storage (``scenes.yaml``
+        entries with an ``id``, as the UI and ha_config_set_scene write them)
+        can be deleted; a scene defined elsewhere in YAML or by an integration
+        is CONFIG_NOT_FOUND.
 
-        WARNING: Deleting a scene that is referenced by automations or scripts
-        (via ``scene.turn_on``) may cause those to fail.
+        The scene is deleted even when automations or scripts reference it;
+        the ones Home Assistant's related search finds are listed in
+        ``referenced_by``, with a warning.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
@@ -1401,12 +1343,30 @@ class ConfigSceneTools:
             entity_id = await self._resolve_scene_entity_id(
                 resolved_id, allow_component=True
             )
+            # A failed lookup only warns: it must not keep the scene alive.
+            lookup: list[str] = []
+            related = (
+                await search_related(self._client, "scene", entity_id, lookup) or {}
+            )
+            users = {k: related[k] for k in ("automation", "script") if related.get(k)}
 
             # Thread the resolution through so delete_scene_config reuses the
             # storage key (no redundant re-resolve) and can classify a 404.
             result = await self._client.delete_scene_config(
                 scene_id, resolution=resolution
             )
+            if users:
+                result["referenced_by"] = users
+                names = ", ".join(sorted(i for ids in users.values() for i in ids))
+                result.setdefault("warnings", []).append(
+                    f"{entity_id} was deleted while still referenced by {names}; "
+                    "update or remove those references."
+                )
+            elif lookup:
+                result.setdefault("warnings", []).append(
+                    "Could not check which automations and scripts use "
+                    f"{entity_id} ({lookup[0]})"
+                )
 
             if wait:
                 await verify_entity_removed(self._client, entity_id, result)
@@ -1429,7 +1389,6 @@ class ConfigSceneTools:
                 context={"scene_id": scene_id},
                 suggestions=[
                     "Verify scene_id exists using ha_search(domain_filter='scene')",
-                    "Check if scene is being used by automations or scripts",
                     "Use ha_get_skill_guide for help",
                 ],
             )

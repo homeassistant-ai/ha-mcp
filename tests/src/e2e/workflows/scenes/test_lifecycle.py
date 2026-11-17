@@ -19,6 +19,7 @@ import asyncio
 import logging
 import time
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -169,13 +170,11 @@ class TestSceneLifecycle:
         assert "light.kitchen_lights" in body_3.get("entities", {})
 
         # 4. Delete
-        delete_data = await safe_call_tool(
-            mcp_client, "ha_config_remove_scene", {"scene_id": scene_id, "wait": True}
+        await MCPAssertions(mcp_client).call_tool_success(
+            "ha_config_remove_scene", {"scene_id": scene_id, "wait": True}
         )
-        # 405 on add-on / YAML-mode is an acceptable outcome — tested separately.
-        if delete_data.get("success"):
-            removed = await _wait_for_scene_removed(mcp_client, scene_id)
-            assert removed, f"Scene {scene_id} still queryable after delete"
+        removed = await _wait_for_scene_removed(mcp_client, scene_id)
+        assert removed, f"Scene {scene_id} still queryable after delete"
 
     async def test_scene_python_transform_surgical_edit(
         self, mcp_client, cleanup_tracker
@@ -277,29 +276,58 @@ class TestSceneLifecycle:
             mcp_client, "ha_config_remove_scene", {"scene_id": scene_id, "wait": False}
         )
 
-    async def test_set_scene_rejects_list_shaped_entities(
+    async def test_remove_names_the_automation_using_the_scene(
         self, mcp_client, cleanup_tracker
     ):
-        """Common LLM-misroute: list-shaped entities (the automation/script confusion) is rejected upfront."""
-        scene_id = "test_wrong_shape_e2e_scene"
+        """Core's related search finds the automation that turns the scene on;
+        the scene is removed anyway, with a warning naming it. The unit tests
+        set ``search`` up themselves; this one proves a real install has it."""
+        scene_id = f"related_e2e_{uuid4().hex[:8]}"
+        automation = f"uses_{scene_id}"
         cleanup_tracker.track("scene", f"scene.{scene_id}")
-
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_scene",
-            {
-                "scene_id": scene_id,
-                "config": {
-                    "name": "Wrong shape",
-                    # Looks like an automation action list — must be rejected.
-                    "entities": [{"entity_id": "light.bed_light", "state": "on"}],
+        cleanup_tracker.track("automation", automation)
+        mcp = MCPAssertions(mcp_client)
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": _make_test_scene_config("Related", name=scene_id),
                 },
-            },
-        )
-        assert data.get("success") is False
-        err = data.get("error") or {}
-        msg = (err.get("message") or "").lower()
-        assert "dict" in msg and "entities" in msg
+            )
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation",
+                {
+                    "entity_id": automation,
+                    "config": {
+                        "alias": automation,
+                        "triggers": [{"trigger": "event", "event_type": automation}],
+                        "actions": [
+                            {
+                                "action": "scene.turn_on",
+                                "target": {"entity_id": f"scene.{scene_id}"},
+                            }
+                        ],
+                    },
+                },
+            )
+            removed = await mcp.call_tool_success(
+                "ha_config_remove_scene", {"scene_id": scene_id}
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_automation",
+                {"entity_id": f"automation.{automation}"},
+            )
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
+            )
+
+        automation_id = created["automation_id"]
+        assert removed["referenced_by"] == {"automation": [automation_id]}
+        assert any(automation_id in w for w in removed["warnings"])
+        assert await _wait_for_scene_removed(mcp_client, scene_id)
 
     async def test_scene_rename_decouples_entity_id_from_storage_key(
         self, mcp_client, cleanup_tracker

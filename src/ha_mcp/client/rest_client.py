@@ -2308,14 +2308,6 @@ class HomeAssistantClient:
             if "name" not in config:
                 config["name"] = scene_id.removeprefix("scene.")
 
-            # Validate required field. ``entities`` is a dict keyed by entity_id,
-            # not a list — distinct from script ``sequence`` and automation ``action``.
-            if "entities" not in config:
-                raise ValueError(
-                    "Scene configuration must include an 'entities' field "
-                    "(a dict keyed by entity_id)"
-                )
-
             response = await self._request("POST", endpoint, json=config)
 
             # Issue #1168 R3 blocker 4: HA's POST /config/scene/config/<id>
@@ -2365,19 +2357,4 @@ class HomeAssistantClient:
         except HomeAssistantAPIError as e:
             if e.config_not_found:
                 await self._raise_scene_config_404(scene_id, resolved_id, resolution)
-            elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete scene '{scene_id}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"It may also occur if the scene is defined in YAML configuration files. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) If the scene is YAML-defined, edit the configuration file directly. "
-                    f"(4) As a fallback, rename the scene with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{scene_id}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scenes).",
-                    status_code=405,
-                ) from e
             raise

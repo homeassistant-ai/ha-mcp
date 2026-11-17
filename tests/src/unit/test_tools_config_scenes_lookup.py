@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -195,7 +196,50 @@ class TestGet:
         assert error_body(exc)["entity_id"] == "scene.missing_scene"
 
 
+_TURN_ON_TEST_SCENE = {
+    "action": "scene.turn_on",
+    "target": {"entity_id": "scene.test_scene"},
+}
+
+
 class TestRemove:
+    @pytest.fixture(autouse=True)
+    async def _search(self, hass: HomeAssistant) -> None:
+        """Core's related search, as ``default_config`` loads it."""
+        assert await async_setup_component(hass, "search", {})
+
+    async def test_remove_names_the_automations_and_scripts_using_the_scene(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """They fail once the scene is gone; the removal still goes ahead."""
+        assert await async_setup_component(
+            hass,
+            "automation",
+            {
+                "automation": {
+                    "id": "movie_time",
+                    "alias": "Movie time",
+                    "triggers": [{"trigger": "event", "event_type": "movie"}],
+                    "actions": [_TURN_ON_TEST_SCENE],
+                }
+            },
+        )
+        assert await async_setup_component(
+            hass, "script", {"script": {"movie": {"sequence": [_TURN_ON_TEST_SCENE]}}}
+        )
+
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert result["referenced_by"] == {
+            "automation": ["automation.movie_time"],
+            "script": ["script.movie"],
+        }
+        assert any(
+            "automation.movie_time" in w and "script.movie" in w
+            for w in result["warnings"]
+        )
+        assert await stored_scenes(hass) == []
+
     async def test_remove_by_slug_deletes_the_storage_key(
         self,
         hass: HomeAssistant,
@@ -426,6 +470,17 @@ class TestVerificationWithoutAnAnswer:
             "removal verification failed" in w and "forced for test" in w
             for w in result["warnings"]
         )
+        assert await stored_scenes(hass) == []
+
+    async def test_remove_without_core_search_still_deletes_with_a_warning(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Core without ``search`` cannot tell what uses the scene; that is no
+        reason to keep it."""
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert "referenced_by" not in result
+        assert any("could not check" in w.lower() for w in result["warnings"])
         assert await stored_scenes(hass) == []
 
 

@@ -132,8 +132,8 @@ _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
     (
         "config/scene/config/",
         "Direct writes to /api/config/scene/config/*",
-        "use call_tool('ha_config_set_scene', ...) so the entities-must-be-dict "
-        "shape check, reference validation, and hash-locking run",
+        "use call_tool('ha_config_set_scene', ...) so the id guard, "
+        "reference validation, and hash-locking run",
     ),
 )
 

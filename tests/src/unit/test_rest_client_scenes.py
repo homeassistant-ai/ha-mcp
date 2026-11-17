@@ -25,9 +25,6 @@ from ha_mcp.client.rest_client import (
 )
 
 from ._command_faults import dropped_on, pooled_socket
-from ._gateway import Gateway
-from ._gateway import gateway as gateway
-from ._gateway import gateway_client as gateway_client
 from ._rest_client_config_core import (
     config_client as config_client,
 )
@@ -93,27 +90,6 @@ async def test_removing_another_integrations_scene_says_it_is_not_editable(
         "hue",
         "bedroom_sleepy",
     )
-
-
-async def test_a_proxy_refusing_removal_explains_the_way_around_it(
-    hass: HomeAssistant,
-    config_client: HomeAssistantClient,
-    gateway: Gateway,
-    gateway_client: HomeAssistantClient,
-) -> None:
-    """Supervisor's ingress proxy answers DELETE with 405."""
-    await load(hass, "scene", [MOVIE_NIGHT])
-    gateway.outages.append(405)
-
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await gateway_client.delete_scene_config("movie_night")
-
-    assert exc_info.value.status_code == 405
-    message = str(exc_info.value).lower()
-    for hint in ("cannot delete", "add-on", "supervisor", "yaml", "workaround"):
-        assert hint in message
-    assert "delete_movie_night" in message
-    assert gateway.requests == ["DELETE /api/config/scene/config/movie_night"]
 
 
 async def test_a_server_error_on_removal_is_not_reported_as_not_found(
@@ -239,16 +215,6 @@ async def test_a_scene_with_entities_is_written(
 
     assert (result["success"], result["scene_id"]) == (True, "test_scene")
     assert (await _stored(config_client, "test_scene"))["entities"] == ENTITIES
-
-
-async def test_a_scene_without_entities_is_refused(
-    config_client: HomeAssistantClient,
-) -> None:
-    with pytest.raises(ValueError) as exc_info:
-        await config_client.upsert_scene_config({"name": "Empty"}, "test_scene")
-
-    assert "entities" in str(exc_info.value)
-    assert await error_status(_stored(config_client, "test_scene")) == 404
 
 
 async def test_a_scene_without_a_name_is_named_after_its_id(
