@@ -14,7 +14,9 @@ _FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
 _LOCK_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
 _PIN_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py"
 # command -> (packages, commands, file filters, tools, Python constraint)
-_HOOKS = {
+_HOOKS: dict[
+    str, tuple[list[str], list[str], list[str], dict[str, dict[str, str]], str]
+] = {
     _WEBSOCKETS_COMMAND: (
         ["websockets"],
         [_WEBSOCKETS_COMMAND],
