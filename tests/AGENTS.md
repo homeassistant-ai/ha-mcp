@@ -47,10 +47,9 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
-- **The File & YAML Tools entry** (the privileged filesystem and YAML
-  services) is set up on every lane by `_install_custom_component` EXCEPT the
-  no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see below), where that config entry
-  is absent and the privileged services never register. A test that
+- **The File & YAML Tools entry** provides the privileged filesystem and YAML
+  services. It is absent while `E2E_NO_TOOLS_ENTRY=1`; combined lanes add it
+  after their initial coverage, while ordinary lanes seed it before boot. A test that
   relies on tools-entry behaviour must carry `requires_tools_entry`;
   everywhere else a test may still rely on
   component-gated behaviour with no marker — e.g. a config entry's
@@ -72,8 +71,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
   the embedded backend only, seeded separately. That one IS lane-specific.
 
 In production the component is optional (it ships via HACS), so server code
-reading component-only data must degrade honestly for installs without it
-rather than assume the e2e's always-present case.
+reading component-only data must degrade honestly for installs without it.
 
 ## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)
 
@@ -107,8 +105,9 @@ post-merge stable/beta workflows retain their existing coverage.
 
 ## No-tools topology (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
-The rest of the suite always has the "HA-MCP File & YAML Tools" config entry.
-`E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry. The lanes that keep the
+`E2E_NO_TOOLS_ENTRY=1` runs without the "HA-MCP File & YAML Tools" entry,
+either throughout a manual-only lane or during a combined lane's first phase.
+The lanes that keep the
 component match the state most real users are in: integration installed,
 second entry never added.
 It is orthogonal to the backend selectors, so each backend has its own shape:

@@ -478,7 +478,7 @@ jobs:
       # No cache-save step here on purpose. The external lane (``haos-e2e``)
       # computes the same cache key (#1407) and is the SOLE saver of the
       # shared qcow2; the other five lanes only restore from that shared
-      # key. All six lanes start in parallel on the same PR
+      # key. The automatic lanes start in parallel on the same PR
       # push, so having only one saver avoids the "another job may be creating
       # this cache" race + the wasted tar+zstd write of a 12 GB image. The
       # shared-key bet is safe because all six consume the SAME byte-identical
@@ -716,7 +716,7 @@ jobs:
 
       # No cache-save step here on purpose. The external lane (``haos-e2e``)
       # computes the same cache key (#1407) and always tries to save the
-      # same qcow2; all six lanes start in
+      # same qcow2; the automatic lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with
