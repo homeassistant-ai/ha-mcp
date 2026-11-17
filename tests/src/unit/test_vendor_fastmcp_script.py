@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -313,3 +314,72 @@ def test_main_leaves_live_trees_untouched_when_a_download_fails(tmp_path, monkey
     assert not list(vendor_dir.glob("*.incoming"))
     for spec in vendor.PACKAGES:
         assert (vendor_dir / spec.package / "live.py").is_file()
+
+
+_PYPROJECT = """[project]
+name = "fixture"
+dependencies = [
+    # Runtime requirements of the vendored packages.
+    "{entry}",
+]
+
+[dependency-groups]
+dev = [
+    "{entry}",
+]
+"""
+
+
+@pytest.mark.parametrize(
+    ("declared", "needed", "expected"),
+    [
+        ("authlib>=1.6.11", "authlib>=1.9.5; extra == 'server'", "authlib>=1.9.5"),
+        (
+            "py-key-value-aio[memory]>=0.4.4,<0.5.0; sys_platform != 'emscripten'",
+            "py-key-value-aio>=0.4.6",
+            "py-key-value-aio[memory]>=0.4.6,<0.5.0; sys_platform != 'emscripten'",
+        ),
+        ("pyjwt[crypto]>=2.12", "pyjwt>=2.10.1", "pyjwt[crypto]>=2.12"),
+        ("cryptography>=48.0.0,<51", "cryptography>=51.0", "cryptography>=48.0.0,<51"),
+        ("pydantic-monty==0.0.18", "pydantic-monty>=0.0.19", "pydantic-monty==0.0.18"),
+    ],
+    ids=[
+        "raised",
+        "keeps-extras-ceiling-marker",
+        "never-lowered",
+        "past-ceiling",
+        "exact-pin",
+    ],
+)
+def test_vendor_sync_raises_the_floors_a_bump_needs_so_installs_upgrade(
+    tmp_path, monkeypatch, declared, needed, expected
+):
+    """A bump that needs a newer dependency raises ha-mcp's published floor.
+
+    Home Assistant keeps whatever version already satisfies the floor ha-mcp
+    publishes, so a floor left behind keeps an older release installed.
+    Floors it cannot raise safely are left for a person to change.
+    """
+    vendor_dir = tmp_path / "_vendor"
+    vendor_dir.mkdir()
+    (vendor_dir / "requirements.txt").write_text(
+        "fastmcp-slim==9.9.9\nmcp==8.8.8\nmcp-types==8.8.8\n", encoding="utf-8"
+    )
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(_PYPROJECT.format(entry=declared), encoding="utf-8")
+    wheel = _wheel(
+        {
+            "fastmcp/__init__.py": _FASTMCP_INIT,
+            "mcp/__init__.py": "",
+            "mcp_types/__init__.py": "",
+            "pkg-9.9.9.dist-info/METADATA": f"Requires-Dist: {needed}\n",
+            "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
+        }
+    )
+    monkeypatch.setattr(vendor, "_download_wheel", lambda distribution, version: wheel)
+
+    vendor.main(vendor_dir, pyproject)
+
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert project["project"]["dependencies"] == [expected]
+    assert project["dependency-groups"]["dev"] == [declared]
