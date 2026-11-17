@@ -10,14 +10,18 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize(("workers", "backend", "expected"), [(0, "", 15), (2, "", 15), (2, "embedded", 12)])
-def test_component_installation_is_one_way_per_worker(tmp_path: Path, workers: int, backend: str, expected: int) -> None:
+@pytest.mark.parametrize(
+    ("workers", "backend", "expected"), [(0, "", 15), (2, "", 15), (2, "embedded", 12)]
+)
+def test_component_installation_is_one_way_per_worker(
+    tmp_path: Path, workers: int, backend: str, expected: int
+) -> None:
     """Exercise real pytest session parameters and xdist scope dispatch together."""
     root = Path(__file__).resolve().parents[3]
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n    requires_component_surface\n"
     )
-    (tmp_path / "conftest.py").write_text('''
+    (tmp_path / "conftest.py").write_text("""
 import os
 from pathlib import Path
 import pytest
@@ -38,9 +42,9 @@ def e2e_topology(request):
     with trace.open("a") as stream:
         stream.write(phase + "\\n")
     yield phase
-''')
+""")
     for name in ("test_first", "test_second", "test_third"):
-        (tmp_path / f"{name}.py").write_text('''
+        (tmp_path / f"{name}.py").write_text("""
 import os
 import pytest
 
@@ -59,9 +63,11 @@ def test_component_and_fallback_paths(e2e_topology):
 def test_shared_surface_runs_when_available(e2e_topology):
     expected = "topology_without_tools" if os.environ.get("E2E_BACKEND") == "embedded" else "topology_with_tools"
     assert e2e_topology == expected
-''')
+""")
     env = os.environ | {
-        "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(root / "tests"), str(root / "tests/src"))),
+        "PYTHONPATH": os.pathsep.join(
+            (str(root), str(root / "src"), str(root / "tests"), str(root / "tests/src"))
+        ),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTEST_ADDOPTS": "",
         "E2E_COMBINE_TOPOLOGIES": "1",
@@ -70,11 +76,29 @@ def test_shared_surface_runs_when_available(e2e_topology):
         "HA_MCP_CONFIG_DIR": str(tmp_path / "settings"),
     }
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "xdist.plugin", "-n", str(workers), "--dist", "loadscope", "-q"],
-        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120,
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "xdist.plugin",
+            "-n",
+            str(workers),
+            "--dist",
+            "loadscope",
+            "-q",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"{expected} passed" in result.stdout, result.stdout
     traces = [path.read_text().splitlines() for path in tmp_path.glob("*.trace")]
     assert traces
-    assert all(trace == ["topology_without_tools", "topology_with_tools"] for trace in traces)
+    assert all(
+        trace == ["topology_without_tools", "topology_with_tools"] for trace in traces
+    )

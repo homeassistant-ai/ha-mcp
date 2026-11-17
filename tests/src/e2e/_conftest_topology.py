@@ -48,9 +48,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
             phases = [WITHOUT_TOOLS, WITH_TOOLS]
         else:
             phases = [WITHOUT_TOOLS]
-        metafunc.parametrize(
-            "e2e_topology", phases, indirect=True, scope="session"
-        )
+        metafunc.parametrize("e2e_topology", phases, indirect=True, scope="session")
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -108,7 +106,9 @@ def _create_tools_entry(env: dict[str, Any]) -> str:
     """Use the same menu and confirmation flow as Add Integration."""
     url = f"{env['base_url']}/api/config/config_entries/flow"
     headers = {"Authorization": f"Bearer {env['token']}"}
-    response = requests.post(url, headers=headers, json={"handler": "ha_mcp_tools"}, timeout=120)
+    response = requests.post(
+        url, headers=headers, json={"handler": "ha_mcp_tools"}, timeout=120
+    )
     response.raise_for_status()
     step = response.json()
     for answer in ({"next_step_id": "tools"}, {}):
@@ -130,7 +130,11 @@ def install_tools_entry(env: dict[str, Any]) -> None:
     if config_path:
         target = Path(config_path) / "custom_components" / "ha_mcp_tools"
         if not target.exists():
-            source = Path(__file__).resolve().parents[3] / "custom_components" / "ha_mcp_tools"
+            source = (
+                Path(__file__).resolve().parents[3]
+                / "custom_components"
+                / "ha_mcp_tools"
+            )
             shutil.copytree(source, target)
             # Core discovered the initial custom-component directory before
             # these files existed. Restart before opening the new flow.
@@ -140,16 +144,24 @@ def install_tools_entry(env: dict[str, Any]) -> None:
     headers = {"Authorization": f"Bearer {env['token']}"}
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
-        response = requests.get(f"{env['base_url']}/api/services", headers=headers, timeout=15)
+        response = requests.get(
+            f"{env['base_url']}/api/services", headers=headers, timeout=15
+        )
         response.raise_for_status()
         if any(row["domain"] == "ha_mcp_tools" for row in response.json()):
             break
         time.sleep(1)
     else:
-        raise RuntimeError(f"File & YAML Tools entry {entry_id} did not load after restart")
+        raise RuntimeError(
+            f"File & YAML Tools entry {entry_id} did not load after restart"
+        )
     if env.get("embedded_webhook_url"):
-        if not _wait_for_embedded_webhook_ready(env["embedded_webhook_url"], timeout=600):
-            raise RuntimeError("Embedded MCP server did not return after the topology restart")
+        if not _wait_for_embedded_webhook_ready(
+            env["embedded_webhook_url"], timeout=600
+        ):
+            raise RuntimeError(
+                "Embedded MCP server did not return after the topology restart"
+            )
     if env["backend"] == "haos_inaddon":
         from haos_runtime import (
             HA_MCP_DEV_ADDON_SLUG,
@@ -160,18 +172,31 @@ def install_tools_entry(env: dict[str, Any]) -> None:
 
         # The app outlives Core and caches absent component capabilities.
         _home_assistant_ws_command(
-            env["base_url"], env["token"],
-            {"type": "supervisor/api", "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/restart", "method": "post"},
+            env["base_url"],
+            env["token"],
+            {
+                "type": "supervisor/api",
+                "endpoint": f"/addons/{HA_MCP_DEV_ADDON_SLUG}/restart",
+                "method": "post",
+            },
             timeout=180,
         )
         env["addon_mcp_url"] = wait_for_addon_mcp_ready()
         if not wait_for_addon_ha_link_ready(env["addon_mcp_url"]):
-            raise RuntimeError("App did not reconnect to Core after the topology restart")
-    logger.info("[E2E_TOPOLOGY] installed tools entry %s in the existing %s", entry_id, env["backend"])
+            raise RuntimeError(
+                "App did not reconnect to Core after the topology restart"
+            )
+    logger.info(
+        "[E2E_TOPOLOGY] installed tools entry %s in the existing %s",
+        entry_id,
+        env["backend"],
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
-async def e2e_topology(request: Any, ha_container_with_fresh_config: dict[str, Any]) -> Any:
+async def e2e_topology(
+    request: Any, ha_container_with_fresh_config: dict[str, Any]
+) -> Any:
     phase = getattr(request, "param", None)
     if phase is None:
         yield
@@ -179,7 +204,9 @@ async def e2e_topology(request: Any, ha_container_with_fresh_config: dict[str, A
     env = ha_container_with_fresh_config
     previous = env.get("topology_phase")
     if previous == WITH_TOOLS and phase == WITHOUT_TOOLS:
-        raise RuntimeError("E2E scheduler returned to the absent topology after installation")
+        raise RuntimeError(
+            "E2E scheduler returned to the absent topology after installation"
+        )
     if phase == WITH_TOOLS and previous != WITH_TOOLS:
         await asyncio.to_thread(install_tools_entry, env)
     os.environ["E2E_NO_TOOLS_ENTRY"] = "1" if phase == WITHOUT_TOOLS else "0"
