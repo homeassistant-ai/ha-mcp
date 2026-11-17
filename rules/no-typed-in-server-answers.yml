@@ -8,12 +8,33 @@
 # No file is exempt.
 id: no-typed-in-server-answers
 language: python
+utils:
+  # An answer written in the test. A spy (wraps=) or a failure (side_effect=)
+  # carries none and stays; so does a wraps= lambda that only calls a function
+  # named after the one it replaces (`wraps=lambda: real_get_update_info()`).
+  typed-in-answer:
+    any:
+      - regex: '\breturn_value\s*='
+      - has:
+          kind: lambda
+          stopBy: end
+          not:
+            all:
+              - inside:
+                  kind: keyword_argument
+                  regex: '^wraps\s*='
+              - has:
+                  field: body
+                  kind: call
+                  has:
+                    field: function
+                    regex: '(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|fetch_\w+)$'
 rule:
   any:
+    # The function is named where the call names what it replaces, and nowhere
+    # else: a listed name inside a replacement's value is no match.
     - all:
         - kind: call
-        # The function is named where the call names what it replaces, and
-        # nowhere else: a listed name inside a replacement's value is no match.
         - any:
             # patch("pkg.mod.get_component_caps", ...),
             # monkeypatch.setattr("pkg.mod._fetch_x", ...)
@@ -39,32 +60,22 @@ rule:
                       nthChild: 2
                       kind: string
                       regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-            # patch.multiple(mod, get_update_info=...)
-            - all:
-                - has:
-                    field: function
-                    regex: '^(\w+\.)*patch\.multiple$'
-                - has:
-                    field: arguments
-                    has:
-                      kind: keyword_argument
-                      regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
-        # ... given an answer written in the test. A spy (wraps=) or a failure
-        # (side_effect=) carries no answer and stays; so does a wraps= lambda
-        # that only calls through.
-        - any:
-            - regex: '\breturn_value\s*='
-            - has:
-                kind: lambda
-                stopBy: end
-                not:
-                  all:
-                    - inside:
-                        kind: keyword_argument
-                        regex: '^wraps\s*='
-                    - has:
-                        field: body
-                        kind: call
+        - matches: typed-in-answer
+    # patch.multiple(mod, get_update_info=...): the answer is read from that
+    # keyword alone. DEFAULT puts a mock in place that answers for the function.
+    - all:
+        - kind: call
+        - has:
+            field: function
+            regex: '^(\w+\.)*patch\.multiple$'
+        - has:
+            field: arguments
+            has:
+              kind: keyword_argument
+              regex: '^(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)\s*='
+              any:
+                - matches: typed-in-answer
+                - regex: '=\s*(\w+\.)*DEFAULT$'
     # A patch with nothing but its target: the mock it puts in place answers
     # for the function, and the test sets that answer through the alias
     # (`with patch(...) as caps: caps.return_value = ...`).

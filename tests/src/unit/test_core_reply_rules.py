@@ -922,8 +922,15 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
         ),
         pytest.param(
             "patch.multiple(update_check, get_update_info=DEFAULT)\n",
+            True,
+            id="patch-multiple-default-mock",
+        ),
+        pytest.param(
+            "patch.multiple(\n"
+            "    mod, get_update_info=mod.get_update_info, helper=Mock(return_value=None)\n"
+            ")\n",
             False,
-            id="patch-multiple-no-answer",
+            id="patch-multiple-answer-on-another-keyword",
         ),
         pytest.param(
             'with patch("ha_mcp.tools.component_api.get_component_caps") as caps:\n'
@@ -968,9 +975,14 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="setattr-dotted-target",
         ),
         pytest.param(
-            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: real_info())\n',
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: real_get_update_info())\n',
             False,
             id="spy-lambda-that-calls-through",
+        ),
+        pytest.param(
+            'patch("ha_mcp.update_check.get_update_info", wraps=lambda: dict(latest="1"))\n',
+            True,
+            id="spy-lambda-calling-something-else",
         ),
         pytest.param(
             'patch("ha_mcp.update_check.get_update_info", wraps=lambda: {"latest": "1"})\n',
