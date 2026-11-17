@@ -77,7 +77,8 @@ async def test_legacy_digest_lists_both_filename_generations(
     hass: HomeAssistant, manager: BackupManager
 ) -> None:
     identity = f"config:{'a' * 120}"
-    current = await capture(hass, manager, identity)
+    with patch("ha_mcp.backup_manager._now_ts", return_value="20260102_000000"):
+        current = await capture(hass, manager, identity)
     digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
     legacy_stem = f"{identity.replace(':', '_')}-{digest}"
     legacy = current.with_name(f"integration.{legacy_stem}.20260101_000000.yaml")
