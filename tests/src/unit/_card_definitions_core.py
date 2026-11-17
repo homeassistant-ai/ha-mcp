@@ -36,6 +36,7 @@ from ._component_core import ws_result
 __all__ = [
     "MINIMAL_DOM",
     "CardIndex",
+    "assert_described_without_a_form",
     "card_description",
     "card_file",
     "card_name",
@@ -123,6 +124,14 @@ def card_file_with_editor(
         encoding="utf-8",
     )
     return path
+
+
+def assert_described_without_a_form(described: dict[str, Any] | None) -> None:
+    """A card with no editor form lists no fields and claims no coverage."""
+    assert described is not None
+    assert described["fields"] is None
+    assert "field_coverage" not in described
+    assert "note" not in described
 
 
 @pytest.fixture

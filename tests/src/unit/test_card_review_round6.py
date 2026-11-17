@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 
 from ._card_definitions_core import (
     CardIndex,
+    assert_described_without_a_form,
     cc,
     cd,
     constrained_core,
@@ -122,12 +123,7 @@ def test_editor_failure_does_not_hide_card_verdict(
 def test_missing_custom_form_has_no_field_coverage_claim(
     custom_cards: cc.CustomCards, broken_editor_card: str
 ) -> None:
-    described = custom_cards.describe(broken_editor_card)
-
-    assert described is not None
-    assert described["fields"] is None
-    assert "field_coverage" not in described
-    assert "note" not in described
+    assert_described_without_a_form(custom_cards.describe(broken_editor_card))
 
 
 def test_looping_editor_cannot_consume_later_cards_budget(

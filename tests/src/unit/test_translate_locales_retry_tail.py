@@ -17,25 +17,16 @@ recorded rather than slept.
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 import httpx
 import pytest
 
 from ._locale_sync_repo import LocaleRepo, Request, answer
+from ._locale_sync_repo import repo as repo
 
 _HALLO = {"messages:greeting": "Hallo"}
 # Far longer than one request carries alongside anything else.
 _HUGE = "word " * 10_000
-
-
-@pytest.fixture
-def repo(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> LocaleRepo:
-    repo = LocaleRepo(tmp_path, monkeypatch, capsys)
-    repo.write_settings("en", {"greeting": "Hello"}, native_name="English", tools=False)
-    return repo
 
 
 Step = Callable[[Request], httpx.Response]

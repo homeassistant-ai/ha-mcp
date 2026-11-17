@@ -263,9 +263,8 @@ class LocaleRepo:
         path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     @staticmethod
-    def read_json(path: Path) -> dict[str, Any]:
-        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-        return data
+    def read_json(path: Path) -> Any:
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def run(self, *argv: str) -> Run:
         """``python scripts/translate_locales.py <argv>`` in this tree."""
@@ -290,3 +289,13 @@ class LocaleRepo:
         out, err = self._capsys.readouterr()
         assert isinstance(code, int), f"exit status {code!r}: {err}"
         return Run(code, out, err)
+
+
+@pytest.fixture
+def repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> LocaleRepo:
+    """A locale repository whose English settings catalog has one string."""
+    repo = LocaleRepo(tmp_path, monkeypatch, capsys)
+    repo.write_settings("en", {"greeting": "Hello"}, native_name="English", tools=False)
+    return repo

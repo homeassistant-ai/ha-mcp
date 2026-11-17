@@ -2187,7 +2187,6 @@ def _add_http_error_hints(
                 else:
                     result["suggestion"] = _direct_port_rejection_suggestion()
             else:
-                # Supervisor keys the map "<port>" or "<port>/<tcp|udp>".
                 ports_dict = addon.get("network") or {}
                 unmapped = sorted(k for k, v in ports_dict.items() if v is None)
                 if unmapped:

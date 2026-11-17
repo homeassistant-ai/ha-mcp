@@ -9,24 +9,15 @@ degrades the run. Only the real API's happy path is left to the live workflow.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
 import pytest
 
 from ._locale_sync_repo import LocaleRepo, Request, answer, envelope
+from ._locale_sync_repo import repo as repo
 
 _HALLO = answer({"messages:greeting": "Hallo"})
-
-
-@pytest.fixture
-def repo(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> LocaleRepo:
-    repo = LocaleRepo(tmp_path, monkeypatch, capsys)
-    repo.write_settings("en", {"greeting": "Hello"}, native_name="English", tools=False)
-    return repo
 
 
 def _replies(repo: LocaleRepo, *responses: httpx.Response | Exception) -> None:

@@ -27,6 +27,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._card_definitions_core import (
     CardIndex,
+    assert_described_without_a_form,
     card_description,
     card_file,
     card_name,
@@ -244,12 +245,7 @@ def test_the_index_keeps_inherited_cards_but_excludes_dialogs(
 def test_a_card_without_an_editor_form_lists_no_fields_and_claims_no_coverage(
     definitions: cd.CardDefinitions, card_type: str
 ) -> None:
-    described = definitions.describe(card_type)
-
-    assert described is not None
-    assert described["fields"] is None
-    assert "field_coverage" not in described
-    assert "note" not in described
+    assert_described_without_a_form(definitions.describe(card_type))
 
 
 def test_every_option_a_form_lists_is_accepted_and_an_unlisted_one_is_flagged(

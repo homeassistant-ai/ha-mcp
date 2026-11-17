@@ -1249,11 +1249,9 @@ class AutomationConfigTools:
 
         ``target`` is the resolved automation for an ``entity_id`` write (None
         creates under a generated id) and ``operation`` is what reading it
-        found. ``detached_blueprint`` is set by take-control mode and names the
-        blueprint the automation's config no longer references. It is
-        reported on the response as ``took_control_of_blueprint`` and nothing
-        more: Home Assistant goes on counting the automation as a user of that
-        blueprint until it is removed, so there is no release to wait for.
+        found. ``detached_blueprint`` (take-control mode) is only reported as
+        ``took_control_of_blueprint``: Home Assistant counts the automation as
+        that blueprint's user until it is removed, so nothing is released.
         """
         result, run_actions = await self._write_and_reload(
             config_dict, entity_id, target, operation, bp_warnings, enabled, run_actions
@@ -1333,8 +1331,7 @@ class AutomationConfigTools:
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
         merge_validation_meta(response, references)
-        # Attached last so skill_content_hint leads the final response: BAT
-        # showed small models miss it behind success/automation_id.
+        # Last, so skill_content_hint leads the response (BAT: small models miss it).
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
