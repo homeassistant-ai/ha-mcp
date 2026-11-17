@@ -50,13 +50,12 @@ class TestErrorHandling:
             )
             # A tool failure reaches callers two ways depending on the
             # transport: as a raised ToolError (the except below) or as a
-            # returned result carrying the error flag — ``is_error`` on
-            # fastmcp's CallToolResult, ``isError`` on the raw MCP one.
-            # Fold either spelling into the same marked dict, keeping the
-            # structured error payload the shared parser recovers so
-            # _get_error_str still finds a message, and marker-based
-            # discrimination stays transport-independent.
-            if getattr(result, "is_error", False) or getattr(result, "isError", False):
+            # returned result carrying the error flag (``is_error``). Fold
+            # both into the same marked dict, keeping the structured error
+            # payload the shared parser recovers so _get_error_str still finds
+            # a message, and marker-based discrimination stays
+            # transport-independent.
+            if getattr(result, "is_error", False):
                 return {
                     **_parse_error_result(result),
                     "success": False,
@@ -864,8 +863,7 @@ async def _safe_tool_call_standalone(
         # Marker parity with the method twin: a returned error-flagged result
         # and a raised ToolError are the same failure over different
         # transports, and callers discriminate on the markers, not the shape.
-        # fastmcp spells the flag ``is_error``, the raw MCP type ``isError``.
-        if getattr(result, "is_error", False) or getattr(result, "isError", False):
+        if getattr(result, "is_error", False):
             return {
                 **_parse_error_result(result),
                 "success": False,

@@ -9,11 +9,9 @@ the e2e suite itself, because every failure mode they guard degrades into a
   it results, and some of those never came from the client at all -- the
   ``_safe_tool_call`` wrappers return a marked dict. Losing the passthrough
   would replace the discrimination markers with a generic placeholder.
-- The error-flag gate in the same helper. fastmcp's ``CallToolResult`` spells
-  the flag ``is_error``; the raw MCP one spells it ``isError``. A gate that
-  checks only one spelling is silently dead against the other transport, and
-  a JSON error envelope decodes identically down the success branch, so
-  nothing observable changes until the payload is not JSON.
+- The error-flag gate in the same helper. A JSON error envelope decodes
+  identically down the success branch, so a gate that stops reading the flag
+  changes nothing observable until the payload is not JSON.
 - ``_hard_failures``
   (``tests/src/e2e/error_handling/test_network_errors.py``), which decides
   which concurrent results are regressions. Too strict and healthy bulk
@@ -27,7 +25,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from mcp import types as sdk_types
 
 from ha_mcp._vendor import mcp_types
 from ha_mcp._vendor.fastmcp.client.client import CallToolResult
@@ -65,11 +62,10 @@ def _FastmcpResult(text: str, is_error: bool = False) -> CallToolResult:
     )
 
 
-def _RawMcpResult(text: str, error_flag: bool = False) -> sdk_types.CallToolResult:
-    """The MCP SDK's ``CallToolResult`` (flag spelled ``isError``)."""
-    return sdk_types.CallToolResult(
-        content=[sdk_types.TextContent(type="text", text=text)],
-        isError=error_flag,
+def _RawMcpResult(text: str) -> mcp_types.CallToolResult:
+    """The raw MCP ``CallToolResult`` the vendored client session returns."""
+    return mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=text)]
     )
 
 
@@ -139,10 +135,6 @@ class TestErrorFlagRouting:
         result = _FastmcpResult(json.dumps(_ERROR_ENVELOPE), is_error=True)
         assert parse_mcp_result(result) == _ERROR_ENVELOPE
 
-    def test_legacy_iserror_spelling_also_routes(self):
-        result = _RawMcpResult(json.dumps(_ERROR_ENVELOPE), error_flag=True)
-        assert parse_mcp_result(result) == _ERROR_ENVELOPE
-
     def test_is_error_with_non_json_body_takes_the_error_branch(self):
         """The spelling bug is only *observable* on a non-JSON body.
 
@@ -152,12 +144,6 @@ class TestErrorFlagRouting:
         branch yields ``{"raw_response": ...}``.
         """
         assert parse_mcp_result(_FastmcpResult("boom", is_error=True)) == {
-            "success": False,
-            "error": "boom",
-        }
-
-    def test_legacy_iserror_with_non_json_body_takes_the_error_branch(self):
-        assert parse_mcp_result(_RawMcpResult("boom", error_flag=True)) == {
             "success": False,
             "error": "boom",
         }
