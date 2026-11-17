@@ -200,49 +200,50 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
     each supported Python (every patch release) and desktop/server platform,
     including requirements that do not apply on the runner's own platform.
     """
-    environments = vendor_fastmcp.marker_environments(python_version, sys_platform)
-
-    def applies(requirement: Requirement) -> bool:
-        return requirement.marker is None or any(
-            requirement.marker.evaluate(environment) for environment in environments
-        )
-
-    declared: dict[str, list[Requirement]] = {}
-    for requirement in _declared():
-        if applies(requirement):
-            declared.setdefault(canonicalize_name(requirement.name), []).append(
-                requirement
-            )
-    problems = []
-    for needed in _vendored_requirements(spec.package):
-        if not applies(needed):
-            continue
-        name = canonicalize_name(needed.name)
-        if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
-            continue
-        candidates = declared.get(name, [])
-        if not candidates:
-            problems.append(f"{needed} is not declared")
-            continue
-        floor, ceiling = vendor_fastmcp.requirement_floor(needed), _ceiling(needed)
-        ok = any(
-            (
-                floor is None
-                or (
-                    (own := vendor_fastmcp.requirement_floor(c)) is not None
-                    and own >= floor
+    declared_all = _declared()
+    needed_all = _vendored_requirements(spec.package)
+    problems: set[str] = set()
+    # Per environment: an entry for a later patch release covers nothing on
+    # an earlier one.
+    for environment in vendor_fastmcp.marker_environments(python_version, sys_platform):
+        declared: dict[str, list[Requirement]] = {}
+        for requirement in declared_all:
+            if requirement.marker is None or requirement.marker.evaluate(environment):
+                declared.setdefault(canonicalize_name(requirement.name), []).append(
+                    requirement
                 )
+        for needed in needed_all:
+            if needed.marker is not None and not needed.marker.evaluate(environment):
+                continue
+            name = canonicalize_name(needed.name)
+            if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
+                continue
+            candidates = declared.get(name, [])
+            if not candidates:
+                problems.add(
+                    f"{needed} is not declared on {environment['python_full_version']}"
+                )
+                continue
+            floor, ceiling = vendor_fastmcp.requirement_floor(needed), _ceiling(needed)
+            ok = any(
+                (
+                    floor is None
+                    or (
+                        (own := vendor_fastmcp.requirement_floor(c)) is not None
+                        and own >= floor
+                    )
+                )
+                and (
+                    ceiling is None
+                    or ((top := _ceiling(c)) is not None and top <= ceiling)
+                )
+                for c in candidates
             )
-            and (
-                ceiling is None or ((top := _ceiling(c)) is not None and top <= ceiling)
-            )
-            for c in candidates
-        )
-        if not ok:
-            problems.append(
-                f"{needed} is not covered by {[str(c) for c in candidates]}"
-            )
-    assert not problems, problems
+            if not ok:
+                problems.add(
+                    f"{needed} is not covered by {[str(c) for c in candidates]}"
+                )
+    assert not problems, sorted(problems)
 
 
 def test_vendored_packages_agree_on_each_others_pins():
