@@ -109,7 +109,7 @@ from .transports import (
     StreamableHttpTransport,
     infer_transport,
 )
-from .transports.base import TransportOptions
+from .transports.base import TransportOptions, _is_verify_replaceable_factory
 
 __all__ = [
     "Client",
@@ -478,12 +478,16 @@ class Client(
             if isinstance(self.transport, StreamableHttpTransport | SSETransport):
                 self.transport.verify = verify
                 # Re-sync existing OAuth auth with the new verify setting,
-                # but only if the transport doesn't have a custom factory
-                # (which takes precedence and was already applied to OAuth).
+                # but only if neither the transport nor the auth provider has
+                # a custom factory (which takes precedence and was already
+                # applied to OAuth).
                 if (
                     isinstance(self.transport.auth, OAuth)
                     and auth is None
                     and self.transport.httpx_client_factory is None
+                    and _is_verify_replaceable_factory(
+                        self.transport.auth.httpx_client_factory
+                    )
                 ):
                     verify_factory = self.transport._make_verify_factory()
                     if verify_factory is not None:
@@ -668,6 +672,19 @@ class Client(
     def session(self) -> ClientSession:
         """Get the current active session. Raises RuntimeError if not connected."""
         if self._session_state.session is None:
+            # Inside a held context, a missing session means the connection was
+            # lost, not that the caller forgot to connect. Report that failure:
+            # the transport's own error once the session task has finished, and
+            # the SDK's closed-connection error while it is still unwinding.
+            session_task = self._session_state.session_task
+            if self._session_state.nesting_counter > 0 and session_task is not None:
+                if session_task.done() and not session_task.cancelled():
+                    exc = session_task.exception()
+                    if exc is not None:
+                        raise exc
+                raise MCPError(
+                    code=mcp_types.CONNECTION_CLOSED, message="Connection closed"
+                )
             raise RuntimeError(
                 "Client is not connected. Use the 'async with client:' context manager first."
             )
@@ -1338,6 +1355,8 @@ class Client(
             return await send()
         # A closed (or never-entered) client must raise, never serve cached entries.
         _ = self.session
+        if self.protocol_version not in MODERN_PROTOCOL_VERSIONS:
+            return await send()
         if cursor is not None:
             # Continuation pages skip the cache; an expired cursor means the listing
             # changed, so evict (spec SHOULD) and re-raise.
