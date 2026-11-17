@@ -20,7 +20,7 @@ in such a tool by migrating the affected path to the native approach this
 document describes, not by patching it so it keeps working the old way.
 
 This document holds the rules for building tools, not each tool's contract.
-The tool sections already here are worked examples of those rules. A migration
+The tool-specific passages already here are worked examples of those rules. A migration
 does not add a section for its own tool: the tool's contract lives in its code,
 its `Field` texts and its tests, and a copy here only duplicates them. Add a
 rule here only when later migrations need it, written as a general rule rather
@@ -72,8 +72,8 @@ the case the component exists for. "It works without the component" does not
 justify the copy; an installation without the component may get less, and the
 fallback says so. A fallback that says what it could not judge is finished: do
 not refine it case by case (more fields compared, more of what it missed
-named). Keeping the fallback level with the component is the churn the
-component exists to end.
+named). Bringing the fallback up to the component case by case is the churn
+the component exists to end.
 
 Component and server releases are paired: every release stamps both with one
 version and the component pins the server build it runs. A bridge and its
