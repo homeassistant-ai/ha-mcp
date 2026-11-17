@@ -12,18 +12,11 @@ from __future__ import annotations
 
 import ast
 import inspect
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-_E2E_UTILITIES = Path(__file__).resolve().parents[1] / "e2e" / "utilities"
-if str(_E2E_UTILITIES) not in sys.path:
-    sys.path.insert(0, str(_E2E_UTILITIES))
-
-import llm_api_probe  # noqa: E402
-from llm_api_probe import (  # noqa: E402
+from tests.src.e2e.utilities.llm_api_probe import (
     LLM_API_SCHEMA_PROBE,
     MIN_TOOL_COUNT,
     PROBE_HELPERS_SOURCE,
@@ -62,7 +55,7 @@ def _helpers() -> dict[str, Any]:
 
 def _written_report_keys() -> set[str]:
     """Keys of the ``report.update({...})`` literal the runner writes."""
-    tree = ast.parse(llm_api_probe._PROBE_RUNNER_SOURCE)
+    tree = ast.parse(LLM_API_SCHEMA_PROBE)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
@@ -72,7 +65,9 @@ def _written_report_keys() -> set[str]:
             and isinstance(node.args[0], ast.Dict)
         ):
             return {
-                key.value for key in node.args[0].keys if isinstance(key, ast.Constant)
+                key.value
+                for key in node.args[0].keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
             }
     raise AssertionError("no report.update({...}) literal found in the probe runner")
 
@@ -88,6 +83,7 @@ def _read_report_keys() -> set[str]:
             and node.func.attr == "get"
             and node.args
             and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
         ):
             keys.add(node.args[0].value)
         elif (
@@ -118,7 +114,7 @@ class TestProbeSource:
 
     def test_the_helpers_compile_and_load_standalone(self) -> None:
         helpers = _helpers()
-        assert callable(helpers["_boolean_exclusive_bounds"])
+        assert callable(helpers["boolean_exclusive_bounds"])
 
     def test_the_walk_skips_instance_data_and_extensions(self) -> None:
         """Mirrors the component: data under default/enum/x- is not a bound."""
@@ -132,8 +128,8 @@ class TestProbeSource:
             "x-ui": {"exclusiveMinimum": True, "type": "integer"},
         }
 
-        assert helpers["_boolean_exclusive_bounds"](schema) is False
-        assert helpers["_count_integer_nodes"](schema) == 0
+        assert helpers["boolean_exclusive_bounds"](schema) is False
+        assert helpers["count_integer_nodes"](schema) == 0
 
     def test_the_walk_reports_a_real_draft4_bound(self) -> None:
         helpers = _helpers()
@@ -149,7 +145,7 @@ class TestProbeSource:
             },
         }
 
-        assert helpers["_boolean_exclusive_bounds"](schema) is True
+        assert helpers["boolean_exclusive_bounds"](schema) is True
 
     def test_integer_nodes_are_counted_in_subschemas_only(self) -> None:
         helpers = _helpers()
@@ -161,7 +157,7 @@ class TestProbeSource:
             },
         }
 
-        assert helpers["_count_integer_nodes"](schema) == 2
+        assert helpers["count_integer_nodes"](schema) == 2
 
     def test_short_names_the_innermost_frame(self) -> None:
         helpers = _helpers()
@@ -172,7 +168,7 @@ class TestProbeSource:
         try:
             boom()
         except ValueError as err:
-            text = helpers["_short"](err)
+            text = helpers["short"](err)
 
         assert text.startswith("ValueError: first line at ")
         assert text.endswith(" in boom")

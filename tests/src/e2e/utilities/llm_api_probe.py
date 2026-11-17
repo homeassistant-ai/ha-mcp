@@ -72,11 +72,11 @@ def _is_integer_node(node):
     return False
 
 
-def _count_integer_nodes(node):
+def count_integer_nodes(node):
     return sum(1 for sub in _walk(node) if _is_integer_node(sub))
 
 
-def _boolean_exclusive_bounds(node):
+def boolean_exclusive_bounds(node):
     # Draft-4 spelling: the 2020-12 keywords carry a NUMBER, never a bool.
     for sub in _walk(node):
         for keyword in ("exclusiveMinimum", "exclusiveMaximum"):
@@ -85,7 +85,7 @@ def _boolean_exclusive_bounds(node):
     return False
 
 
-def _short(err):
+def short(err):
     # One line: type, first message line, and the innermost frame, which is
     # the only location a remote interpreter can hand back.
     text = str(err).strip().splitlines()
@@ -156,7 +156,7 @@ async def _run():
     try:
         from homeassistant.const import __version__ as ha_version
     except ImportError as err:
-        report["ha_version_error"] = _short(err)
+        report["ha_version_error"] = short(err)
     else:
         report["ha_version"] = ha_version
 
@@ -167,14 +167,14 @@ async def _run():
         # interpreter. Whether that is legitimate is the caller's call, from
         # ha_version: Core ships probatio from 2026.9.
         probatio = None
-        report["probatio_import_error"] = _short(err)
+        report["probatio_import_error"] = short(err)
     report["probatio"] = probatio is not None
 
     try:
         from jsonschema import Draft202012Validator
     except ImportError as err:
         Draft202012Validator = None
-        report["jsonschema_import_error"] = _short(err)
+        report["jsonschema_import_error"] = short(err)
     report["draft2020_checked"] = Draft202012Validator is not None
 
     if normalise_schema is None:
@@ -215,7 +215,7 @@ def _convert_all(
         try:
             params = convert_parameters(None, tool, normalise_schema(schema, tool.name))
         except Exception as err:  # collecting, not suppressing
-            report["conversion_failures"].append(tool.name + ": " + _short(err))
+            report["conversion_failures"].append(tool.name + ": " + short(err))
             continue
         if params is None:
             report["conversion_failures"].append(
@@ -237,18 +237,18 @@ def _convert_all(
             }}
         except Exception as err:  # collecting, not suppressing
             report["conversion_failures"].append(
-                tool.name + ": to_openapi: " + _short(err)
+                tool.name + ": to_openapi: " + short(err)
             )
             continue
-        if _boolean_exclusive_bounds(emitted):
+        if boolean_exclusive_bounds(emitted):
             report["boolean_exclusive"].append(tool.name)
-        if _count_integer_nodes(emitted) < _count_integer_nodes(schema):
+        if count_integer_nodes(emitted) < count_integer_nodes(schema):
             report["integer_lost"].append(tool.name)
         if Draft202012Validator is not None:
             try:
                 Draft202012Validator.check_schema(emitted)
             except Exception as err:  # collecting, not suppressing
-                report["draft2020_invalid"].append(tool.name + ": " + _short(err))
+                report["draft2020_invalid"].append(tool.name + ": " + short(err))
 
 
 class _ProbeTimeout(BaseException):

@@ -119,7 +119,7 @@ def test_teardown_survives_a_task_that_raises_on_cancel(caplog) -> None:
 
     tasks = loop.run_until_complete(start())
 
-    with caplog.at_level(logging.WARNING, logger=wt._LOGGER.name):
+    with caplog.at_level(logging.WARNING, logger=wt.__name__):
         wt.teardown_worker_loop(loop)
 
     assert loop.is_closed()
@@ -138,6 +138,10 @@ def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -
     """
     monkeypatch.setattr(wt, "TEARDOWN_TIMEOUT_SECONDS", 0.1)
     loop = asyncio.new_event_loop()
+    # The abandoned task stays pending by design. When it is collected, asyncio
+    # reports "Task was destroyed but it is pending!" (the exact signature this
+    # fix removes from production) through the loop's handler, kept here.
+    loop.set_exception_handler(lambda _loop, _context: None)
 
     tasks: dict[str, asyncio.Task[Any]] = {}
 
@@ -154,17 +158,12 @@ def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -
 
     loop.run_until_complete(start())
 
-    with caplog.at_level(logging.WARNING, logger=wt._LOGGER.name):
+    with caplog.at_level(logging.WARNING, logger=wt.__name__):
         wt.teardown_worker_loop(loop)
 
     assert loop.is_closed()
     assert not tasks["stubborn"].done()
     assert "ignored cancellation during worker-loop teardown" in caplog.text
-
-    # The abandoned task stays pending by design; silence asyncio's "Task
-    # was destroyed but it is pending!" destroy log — the exact signature
-    # this fix removes from production — when the reference is collected.
-    tasks["stubborn"]._log_destroy_pending = False
 
 
 async def test_shutdown_server_resources_runs_every_step(monkeypatch) -> None:
@@ -221,7 +220,7 @@ async def test_shutdown_server_resources_bounded_abandons_a_swallowing_hang(
     monkeypatch.setattr(ws_listener, "stop_websocket_listener", swallowing_hang)
 
     try:
-        with caplog.at_level(logging.WARNING, logger=wt._LOGGER.name):
+        with caplog.at_level(logging.WARNING, logger=wt.__name__):
             await wt.shutdown_server_resources_bounded(AsyncMock(name="server"))
 
         assert "Embedded resource cleanup timed out" in caplog.text

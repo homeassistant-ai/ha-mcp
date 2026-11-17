@@ -1,15 +1,19 @@
-"""Unit tests for CIMD validation + client_id translation (oauth_ha_auth)."""
+"""Unit tests for CIMD validation + client_id translation (oauth_ha_auth).
+
+A client's metadata document lives on the public internet, so ``cimd_web``
+serves it through Core's ``aioclient_mock`` and answers name resolution with a
+public address. The lookup cache outlives a test, so every client_id that
+reaches it is unique to its test.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import json
+import socket
+import uuid
 
 import pytest
-from aiohttp import test_utils
-from aiohttp import web as aiohttp_web
 
 from custom_components.ha_mcp_tools import oauth_dcr, oauth_ha_auth
 from custom_components.ha_mcp_tools.oauth_dcr import (
@@ -19,8 +23,8 @@ from custom_components.ha_mcp_tools.oauth_dcr import (
 from custom_components.ha_mcp_tools.oauth_ha_auth import (
     MAX_REVOKE_ENVELOPE_LEN,
     EnvelopeState,
-    _b64url_encode,
     core_token_for_revocation,
+    fetch_cimd_redirects,
     origin_client_id,
     redirect_matches,
     resolve_forward_client_id,
@@ -30,15 +34,25 @@ from custom_components.ha_mcp_tools.oauth_ha_auth import (
     wrap_refresh_token,
 )
 
-# These tests run their own listener on the loopback interface; Core's test
-# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
-pytestmark = pytest.mark.usefixtures("socket_enabled")
+from ._webhook_proxy_oauth_core import (
+    PUBLIC_ADDRESS,
+    CimdWeb,
+    b64url,
+    hand_signed_envelope,
+)
+from ._webhook_proxy_oauth_core import cimd_web as cimd_web
 
 KEY = b"k" * 32
 GOOGLE_REDIRECT_URIS = [
     "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
     "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
 ]
+CALLBACK = "https://client.example/cb"
+
+
+def unique_client_id(origin: str = "https://client.example") -> str:
+    """A metadata document URL on ``origin`` that no earlier lookup cached."""
+    return f"{origin}/{uuid.uuid4().hex}.json"
 
 
 def test_cimd_timing_constants():
@@ -221,18 +235,15 @@ async def test_refresh_marks_dcr_clients_without_stable_origin(redirect_uris):
 
 
 @pytest.mark.asyncio
-async def test_refresh_same_origin_cimd_client_passes_through(monkeypatch):
+async def test_refresh_same_origin_cimd_client_passes_through(cimd_web: CimdWeb):
     """Keep a same-origin CIMD client ID unchanged during refresh."""
-
-    async def fetch_redirects(_session, _client_id):
-        return ["https://claude.ai/api/mcp/auth_callback"]
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = unique_client_id("https://claude.ai")
+    cimd_web.serve(client_id, ["https://claude.ai/api/mcp/auth_callback"])
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
-        client_id="https://claude.ai/oauth/mcp-oauth-client-metadata",
+        client_id=client_id,
     )
 
     assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
@@ -253,83 +264,74 @@ async def test_refresh_same_origin_cimd_client_passes_through(monkeypatch):
     ],
 )
 @pytest.mark.asyncio
-async def test_refresh_marks_cimd_clients_without_stable_origin(monkeypatch, redirects):
+async def test_refresh_marks_cimd_clients_without_stable_origin(
+    cimd_web: CimdWeb, redirects: list[str]
+):
     """#2217 review sweep: VERIFIED CIMD identities with no reproducible
     origin are UNREPRODUCIBLE, exactly like the equivalent DCR blobs —
     previously they fell through to None/passthrough and were 307'd into a
     guaranteed core failure on every token expiry."""
-
-    async def fetch_redirects(_session, _client_id):
-        return redirects
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = unique_client_id("https://spark.example")
+    cimd_web.serve(client_id, redirects)
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
-        client_id="https://spark.example/client-metadata.json",
+        client_id=client_id,
     )
 
     assert translated is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio
-async def test_refresh_translates_cross_origin_cimd_client(monkeypatch):
+async def test_refresh_translates_cross_origin_cimd_client(cimd_web: CimdWeb):
     """A CIMD identity with one stable web origin re-derives it on refresh."""
-
-    async def fetch_redirects(_session, _client_id):
-        return ["https://cb.example/callback"]
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = unique_client_id()
+    cimd_web.serve(client_id, ["https://cb.example/callback"])
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
-        client_id="https://client.example/metadata.json",
+        client_id=client_id,
     )
 
     assert translated == "https://cb.example"
 
 
 @pytest.mark.asyncio
-async def test_refresh_unverified_identity_passes_through(monkeypatch):
+async def test_refresh_unverified_identity_passes_through(cimd_web: CimdWeb):
     """No DCR blob and no fetchable document → core stays the authority."""
-
-    async def fetch_redirects(_session, _client_id):
-        return None
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = unique_client_id("https://unknown.example")
+    cimd_web.serve(client_id, None, status=404)
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
-        client_id="https://unknown.example/metadata.json",
+        client_id=client_id,
     )
 
     assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
 
 
 @pytest.mark.asyncio
-async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
+async def test_symmetric_explicit_port_passes_through_on_both_legs(
+    cimd_web: CimdWeb,
+):
     """#2219 review: when the client_id AND the registered redirect both
     carry the same explicit default port, the authorize fast path fires (raw
     netlocs equal) and the token is bound to the full client_id — so refresh
     must pass through, not translate to the canonicalized origin."""
-
-    async def fetch_redirects(_session, _client_id):
-        return ["https://claude.ai:443/api/mcp/auth_callback"]
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
-    client_id = "https://claude.ai:443/oauth/client.json"
+    client_id = unique_client_id("https://claude.ai:443")
+    cimd_web.serve(client_id, ["https://claude.ai:443/api/mcp/auth_callback"])
 
     authorize_id = await resolve_forward_client_id(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
         redirect_uri="https://claude.ai:443/api/mcp/auth_callback",
     )
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
     )
@@ -344,7 +346,7 @@ async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
     [("upper", "lower"), ("lower", "lower"), ("lower", "upper")],
 )
 async def test_case_only_differences_pass_through_on_both_legs(
-    monkeypatch, presented_case, registered_case
+    cimd_web: CimdWeb, presented_case: str, registered_case: str
 ):
     """#2219 review round 3: core's authorize leg lowercases BOTH sides
     (indieauth._parse_url) while its refresh leg compares byte-exact, so a
@@ -355,22 +357,17 @@ async def test_case_only_differences_pass_through_on_both_legs(
     upper = "https://CLAUDE.AI/api/mcp/auth_callback"
     lower = "https://claude.ai/api/mcp/auth_callback"
     presented = upper if presented_case == "upper" else lower
-    registered = [upper if registered_case == "upper" else lower]
-
-    async def fetch_redirects(_session, _client_id):
-        return registered
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
-    client_id = "https://CLAUDE.AI/oauth/client.json"
+    client_id = unique_client_id("https://CLAUDE.AI")
+    cimd_web.serve(client_id, [upper if registered_case == "upper" else lower])
 
     authorize_id = await resolve_forward_client_id(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
         redirect_uri=presented,
     )
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
     )
@@ -380,49 +377,42 @@ async def test_case_only_differences_pass_through_on_both_legs(
 
 
 @pytest.mark.asyncio
-async def test_mixed_port_shapes_are_unreproducible(monkeypatch):
-    """#2219 review round 3: _refresh_identity_is_reproducible normalizes
+async def test_mixed_port_shapes_are_unreproducible(cimd_web: CimdWeb):
+    """#2219 review round 3: the refresh identity check normalizes
     ports, so these two redirects are ONE canonical origin — but authorize
     passes the raw client_id through for the port-less one and translates the
     explicit-port one. Which was presented is unrecorded, so the honest
     answer is a local invalid_grant, not a coin flip."""
-
-    async def fetch_redirects(_session, _client_id):
-        return ["https://h.example/a", "https://h.example:443/b"]
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = unique_client_id("https://h.example")
+    cimd_web.serve(client_id, ["https://h.example/a", "https://h.example:443/b"])
 
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
-        client_id="https://h.example/client.json",
+        client_id=client_id,
     )
 
     assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio
-async def test_explicit_default_port_translates_on_both_legs(monkeypatch):
+async def test_explicit_default_port_translates_on_both_legs(cimd_web: CimdWeb):
     """#2218 review (reverting #2217's canonical comparison): a client_id
     with an explicit scheme-default port misses the raw-netloc authorize fast
     path, so its token is minted under the TRANSLATED origin — and the
     redirect-less refresh must re-derive that same origin, not pass the raw
     client_id through into a guaranteed core rejection. The two legs agree."""
-
-    async def fetch_redirects(_session, _client_id):
-        return ["https://claude.ai/api/mcp/auth_callback"]
-
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
-    client_id = "https://claude.ai:443/oauth/mcp-oauth-client-metadata"
+    client_id = unique_client_id("https://claude.ai:443")
+    cimd_web.serve(client_id, ["https://claude.ai/api/mcp/auth_callback"])
 
     authorize_id = await resolve_forward_client_id(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
         redirect_uri="https://claude.ai/api/mcp/auth_callback",
     )
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=object(),
+        session=cimd_web.session,
         dcr_key=None,
         client_id=client_id,
     )
@@ -456,119 +446,52 @@ async def test_mixed_registration_refresh_derivation_is_unreproducible():
     )
 
     assert authorize_id == "https://a.example"
-    # aligned with _refresh_identity_is_reproducible
     assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
-@pytest.fixture
-async def aiohttp_client_factory():
-    """Serve real CIMD documents for the component to fetch."""
-    clients = []
-    try:
-
-        async def factory(*, body, status, self_ref_client_id):
-            doc_url = ""
-
-            async def serve_document(_request):
-                response_body = dict(body)
-                if self_ref_client_id:
-                    response_body["client_id"] = doc_url
-                return aiohttp_web.json_response(response_body, status=status)
-
-            app = aiohttp_web.Application()
-            app.router.add_get("/client.json", serve_document)
-            client = test_utils.TestClient(test_utils.TestServer(app, host="localhost"))
-            await client.start_server()
-            clients.append(client)
-            doc_url = str(client.make_url("/client.json"))
-            return doc_url, client.session
-
-        yield factory
-    finally:
-        for client in clients:
-            await client.close()
-
-
 @pytest.mark.asyncio
-async def test_fetch_cimd_valid_document(aiohttp_client_factory, monkeypatch):
+async def test_fetch_cimd_valid_document(cimd_web: CimdWeb):
     """Accept a valid self-identifying CIMD document."""
-    doc_url, session = await aiohttp_client_factory(
-        body={
-            "client_id": "PLACEHOLDER_SELF",
-            "client_name": "Test client",
-            "redirect_uris": ["https://g.example/cb"],
-        },
-        status=200,
-        self_ref_client_id=True,
-    )
-    monkeypatch.setattr(oauth_ha_auth, "_ALLOWED_SCHEMES", ("http", "https"))
-    monkeypatch.setattr(oauth_ha_auth, "_is_loopback_host", lambda _host: False)
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "_resolve_public_addresses",
-        lambda _host, _port: _async_result(["127.0.0.1"]),
-    )
+    client_id = unique_client_id()
+    cimd_web.serve(client_id, ["https://g.example/cb"])
 
-    oauth_ha_auth._cimd_cache.clear()
-    uris = await oauth_ha_auth.fetch_cimd_redirects(session, doc_url)
-    assert uris == ["https://g.example/cb"]
-
-
-@pytest.mark.asyncio
-async def test_fetch_cimd_rejects_mismatched_client_id(
-    aiohttp_client_factory, monkeypatch
-):
-    """Reject a CIMD document whose client ID does not round-trip."""
-    doc_url, session = await aiohttp_client_factory(
-        body={
-            "client_id": "https://other.example/x",
-            "client_name": "Test client",
-            "redirect_uris": ["https://g.example/cb"],
-        },
-        status=200,
-        self_ref_client_id=False,
-    )
-    monkeypatch.setattr(oauth_ha_auth, "_ALLOWED_SCHEMES", ("http", "https"))
-    monkeypatch.setattr(oauth_ha_auth, "_is_loopback_host", lambda _host: False)
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "_resolve_public_addresses",
-        lambda _host, _port: _async_result(["127.0.0.1"]),
-    )
-
-    oauth_ha_auth._cimd_cache.clear()
-    assert await oauth_ha_auth.fetch_cimd_redirects(session, doc_url) is None
-    assert doc_url not in oauth_ha_auth._cimd_cache
-
-
-@pytest.mark.asyncio
-async def test_fetch_cimd_refuses_ip_literal_and_loopback():
-    """Refuse CIMD fetch targets that violate the SSRF and path floor."""
-    assert await oauth_ha_auth.fetch_cimd_redirects(None, "https://127.0.0.1/x") is None
-    assert (
-        await oauth_ha_auth.fetch_cimd_redirects(None, "https://10.0.0.5/doc.json")
-        is None
-    )
-    assert await oauth_ha_auth.fetch_cimd_redirects(None, "https://h.example/") is None
-
-
-async def _async_result(value):
-    """Return a value from an async monkeypatch."""
-    return value
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) == [
+        "https://g.example/cb"
+    ]
 
 
 @pytest.mark.parametrize(
     "client_id",
     [
+        "https://127.0.0.1/x",
+        "https://10.0.0.5/doc.json",
+        "https://h.example/",
         "https://user@example.com/client.json",
         "https://example.com/a/../client.json",
         "https://example.com/client.json#",
         "https://example.com:bad/client.json",
     ],
+    ids=[
+        "loopback",
+        "ip-literal",
+        "no-path",
+        "username",
+        "dot-segment",
+        "fragment",
+        "bad-port",
+    ],
 )
-def test_cimd_client_id_rejects_forbidden_url_shapes(client_id):
-    """Enforce the -00 username, dot-segment, fragment, and port MUSTs."""
-    assert oauth_ha_auth._valid_cimd_client_id(client_id) is False
+@pytest.mark.asyncio
+async def test_fetch_cimd_refuses_forbidden_client_ids(
+    cimd_web: CimdWeb, client_id: str
+):
+    """Enforce the SSRF floor and the -00 path, username, dot-segment,
+    fragment, and port MUSTs before any request leaves, even when the
+    address serves a valid document."""
+    cimd_web.serve(client_id, [CALLBACK])
+
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
+    assert cimd_web.fetches == 0
 
 
 @pytest.mark.parametrize(
@@ -582,155 +505,110 @@ def test_cimd_client_id_rejects_forbidden_url_shapes(client_id):
         {"token_endpoint_auth_method": "client_secret_post"},
     ],
 )
-def test_parse_cimd_requires_name_and_forbids_shared_secrets(extra):
+@pytest.mark.asyncio
+async def test_fetch_cimd_requires_name_and_forbids_shared_secrets(
+    cimd_web: CimdWeb, extra: dict[str, object]
+):
     """Enforce MCP's client_name and the -00 shared-secret prohibitions."""
-    client_id = "https://client.example/client.json"
-    document = {
-        "client_id": client_id,
-        "redirect_uris": ["https://client.example/callback"],
-        **extra,
-    }
+    client_id = unique_client_id()
+    document = {"client_id": client_id, "redirect_uris": [CALLBACK], **extra}
     if extra:
         document["client_name"] = "Client"
+    cimd_web.serve(client_id, None, text=json.dumps(document))
 
-    assert oauth_ha_auth._parse_cimd(json.dumps(document).encode(), client_id) is None
-
-
-def test_parse_cimd_rejects_nonstandard_json_constants():
-    """Reject NaN even though Python's JSON decoder accepts it by default."""
-    client_id = "https://client.example/client.json"
-    raw = (
-        b'{"client_id":"https://client.example/client.json",'
-        b'"client_name":"Client","redirect_uris":["https://client.example/cb"],'
-        b'"logo_uri":NaN}'
-    )
-
-    assert oauth_ha_auth._parse_cimd(raw, client_id) is None
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
 
 
-class _ChunkedContent:
-    """A stream whose one-shot read omits later chunks (the reviewed failure)."""
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param(
+            '{"client_id":"https://other.example/x","client_name":"Client",'
+            f'"redirect_uris":["{CALLBACK}"]}}',
+            id="mismatched-client-id",
+        ),
+        pytest.param(
+            '{"client_id":"%s","client_name":"Client",'
+            f'"redirect_uris":["{CALLBACK}"],"logo_uri":NaN}}',
+            id="nan-constant",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_fetch_cimd_rejects_a_document_that_is_not_strict(
+    cimd_web: CimdWeb, document: str
+):
+    """Reject a client_id that does not round-trip, and NaN, which Python's
+    JSON decoder accepts by default."""
+    client_id = unique_client_id()
+    cimd_web.serve(client_id, None, text=document.replace("%s", client_id))
 
-    def __init__(self, chunks):
-        self._chunks = chunks
-
-    async def read(self, _limit):
-        return self._chunks[0]
-
-    async def iter_chunked(self, _size):
-        for chunk in self._chunks:
-            yield chunk
-
-
-class _FetchResponse:
-    status = 200
-
-    def __init__(self, chunks):
-        self.content = _ChunkedContent(chunks)
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return None
-
-
-class _FetchSession:
-    def __init__(self, responses):
-        self._responses = responses
-        self.calls = []
-
-    def get(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        return self._responses.pop(0)
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_cimd_reads_entire_stream_before_accepting(monkeypatch):
-    """Reject trailing bytes beyond the cap even when read(n) returns early."""
-    client_id = "https://client.example/client.json"
+async def test_fetch_cimd_reads_entire_stream_before_accepting(cimd_web: CimdWeb):
+    """Reject trailing bytes beyond the cap when the first read returns only a
+    complete valid document: a slow server sends the rest later."""
+    client_id = unique_client_id()
     valid_prefix = json.dumps(
-        {
-            "client_id": client_id,
-            "client_name": "Client",
-            "redirect_uris": ["https://client.example/cb"],
-        }
+        {"client_id": client_id, "client_name": "Client", "redirect_uris": [CALLBACK]}
     ).encode()
-    session = _FetchSession(
-        [_FetchResponse([valid_prefix, b" " * oauth_ha_auth.CIMD_MAX_BYTES])]
+    cimd_web.serve_in_pieces(
+        client_id, [valid_prefix, b" " * oauth_ha_auth.CIMD_MAX_BYTES]
     )
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "_resolve_public_addresses",
-        lambda _host, _port: _async_result(["93.184.216.34"]),
-    )
-    oauth_ha_auth._cimd_cache.clear()
 
-    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) is None
-    assert client_id not in oauth_ha_auth._cimd_cache
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
 
 
 @pytest.mark.asyncio
-async def test_invalid_cimd_is_not_negative_cached(monkeypatch):
+async def test_invalid_cimd_is_not_negative_cached(cimd_web: CimdWeb):
     """A corrected document is retried immediately after an invalid response."""
-    client_id = "https://client.example/client.json"
-    invalid = json.dumps(
-        {
-            "client_id": client_id,
-            "redirect_uris": ["https://client.example/cb"],
-        }
-    ).encode()
-    valid = json.dumps(
-        {
-            "client_id": client_id,
-            "client_name": "Client",
-            "redirect_uris": ["https://client.example/cb"],
-        }
-    ).encode()
-    session = _FetchSession([_FetchResponse([invalid]), _FetchResponse([valid])])
-    monkeypatch.setattr(
-        oauth_ha_auth,
-        "_resolve_public_addresses",
-        lambda _host, _port: _async_result(["93.184.216.34"]),
-    )
-    oauth_ha_auth._cimd_cache.clear()
+    client_id = unique_client_id()
+    nameless = {"client_id": client_id, "redirect_uris": [CALLBACK]}
+    cimd_web.serve(client_id, None, text=json.dumps(nameless))
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
 
-    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) is None
-    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) == [
-        "https://client.example/cb"
-    ]
-    assert len(session.calls) == 2
+    cimd_web.serve(client_id, [CALLBACK])
+
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) == [CALLBACK]
+    assert cimd_web.fetches == 1
 
 
 @pytest.mark.asyncio
-async def test_dns_rrset_with_private_answer_is_rejected(monkeypatch):
+async def test_dns_rrset_with_private_answer_is_rejected(cimd_web: CimdWeb):
     """Fail closed when a hostname mixes public and private DNS answers."""
+    client_id = unique_client_id()
+    cimd_web.serve(client_id, [CALLBACK])
+    cimd_web.dns.return_value = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_ADDRESS, 443)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.10", 443)),
+    ]
 
-    class Loop:
-        async def getaddrinfo(self, *_args, **_kwargs):
-            return [
-                (2, 1, 6, "", ("93.184.216.34", 443)),
-                (2, 1, 6, "", ("192.168.1.10", 443)),
-            ]
-
-    monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
-
-    assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
+    assert cimd_web.fetches == 0
 
 
 @pytest.mark.asyncio
-async def test_dns_resolution_timeout_uses_live_constant(monkeypatch):
-    """Apply the configurable resolver bound to each DNS lookup."""
+async def test_dns_resolution_timeout_uses_live_constant(
+    cimd_web: CimdWeb, monkeypatch: pytest.MonkeyPatch
+):
+    """Apply the configurable resolver bound to each DNS lookup: a resolver
+    that never answers is given up on, not waited out to the lookup deadline."""
 
-    class Loop:
-        async def getaddrinfo(self, *_args, **_kwargs):
-            await asyncio.sleep(0.1)
-            return [(2, 1, 6, "", ("93.184.216.34", 443))]
+    async def unanswered(*_args: object, **_kwargs: object) -> None:
+        await asyncio.Event().wait()
 
+    client_id = unique_client_id()
+    cimd_web.serve(client_id, [CALLBACK])
+    cimd_web.dns.side_effect = unanswered
     monkeypatch.setattr(oauth_ha_auth, "CIMD_RESOLVE_TIMEOUT", 0.01)
-    monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
+    monkeypatch.setattr(oauth_ha_auth, "CIMD_TOTAL_LOOKUP_TIMEOUT", 3600.0)
 
-    assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []
+    # Without the bound the lookup would wait the hour, so this guard fails it.
+    async with asyncio.timeout(30):
+        assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
+    assert cimd_web.fetches == 0
 
 
 def test_stable_translation_origin_normalizes_default_ports():
@@ -798,36 +676,32 @@ async def test_mixed_registration_loopback_authorize_refresh_stays_local():
 
 
 @pytest.mark.asyncio
-async def test_cimd_negative_results_are_cached(monkeypatch):
+async def test_cimd_negative_results_are_cached(cimd_web: CimdWeb):
     """Failed lookups cache briefly so an anonymous caller cannot force a
     fresh resolution per request (#2213 review round 2)."""
-    calls = []
+    client_id = unique_client_id("https://dead.example")
+    cimd_web.dns.return_value = []
 
-    async def no_addresses(hostname, port):
-        calls.append(hostname)
-        return []
-
-    monkeypatch.setattr(oauth_ha_auth, "_resolve_public_addresses", no_addresses)
-    oauth_ha_auth._cimd_cache.clear()
-    url = "https://dead.example/client.json"
-    assert await oauth_ha_auth.fetch_cimd_redirects(object(), url) is None
-    assert await oauth_ha_auth.fetch_cimd_redirects(object(), url) is None
-    assert calls == ["dead.example"]  # second call served from negative cache
-    oauth_ha_auth._cimd_cache.clear()
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
+    assert await fetch_cimd_redirects(cimd_web.session, client_id) is None
+    assert cimd_web.dns.await_count == 1  # second call served from negative cache
 
 
-def test_cimd_cache_evicts_oldest_not_wholesale():
+@pytest.mark.asyncio
+async def test_cimd_cache_evicts_oldest_not_wholesale(cimd_web: CimdWeb):
     """At capacity the oldest entry goes, never the whole cache (#2213 r2)."""
-    oauth_ha_auth._cimd_cache.clear()
-    now = 1000.0
-    for i in range(oauth_ha_auth._CIMD_CACHE_MAX):
-        oauth_ha_auth._cache_cimd(f"https://h{i}.example/c.json", now, ["https://x/cb"])
-    oauth_ha_auth._cache_cimd("https://new.example/c.json", now, ["https://x/cb"])
-    assert len(oauth_ha_auth._cimd_cache) == oauth_ha_auth._CIMD_CACHE_MAX
-    assert "https://h0.example/c.json" not in oauth_ha_auth._cimd_cache  # oldest out
-    assert "https://h1.example/c.json" in oauth_ha_auth._cimd_cache  # rest retained
-    assert "https://new.example/c.json" in oauth_ha_auth._cimd_cache
-    oauth_ha_auth._cimd_cache.clear()
+    client_ids = [unique_client_id() for _ in range(oauth_ha_auth.CIMD_CACHE_MAX + 1)]
+    for client_id in client_ids:
+        cimd_web.serve(client_id, [CALLBACK])
+        assert await fetch_cimd_redirects(cimd_web.session, client_id) == [CALLBACK]
+
+    for retained in (client_ids[1], client_ids[-1]):  # rest retained
+        cimd_web.serve(retained, [CALLBACK])
+        assert await fetch_cimd_redirects(cimd_web.session, retained) == [CALLBACK]
+        assert cimd_web.fetches == 0
+    cimd_web.serve(client_ids[0], [CALLBACK])  # oldest out
+    assert await fetch_cimd_redirects(cimd_web.session, client_ids[0]) == [CALLBACK]
+    assert cimd_web.fetches == 1
 
 
 # ---------------------------------------------------------------------------
@@ -877,20 +751,6 @@ def test_refresh_envelope_rejects_non_envelope_tokens(token, expected):
     assert unwrap_refresh_token(KEY, token, "cid") is expected
 
 
-def _hand_signed_envelope(payload: object) -> str:
-    """Sign an arbitrary envelope payload under KEY, exactly as the code does.
-
-    Lets a test drive payload shapes ``wrap_refresh_token`` cannot produce, so
-    the version and type guards are exercised behind a VALID MAC instead of
-    being masked by the signature check.
-    """
-    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-    signature = hmac.new(
-        KEY, f"hamcp-rt-{body}".encode("ascii"), hashlib.sha256
-    ).digest()
-    return f"hamcp-rt-{body}.{_b64url_encode(signature)}"
-
-
 @pytest.mark.parametrize(
     "payload",
     [
@@ -911,10 +771,13 @@ def test_refresh_envelope_rejects_wrong_payload_shapes(payload):
     """A valid MAC over the wrong payload is still INVALID, never a crash.
 
     The signature only proves WE minted the blob; a future version or a
-    non-string field would otherwise be unpacked into the forwarded form.
+    non-string field would otherwise be unpacked into the forwarded form. The
+    envelope is signed by hand because ``wrap_refresh_token`` cannot produce
+    these shapes, so the guards are reached behind a VALID MAC; no presenter is
+    bound (the revocation leg's call), so its check cannot answer for them.
     """
     assert (
-        unwrap_refresh_token(KEY, _hand_signed_envelope(payload), "cid")
+        unwrap_refresh_token(KEY, hand_signed_envelope(KEY, payload), None)
         is EnvelopeState.INVALID
     )
 
@@ -976,7 +839,7 @@ ROTATED_KEY = b"r" * 32
 
 def _prefixed(payload: bytes) -> str:
     """A ``hamcp-rt-`` value over ``payload`` with a signature we never minted."""
-    return f"hamcp-rt-{_b64url_encode(payload)}.not-a-real-signature"
+    return f"hamcp-rt-{b64url(payload)}.not-a-real-signature"
 
 
 def test_core_token_for_revocation_reads_a_verified_envelope():

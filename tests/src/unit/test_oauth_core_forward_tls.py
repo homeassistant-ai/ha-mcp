@@ -2,47 +2,55 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
-from homeassistant.helpers import network
 
-import custom_components.ha_mcp_tools.oauth_autoapprove as aa
+from custom_components.ha_mcp_tools.const import WEBHOOK_AUTH_HA
+from custom_components.ha_mcp_tools.oauth_ha_auth import wrap_refresh_token
 
-from ._core_forward_relay import _RelaySession
+from ._oauth_autoapprove_core import DCR_KEY, TOKEN_URL, OpenSurface
+from ._oauth_autoapprove_core import open_oauth_surface as open_oauth_surface
+from ._tls_core import tls_core
 
-
-def tls_core(monkeypatch, *, api=None, configured_url=None):
-    """A core serving TLS on :9443. ``get_url`` answers with the configured
-    URL because the pre-#2950 forward consulted it: that keeps the path
-    reachable when the fix is reverted, so these tests fail instead of
-    erroring."""
-
-    def get_url(_hass, **_kwargs):
-        if configured_url is None:
-            raise network.NoURLAvailableError
-        return configured_url
-
-    monkeypatch.setattr(network, "get_url", get_url)
-    api = api or SimpleNamespace(use_ssl=True, port=9443)
-    return SimpleNamespace(config=SimpleNamespace(api=api)), _RelaySession()
+CLIENT_ID = "https://client.example/metadata.json"
 
 
 @pytest.mark.parametrize(
-    "configured_url",
+    "internal_url",
     [None, "https://homeassistant.local:9443"],
     ids=["no-https-url", "private-ca-internal-url"],
 )
-async def test_sign_in_reaches_a_tls_core(monkeypatch, configured_url):
+async def test_sign_in_reaches_a_tls_core(
+    open_oauth_surface: OpenSurface, tmp_path: Path, internal_url: str | None
+) -> None:
     """With http.ssl_certificate, every ha_auth sign-in answered 503: the
-    forward verified a certificate issued for a name it could not trust."""
-    hass, session = tls_core(monkeypatch, configured_url=configured_url)
-
-    result = await aa._forward_to_core(
-        hass, {"session": session}, "/auth/token", {"grant_type": "authorization_code"}
+    forward verified a certificate issued for a name it could not trust. The
+    pre-#2950 forward consulted the configured URL, so one is set as well."""
+    surface = await open_oauth_surface(WEBHOOK_AUTH_HA)
+    hass = surface.hass
+    if internal_url is not None:
+        await hass.config.async_update(internal_url=internal_url)
+    # A signed refresh envelope is always proxied to core rather than 307'd.
+    envelope = wrap_refresh_token(
+        DCR_KEY, await surface.core_refresh_token(CLIENT_ID), CLIENT_ID, CLIENT_ID
     )
 
-    assert isinstance(result, tuple)  # a web.Response here is the user's 503
-    url, kwargs = session.calls[-1]
-    assert url == "https://127.0.0.1:9443/auth/token"
-    assert kwargs.get("ssl") is False
+    async with tls_core(hass, tmp_path) as core_url:
+        port = urlparse(core_url).port
+        assert hass.config.api is not None and port is not None
+        hass.config.api.port = port
+        hass.config.api.use_ssl = True
+        resp = await surface.client.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": CLIENT_ID,
+                "refresh_token": envelope,
+            },
+        )
+        assert resp.status == 200, await resp.text()  # 503 is the sign-in failing
+        body = await resp.json()
+
+    assert surface.client_id_of(body["access_token"]) == CLIENT_ID
