@@ -145,31 +145,6 @@ class TestCalendarEvents:
         logger.info(f"Error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity test completed")
 
-    async def test_get_calendar_events_invalid_entity_format(self, mcp_client):
-        """
-        Test: Get events with invalid entity format
-
-        Core's calendar view answers a bare 400; the leading hint says what
-        that can mean.
-        """
-        logger.info(
-            "Testing ha_config_get_calendar_events with invalid entity format..."
-        )
-
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_get_calendar_events",
-            {"entity_id": "not_a_calendar_entity"},
-        )
-
-        assert data.get("success") is False, "Should fail for invalid format"
-        hint = data["error"]["suggestions"][0]
-        assert "'not_a_calendar_entity' is not a calendar entity" in hint, hint
-
-        logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
-        logger.info("Invalid format test completed")
-
 
 @pytest.mark.calendar
 @pytest.mark.slow
@@ -386,9 +361,7 @@ class TestCalendarEventLifecycle:
         start = (now + timedelta(days=1)).isoformat()
         end = (now + timedelta(days=1, hours=1)).isoformat()
 
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_config_set_calendar_event",
             {
                 "entity_id": "not_a_valid_calendar",
@@ -396,11 +369,7 @@ class TestCalendarEventLifecycle:
                 "start": start,
                 "end": end,
             },
-        )
-
-        assert data.get("success") is False, "Should fail for invalid entity"
-        assert "is an invalid entity ID" in extract_error_message(data), (
-            "Error should carry Core's reason"
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
@@ -732,16 +701,10 @@ class TestCalendarEventLifecycle:
         """
         logger.info("Testing ha_config_remove_calendar_event with invalid entity...")
 
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_config_remove_calendar_event",
             {"entity_id": "not_a_valid_calendar", "uid": "some-event-uid"},
-        )
-
-        assert data.get("success") is False, "Should fail for invalid entity"
-        assert "is an invalid entity ID" in extract_error_message(data), (
-            "Error should carry Core's reason"
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")

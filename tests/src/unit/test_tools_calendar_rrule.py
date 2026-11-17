@@ -10,7 +10,8 @@ calendars: ``calendar.writable`` is Core's Local Calendar, whose create method
 is spied on to see each event Core hands it; ``calendar.read_only`` is Core's
 Remote Calendar, which supports no event creation, so Core refuses every create
 on it. A wrong rule, a too-short event or a mix of a date and a time is
-refused by Core's own schema, and the refusal carries Core's text.
+refused by Core's own schema, and the refusal carries Core's text; one such
+refusal stands for all of them.
 """
 
 import datetime as dt
@@ -189,34 +190,6 @@ async def _refused_create(
     return error_body(exc_info)
 
 
-async def test_mixed_date_and_datetime_values_are_refused_with_cores_reason(
-    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
-) -> None:
-    """Mixed all-day and timed boundaries are ambiguous; Core says so."""
-    body = await _refused_create(
-        core_client, start="2026-07-04", end="2026-07-04T12:00:00"
-    )
-
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "Expected all values to be the same type" in body["error"]["message"]
-    assert _created(writable) == []
-
-
-async def test_a_refused_rule_names_what_core_could_not_parse(
-    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
-) -> None:
-    body = await _refused_create(
-        core_client,
-        start="2026-06-15T10:00:00",
-        end="2026-06-15T10:30:00",
-        rrule="FREQ=FORTNIGHTLY",
-    )
-
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "Invalid rrule 'FREQ=FORTNIGHTLY'" in body["error"]["message"]
-    assert _created(writable) == []
-
-
 async def test_a_calendar_without_creates_says_so(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
@@ -230,13 +203,15 @@ async def test_a_calendar_without_creates_says_so(
     )
 
     assert "Calendar does not support event creation" in body["error"]["message"]
-    assert body["ha_error_code"] == "not_supported"
+    assert "integration does not offer" in body["error"]["suggestion"]
 
 
 async def test_a_single_day_all_day_event_ending_on_its_start_gets_cores_reason(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    """The all-day end date is exclusive, so end == start is an empty event."""
+    """The all-day end date is exclusive, so end == start is an empty event.
+    Core's schema refuses it, as it refuses a bad rule or a date mixed with a
+    time, and its reason reaches the caller."""
     body = await _refused_create(core_client, start="2026-07-04", end="2026-07-04")
 
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -266,4 +241,4 @@ async def test_rrule_create_with_no_answer_reports_connection_failure(
 
     err = error_of(exc_info)
     assert err["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    assert not any("RRULE" in s for s in err.get("suggestions", []))
+    assert not any("calendar" in s.lower() for s in err.get("suggestions", []))

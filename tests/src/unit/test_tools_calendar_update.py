@@ -175,6 +175,7 @@ async def test_a_calendar_without_updates_says_so(
     error = await _refused(core_client, entity_id="calendar.read_only", uid="evt-123")
 
     assert "Calendar does not support event update" in error["message"]
+    assert "integration does not offer" in error["suggestion"]
 
 
 async def test_an_update_of_an_unknown_calendar_points_at_the_calendar_search(
@@ -203,7 +204,7 @@ async def test_an_update_of_an_unknown_uid_points_at_the_event_list(
 async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
     hass: HomeAssistant, ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
-    """A dropped connection is not a calendar problem: no UID hints."""
+    """A dropped connection is not a calendar problem: no uid hints."""
     event = await _one_off(ws, core_client)
     socket = await pooled_socket(core_client)
 
@@ -211,7 +212,7 @@ async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
         error = await _refused(core_client, uid=event["uid"])
 
     assert error["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    assert all("UID" not in s for s in error["suggestions"])
+    assert all("uid" not in s.lower() for s in error["suggestions"])
 
 
 @pytest.mark.parametrize("recurrence", ["recurrence_id", "recurrence_range"])
@@ -230,7 +231,8 @@ async def test_recurrence_targeting_without_uid_creates_nothing(
 async def test_a_blank_uid_is_refused_by_name(
     core_client: HomeAssistantClient,
 ) -> None:
-    """A blank uid would reach HA as a misleading "event not found"."""
+    """A blank uid would reach HA, which answers it with no more than a
+    failed update."""
     body = await rejected_call_body(_update(core_client, uid="   "))
 
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

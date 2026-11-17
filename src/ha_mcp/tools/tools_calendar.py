@@ -9,7 +9,7 @@ Use ha_search(query='calendar', domain_filter='calendar') to find calendar entit
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -28,6 +28,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .response_helpers import fetch_ha_timezone, resolve_local_timezone
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,20 @@ logger = logging.getLogger(__name__)
 # The only recurrence range Home Assistant recognises; it compares the string
 # verbatim against ical's Range.THIS_AND_FUTURE.
 _THIS_AND_FUTURE = "THISANDFUTURE"
+
+_FIND_CALENDARS_HINT = (
+    "Use ha_search(query='calendar', domain_filter='calendar') to find "
+    "calendar entities"
+)
+
+# What to do about a calendar write Core refuses, by Core's error code.
+_REFUSAL_HINTS = {
+    "not_found": _FIND_CALENDARS_HINT,
+    "not_supported": "This calendar's integration does not offer this write; "
+    "use a calendar that does",
+    "unauthorized": "The Home Assistant user behind this connection may not "
+    "change this calendar",
+}
 
 
 def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
@@ -150,8 +165,7 @@ def _validate_recurrence_target(
 
 
 def _set_fields(**fields: Any) -> dict[str, Any]:
-    """The given fields that are set: an unset one stays out of Core's
-    command rather than reaching the calendar as a value."""
+    """The given fields that are not None."""
     return {key: value for key, value in fields.items() if value is not None}
 
 
@@ -204,29 +218,22 @@ class CalendarTools:
         - Date range: ha_config_get_calendar_events("calendar.work", start="2024-01-01T00:00:00", end="2024-01-31T23:59:59")
         """
         try:
-            # Core reads a time without an offset in Home Assistant's time
-            # zone, which need not be this server's, so the default window is
-            # an aware UTC instant.
-            now = datetime.now(UTC)
-            if start is None:
-                start = now.isoformat()
-            if end is None:
-                end = (now + timedelta(days=7)).isoformat()
+            if start is None or end is None:
+                # Core reads a time without an offset in Home Assistant's time
+                # zone, which need not be this server's. A default without an
+                # offset pairs with a bound given the same way; Core cannot
+                # compare one with an offset against one without.
+                ha_timezone, _ = await fetch_ha_timezone(self._client)
+                local_tz, _ = resolve_local_timezone(ha_timezone)
+                now = datetime.now(local_tz).replace(tzinfo=None)
+                start = start or now.isoformat()
+                end = end or (now + timedelta(days=7)).isoformat()
 
-            # Build the API endpoint for calendar events
-            # Home Assistant uses: GET /api/calendars/{entity_id}?start=...&end=...
-            params = {"start": start, "end": end}
-
-            # Use the REST client to fetch calendar events
-            # The endpoint is /calendars/{entity_id} (note: without /api prefix as client adds it)
+            # The client adds the /api prefix to Core's calendar view.
             response = await self._client._request(
-                "GET", f"/calendars/{entity_id}", params=params
+                "GET", f"/calendars/{entity_id}", params={"start": start, "end": end}
             )
-
-            # Response is a list of events
             events = response if isinstance(response, list) else []
-
-            # Limit results
             limited_events = events[:max_results]
 
             return {
@@ -247,12 +254,10 @@ class CalendarTools:
         except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
-            suggestions = [
-                "Use ha_search(query='calendar', domain_filter='calendar') to "
-                "find calendar entities",
-            ]
+            suggestions = [_FIND_CALENDARS_HINT]
             if isinstance(error, HomeAssistantAPIError) and error.status_code == 400:
-                # Core's calendar view answers every refusal with a bare 400.
+                # Core's calendar view answers an unknown calendar entity or a
+                # bad time range with a bare 400.
                 suggestions.insert(
                     0,
                     f"Home Assistant answers 400 when '{entity_id}' is not a "
@@ -266,7 +271,11 @@ class CalendarTools:
             return None  # unreachable: exception_to_structured_error always raises
 
     async def _send_event_command(
-        self, action: str, entity_id: str, uid: str | None, **fields: Any
+        self,
+        action: Literal["create", "update", "delete"],
+        entity_id: str,
+        uid: str | None = None,
+        **fields: Any,
     ) -> dict[str, Any]:
         """Send ``calendar/event/<action>`` for ``entity_id`` and event ``uid``.
 
@@ -275,37 +284,30 @@ class CalendarTools:
         ``create_event`` service schema has no ``rrule``. A refusal is raised
         with Core's own text and error code: ``not_found`` for a calendar
         entity Core does not have, ``not_supported`` for a write the calendar
-        does not offer, ``invalid_format`` for an event Core's schema refuses,
-        and ``failed`` with the integration's text when the write itself fails.
+        does not offer, ``invalid_format`` for a command Core's schema refuses
+        (a malformed entity_id or event), and ``failed`` with the integration's
+        text when the write itself fails. Unset ``fields`` stay out of the
+        command.
         """
+        target = {"entity_id": entity_id, **_set_fields(uid=uid)}
         result: dict[str, Any] = await self._client.send_websocket_message(
-            {
-                "type": f"calendar/event/{action}",
-                "entity_id": entity_id,
-                **_set_fields(uid=uid),
-                **fields,
-            }
+            {"type": f"calendar/event/{action}", **target, **_set_fields(**fields)}
         )
         if not result.get("success"):
             code = result.get("error_code")
-            suggestions = None
-            if code == "not_found":
-                suggestions = [
-                    "Use ha_search(query='calendar', domain_filter='calendar') "
-                    "to find calendar entities"
-                ]
-            elif code == "failed" and uid is not None:
+            hint = _REFUSAL_HINTS.get(code or "")
+            if code == "failed" and uid is not None:
                 # Local Calendar answers a uid it does not hold with a generic
-                # "An error occurred while updating the event".
-                suggestions = [
+                # "An error occurred while updating/deleting the event".
+                hint = (
                     "Use ha_config_get_calendar_events() to check the event's "
                     "uid and recurrence_id"
-                ]
+                )
             raise_core_refusal(
                 f"Failed to {action} the calendar event",
                 result,
-                {"entity_id": entity_id, **_set_fields(uid=uid)},
-                suggestions,
+                target,
+                [hint] if hint else None,
             )
         return result
 
@@ -395,9 +397,7 @@ class CalendarTools:
     ) -> dict[str, Any]:
         """Create a new event in a calendar, or update an existing one.
 
-        Creates the event, or with ``rrule`` a recurring series, through the
-        WebSocket ``calendar/event/create`` command. Passing ``uid`` switches
-        to update mode, which uses ``calendar/event/update``.
+        Passing ``uid`` switches to update mode.
 
         **When NOT to use:**
         - To retrieve calendar events, use ``ha_config_get_calendar_events``.
@@ -428,8 +428,8 @@ class CalendarTools:
         """
         try:
             if uid is not None:
-                # An empty/whitespace uid would reach the WS command and HA
-                # returns a misleading "event not found".
+                # An empty/whitespace uid would reach the WS command, and HA
+                # answers it with no more than a failed update.
                 validate_identifier_not_empty(
                     uid,
                     "uid",
@@ -486,9 +486,8 @@ class CalendarTools:
                     entity_id,
                     uid,
                     event=event,
-                    **_set_fields(
-                        recurrence_id=recurrence_id, recurrence_range=recurrence_range
-                    ),
+                    recurrence_id=recurrence_id,
+                    recurrence_range=recurrence_range,
                 )
                 return {
                     "success": True,
@@ -508,9 +507,7 @@ class CalendarTools:
                 "dtend": end,
                 **_set_fields(description=description, location=location, rrule=rrule),
             }
-            result = await self._send_event_command(
-                "create", entity_id, None, event=event
-            )
+            result = await self._send_event_command("create", entity_id, event=event)
 
             return {
                 "success": True,
@@ -525,10 +522,9 @@ class CalendarTools:
         except Exception as error:  # noqa: BLE001
             action = "update" if uid is not None else "create"
             logger.error(f"Failed to {action} calendar event in {entity_id}: {error}")
-            context: dict[str, Any] = {"entity_id": entity_id}
-            if uid is not None:
-                context["uid"] = uid
-            exception_to_structured_error(error, context=context)
+            exception_to_structured_error(
+                error, context={"entity_id": entity_id, **_set_fields(uid=uid)}
+            )
             return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
@@ -569,8 +565,7 @@ class CalendarTools:
     ) -> dict[str, Any]:
         """Delete an event from a calendar.
 
-        Deletes a calendar event via the WebSocket ``calendar/event/delete``
-        command. Get the event UID from ha_config_get_calendar_events().
+        Get the event UID from ha_config_get_calendar_events().
 
         EXAMPLES:
         - Delete a single event: ha_config_remove_calendar_event("calendar.family", uid="event-12345")
@@ -594,9 +589,8 @@ class CalendarTools:
                 "delete",
                 entity_id,
                 uid,
-                **_set_fields(
-                    recurrence_id=recurrence_id, recurrence_range=recurrence_range
-                ),
+                recurrence_id=recurrence_id,
+                recurrence_range=recurrence_range,
             )
 
             return {

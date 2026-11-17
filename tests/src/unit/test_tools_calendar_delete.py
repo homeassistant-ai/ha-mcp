@@ -1,4 +1,4 @@
-"""Unit tests for ``ha_config_remove_calendar_event`` pooled-WS routing (#1813).
+"""Unit tests for ``ha_config_remove_calendar_event`` pooled-WS routing.
 
 ``calendar.delete_event`` is not a REST service — delete lives exclusively on
 the WebSocket command ``calendar/event/delete``, routed through the shared
