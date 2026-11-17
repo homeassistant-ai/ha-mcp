@@ -175,13 +175,23 @@ def test_pyproject_declares_no_shared_fastmcp_or_mcp():
     assert not declared & _VENDORED_DISTRIBUTIONS
 
 
-def _ceiling(requirement: Requirement) -> Version | None:
-    versions = [
-        Version(s.version)
+def _ceiling(requirement: Requirement) -> tuple[Version, bool] | None:
+    """The tightest upper bound and whether it admits the bound itself."""
+    bounds = [
+        (Version(s.version), s.operator != "<")
         for s in requirement.specifier
         if s.operator in {"<", "<=", "=="}
     ]
-    return min(versions, default=None)
+    return min(bounds, default=None)
+
+
+def _within(top: tuple[Version, bool] | None, ceiling: tuple[Version, bool]) -> bool:
+    """Whether a declared upper bound ``top`` stays inside ``ceiling``."""
+    if top is None:
+        return False
+    if top[0] != ceiling[0]:
+        return top[0] < ceiling[0]
+    return ceiling[1] or not top[1]
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
@@ -233,10 +243,7 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
                         and own >= floor
                     )
                 )
-                and (
-                    ceiling is None
-                    or ((top := _ceiling(c)) is not None and top <= ceiling)
-                )
+                and (ceiling is None or _within(_ceiling(c), ceiling))
                 for c in candidates
             )
             if not ok:
