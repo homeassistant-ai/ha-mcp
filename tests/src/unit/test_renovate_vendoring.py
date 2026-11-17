@@ -35,7 +35,7 @@ _HOOKS = {
         python=">=3.14,<3.15",
     ),
     # The generator raises pyproject.toml floors, so the lock must follow; uv
-    # lock resolves the dev group's homeassistant, which needs Python 3.14.2.
+    # lock resolves the dev group's homeassistant, which needs Python 3.14.2 or later.
     _FASTMCP_COMMAND: _Hook(
         packages=["fastmcp-slim", "mcp", "mcp-types"],
         commands=[_FASTMCP_COMMAND, "uv lock"],

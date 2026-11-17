@@ -318,8 +318,8 @@ The private websockets and FastMCP pins each have a narrowly scoped
 post-upgrade task. For websockets, Renovate installs Python 3.14, runs
 `python3 -I scripts/vendor_websockets.py` and includes only
 `src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
-For FastMCP, it installs Python 3.14.2 and uv (`uv lock` resolves the dev
-group's `homeassistant`, which needs 3.14.2), runs
+For FastMCP, it installs Python 3.14.2 or later and uv (`uv lock` resolves the
+dev group's `homeassistant`, which needs at least 3.14.2), runs
 `uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py`,
 then `uv lock`, and includes the FastMCP / MCP SDK trees plus `pyproject.toml`
 and `uv.lock`. The generator raises each `[project.dependencies]` floor the new
