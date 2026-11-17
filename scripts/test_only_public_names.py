@@ -11,7 +11,7 @@ Python (``homeassistant-addon*``), uses it when:
 
 - production Python names it (a name, an attribute, an import), its own
   definition aside, or reads it as an attribute of a receiver no import names
-  in a module that imports its module;
+  in a module that hands its module on as a value;
 - production Python holds it in a string (``getattr``, a registry), an
   ``__all__`` entry or a docstring aside;
 - a file production reads names it (pyproject, workflows, manifests, YAML,
@@ -130,9 +130,10 @@ def _dotted(node: ast.expr) -> str | None:
     return None
 
 
-def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
-    # ``__all__`` entries and docstrings name a function without using it.
-    exported = {
+def _naming_only(tree: ast.Module) -> set[int]:
+    """The strings that name a function without using it: ``__all__`` entries
+    and docstrings."""
+    return {
         id(elt)
         for node in tree.body
         if isinstance(node, ast.Assign)
@@ -147,18 +148,23 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
         and isinstance(node.body[0], ast.Expr)
         and isinstance(node.body[0].value, ast.Constant)
     }
+
+
+def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
+    exported = _naming_only(tree)
     package = module if is_package else module.rpartition(".")[0]
     uses = _Uses(set(), set(), set())
-    # Modules this one imports, and attributes read through a receiver no
-    # import names (``handler = HANDLERS[radio]``, a parameter).
-    imported: set[str] = set()
+    # Imported modules this one hands on as a value (into ``HANDLERS``, as an
+    # argument), and attributes read through a receiver no import names
+    # (``handler = HANDLERS[radio]``, a parameter), which may hold one of them.
+    handed_on: set[str] = set()
     unresolved: set[str] = set()
 
     def walk(scope: ast.AST, enclosing: dict[str, str]) -> None:
         # A scope's imports bind for its whole body, wherever they stand.
         nodes = list(_scope_nodes(scope))
         aliases = {**enclosing, **_bindings(nodes, package)}
-        imported.update(aliases.values())
+        owners = {id(node.value) for node in nodes if isinstance(node, ast.Attribute)}
         for node in nodes:
             if isinstance(node, _SCOPES):
                 walk(node, aliases)
@@ -167,15 +173,10 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 uses.qualified.update((base, alias.name) for alias in node.names)
             elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Store):
                 uses.qualified.add((module, node.id))
+                if node.id in aliases and id(node) not in owners:
+                    handed_on.add(aliases[node.id])
             elif isinstance(node, ast.Attribute):
-                uses.attributes.add(node.attr)
-                owner = _dotted(node.value)
-                head, _, rest = (owner or "").partition(".")
-                if head not in aliases:
-                    unresolved.add(node.attr)
-                if owner is not None:
-                    target = ".".join(filter(None, [aliases.get(head, head), rest]))
-                    uses.qualified.add((target, node.attr))
+                _read_attribute(node, aliases, uses, unresolved)
             elif (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
@@ -184,9 +185,23 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 uses.strings.update(WORD.findall(node.value))
 
     walk(tree, {})
-    # Such a receiver may hold a module this one imports.
-    uses.qualified.update((m, name) for m in imported for name in unresolved)
+    uses.qualified.update((m, name) for m in handed_on for name in unresolved)
     return uses
+
+
+def _read_attribute(
+    node: ast.Attribute, aliases: dict[str, str], uses: _Uses, unresolved: set[str]
+) -> None:
+    """Record ``owner.attr``: the module ``owner`` names, or ``attr`` as read
+    through a receiver no import names."""
+    uses.attributes.add(node.attr)
+    owner = _dotted(node.value)
+    head, _, rest = (owner or "").partition(".")
+    if head not in aliases:
+        unresolved.add(node.attr)
+    if owner is not None:
+        target = ".".join(filter(None, [aliases.get(head, head), rest]))
+        uses.qualified.add((target, node.attr))
 
 
 _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
@@ -214,6 +229,7 @@ def _import_base(node: ast.ImportFrom, package: str) -> str:
 _LOADERS = frozenset({"module_from_spec", "import_module", "load_source"})
 # A module a script loads by its file path, under the name it is bound to
 # (``tool_hints = module_from_spec(...)``), which names it after the file.
+# ``import_module("a.b")`` names the module itself.
 _LOADED = "<loaded>."
 
 
@@ -235,8 +251,17 @@ def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
             and (loader := _dotted(node.value.func)) is not None
             and loader.rpartition(".")[2] in _LOADERS
         ):
+            call = node.value
+            named = (
+                call.args[0].value
+                if loader.endswith("import_module")
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and isinstance(call.args[0].value, str)
+                else None
+            )
             bound.update(
-                (target.id, f"{_LOADED}{target.id}")
+                (target.id, named or f"{_LOADED}{target.id}")
                 for target in node.targets
                 if isinstance(target, ast.Name)
             )

@@ -315,6 +315,13 @@ def _listed(rule: str, entry: str) -> str:
         ),
         pytest.param(
             _workflow(
+                "      - if: success() || failure()\n        run: |", "      - run: |"
+            ),
+            "step does not always run or fail",
+            id="step-runs-only-after-the-earlier-ones-succeed",
+        ),
+        pytest.param(
+            _workflow(
                 "        run: |", "        continue-on-error: true\n        run: |"
             ),
             "step does not always run or fail",

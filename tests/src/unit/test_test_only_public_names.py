@@ -144,6 +144,15 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         pytest.param(
             {
                 "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": "import importlib\n\n"
+                'api = importlib.import_module("ha_mcp.a")\napi.probe()\n',
+            },
+            False,
+            id="called-through-import-module-under-another-name",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
                 "src/ha_mcp/b.py": "def run(a):\n    a.probe()\n",
             },
             True,
@@ -180,6 +189,15 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
             },
             False,
             id="read-through-a-receiver-holding-its-imported-module",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n\n\ndef other():\n    pass\n",
+                "src/ha_mcp/b.py": "from . import a\n\n\nclass Device:\n"
+                "    def probe(self):\n        pass\n\n\na.other()\nDevice().probe()\n",
+            },
+            True,
+            id="same-name-on-an-object-of-a-module-that-only-reads-its-import",
         ),
         pytest.param(
             {

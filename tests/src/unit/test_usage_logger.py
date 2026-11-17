@@ -275,6 +275,39 @@ def test_calls_logged_just_before_shutdown_reach_the_disk(tmp_path: Path) -> Non
     assert written == [f"ha_tool_{n}" for n in range(20)]
 
 
+def test_a_call_logged_as_shutdown_starts_reaches_the_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The writer used to see an empty queue, then the stop flag, and stop:
+    a call logged and a ``shutdown()`` between those two checks was lost.
+
+    The writer's first look at the stop flag is made to find exactly that:
+    the call is logged and the flag set just before it reads it."""
+    log_path = tmp_path / "usage.jsonl"
+    before = set(threading.enumerate())
+    logger = UsageLogger(str(log_path))
+    (writer,) = set(threading.enumerate()) - before
+    real_is_set = threading.Event.is_set
+    raced = threading.Event()
+
+    def logged_then_stopped(self: threading.Event) -> bool:
+        if threading.current_thread() is writer and not real_is_set(raced):
+            raced.set()
+            logger.log_tool_usage(
+                tool_name="ha_raced", parameters={}, execution_time_ms=1.0, success=True
+            )
+            self.set()
+        return real_is_set(self)
+
+    monkeypatch.setattr(threading.Event, "is_set", logged_then_stopped)
+    assert raced.wait(timeout=5)
+    logger.shutdown()
+
+    assert [
+        json.loads(line)["tool_name"] for line in log_path.read_text().splitlines()
+    ] == ["ha_raced"]
+
+
 class TestUsageLoggerConstants:
     """Test constants are properly defined."""
 

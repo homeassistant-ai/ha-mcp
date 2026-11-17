@@ -368,7 +368,8 @@ def _mypy_step_problem(workflow: Path) -> str | None:
         lines = [line.strip() for line in str(step.get("run", "")).splitlines()]
         if f"{MYPY_ON_TESTS} || status=1" not in lines:
             continue
-        if step.get("if", ALWAYS) != ALWAYS or "continue-on-error" in step:
+        # Without ``if`` a step runs only after the earlier ones succeeded.
+        if step.get("if") != ALWAYS or "continue-on-error" in step:
             return f"its `{MYPY_ON_TESTS}` step does not always run or fail"
         if [line for line in lines if line][-1] != 'exit "$status"':
             return f"its `{MYPY_ON_TESTS}` step does not exit on the status"
