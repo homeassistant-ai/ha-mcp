@@ -5,6 +5,9 @@
 # the functions between the client and the tools. Reach the state through the
 # real thing instead: the component set up in `hass`, Core's own integrations,
 # Core's Supervisor test support, a local HTTP server for PyPI.
+# The rule reads what the call itself says: the function's name as a string or
+# a keyword, whatever the patcher is called (`patch`, an alias of it,
+# `monkeypatch.setattr`). A name held in a variable is left to review.
 # No file is exempt.
 id: no-typed-in-server-answers
 language: python
@@ -19,37 +22,33 @@ utils:
       - has:
           kind: lambda
           stopBy: end
+  # "pkg.mod.get_component_caps"
+  dotted-target:
+    kind: string
+    regex: '^\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+  # "get_component_caps"
+  attribute-target:
+    kind: string
+    regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
 rule:
   any:
     # The function is named where the call names what it replaces, and nowhere
     # else: a listed name inside a replacement's value is no match.
     - all:
         - kind: call
-        - any:
-            # patch("pkg.mod.get_component_caps", ...),
-            # monkeypatch.setattr("pkg.mod._fetch_x", ...)
-            - all:
-                - has:
-                    field: function
-                    regex: '^(\w+\.)*(patch|setattr)$'
-                - has:
-                    field: arguments
-                    has:
-                      nthChild: 1
-                      kind: string
-                      regex: '^\w*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
-            # patch.object(mod, "get_update_info", ...),
-            # monkeypatch.setattr(mod, "_fetch_x", ...)
-            - all:
-                - has:
-                    field: function
-                    regex: '^(\w+\.)*(patch\.object|setattr)$'
-                - has:
-                    field: arguments
-                    has:
-                      nthChild: 2
-                      kind: string
-                      regex: '^\w*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']$'
+        - has:
+            field: arguments
+            any:
+              # patch("pkg.mod.get_component_caps", ...),
+              # monkeypatch.setattr("pkg.mod._fetch_x", ...)
+              - has:
+                  nthChild: 1
+                  matches: dotted-target
+              # patch.object(mod, "get_update_info", ...),
+              # monkeypatch.setattr(mod, "_fetch_x", ...)
+              - has:
+                  nthChild: 2
+                  matches: attribute-target
         - matches: typed-in-answer
     # patch.multiple(mod, get_update_info=...): the answer is read from that
     # keyword alone. DEFAULT puts a mock in place that answers for the function.
@@ -57,7 +56,7 @@ rule:
         - kind: call
         - has:
             field: function
-            regex: '^(\w+\.)*patch\.multiple$'
+            regex: '(^|\.)multiple$'
         - has:
             field: arguments
             has:
@@ -68,11 +67,42 @@ rule:
                 - regex: '=\s*(\w+\.)*DEFAULT$'
     # A patch with nothing but its target: the mock it puts in place answers
     # for the function, and the test sets that answer through the alias
-    # (`with patch(...) as caps: caps.return_value = ...`).
-    - kind: call
-      regex: '^(\w+\.)*patch\(\s*["''][\w.]*\.(get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
-    - kind: call
-      regex: '^(\w+\.)*patch\.object\(\s*[\w.]+\s*,\s*["''](get_component_caps|component_serves|component_supports|get_addon_info|get_update_info|_?fetch_\w+)["'']\s*,?\s*\)$'
+    # (`with patch(...) as caps: caps.return_value = ...`). It is a call named
+    # `patch` or `<name>.object`, or one used as a context manager or decorator.
+    - all:
+        - kind: call
+        - has:
+            field: arguments
+            all:
+              - has:
+                  nthChild: 1
+                  matches: dotted-target
+              - not:
+                  has:
+                    nthChild: 2
+        - any:
+            - has:
+                field: function
+                regex: '(^|\.)patch$'
+            - inside:
+                kind: with_item
+                stopBy: end
+            - inside:
+                kind: decorator
+    - all:
+        - kind: call
+        - has:
+            field: function
+            regex: '\.object$'
+        - has:
+            field: arguments
+            all:
+              - has:
+                  nthChild: 2
+                  matches: attribute-target
+              - not:
+                  has:
+                    nthChild: 3
 files:
   - "tests/src/unit/**"
   - "tests/addon/**"
