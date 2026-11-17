@@ -769,8 +769,10 @@ jobs:
         include:
           - os: ubuntu-latest
             pytest_workers: 3
+            combine_topologies: '1'
           - os: ubuntu-24.04-arm
             pytest_workers: 4
+            combine_topologies: '0'
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -838,7 +840,7 @@ jobs:
           -v
         echo "✅ Full E2E test suite passed"
       env:
-        E2E_COMBINE_TOPOLOGIES: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.combine_topologies }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -965,8 +967,10 @@ jobs:
         include:
           - os: ubuntu-latest
             pytest_workers: 2
+            combine_topologies: '1'
           - os: ubuntu-24.04-arm
             pytest_workers: 3
+            combine_topologies: '0'
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1035,7 +1039,7 @@ jobs:
         echo "✅ Full E2E test suite (embedded backend) passed"
       env:
         E2E_BACKEND: "embedded"
-        E2E_COMBINE_TOPOLOGIES: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.combine_topologies }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

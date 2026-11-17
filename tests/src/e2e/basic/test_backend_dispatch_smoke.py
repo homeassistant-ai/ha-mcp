@@ -66,7 +66,7 @@ from typing import Any
 import pytest
 
 from ..utilities.assertions import safe_call_tool
-from ..utilities.topology import item_topology, tools_entry_absent
+from ..utilities.topology import combined_topologies, item_topology, tools_entry_absent
 
 # Floor for total collected tests across all lanes. As of 2026-05-22
 # container lanes collect 912 and HAOS lanes collect 915 (small per-mode
@@ -459,7 +459,8 @@ def test_session_skipped_count_below_ceiling(
     their own ``<backend>_no_tools`` keys rather than sharing the backend's.
     """
     backend = ha_container_with_fresh_config["backend"]
-    lane = f"{backend}_no_tools" if tools_entry_absent() else backend
+    combined = combined_topologies()
+    lane = f"{backend}_no_tools" if tools_entry_absent() and not combined else backend
     ceiling = _SKIP_CEILING_PER_LANE.get(lane)
     assert ceiling is not None, (
         f"Unknown lane {lane!r} — add to _SKIP_CEILING_PER_LANE at the top of this file"
@@ -468,11 +469,12 @@ def test_session_skipped_count_below_ceiling(
     # by pytest_collection_modifyitems (which ran before any test).
     # Under pytest-xdist with --dist loadscope, each worker collects
     # the full session, so this count is consistent per worker.
+    # A combined session still collects the component-enabled coverage, split
+    # across phases. Count both phases against that lane's existing allowance;
+    # the larger no-tools allowance would hide skipped installed-phase tests.
     skipped = sum(
-        1
+        any(m.name == "skip" for m in item.iter_markers())
         for item in request.session.items
-        if item_topology(item) == item_topology(request.node)
-        and any(m.name == "skip" for m in item.iter_markers())
     )
     assert skipped <= ceiling, (
         f"{skipped} tests have skip markers on the {lane} lane, "

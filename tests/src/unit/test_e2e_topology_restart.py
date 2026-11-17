@@ -1,14 +1,21 @@
 """Wait for Supervisor's existing Core job before requesting another restart."""
 
+import asyncio
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMockResponse
+
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ..e2e import _conftest_topology as topology
 from ..e2e._conftest_topology import _wait_for_core_job
+from ._supervisor_core import SUPERVISOR, load_supervisor_api, supervisor_requests
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +24,13 @@ def _haos_runtime_import_path(monkeypatch):
 
 
 @pytest.mark.parametrize("nested", [False, True])
-def test_core_job_wait_observes_completion(monkeypatch, nested):
+async def test_core_job_wait_observes_completion(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    aioclient_mock,
+    monkeypatch,
+    nested,
+):
     active = {
         "name": "home_assistant_core_restart",
         "done": False,
@@ -29,39 +42,58 @@ def test_core_job_wait_observes_completion(monkeypatch, nested):
         if nested
         else [active]
     )
-    command = Mock(
-        side_effect=[{"jobs": first}, {"jobs": [{**active, "done": True}, other]}]
-    )
-    monkeypatch.setattr("haos_runtime._home_assistant_ws_command", command)
+    load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
+    polls = 0
+
+    async def answer_jobs(method, url, data):
+        nonlocal polls
+        polls += 1
+        active["done"] = polls > 1
+        return AiohttpClientMockResponse(
+            method,
+            url,
+            status=200,
+            text=json.dumps({"result": "ok", "data": {"jobs": [*first, other]}}),
+            headers={"Content-Type": "application/json"},
+        )
+
+    aioclient_mock.get(f"http://{SUPERVISOR}/jobs/info", side_effect=answer_jobs)
     sleep = Mock()
     monkeypatch.setattr(
         topology, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleep)
     )
 
-    _wait_for_core_job({"base_url": "http://ha.invalid", "token": "test"})
+    await asyncio.to_thread(
+        _wait_for_core_job,
+        {"base_url": core_client.base_url, "token": core_client.token},
+    )
 
-    assert command.call_count == 2
-    assert command.call_args.args[2] == {
-        "type": "supervisor/api",
-        "endpoint": "/jobs/info",
-        "method": "get",
-    }
+    assert supervisor_requests(aioclient_mock) == [("get", "/jobs/info")] * 2
     sleep.assert_called_once_with(1)
 
 
-def test_core_job_wait_is_bounded(monkeypatch):
-    command = Mock(
-        return_value={
-            "jobs": [
-                {
-                    "name": "home_assistant_core_restart",
-                    "done": False,
-                    "child_jobs": [],
-                }
-            ]
-        }
+async def test_core_job_wait_is_bounded(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    aioclient_mock,
+    monkeypatch,
+):
+    load_supervisor_api(
+        hass,
+        aioclient_mock,
+        monkeypatch,
+        {
+            ("get", "/jobs/info"): {
+                "jobs": [
+                    {
+                        "name": "home_assistant_core_restart",
+                        "done": False,
+                        "child_jobs": [],
+                    }
+                ]
+            }
+        },
     )
-    monkeypatch.setattr("haos_runtime._home_assistant_ws_command", command)
     monkeypatch.setattr(
         topology,
         "time",
@@ -69,7 +101,9 @@ def test_core_job_wait_is_bounded(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="previous Core job did not finish"):
-        _wait_for_core_job(
-            {"base_url": "http://ha.invalid", "token": "test"}, timeout=2
+        await asyncio.to_thread(
+            _wait_for_core_job,
+            {"base_url": core_client.base_url, "token": core_client.token},
+            timeout=2,
         )
-    command.assert_called_once()
+    assert supervisor_requests(aioclient_mock) == [("get", "/jobs/info")]

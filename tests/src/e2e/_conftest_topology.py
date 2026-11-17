@@ -14,7 +14,11 @@ import pytest
 import requests
 
 from ._conftest_embedded import _wait_for_embedded_webhook_ready
-from ._conftest_readiness import _wait_for_ha_api_ready
+from ._conftest_readiness import (
+    _wait_for_core_state_running,
+    _wait_for_entries_loaded,
+    _wait_for_ha_api_ready,
+)
 from .utilities.topology import (
     combined_topologies,
     component_surface_available,
@@ -125,6 +129,13 @@ def _restart_core(env: dict[str, Any]) -> None:
         raise RuntimeError("Core never went down after the topology restart")
     if not _wait_for_ha_api_ready(base_url, headers, timeout=600):
         raise RuntimeError("Core did not return after the topology restart")
+    ready, _, state, _, _, snapshot_ok, unloaded = _wait_for_core_state_running(
+        base_url, headers, timeout=600
+    )
+    if not ready:
+        raise RuntimeError(f"Core did not finish restarting: {state}; {unloaded}")
+    if env.get("container") is not None and (unloaded or not snapshot_ok):
+        _wait_for_entries_loaded(env["container"], base_url, headers)
 
 
 def _create_tools_entry(env: dict[str, Any]) -> str:
@@ -167,6 +178,10 @@ def install_tools_entry(env: dict[str, Any]) -> None:
     entry_id = _create_tools_entry(env)
     _restart_core(env)
     headers = {"Authorization": f"Bearer {env['token']}"}
+    if env["backend"].startswith("haos"):
+        from ._conftest_haos import _wait_for_haos_tools_entry_loaded
+
+        _wait_for_haos_tools_entry_loaded(env["base_url"], headers)
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         response = requests.get(

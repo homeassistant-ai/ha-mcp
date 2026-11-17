@@ -384,12 +384,22 @@ def test_ordinary_lane_does_not_carry_the_no_tools_env(
     ],
 )
 def test_retiring_a_runner_preserves_its_topology_in_the_retained_job(
-    workflow: str, legacy: str, retained: str
+    monkeypatch: pytest.MonkeyPatch, workflow: str, legacy: str, retained: str
 ) -> None:
     condition = _job(workflow, legacy)["if"]
     assert "github.event_name == 'workflow_dispatch'" in condition
     assert "inputs." in condition
-    assert _step_env(_pytest_step(workflow, retained)).get("E2E_COMBINE_TOPOLOGIES")
+    flag = _step_env(_pytest_step(workflow, retained))["E2E_COMBINE_TOPOLOGIES"]
+    job = _job(workflow, retained)
+    matrix = job.get("strategy", {}).get("matrix")
+    for row in matrix["include"] if matrix else [{}]:
+        resolved = flag
+        if str(flag).startswith("${{"):
+            field = re.fullmatch(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", flag)
+            assert field is not None, f"Unsupported matrix flag: {flag}"
+            resolved = row[field[1]]
+        monkeypatch.setenv("E2E_COMBINE_TOPOLOGIES", str(resolved))
+        assert topology.combined_topologies() is (row.get("os") != "ubuntu-24.04-arm")
 
 
 def test_stdio_lane_requires_an_explicit_manual_selection() -> None:

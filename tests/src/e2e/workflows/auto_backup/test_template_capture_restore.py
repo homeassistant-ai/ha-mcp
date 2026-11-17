@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.cleanup import CleanupSteps
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
 from .test_capture_and_restore import _wait_for_backup
@@ -294,15 +295,18 @@ class TestTemplateHelperCaptureRestore:
             backup_names.clear()
             entry_id = None
         finally:
-            if entry_id is not None:
-                await ha_client.delete_config_entry(entry_id)
-            for backup_name in backup_names:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_manage_backup",
-                    {
-                        "scope": "edits",
-                        "action": "delete",
-                        "backup_name": backup_name,
-                    },
-                )
+            with CleanupSteps() as cleanup:
+                with cleanup.step():
+                    if entry_id is not None:
+                        await ha_client.delete_config_entry(entry_id)
+                for backup_name in backup_names:
+                    with cleanup.step():
+                        await safe_call_tool(
+                            mcp_client,
+                            "ha_manage_backup",
+                            {
+                                "scope": "edits",
+                                "action": "delete",
+                                "backup_name": backup_name,
+                            },
+                        )
