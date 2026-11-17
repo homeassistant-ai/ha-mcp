@@ -111,7 +111,7 @@ def echo(request: Request) -> httpx.Response:
 class Engine:
     """The Gemini API: records each request and answers it with ``reply``."""
 
-    reply: Callable[[Request], httpx.Response] = echo
+    reply: Callable[[Request], httpx.Response] = field(default_factory=lambda: echo)
     requests: list[Request] = field(default_factory=list)
 
     @property

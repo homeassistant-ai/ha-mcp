@@ -172,7 +172,7 @@ class BuildSupervisor(Supervisor):
     async def serve(self, request: web.Request) -> web.StreamResponse:
         hooks = self._hooks.get((request.method, "/" + request.match_info["path"]))
         if hooks and inspect.isawaitable(result := hooks.pop(0)()):
-            await result
+            await asyncio.gather(result)
         return await super().serve(request)
 
 

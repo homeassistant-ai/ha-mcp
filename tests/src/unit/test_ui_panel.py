@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import re
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -588,11 +588,33 @@ class TestProxyForwarding:
 # ---------------------------------------------------------------------------
 
 
+class _Scripts(HTMLParser):
+    """The text of every ``<script>`` element of a page, as a browser reads it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scripts: list[str] = []
+        self._inside = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._inside = tag == "script"
+        if self._inside:
+            self.scripts.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        self._inside = False
+
+    def handle_data(self, data: str) -> None:
+        if self._inside:
+            self.scripts[-1] += data
+
+
 def _boot_script(page: str) -> str:
     """The script the served boot page runs."""
-    found = re.search(r"<script>(.*?)</script>", page, re.DOTALL)
-    assert found is not None, page
-    return found.group(1)
+    parser = _Scripts()
+    parser.feed(page)
+    [script] = parser.scripts
+    return script
 
 
 class TestBootView:
