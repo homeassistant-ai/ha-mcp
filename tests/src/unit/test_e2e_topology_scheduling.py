@@ -6,8 +6,35 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from ..e2e.basic.test_backend_dispatch_smoke import (
+    _SKIP_CEILING_PER_LANE,
+    test_session_skipped_count_below_ceiling as check_skip_ceiling,
+)
+
+
+def test_installed_phase_excess_skips_fail_the_combined_gate(monkeypatch):
+    monkeypatch.setenv("E2E_COMBINE_TOPOLOGIES", "1")
+    monkeypatch.setenv("E2E_NO_TOOLS_ENTRY", "1")
+    absent = SimpleNamespace(
+        callspec=SimpleNamespace(params={"e2e_topology": "topology_without_tools"}),
+        iter_markers=lambda: iter(()),
+    )
+    installed = SimpleNamespace(
+        callspec=SimpleNamespace(params={"e2e_topology": "topology_with_tools"}),
+        iter_markers=lambda: iter((pytest.mark.skip.mark,)),
+    )
+    request = SimpleNamespace(
+        node=absent,
+        session=SimpleNamespace(
+            items=[absent] + [installed] * (_SKIP_CEILING_PER_LANE["container"] + 1)
+        ),
+    )
+    with pytest.raises(AssertionError, match="exceeds the ceiling"):
+        check_skip_ceiling(request, {"backend": "container"})
 
 
 @pytest.mark.parametrize(
