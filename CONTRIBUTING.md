@@ -33,7 +33,7 @@ uv run lefthook install    # Install git hooks
 uv run ruff format src/ tests/     # Format
 uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
-uv run python scripts/mypy_tests_exact.py  # Type check the unit and app tests
+uv run mypy tests/src/unit/ tests/addon/  # Type check the unit and app tests
 uv run ast-grep scan               # AST lint (error handling patterns)
 ```
 

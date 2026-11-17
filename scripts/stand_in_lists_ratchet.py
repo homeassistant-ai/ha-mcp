@@ -4,8 +4,10 @@
 The unit and app (add-on) tests run on real Home Assistant Core
 (tests/AGENTS.md, "Unit Tests Run on Real Home Assistant Core"). Files written
 before each check are listed with it: the ``ignores`` of the ast-grep rules
-that scan the tests, the ``SLF001`` entries of the two test ``ruff.toml`` files
-and the mypy overrides that name a ``tests.`` module in ``pyproject.toml``.
+that scan the tests and the ``SLF001`` entries of the two test ``ruff.toml``
+files. mypy has no list: a ``pyproject.toml`` override that names a ``tests.``
+module would be one, and any added is refused, as is every other way of
+checking the tests less than at the base (below).
 ``tests/core_stand_in_guard.py`` has no list now: a guard without
 ``_GRANDFATHERED`` counts as one with an empty list, and its hook must not see
 the test item. The lists are plain files, so a pull request could add its own
@@ -33,8 +35,12 @@ still reaches into private members the conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
 removing or renaming a rule (except one named in ``RETIRED_RULES`` whose list
-is empty), loosening the ``tests.*`` mypy settings, and turning ``SLF001`` off
-in a test ``ruff.toml``.
+is empty), turning ``SLF001`` off in a test ``ruff.toml``, and for mypy: a
+setting that checks the tests less, a test path excluded, Core's or our own
+imports skipped, a ``mypy.ini`` that would replace ``pyproject.toml``'s
+settings, and a workflow that no longer runs ``MYPY_ON_TESTS``. The
+in-file switches (``# mypy:`` comments, ``no_type_check``) are the ast-grep
+rule ``no-stand-in-suppressions``.
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml  # type: ignore[import-untyped]
 
@@ -58,13 +64,50 @@ GUARD = "tests/core_stand_in_guard.py"
 RUFF_FILES = ("tests/src/unit/ruff.toml", "tests/addon/ruff.toml")
 PYPROJECT = "pyproject.toml"
 WORKFLOW = ".github/workflows/pr.yml"
-# The Fast Checks step that runs mypy on the tests.
-MYPY_ON_TESTS = "scripts/mypy_tests_exact.py"
+# The Fast Checks command that runs mypy on the tests; it stays in the workflow.
+MYPY_ON_TESTS = "uv run mypy tests/src/unit/ tests/addon/"
+# mypy reads either of these instead of pyproject.toml.
+MYPY_CONFIG_FILES = ("mypy.ini", ".mypy.ini")
+# The value of each setting that checks the most. The tests' value of one of
+# these may only change to it; any other setting may not change at all, except
+# the lists below and the settings that decide nothing mypy reports.
+MYPY_STRICT: dict[str, object] = {
+    "ignore_errors": False,
+    "ignore_missing_imports": False,
+    "follow_imports": "normal",
+    "strict_optional": True,
+    "implicit_optional": False,
+    "check_untyped_defs": True,
+    "allow_untyped_globals": False,
+    "allow_redefinition": False,
+    "disallow_untyped_defs": True,
+    "disallow_incomplete_defs": True,
+    "disallow_untyped_calls": True,
+    "disallow_untyped_decorators": True,
+    "disallow_any_generics": True,
+    "warn_return_any": True,
+    "warn_unused_ignores": True,
+    "warn_redundant_casts": True,
+    "warn_unreachable": True,
+    "strict_equality": True,
+    "strict": True,
+}
+MYPY_NEUTRAL = frozenset(
+    {"python_version", "mypy_path", "cache_dir", "warn_unused_configs"}
+    | {"explicit_package_bases", "exclude", "overrides"}
+)
+# Lists whose gained entry checks less, and lists whose lost entry does.
+MYPY_GAINED_LOOSENS = ("disable_error_code", "always_true", "always_false")
+MYPY_LOST_LOOSENS = ("enable_error_code", "plugins")
+# The packages whose types a test is checked against: skipping their imports
+# turns those types into Any.
+TYPED_FOR_TESTS = frozenset(
+    {"homeassistant", "custom_components", "ha_mcp", "pytest_homeassistant"}
+)
 # The parts of an ast-grep rule that decide what it matches.
 RULE_DEFINITION = ("rule", "constraints", "utils", "language")
 # The list of test modules mypy skips, as the conversion check names it.
 MYPY_LIST = f"{PYPROJECT} (mypy)"
-MYPY_LOOSENING = ("ignore_errors", "ignore_missing_imports", "follow_imports")
 # A rule deleted with what it refused: it named three shared fake modules, and
 # no file is left to import from any of them. Matters only while a pull
 # request's base still has the rule, and only with its list empty.
@@ -220,72 +263,104 @@ def _module_path(base: Base, module: str) -> str:
     return f"{stem}/__init__.py" if base.has(f"{stem}/__init__.py") else f"{stem}.py"
 
 
-def _mypy_state(text: str) -> tuple[set[str], dict[str, Any], set[str]]:
-    """The exempt test modules, the ``tests.*`` settings and the test excludes."""
+class _MypyState(NamedTuple):
+    exempt: set[str]
+    # The settings mypy applies to a test module: the global ones, then the
+    # ``tests.*`` override's.
+    settings: dict[str, Any]
+    excluded: set[str]
+    # (module pattern, follow_imports) for the packages a test is typed against.
+    untyped: set[tuple[str, str]]
+
+
+def _mypy_state(text: str) -> _MypyState:
     mypy = tomllib.loads(text).get("tool", {}).get("mypy", {})
     exempt: set[str] = set()
-    settings: dict[str, Any] = {}
+    untyped: set[tuple[str, str]] = set()
+    settings = {k: v for k, v in mypy.items() if k not in MYPY_NEUTRAL}
     for override in mypy.get("overrides", []):
         modules = _modules(override)
-        if modules == ["tests.*"]:
-            settings = {k: v for k, v in override.items() if k != "module"}
+        follow = override.get("follow_imports", "normal")
+        untyped.update(
+            (m, follow)
+            for m in modules
+            if follow != "normal" and m.split(".")[0] in TYPED_FOR_TESTS
+        )
+        if modules != ["tests.*"]:
+            exempt.update(m for m in modules if m == "tests" or m.startswith("tests."))
             continue
-        exempt.update(m for m in modules if m == "tests" or m.startswith("tests."))
-    # A code disabled for every module is disabled for the tests too.
-    settings["disable_error_code"] = sorted(
-        {*settings.get("disable_error_code", []), *mypy.get("disable_error_code", [])}
-    )
+        for key, value in override.items():
+            if key in MYPY_GAINED_LOOSENS:
+                # A code disabled for every module stays disabled for the tests.
+                settings[key] = sorted({*settings.get(key, []), *value})
+            elif key != "module":
+                settings[key] = value
     exclude = mypy.get("exclude", [])
     excluded = {
         pattern
         for pattern in ([exclude] if isinstance(exclude, str) else exclude)
         if "tests" in pattern
     }
-    return exempt, settings, excluded
+    return _MypyState(exempt, settings, excluded, untyped)
 
 
-def _loosened_settings(
-    head: dict[str, Any], base: dict[str, Any], checked_at_base: bool
-) -> list[str]:
-    """How the ``tests.*`` override checks less than at the base."""
-    found = [
-        f"{PYPROJECT}: the tests.* mypy override gained {key}"
-        for key in MYPY_LOOSENING
-        if key in head and key not in base
-    ]
-    if checked_at_base:
-        gained = set(head.get("disable_error_code", [])) - set(
-            base.get("disable_error_code", [])
-        )
-        found.extend(
-            f"{PYPROJECT}: mypy no longer reports {code} in tests"
-            for code in sorted(gained)
-        )
-        if head.get("check_untyped_defs") is False:
-            found.append(f"{PYPROJECT}: mypy no longer checks untyped tests")
+def _loosened_settings(head: dict[str, Any], base: dict[str, Any]) -> list[str]:
+    """How mypy checks the tests less than at the base."""
+    found: list[str] = []
+    for key in sorted(head.keys() | base.keys()):
+        new, old = head.get(key), base.get(key)
+        if new == old:
+            continue
+        if key in MYPY_GAINED_LOOSENS or key in MYPY_LOST_LOOSENS:
+            gained, lost = (
+                set(new or []) - set(old or []),
+                set(old or []) - set(new or []),
+            )
+            loosened = gained if key in MYPY_GAINED_LOOSENS else lost
+            found.extend(
+                f"{PYPROJECT}: mypy no longer reports {entry} in tests"
+                if key == "disable_error_code"
+                else f"{PYPROJECT}: mypy {key} for the tests "
+                f"{'gained' if key in MYPY_GAINED_LOOSENS else 'lost'} {entry!r}"
+                for entry in sorted(loosened)
+            )
+        elif key not in MYPY_STRICT or new != MYPY_STRICT[key]:
+            found.append(
+                f"{PYPROJECT}: mypy {key} for the tests changed from {old!r} to {new!r}"
+            )
     return found
 
 
-def _check_mypy(base: Base, head_text: str, problems: list[str]) -> None:
+def _check_mypy(base: Base, repo: Path, problems: list[str]) -> None:
+    """mypy checks every test as it did at the base, or more."""
     base_text = base.text(PYPROJECT)
-    workflow = base.text(WORKFLOW) or ""
-    checked_at_base = base_text is not None and MYPY_ON_TESTS in workflow
-    head_exempt, head_settings, head_excluded = _mypy_state(head_text)
-    base_exempt, base_settings, base_excluded = (
-        _mypy_state(base_text) if base_text is not None else (set(), {}, set())
-    )
+    head = _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8"))
+    at_base = _mypy_state(base_text or "")
     problems.extend(
         f"{PYPROJECT}: mypy exclude gained {pattern!r}"
-        for pattern in sorted(head_excluded - base_excluded)
+        for pattern in sorted(head.excluded - at_base.excluded)
     )
-    problems.extend(_loosened_settings(head_settings, base_settings, checked_at_base))
-    for module in sorted(head_exempt - base_exempt):
+    problems.extend(_loosened_settings(head.settings, at_base.settings))
+    problems.extend(
+        f"{PYPROJECT}: follow_imports = {follow!r} for {module} turns the types "
+        "the tests are checked against into Any"
+        for module, follow in sorted(head.untyped - at_base.untyped)
+    )
+    for module in sorted(head.exempt - at_base.exempt):
         if "*" in module:
             problems.append(f"{PYPROJECT}: {module} exempts a whole tree from mypy")
         elif not base.has(_module_path(base, module)):
             problems.append(f"{PYPROJECT}: {module} is new and exempt from mypy")
-        elif checked_at_base:
+        else:
             problems.append(f"{PYPROJECT}: {module} was added to the mypy list")
+    problems.extend(
+        f"{name}: mypy reads it instead of {PYPROJECT}'s settings"
+        for name in MYPY_CONFIG_FILES
+        if (repo / name).exists()
+    )
+    workflow = repo / WORKFLOW
+    if not workflow.exists() or MYPY_ON_TESTS not in workflow.read_text("utf-8"):
+        problems.append(f"{WORKFLOW}: Fast Checks no longer runs `{MYPY_ON_TESTS}`")
 
 
 def _check_rules(base: Base, repo: Path, problems: list[str]) -> None:
@@ -477,12 +552,12 @@ def _lists(base: Base, repo: Path) -> tuple[dict[str, set[str]], dict[str, set[s
             before[path] = _ruff_entries(path, ruff_base, [])
     head[MYPY_LIST] = {
         _module_path(base, module)
-        for module in _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8"))[0]
+        for module in _mypy_state((repo / PYPROJECT).read_text(encoding="utf-8")).exempt
     }
     pyproject_base = base.text(PYPROJECT)
     if pyproject_base is not None:
         before[MYPY_LIST] = {
-            _module_path(base, module) for module in _mypy_state(pyproject_base)[0]
+            _module_path(base, module) for module in _mypy_state(pyproject_base).exempt
         }
     return head, before
 
@@ -527,7 +602,7 @@ def problems_since(repo: Path, commit: str) -> list[str]:
             _ruff_entries(path, ruff_base, []) if ruff_base is not None else None,
             problems,
         )
-    _check_mypy(base, (repo / PYPROJECT).read_text(encoding="utf-8"), problems)
+    _check_mypy(base, repo, problems)
     head_lists, base_lists = _lists(base, repo)
     _check_private_access(base, repo, head_lists, problems)
     _check_full_conversion(head_lists, base_lists, problems)

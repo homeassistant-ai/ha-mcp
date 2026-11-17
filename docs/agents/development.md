@@ -117,7 +117,7 @@ URL dynamically. The shared token is in `tests/test_constants.py`.
 uv run ruff format src/ tests/
 uv run ruff check src/ tests/ --fix
 uv run mypy src/
-uv run python scripts/mypy_tests_exact.py
+uv run mypy tests/src/unit/ tests/addon/
 uv run ast-grep scan
 ```
 

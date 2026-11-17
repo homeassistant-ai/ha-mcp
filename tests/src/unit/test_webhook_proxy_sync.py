@@ -313,8 +313,9 @@ def test_docs_banners_match_canonical():
     The banner is identity, owned by DOCS_BANNERS in the sync script (like the
     start.py mutex constants). A hand edit to a committed banner without
     updating the constant would be silently reverted at the next promote/reset
-    — fail immediately instead. That each carries exactly one banner is what
-    the transform tests below need: ``transform_docs`` refuses any other count.
+    — fail immediately instead. This checks presence only; the transform tests
+    below fail when a DOCS.md carries the banner other than once
+    (``transform_docs`` refuses any other count).
     """
     for flavor in (sync.STABLE, sync.DEV):
         text = _docs_text(flavor)

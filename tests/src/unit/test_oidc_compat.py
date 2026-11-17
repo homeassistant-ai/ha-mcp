@@ -71,7 +71,8 @@ def _proxy_settings(store: MemoryStore) -> dict[str, Any]:
 
 @pytest.fixture
 def oidc_proxy(store: MemoryStore) -> HaMcpOIDCProxy:
-    """A real proxy, as the OIDC entrypoint builds it."""
+    """A real proxy with the OIDC entrypoint's scopes; a test runs
+    ``setup_scope_compatibility()`` itself, as the entrypoint does next."""
     return HaMcpOIDCProxy(**_proxy_settings(store), required_scopes=["openid"])
 
 

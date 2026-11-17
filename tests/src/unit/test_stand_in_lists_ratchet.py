@@ -47,7 +47,7 @@ disable_error_code = ["import-untyped"]
 module = ["tests.src.unit.test_old"]
 ignore_errors = true
 """
-_WORKFLOW = "run: uv run python scripts/mypy_tests_exact.py\n"
+_WORKFLOW = "run: uv run mypy tests/src/unit/ tests/addon/\n"
 
 _BASE = {
     _RULE_PATH: _RULE,
@@ -249,6 +249,40 @@ def _listed(rule: str, entry: str) -> str:
             id="mypy-loosened-for-every-module",
         ),
         pytest.param(
+            {"pyproject.toml": "[tool.mypy]\nstrict_optional = false\n\n" + _PYPROJECT},
+            "mypy strict_optional for the tests changed from None to False",
+            id="none-allowed-everywhere",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": _PYPROJECT.replace(
+                    "disallow_untyped_defs = false\n",
+                    "disallow_untyped_defs = false\ncheck_untyped_defs = false\n",
+                )
+            },
+            "mypy check_untyped_defs for the tests changed",
+            id="untyped-tests-unchecked",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": _PYPROJECT
+                + '\n[[tool.mypy.overrides]]\nmodule = ["homeassistant.*"]\n'
+                'follow_imports = "skip"\n'
+            },
+            "for homeassistant.* turns the types the tests are checked against into Any",
+            id="core-types-skipped",
+        ),
+        pytest.param(
+            {"mypy.ini": "[mypy]\nignore_errors = True\n"},
+            "mypy.ini: mypy reads it instead of pyproject.toml's settings",
+            id="settings-replaced-by-mypy-ini",
+        ),
+        pytest.param(
+            {".github/workflows/pr.yml": "run: uv run mypy src/\n"},
+            "Fast Checks no longer runs `uv run mypy tests/src/unit/ tests/addon/`",
+            id="tests-no-longer-type-checked",
+        ),
+        pytest.param(
             {_RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', "")},
             f"{_OLD} came off no-hand-made-core-replies but is still on "
             f"pyproject.toml (mypy), {_GUARD_PATH}, {_RUFF_PATH}",
@@ -352,6 +386,20 @@ def test_a_file_on_the_private_access_list_cannot_gain_any(
     assert ratchet.problems_since(repo, "HEAD") == (expected if reported else [])
 
 
+def test_mypy_may_check_the_tests_more(ratchet: ModuleType, tmp_path: Path) -> None:
+    """Only a looser setting is refused: a stricter one is the direction wanted."""
+    repo = _pull_request(
+        tmp_path,
+        {
+            "pyproject.toml": _PYPROJECT.replace(
+                "disallow_untyped_defs = false", "disallow_untyped_defs = true"
+            )
+        },
+    )
+
+    assert ratchet.problems_since(repo, "HEAD") == []
+
+
 def test_an_unlisted_file_is_left_to_the_rule_itself(
     ratchet: ModuleType, tmp_path: Path
 ) -> None:
@@ -368,18 +416,12 @@ def test_a_check_that_is_new_lists_older_files_but_no_new_one(
     base = {
         name: text
         for name, text in _BASE.items()
-        if name not in (_RULE_PATH, _RUFF_PATH, ".github/workflows/pr.yml")
+        if name not in (_RULE_PATH, _RUFF_PATH)
     }
-    base["pyproject.toml"] = ""
     older = _listed(_RULE, _CLEAN)
     repo = _pull_request(
         tmp_path,
-        {
-            _RULE_PATH: older,
-            _RUFF_PATH: _RUFF + '"test_clean.py" = ["SLF001"]\n',
-            "pyproject.toml": _PYPROJECT,
-            ".github/workflows/pr.yml": _WORKFLOW,
-        },
+        {_RULE_PATH: older, _RUFF_PATH: _RUFF + '"test_clean.py" = ["SLF001"]\n'},
         base,
     )
     assert ratchet.problems_since(repo, "HEAD") == []

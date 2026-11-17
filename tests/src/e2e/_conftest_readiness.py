@@ -119,7 +119,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Master-side hook: render collected timings as a terminal section.
 
     Falls back to the local list when running without xdist (no
-    ``pytest_testnodedown`` fires in that mode, so ``_ALL_*`` stays empty).
+    ``pytest_testnodedown`` fires in that mode, so ``ALL_*`` stays empty).
     """
     diagnostics = ALL_READINESS_DIAGNOSTICS or READINESS_DIAGNOSTICS
     if diagnostics:

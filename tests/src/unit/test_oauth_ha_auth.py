@@ -689,19 +689,28 @@ async def test_cimd_negative_results_are_cached(cimd_web: CimdWeb):
 
 @pytest.mark.asyncio
 async def test_cimd_cache_evicts_oldest_not_wholesale(cimd_web: CimdWeb):
-    """At capacity the oldest entry goes, never the whole cache (#2213 r2)."""
+    """At capacity the oldest entry goes, never the whole cache (#2213 r2).
+
+    Earlier tests' entries are older than these and go first. Whatever their
+    number, a cache cleared when full cannot keep all of the newest
+    ``CIMD_CACHE_MAX`` entries both before and after one more is added.
+    """
     client_ids = [unique_client_id() for _ in range(oauth_ha_auth.CIMD_CACHE_MAX + 1)]
     for client_id in client_ids:
         cimd_web.serve(client_id, [CALLBACK])
         assert await fetch_cimd_redirects(cimd_web.session, client_id) == [CALLBACK]
 
-    for retained in (client_ids[1], client_ids[-1]):  # rest retained
+    for retained in (client_ids[1], client_ids[-1]):
         cimd_web.serve(retained, [CALLBACK])
         assert await fetch_cimd_redirects(cimd_web.session, retained) == [CALLBACK]
         assert cimd_web.fetches == 0
-    cimd_web.serve(client_ids[0], [CALLBACK])  # oldest out
+    cimd_web.serve(client_ids[0], [CALLBACK])
     assert await fetch_cimd_redirects(cimd_web.session, client_ids[0]) == [CALLBACK]
-    assert cimd_web.fetches == 1
+    assert cimd_web.fetches == 1  # evicted, so fetched again
+    # Fetching it again evicted only the next oldest.
+    cimd_web.serve(client_ids[2], [CALLBACK])
+    assert await fetch_cimd_redirects(cimd_web.session, client_ids[2]) == [CALLBACK]
+    assert cimd_web.fetches == 0
 
 
 # ---------------------------------------------------------------------------

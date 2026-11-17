@@ -297,10 +297,15 @@ class _PiecewiseResponse(AiohttpClientMockResponse):
     def content(self) -> aiohttp.StreamReader:
         loop = asyncio.get_running_loop()
         stream = aiohttp.StreamReader(MagicMock(_reading_paused=False), limit=2**16)
-        stream.feed_data(self._pieces[0])
-        for piece in self._pieces[1:]:
-            loop.call_soon(stream.feed_data, piece)
-        loop.call_soon(stream.feed_eof)
+
+        def feed(pieces: list[bytes]) -> None:
+            if not pieces:
+                stream.feed_eof()
+                return
+            stream.feed_data(pieces[0])
+            loop.call_soon(feed, pieces[1:])
+
+        feed(self._pieces)
         return stream
 
 

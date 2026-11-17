@@ -51,7 +51,7 @@ class _SessionContainer(DockerContainer):
 
 @pytest.fixture
 def item(request: pytest.FixtureRequest) -> Iterator[pytest.Item]:
-    """This test's own item, whose session the container is stashed on."""
+    """This test's own item, whose config stash holds the container."""
     node = request.node
     assert isinstance(node, pytest.Item)
     yield node

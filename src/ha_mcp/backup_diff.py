@@ -189,6 +189,13 @@ def compute_json_patch(
     return truncated
 
 
+def json_equal(expected: Any, current: Any) -> bool:
+    """Equal as the restore preview compares them: type-sensitive (False is not 0)."""
+    patch: list[dict[str, Any]] = []
+    compute_json_patch(expected, current, 1, patch)
+    return not patch
+
+
 def _diff_node(
     stored: Any,
     current: Any,

@@ -248,8 +248,7 @@ rules, and mypy has none:
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
   member access. Setting a private attribute on a Core object forces a state
   Core never produces, and calling a private function skips the entry point a
-  user reaches: go through the public command or tool.
-  `test_core_reply_rules.py` keeps these lists exact too. Importing the name
+  user reaches: go through the public command or tool. Importing the name
   (`from module import _name`, or any name from a private module such as
   `ha_mcp._internal`) skips the entry point the same way and SLF001 does not
   see it, so the same test fails a file that is on none of these lists and
@@ -258,7 +257,7 @@ rules, and mypy has none:
   vendored package is not. A file still on a
   list loses its private imports when it is converted.
 - mypy checks both trees against Core's real types
-  (`uv run python scripts/mypy_tests_exact.py`). A `None` or a placeholder
+  (`uv run mypy tests/src/unit/ tests/addon/`). A `None` or a placeholder
   assigned where Core declares a type is an error wherever mypy knows the
   object's type: an object the test builds, or a fixture the test annotates.
   An unannotated fixture parameter is `Any` and mypy checks nothing done to
@@ -266,7 +265,12 @@ rules, and mypy has none:
   (`hass: HomeAssistant`, `core_client: HomeAssistantClient`); this is the one
   exception to tests needing no type hints. No module is exempt:
   `pyproject.toml` has no `ignore_errors` list for `tests.`, and the ratchet
-  fails a pull request that adds one.
+  fails a pull request that adds one or checks the tests less in any other
+  way: a looser setting, an excluded test path, Core's or our own imports
+  skipped, a `mypy.ini` (mypy reads it instead of `pyproject.toml`), or Fast
+  Checks no longer running the command above. `no-stand-in-suppressions`
+  refuses the switches inside a file: any `# mypy:` setting comment and
+  `no_type_check`.
 
 The plugin enforces, for every test:
 

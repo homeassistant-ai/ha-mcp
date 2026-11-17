@@ -965,7 +965,7 @@ class TestExemptPredicateSchemaDrift:
     @pytest.mark.parametrize("param", _ADDON_CONFIG_WRITE_PARAMS_MANIFEST)
     def test_each_addon_config_write_param_is_blocked(self, param):
         """Each config-change parameter alone makes ha_manage_app a write,
-        whatever its value: one the predicate stops checking would let that
+        at any value but None, even False: one the predicate stops checking would let that
         app (add-on) config change slip through as a read."""
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_app"].blocked_write
         assert rule({"slug": "x", param: False}) is not None

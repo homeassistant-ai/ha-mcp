@@ -82,6 +82,7 @@ from .backup_diff import (
     _build_diff_response,
     build_text_diff_response,
     compute_json_patch,
+    json_equal,
     summarize_patch_counts,
 )
 from .backup_entities import (
@@ -2774,13 +2775,6 @@ def _flow_snapshot_for_restore(
         raise BackupRestoreError(str(err), reason="invalid_snapshot") from err
 
 
-def _snapshot_configs_match(expected: Any, current: Any) -> bool:
-    """Reuse the preview's type-sensitive comparison (False is not 0)."""
-    patch: list[dict[str, Any]] = []
-    compute_json_patch(expected, current, 1, patch)
-    return not patch
-
-
 async def _verify_readback(
     read: Callable[[], Awaitable[Any]], expected: Any, keys: tuple[str, ...]
 ) -> Literal["matched", "mismatched", "unavailable"]:
@@ -2792,7 +2786,7 @@ async def _verify_readback(
         _log_flow_helper_failure("readback", err)
         return "unavailable"
     actual = {key: restored[key] for key in keys} if restored is not None else None
-    if _snapshot_configs_match(expected, actual):
+    if json_equal(expected, actual):
         return "matched"
     logger.warning("Flow helper restore step=readback reason=mismatch")
     return "mismatched"

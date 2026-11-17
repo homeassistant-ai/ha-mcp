@@ -121,10 +121,8 @@ def _backup_write(args: dict[str, Any]) -> str | None:
     return f"scope={scope!r}, action={action!r}"
 
 
-# Add-on parameters that, when present, mean the call mutates add-on
-# configuration (so the read-only middleware must block it). Module-level
-# so the schema-drift guard test (test_read_only.py) can pin an
-# independent manifest against it — see item 10b / ha_manage_app.
+# ha_manage_app parameters that, set to anything but None, make the call an
+# app (add-on) configuration change, which the read-only middleware blocks.
 _ADDON_CONFIG_WRITE_PARAMS = ("options", "network", "boot", "auto_update", "watchdog")
 
 

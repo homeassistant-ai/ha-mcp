@@ -128,6 +128,13 @@ def test_teardown_survives_a_task_that_raises_on_cancel(caplog) -> None:
     assert "cleanup went sideways" in caplog.text
 
 
+def drop_destroyed_pending(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    if context.get("message") != "Task was destroyed but it is pending!":
+        loop.default_exception_handler(context)
+
+
 def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -> None:
     """A task that swallows cancellation is logged and abandoned, not joined.
 
@@ -138,11 +145,6 @@ def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -
     """
     monkeypatch.setattr(wt, "TEARDOWN_TIMEOUT_SECONDS", 0.1)
     loop = asyncio.new_event_loop()
-    # The abandoned task stays pending by design. When it is collected, asyncio
-    # reports "Task was destroyed but it is pending!" (the exact signature this
-    # fix removes from production) through the loop's handler, kept here.
-    loop.set_exception_handler(lambda _loop, _context: None)
-
     tasks: dict[str, asyncio.Task[Any]] = {}
 
     async def stubborn() -> None:
@@ -160,6 +162,11 @@ def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -
 
     with caplog.at_level(logging.WARNING, logger=wt.__name__):
         wt.teardown_worker_loop(loop)
+    # The abandoned task stays pending by design. When it is collected, asyncio
+    # reports "Task was destroyed but it is pending!" (the exact signature this
+    # fix removes from production) through the closed loop's handler; that one
+    # message is expected here, anything else is still reported.
+    loop.set_exception_handler(drop_destroyed_pending)
 
     assert loop.is_closed()
     assert not tasks["stubborn"].done()

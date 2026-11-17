@@ -74,6 +74,13 @@ async def test_oauth_serves_only_while_the_heartbeat_is_fresh(
     await _beat(oauth, hass)
     assert await _metadata_status(oauth, hass) == 200
 
+    # One missed 30-second touch is a slow loop, not a stopped add-on.
+    minute_ago = time.time() - 60
+    await hass.async_add_executor_job(
+        os.utime, oauth.HEARTBEAT_FILE, (minute_ago, minute_ago)
+    )
+    assert await _metadata_status(oauth, hass) == 200
+
     # The add-on crashed without cleanup a day ago.
     day_ago = time.time() - 86400
     await hass.async_add_executor_job(

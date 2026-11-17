@@ -27,7 +27,7 @@ async def test_sign_in_reaches_a_tls_core(
 ) -> None:
     """With http.ssl_certificate, every ha_auth sign-in answered 503: the
     forward verified a certificate issued for a name it could not trust. The
-    pre-#2950 forward consulted the configured URL, so one is set as well."""
+    pre-#2950 forward consulted the configured URL, so one case sets it."""
     surface = await open_oauth_surface(WEBHOOK_AUTH_HA)
     hass = surface.hass
     if internal_url is not None:

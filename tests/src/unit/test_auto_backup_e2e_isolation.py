@@ -10,9 +10,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import backup_manager as bm
 from ha_mcp import config
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils import data_paths
 
 from ..e2e import conftest as e2e_fixtures
@@ -29,9 +33,23 @@ def _legacy_history(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return legacy
 
 
+async def _capture(hass: HomeAssistant, manager: bm.BackupManager) -> Path:
+    """A snapshot the server captures of a real config entry."""
+    assert await async_setup_component(hass, "config", {})
+    entry = MockConfigEntry(domain="test", title="Isolation")
+    entry.add_to_hass(hass)
+    path = await manager.maybe_snapshot("integration", entry.entry_id, force=True)
+    assert path is not None
+    return path
+
+
 @pytest.mark.parametrize("backend", ["container", "haos"])
-def test_backup_fixture_overrides_existing_legacy_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
+async def test_backup_fixture_overrides_existing_legacy_directory(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    backend: str,
 ) -> None:
     legacy = _legacy_history(monkeypatch, tmp_path)
     monkeypatch.setattr(bm, "get_data_dir", lambda: tmp_path / "data")
@@ -40,19 +58,19 @@ def test_backup_fixture_overrides_existing_legacy_directory(
     monkeypatch.setenv("HAMCP_BACKUP_DIR", "")
     config.reset_global_settings()
     before = config.get_global_settings()
-    client = SimpleNamespace()
-    assert bm.get_backup_manager(client, before).backup_dir == legacy
+    assert bm.get_backup_manager(core_client, before).backup_dir == legacy
 
     fixture = contextmanager(inspect.unwrap(backup_fixtures.isolate_edit_backups))
     with fixture(monkeypatch, tmp_path, {"backend": backend}):
         settings = config.get_global_settings()
         assert settings is not before
-        manager = bm.get_backup_manager(client, settings)
+        manager = bm.get_backup_manager(core_client, settings)
         assert manager.backup_dir == tmp_path / "backups"
         # Existing tests reset settings again when enabling capture.
         _enable_auto_backup(monkeypatch)
-        manager = bm.get_backup_manager(client, config.get_global_settings())
-        assert manager.backup_dir == tmp_path / "backups"
+        manager = bm.get_backup_manager(core_client, config.get_global_settings())
+        assert (await _capture(hass, manager)).parent == tmp_path / "backups"
+        assert [path.name for path in legacy.iterdir()] == ["existing.yaml"]
 
     assert os.environ["HAMCP_BACKUP_DIR"] == ""
     assert config.get_global_settings().auto_backup_dir == ""
@@ -95,8 +113,11 @@ def test_stdio_environment_pins_backups_inside_its_disposable_directory(
     assert manager.backup_dir == config_dir / "backups"
 
 
-def test_in_process_server_keeps_every_write_out_of_the_developer_home(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_in_process_server_keeps_every_write_out_of_the_developer_home(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A local E2E run must not add snapshots or settings files to the
     developer's ``~/.ha-mcp`` or to an existing legacy backup store."""
@@ -122,9 +143,10 @@ def test_in_process_server_keeps_every_write_out_of_the_developer_home(
     fixture = contextmanager(inspect.unwrap(e2e_fixtures.in_process_data_dir))
     with fixture(SimpleNamespace(mktemp=mktemp)) as config_dir:
         assert not data_paths.get_data_dir().is_relative_to(home)
-        manager = bm.get_backup_manager(SimpleNamespace(), config.get_global_settings())
+        manager = bm.get_backup_manager(core_client, config.get_global_settings())
+        path = await _capture(hass, manager)
 
-    assert manager.backup_dir.is_relative_to(config_dir)
+    assert path.is_relative_to(config_dir)
     assert not (home / ".ha-mcp").exists()
     assert list(legacy.iterdir()) == [sentinel]
     assert "HAMCP_BACKUP_DIR" not in os.environ

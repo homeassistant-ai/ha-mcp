@@ -34,7 +34,9 @@ def context(
     request_name: str | None = None,
     progress: Callable[..., Awaitable[None]] | None = None,
 ) -> SimpleNamespace:
-    """``request_name`` is the tool the client's own request called, when
+    """A middleware context for one call of ``name``.
+
+    ``request_name`` is the tool the client's own request called, when
     the gated call is nested inside another tool's run. ``progress`` receives
     the heartbeats a waiting call sends its client."""
     args = arguments if arguments is not None else {"domain": "light"}
@@ -266,7 +268,6 @@ async def test_continuation_resumes_only_after_ui_approval(
     queue = ApprovalQueue()
     policy = Policy(rules=[Rule(tool_name="ha_call_service")])
     middleware = PolicyMiddleware(policy_provider=lambda: policy, queue=queue)
-    # A round waits a hundredth of a second before asking.
     monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0.01)
     dispatched = []
 
@@ -306,7 +307,8 @@ async def test_legacy_client_keeps_approval_error_and_recall(
     """Legacy clients never receive an unrepresentable input_required result."""
     from ha_mcp.policy import mrtr
 
-    # A client that could be asked would be, well inside the one-second window.
+    # Short enough that a client that can be asked is asked well inside the
+    # one-second window.
     monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0.01)
     queue = ApprovalQueue()
     middleware = PolicyMiddleware(
@@ -350,6 +352,47 @@ async def test_confirmed_retry_waits_out_the_window_without_asking_again(
         await gate.middleware.on_call_tool(ctx, gate.execute)
     ctx.fastmcp_context.report_progress.assert_awaited()
     assert gate.executed == []
+
+
+def approve_later(queue: ApprovalQueue) -> Callable[..., Awaitable[None]]:
+    """A progress callback: the user approves in the tab a tenth of a second
+    after the call starts waiting, ten rounds' worth past ``ROUND_WAIT_SECONDS``."""
+
+    async def progress(**_progress: object) -> None:
+        token = queue.list_pending()[0].token
+        asyncio.get_running_loop().call_later(0.1, queue.approve, token)
+
+    return progress
+
+
+@pytest.mark.anyio
+async def test_confirmed_retry_runs_when_approved_inside_the_rest_of_the_window(
+    gate: SimpleNamespace,
+) -> None:
+    """The retry waits for the rest of the window, not one round."""
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    # Five seconds of the 60 s window are left.
+    gate.clock[0] += 55
+    ctx = context(
+        first.input_required.request_state,
+        answer="accept",
+        progress=approve_later(gate.queue),
+    )
+    assert await gate.middleware.on_call_tool(ctx, gate.execute) == "saved"
+    assert gate.executed == ["ha_call_service"]
+
+
+@pytest.mark.anyio
+async def test_client_without_elicitation_runs_when_approved_inside_the_window(
+    gate: SimpleNamespace,
+) -> None:
+    """Such a client waits the whole window, so a late approval still runs it."""
+    blocking = PolicyMiddleware(
+        policy_provider=lambda: gate.policy, queue=gate.queue, wait_seconds=5
+    )
+    ctx = context(elicitation=False, progress=approve_later(gate.queue))
+    assert await blocking.on_call_tool(ctx, gate.execute) == "saved"
+    assert gate.executed == ["ha_call_service"]
 
 
 @pytest.mark.anyio

@@ -20,6 +20,7 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from .backup_diff import json_equal
 from .backup_entity_ids import _manager
 
 if TYPE_CHECKING:
@@ -125,7 +126,7 @@ async def restore_integration(client: Any, entity_id: str, config: Any) -> Any:
     if (
         not_restored is None
         and options is not None
-        and not bm._snapshot_configs_match(options, current["options"])
+        and not json_equal(options, current["options"])
     ):
         try:
             await _restore_options(client, entity_id, config, current["options"])
