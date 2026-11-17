@@ -71,7 +71,35 @@ def order_topologies(items: list[Any]) -> None:
         items.sort(key=lambda item: item_topology(item) == WITH_TOOLS)
 
 
+def _wait_for_core_job(env: dict[str, Any], timeout: float = 300) -> None:
+    """A restored HTTP endpoint can precede Supervisor releasing its restart lock."""
+    from haos_runtime import _home_assistant_ws_command
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = _home_assistant_ws_command(
+            env["base_url"],
+            env["token"],
+            {"type": "supervisor/api", "endpoint": "/jobs/info", "method": "get"},
+            timeout=min(30, max(deadline - time.monotonic(), 0.1)),
+        )
+        pending = list(result["jobs"])
+        while pending:
+            job = pending.pop()
+            if not job["done"] and (job.get("name") or "").startswith(
+                "home_assistant_core_"
+            ):
+                break
+            pending.extend(job["child_jobs"])
+        else:
+            return
+        time.sleep(1)
+    raise RuntimeError("Supervisor's previous Core job did not finish before restart")
+
+
 def _restart_core(env: dict[str, Any]) -> None:
+    if env["backend"].startswith("haos"):
+        _wait_for_core_job(env)
     headers = {"Authorization": f"Bearer {env['token']}"}
     base_url = env["base_url"]
     try:
