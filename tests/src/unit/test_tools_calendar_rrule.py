@@ -209,9 +209,7 @@ async def test_a_calendar_without_creates_says_so(
 async def test_a_single_day_all_day_event_ending_on_its_start_gets_cores_reason(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    """The all-day end date is exclusive, so end == start is an empty event.
-    Core's schema refuses it, as it refuses a bad rule or a date mixed with a
-    time, and its reason reaches the caller."""
+    """The all-day end date is exclusive, so end == start is an empty event."""
     body = await _refused_create(core_client, start="2026-07-04", end="2026-07-04")
 
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

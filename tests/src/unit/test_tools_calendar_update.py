@@ -188,6 +188,20 @@ async def test_an_update_of_an_unknown_calendar_points_at_the_calendar_search(
     assert "ha_search" in error["suggestion"]
 
 
+async def test_a_user_who_may_not_change_the_calendar_is_told_so(
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+    read_only_client: HomeAssistantClient,
+) -> None:
+    """Core refuses a non-admin's write as unauthorized, which no parameter
+    change can fix."""
+    event = await _one_off(ws, core_client)
+
+    error = await _refused(read_only_client, uid=event["uid"])
+
+    assert "may not change this calendar" in error["suggestion"]
+
+
 async def test_an_update_of_an_unknown_uid_points_at_the_event_list(
     ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
@@ -212,7 +226,7 @@ async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
         error = await _refused(core_client, uid=event["uid"])
 
     assert error["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    assert all("uid" not in s.lower() for s in error["suggestions"])
+    assert all("ha_config_get_calendar_events" not in s for s in error["suggestions"])
 
 
 @pytest.mark.parametrize("recurrence", ["recurrence_id", "recurrence_range"])

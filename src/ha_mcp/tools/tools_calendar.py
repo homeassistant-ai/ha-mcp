@@ -226,8 +226,10 @@ class CalendarTools:
                 ha_timezone, _ = await fetch_ha_timezone(self._client)
                 local_tz, _ = resolve_local_timezone(ha_timezone)
                 now = datetime.now(local_tz).replace(tzinfo=None)
-                start = start or now.isoformat()
-                end = end or (now + timedelta(days=7)).isoformat()
+                if start is None:
+                    start = now.isoformat()
+                if end is None:
+                    end = (now + timedelta(days=7)).isoformat()
 
             # The client adds the /api prefix to Core's calendar view.
             response = await self._client._request(
@@ -256,8 +258,6 @@ class CalendarTools:
 
             suggestions = [_FIND_CALENDARS_HINT]
             if isinstance(error, HomeAssistantAPIError) and error.status_code == 400:
-                # Core's calendar view answers an unknown calendar entity or a
-                # bad time range with a bare 400.
                 suggestions.insert(
                     0,
                     f"Home Assistant answers 400 when '{entity_id}' is not a "
@@ -284,7 +284,8 @@ class CalendarTools:
         ``create_event`` service schema has no ``rrule``. A refusal is raised
         with Core's own text and error code: ``not_found`` for a calendar
         entity Core does not have, ``not_supported`` for a write the calendar
-        does not offer, ``invalid_format`` for a command Core's schema refuses
+        does not offer, ``unauthorized`` for a user who may not change the
+        calendar, ``invalid_format`` for a command Core's schema refuses
         (a malformed entity_id or event), and ``failed`` with the integration's
         text when the write itself fails. Unset ``fields`` stay out of the
         command.
@@ -366,9 +367,7 @@ class CalendarTools:
         uid: Annotated[
             str | None,
             Field(
-                description=(
-                    "UID of an existing event to update. Omit to create a new event."
-                ),
+                description="UID of an existing event to update.",
                 default=None,
             ),
         ] = None,

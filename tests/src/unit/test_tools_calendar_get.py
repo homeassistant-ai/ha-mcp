@@ -3,8 +3,9 @@
 The tool reads Core's calendar view (``GET /api/calendars/<entity_id>``), which
 keeps the uid and recurrence_id the edit and remove tools need. The view reads
 a time without an offset in Home Assistant's time zone, and answers an
-unknown calendar entity or a bad time range with a bare 400. The tool runs on the server's own client against a
-real ``hass`` whose ``calendar.test`` is Core's Local Calendar.
+unknown calendar entity or a bad time range with a bare 400. The tool runs on
+the server's own client against a real ``hass`` whose ``calendar.test`` is
+Core's Local Calendar.
 """
 
 import datetime as dt
@@ -59,18 +60,18 @@ async def test_a_start_without_an_offset_pairs_with_the_default_end(
     hass_ws_client: WebSocketGenerator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Core cannot compare a time without an offset against one with an
-    offset, so the default end must take the form the documented examples
-    give start in."""
+    """A start without an offset, as the tool's example gives it, must not
+    fail against the default end: Core cannot compare it with a time that
+    has an offset."""
     now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)
     await local_calendar(hass, "Test")
     ws = await hass_ws_client(hass)
-    start = dt_util.as_local(now).replace(tzinfo=None)
-    await write_event(ws, "calendar.test", "Soon", start + dt.timedelta(hours=1))
+    local_now = dt_util.as_local(now).replace(tzinfo=None)
+    await write_event(ws, "calendar.test", "Soon", local_now + dt.timedelta(hours=1))
 
     listed = await CalendarTools(core_client).ha_config_get_calendar_events(
-        "calendar.test", start=start.isoformat()
+        "calendar.test", start=local_now.isoformat()
     )
 
     assert [event["summary"] for event in listed["events"]] == ["Soon"]
