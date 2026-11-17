@@ -24,6 +24,7 @@ from uuid import uuid4
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ async def _wait_for_scene_registered(
             )
             if state_data.get("success"):
                 return True
-        except Exception as e:  # noqa: BLE001
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"Scene registration check failed: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -72,18 +73,24 @@ async def _wait_for_scene_registered(
 async def _wait_for_scene_removed(
     mcp_client, scene_id: str, timeout: int = 15, poll_interval: float = 1.0
 ) -> bool:
-    """Poll until the scene is no longer queryable."""
+    """Poll until reading the scene answers that it is not found.
+
+    Any other failed read, an auth error say, does not count as removed.
+    """
     start_time = time.monotonic()
     while time.monotonic() - start_time < timeout:
         try:
             get_data = await safe_call_tool(
                 mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
             )
-            # Either success=False OR an empty/missing config means it's gone.
-            if not get_data.get("success") or not get_data.get("config"):
+            error = get_data.get("error")
+            if isinstance(error, dict) and error.get("code") in (
+                "ENTITY_NOT_FOUND",
+                "CONFIG_NOT_FOUND",
+            ):
                 return True
-        except Exception:  # noqa: BLE001
-            return True
+        except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"Scene removal check failed: {e}")
         await asyncio.sleep(poll_interval)
     return False
 
@@ -315,6 +322,11 @@ class TestSceneLifecycle:
             removed = await mcp.call_tool_success(
                 "ha_config_remove_scene", {"scene_id": scene_id}
             )
+            # Checked before the cleanup below could remove it a second time.
+            automation_id = created["automation_id"]
+            assert removed["referenced_by"] == {"automation": [automation_id]}
+            assert any(automation_id in w for w in removed["warnings"])
+            assert await _wait_for_scene_removed(mcp_client, scene_id)
         finally:
             await safe_call_tool(
                 mcp_client,
@@ -324,11 +336,6 @@ class TestSceneLifecycle:
             await safe_call_tool(
                 mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
             )
-
-        automation_id = created["automation_id"]
-        assert removed["referenced_by"] == {"automation": [automation_id]}
-        assert any(automation_id in w for w in removed["warnings"])
-        assert await _wait_for_scene_removed(mcp_client, scene_id)
 
     async def test_scene_rename_decouples_entity_id_from_storage_key(
         self, mcp_client, cleanup_tracker
