@@ -84,32 +84,28 @@ _SERVER_ANSWERS = "no-typed-in-server-answers"
             id="another-function-with-a-listed-keyword-inside",
         ),
         pytest.param(
-            "from unittest.mock import patch as replace\n"
-            'replace("ha_mcp.update_check.get_update_info", return_value=None)\n',
+            "from unittest.mock import patch as replace\n",
             True,
-            id="aliased-patch",
+            id="patch-imported-under-another-name",
         ),
         pytest.param(
-            'with replace("ha_mcp.update_check.get_update_info") as info:\n'
-            "    info.return_value = None\n",
-            True,
-            id="aliased-bare-patch-as-a-context-manager",
-        ),
-        pytest.param(
-            '@replace("ha_mcp.update_check.get_update_info")\ndef test_it(info): ...\n',
-            True,
-            id="aliased-bare-patch-as-a-decorator",
-        ),
-        pytest.param(
-            'replace.object(update_check, "get_update_info")\n',
-            True,
-            id="aliased-bare-patch-object",
+            "from unittest.mock import AsyncMock as Fake, patch\n"
+            "import unittest.mock as mock\n",
+            False,
+            id="other-import-aliases",
         ),
         pytest.param(
             'getattr(update_check, "get_update_info")\n'
+            'getattr(update_check, "get_update_info", lambda: None)\n'
             'import_module("ha_mcp.tools.fetch_helper")\n',
             False,
             id="reading-a-listed-name",
+        ),
+        pytest.param(
+            'with nullcontext(resolve_name("ha_mcp.update_check.get_update_info")):\n'
+            "    pass\n",
+            False,
+            id="reading-a-listed-name-inside-a-with",
         ),
         pytest.param(
             'monkeypatch.setattr("ha_mcp.update_check.get_update_info", lambda: None)\n',

@@ -210,7 +210,8 @@ replacement carries an answer written in the test (`return_value=`, a
 `lambda`), or is a patch with nothing but its target (`DEFAULT` in
 `patch.multiple`), whose mock answers for the function. A spy on the real
 function (`wraps=real_fn`) and a failure (`side_effect=SomeError`) stay; a
-`lambda` is refused in either. The test sets
+`lambda` is refused in either, and so is importing `patch` under another name,
+which would hide a replacement from the rule. The test sets
 up the real component or integration, uses Core's Supervisor test support, or
 serves PyPI's JSON from a local server. It has no list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
