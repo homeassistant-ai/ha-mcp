@@ -28,7 +28,8 @@ classifiers = [
 
 dependencies = [
     # fastmcp/mcp/mcp-types are vendored (scripts/vendor_fastmcp.py) so HA
-    # Core's own mcp 1.x pin can't conflict. Below: their runtime requirements.
+    # Core's own mcp 1.x pin can't conflict. Below: their runtime requirements,
+    # whose floors that script raises when a vendored bump needs it.
     "anyio>=4.10",
     "authlib>=1.6.11",
     "certifi>=2026.10.19",

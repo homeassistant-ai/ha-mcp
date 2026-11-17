@@ -40,12 +40,14 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encodi
 // authenticated lookup; this fixture does not test that external lookup.
 const fixturePython = '3.14.2';
 
-async function exercise({ script, depName, pins, bumped, vendorDirs, extraFiles, check }) {
+async function exercise({
+  script, depName, pins, bumped, vendorDirs, extraFiles, seedFiles = {}, followUp = [], check,
+}) {
   const dependency = {
     depName, packageName: depName, datasource: 'pypi', manager: 'custom.regex', packageFile: pinFile,
   };
   const matched = await applyPackageRules({ ...getConfig(), ...repository, ...dependency });
-  assert.deepEqual(matched.postUpgradeTasks.commands, [`python3 -I scripts/${script}`],
+  assert.deepEqual(matched.postUpgradeTasks.commands, [`python3 -I scripts/${script}`, ...followUp],
     `${depName} updates must regenerate source with ${script}`);
   for (const other of [
     { ...dependency, packageFile: 'other/requirements.txt' },
@@ -71,6 +73,9 @@ async function exercise({ script, depName, pins, bumped, vendorDirs, extraFiles,
   mkdirSync(localDir);
   copyFileSync(`/source/scripts/${script}`, join(seed, `scripts/${script}`));
   writeFileSync(join(seed, pinFile), pins);
+  for (const [path, contents] of Object.entries(seedFiles)) {
+    writeFileSync(join(seed, path), contents);
+  }
   for (const dir of vendorDirs) {
     mkdirSync(join(seed, dir), { recursive: true });
     writeFileSync(join(seed, dir, 'obsolete.py'), '# Must disappear when the tree is replaced.\n');
@@ -125,14 +130,15 @@ async function exercise({ script, depName, pins, bumped, vendorDirs, extraFiles,
       assert.equal(createHash('sha256').update(readFileSync(join(localDir, dir, path))).digest('hex'), digest);
     }
   }
-  assert.ok([...artifacts.keys()].every((path) => vendorDirs.some((dir) => path.startsWith(`${dir}/`))),
-    'Only vendored outputs belong in the generated artifacts');
-  check(localDir);
+  assert.ok([...artifacts.keys()].every((path) => vendorDirs.some((dir) => path.startsWith(`${dir}/`))
+    || matched.postUpgradeTasks.fileFilters.includes(path)),
+  'Only vendored outputs and the files the rule names belong in the generated artifacts');
+  check(localDir, artifacts);
 
   // A failed regeneration must stay visible, not silently accept a pin-only bump.
   const failed = await executePostUpgradeCommands(branch('not-a-valid-pin\n'));
   assert.ok(failed.artifactErrors.length, 'A failed generator must report an artifact error');
-  check(localDir);
+  check(localDir, null);
 }
 
 await exercise({
@@ -149,6 +155,17 @@ await exercise({
   },
 });
 
+// A floor below what fastmcp-slim 4.0.3 needs (authlib>=1.6.11) must come back
+// raised, and re-locked, in the same update.
+const fixtureProject = `[project]
+name = "fixture"
+version = "0"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "authlib>=1.0",
+]
+`;
+
 await exercise({
   script: 'vendor_fastmcp.py',
   depName: 'fastmcp-slim',
@@ -158,11 +175,18 @@ await exercise({
   },
   vendorDirs: ['src/ha_mcp/_vendor/fastmcp', 'src/ha_mcp/_vendor/mcp', 'src/ha_mcp/_vendor/mcp_types'],
   extraFiles: {},
-  check: (localDir) => {
+  seedFiles: { 'pyproject.toml': fixtureProject },
+  followUp: ['uv lock'],
+  check: (localDir, artifacts) => {
     const vendor = join(localDir, 'src/ha_mcp/_vendor');
     assert.match(readFileSync(join(vendor, 'fastmcp/VENDORED'), 'utf8'), /^fastmcp-slim==4\.0\.3\n/);
     assert.match(readFileSync(join(vendor, 'fastmcp/__init__.py'), 'utf8'), /__version__ = "4\.0\.3"/);
     assert.doesNotMatch(readFileSync(join(vendor, 'mcp/__init__.py'), 'utf8'), /^\s*from mcp_types\b/m);
+    if (!artifacts) return;
+    assert.match(String(artifacts.get('pyproject.toml')?.contents), /"authlib>=1\.6\.11",/,
+      'The raised floor must be committed');
+    assert.match(String(artifacts.get('uv.lock')?.contents),
+      /\{ name = "authlib", specifier = ">=1\.6\.11" \}/, 'The lock must follow the raised floor');
   },
 });
 
@@ -229,4 +253,4 @@ async function exerciseCorePins() {
 
 await exerciseCorePins();
 
-console.log('Pinned Renovate executor regenerated the websockets and FastMCP/MCP SDK trees, licenses and manifests; collected additions/deletions; rejected unauthorized commands and surfaced generator failures; rewrote the Core integration pins and their Dependabot ignores and re-locked.');
+console.log('Pinned Renovate executor regenerated the websockets and FastMCP/MCP SDK trees, licenses and manifests; raised and re-locked a dependency floor the FastMCP bump needs; collected additions/deletions; rejected unauthorized commands and surfaced generator failures; rewrote the Core integration pins and their Dependabot ignores and re-locked.');

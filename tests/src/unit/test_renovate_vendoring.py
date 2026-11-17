@@ -13,15 +13,28 @@ _WEBSOCKETS_COMMAND = "python3 -I scripts/vendor_websockets.py"
 _FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
 _LOCK_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
 _PIN_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py"
+# command -> (packages, commands, file filters, tools, Python constraint)
 _HOOKS = {
-    _WEBSOCKETS_COMMAND: (["websockets"], ["src/ha_mcp/_vendor/websockets/**"]),
+    _WEBSOCKETS_COMMAND: (
+        ["websockets"],
+        [_WEBSOCKETS_COMMAND],
+        ["src/ha_mcp/_vendor/websockets/**"],
+        {"python": {}},
+        ">=3.14,<3.15",
+    ),
+    # The generator raises pyproject.toml floors, so the lock must follow.
     _FASTMCP_COMMAND: (
         ["fastmcp-slim", "mcp", "mcp-types"],
+        [_FASTMCP_COMMAND, "uv lock"],
         [
             "src/ha_mcp/_vendor/fastmcp/**",
             "src/ha_mcp/_vendor/mcp/**",
             "src/ha_mcp/_vendor/mcp_types/**",
+            "pyproject.toml",
+            "uv.lock",
         ],
+        {"python": {}, "uv": {}},
+        ">=3.14.2,<3.15",
     ),
 }
 
@@ -45,16 +58,16 @@ def test_each_vendoring_hook_is_scoped_to_its_private_pins() -> None:
         if "postUpgradeTasks" in rule and rule.get("matchFileNames") == [_PIN_FILE]
     }
     assert set(rules) == set(_HOOKS), "one regeneration hook per vendoring script"
-    for command, (packages, file_filters) in _HOOKS.items():
+    for command, (packages, commands, file_filters, tools, python) in _HOOKS.items():
         rule = rules[command]
         assert rule["matchManagers"] == ["custom.regex"]
         assert rule["matchDatasources"] == ["pypi"]
         assert rule["matchPackageNames"] == packages
         assert rule["matchFileNames"] == [_PIN_FILE]
-        assert rule["postUpgradeTasks"]["commands"] == [command]
+        assert rule["postUpgradeTasks"]["commands"] == commands
         assert rule["postUpgradeTasks"]["fileFilters"] == file_filters
-        assert rule["postUpgradeTasks"]["installTools"] == {"python": {}}
-        assert rule["constraints"]["python"] == ">=3.14,<3.15"
+        assert rule["postUpgradeTasks"]["installTools"] == tools
+        assert rule["constraints"]["python"] == python
         # Update mode retains the matched upgrade's Python constraint in 44.50.1.
         assert rule["postUpgradeTasks"]["executionMode"] == "update"
         assert "minimumReleaseAge" not in rule
@@ -66,7 +79,7 @@ def test_vendored_fastmcp_packages_update_together() -> None:
     rule = next(
         r
         for r in config["packageRules"]
-        if r.get("postUpgradeTasks", {}).get("commands") == [_FASTMCP_COMMAND]
+        if _FASTMCP_COMMAND in r.get("postUpgradeTasks", {}).get("commands", [])
     )
     assert rule["groupName"] == "vendored fastmcp"
 

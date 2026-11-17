@@ -6,7 +6,9 @@ own ``mcp`` pin can never conflict with ours. These packages import themselves
 by absolute name, so every such import is rewritten to the vendored path.
 
 Pins live in ``src/ha_mcp/_vendor/requirements.txt``; Renovate runs this script
-on a bump and ``tests/src/unit/test_vendored_fastmcp.py`` rejects drift.
+on a bump and ``tests/src/unit/test_vendored_fastmcp.py`` rejects drift. The
+sync also raises the ``pyproject.toml`` floors the new versions need; Renovate
+re-locks afterwards.
 
 Usage:
     python scripts/vendor_fastmcp.py
@@ -29,6 +31,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _VENDOR_DIR = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
 _PIN_FILE = _VENDOR_DIR / "requirements.txt"
+_PYPROJECT = _REPO_ROOT / "pyproject.toml"
 _PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
 
 VENDOR_PREFIX = "ha_mcp._vendor"
@@ -276,6 +279,110 @@ def runtime_requirements(wheel_payload: bytes, extras: tuple[str, ...]) -> list[
     return sorted(dict.fromkeys(requirements))
 
 
+_PROJECT_DEPENDENCIES_RE = re.compile(
+    r"^\[project\]$.*?^dependencies = \[$(?P<body>.*?)^\]$", re.MULTILINE | re.DOTALL
+)
+_REQUIREMENT_RE = re.compile(
+    r"\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?"
+    r"(?P<specs>[^;]*)(?:;.*)?",
+    re.DOTALL,
+)
+_SPECIFIER_RE = re.compile(r"(===|==|!=|~=|>=|<=|>|<)\s*(\S+)")
+
+
+def _release(version: str) -> tuple[int, ...] | None:
+    """Comparable release segments of a plain ``X.Y.Z`` version, else None."""
+    if not re.fullmatch(r"\d+(?:\.\d+)*", version):
+        return None
+    parts = [int(part) for part in version.split(".")]
+    while parts and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def _specifiers(specs: str) -> list[tuple[str, str]] | None:
+    parsed: list[tuple[str, str]] = []
+    for raw in filter(None, (s.strip() for s in specs.split(","))):
+        if (match := _SPECIFIER_RE.fullmatch(raw)) is None:
+            return None
+        parsed.append((match.group(1), match.group(2)))
+    return parsed
+
+
+def _needed_floors(requirements: list[str]) -> dict[str, str]:
+    floors: dict[str, str] = {}
+    for requirement in requirements:
+        match = _REQUIREMENT_RE.fullmatch(requirement)
+        if match is None:
+            continue
+        name = canonical(match.group("name"))
+        for operator, version in _specifiers(match.group("specs")) or []:
+            release = _release(version)
+            if operator != ">=" or release is None:
+                continue
+            current = floors.get(name)
+            if current is None or release > (_release(current) or ()):
+                floors[name] = version
+    return floors
+
+
+def _raise_floor(entry: str, floors: dict[str, str]) -> str:
+    """``entry`` with its ``>=`` floor raised to the vendored packages' need.
+
+    Only a ``>=`` floor below the need, under a ceiling that still admits it,
+    is raised. Anything else (an exact pin, a ceiling the need passes, an
+    unparsed version) is left for test_vendored_fastmcp.py to report.
+    """
+    match = _REQUIREMENT_RE.fullmatch(entry)
+    needed = floors.get(canonical(match.group("name"))) if match else None
+    specifiers = _specifiers(match.group("specs")) if match else None
+    if match is None or needed is None or specifiers is None:
+        return entry
+    target = _release(needed)
+    lows = [version for operator, version in specifiers if operator == ">="]
+    if (
+        target is None
+        or len(lows) != 1
+        or any(op not in {">=", "<", "<=", "!="} for op, _ in specifiers)
+    ):
+        return entry
+    low = _release(lows[0])
+    if low is None or low >= target:
+        return entry
+    for operator, version in specifiers:
+        if operator in {"<", "<="}:
+            top = _release(version)
+            if top is None or target > top or (operator == "<" and target == top):
+                return entry
+    specs = re.sub(
+        rf">=\s*{re.escape(lows[0])}(?![\w.])",
+        f">={needed}",
+        match.group("specs"),
+        count=1,
+    )
+    return entry[: match.start("specs")] + specs + entry[match.end("specs") :]
+
+
+def raise_dependency_floors(pyproject: str, requirements: list[str]) -> str:
+    """Raise ``[project].dependencies`` floors the vendored packages outgrew.
+
+    ha-mcp declares the vendored packages' requirements itself, and an install
+    into Home Assistant keeps any version that meets the published floor, so a
+    floor left behind keeps the older release installed.
+    """
+    match = _PROJECT_DEPENDENCIES_RE.search(pyproject)
+    if match is None:
+        raise SystemExit("no [project] dependencies array in pyproject.toml")
+    floors = _needed_floors(requirements)
+    body = re.sub(
+        r'^(\s*")([^"]+)(")',
+        lambda m: m.group(1) + _raise_floor(m.group(2), floors) + m.group(3),
+        match.group("body"),
+        flags=re.MULTILINE,
+    )
+    return pyproject[: match.start("body")] + body + pyproject[match.end("body") :]
+
+
 def _download(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=60) as response:
         payload: bytes = response.read()
@@ -391,7 +498,23 @@ def _promote(staged: dict[Path, Path]) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def main(vendor_dir: Path = _VENDOR_DIR) -> int:
+def _sync_pyproject(vendor_dir: Path, pyproject: Path) -> None:
+    requirements = [
+        line
+        for spec in PACKAGES
+        for line in (vendor_dir / spec.package / REQUIRES_NAME)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    current = pyproject.read_text(encoding="utf-8")
+    raised = raise_dependency_floors(current, requirements)
+    if raised != current:
+        pyproject.write_text(raised, encoding="utf-8", newline="\n")
+        print(f"raised dependency floors in {pyproject.name}")
+
+
+def main(vendor_dir: Path = _VENDOR_DIR, pyproject: Path = _PYPROJECT) -> int:
     pins = read_pins(vendor_dir / "requirements.txt")
     staged: dict[Path, Path] = {}
     counts: dict[str, int] = {}
@@ -418,6 +541,7 @@ def main(vendor_dir: Path = _VENDOR_DIR) -> int:
             shutil.rmtree(staging, ignore_errors=True)
         raise
     _promote(staged)
+    _sync_pyproject(vendor_dir, pyproject)
     for spec in PACKAGES:
         print(
             f"vendored {spec.distribution}=={pins[spec.distribution]}: "

@@ -206,10 +206,11 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
 ):
     """Every requirement the vendored wheels declare is a direct dependency.
 
-    Checked against the requirement list the sync records from each wheel, so
-    a bump that adds a dependency or raises a floor fails here rather than
-    only inside Home Assistant, where Core's constraints can hold an older
-    version back. Check each supported Python and desktop/server platform,
+    Checked against the requirement list the sync records from each wheel.
+    The sync raises the floors it safely can; a bump that adds a dependency,
+    or needs a floor past a declared ceiling or exact pin, fails here rather
+    than only inside Home Assistant, where Core's constraints can hold an
+    older version back. Check each supported Python and desktop/server platform,
     including requirements that do not apply on the runner's own platform.
     """
     environment = {

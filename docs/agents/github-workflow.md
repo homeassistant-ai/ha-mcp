@@ -318,7 +318,14 @@ The private websockets and FastMCP pins each have a narrowly scoped
 post-upgrade task. Renovate installs Python 3.14, runs
 `python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
 and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
-generated artifacts alongside the pin. The scanner allows only those exact
+generated artifacts alongside the pin. The FastMCP generator also raises the
+`[project.dependencies]` floors the new versions need, then `uv lock` re-locks,
+so `pyproject.toml` and `uv.lock` join that update: Home Assistant keeps any
+installed version that meets the published floor, so a floor left behind would
+keep the older release installed. A floor it cannot raise (past a declared
+ceiling or an exact pin) or a new requirement still fails
+`test_vendored_fastmcp.py` for a person to resolve, and the Core constraint
+check gates a raised floor of any package Core constrains. The scanner allows only those exact
 commands, with shell execution disabled. These dependencies retain the ordinary
 schedule and release-age policy. Source, license, manifest, drift, and API
 checks still gate the update; a failed generator is an artifact error, not an
