@@ -29,7 +29,7 @@ before adding a gate:
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
 | `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
 | `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
-| `requires_component_surface` | every lane that starts with an active component config entry (`src/e2e/utilities/topology.py::component_surface_available`) — skips the two no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled) |
+| `requires_component_surface` | needs an active component entry (`src/e2e/utilities/topology.py::component_surface_available`); runs after installation on combined external lanes and skips permanently component-free lanes |
 | `component_topology` | tests whose assertions exercise different component and fallback behavior; both states on combined external lanes, once on embedded lanes whose server already provides the shared surface |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
@@ -50,10 +50,11 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 - **The File & YAML Tools entry** provides the privileged filesystem and YAML
   services. It is absent while `E2E_NO_TOOLS_ENTRY=1`; combined lanes add it
   after their initial coverage, while ordinary lanes seed it before boot. A test that
-  relies on tools-entry behaviour must carry `requires_tools_entry`;
-  everywhere else a test may still rely on
-  component-gated behaviour with no marker — e.g. a config entry's
-  `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+  relies on tools-entry behaviour must carry `requires_tools_entry`.
+  A shared-component requirement uses `requires_component_surface`; a test
+  with assertions for both component and fallback behavior uses
+  `component_topology`. For example, a config entry's `unique_id` is available
+  through the component but not through Home Assistant's native API.
   Consequence for `ha_search`: a query-driven call is served by the component's
   in-process scan, not the legacy REST path, so a test written for legacy-only
   behaviour passes *vacuously*. This holds when `search_types` names

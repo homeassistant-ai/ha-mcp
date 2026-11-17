@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
-from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
