@@ -197,15 +197,13 @@ class TestAckKeyShape:
         """Without the process salt the suffix is not derivable — a key
         computed by another process (or reconstructed from the public
         formula) for the same moment does not satisfy this process's gate."""
+        print_key = (
+            "import sys, time; time.time = lambda: float(sys.argv[1]); "
+            "from ha_mcp.strict_bps import current_strict_bps_ack_key; "
+            "print(current_strict_bps_ack_key())"
+        )
         other_process = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys, time; time.time = lambda: float(sys.argv[1]); "
-                "from ha_mcp.strict_bps import current_strict_bps_ack_key; "
-                "print(current_strict_bps_ack_key())",
-                str(BUCKET_START),
-            ],
+            [sys.executable, "-c", print_key, str(BUCKET_START)],
             capture_output=True,
             check=True,
             text=True,
