@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Etagen und Bereiche auflisten",
-      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
+      "description": "Liste die Stockwerke in der Reihenfolge auf, in der Home Assistant sie führt, jeweils mit ihren zugewiesenen Bereichen verschachtelt sowie Bereichen ohne Stockwerk."
     },
     "ha_list_services": {
       "title": "Dienste auflisten",
@@ -901,8 +901,8 @@
       "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
     },
     "ha_set_area_or_floor": {
-      "title": "Bereich oder Etage erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
+      "title": "Bereiche oder Stockwerke erstellen, aktualisieren oder neu anordnen",
+      "description": "Erstelle, aktualisiere oder ordne Home Assistant Bereiche oder Stockwerke neu an."
     },
     "ha_set_device": {
       "title": "Gerät aktualisieren",

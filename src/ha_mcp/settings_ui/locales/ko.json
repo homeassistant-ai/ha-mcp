@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "층 및 영역 목록",
-      "description": "층을 층수 오름차순으로 나열하고 각 층에 속한 영역을 함께 보여 주며, 층이 지정되지 않은 영역도 표시합니다."
+      "description": "Home Assistant가 유지하는 순서대로 층 목록을 나열하고, 각 층에 할당된 구역을 중첩하여 표시하며 층이 없는 구역도 함께 보여줍니다."
     },
     "ha_list_services": {
       "title": "사용 가능한 서비스 목록",
@@ -901,8 +901,8 @@
       "description": "이름, 도메인, 영역으로 엔티티(조명, 센서, 스위치, 냉난방 등)를 검색하고, 자동화·스크립트·장면 내부까지 함께 찾습니다."
     },
     "ha_set_area_or_floor": {
-      "title": "영역 또는 층 생성·수정",
-      "description": "Home Assistant 영역이나 층을 만들거나 수정합니다."
+      "title": "구역 또는 층 생성, 업데이트 또는 순서 변경",
+      "description": "Home Assistant 구역 또는 층을 생성, 업데이트 또는 순서를 변경합니다."
     },
     "ha_set_device": {
       "title": "기기 설정",

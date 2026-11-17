@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Szintek és területek listázása",
-      "description": "Szintek listázása növekvő sorrendben, mindegyikbe ágyazva a hozzárendelt területekkel, plusz a szint nélküli területek."
+      "description": "Listázza a szinteket a Home Assistant által tárolt sorrendben, mindegyikbe beágyazva a hozzájuk rendelt területeket, valamint a szint nélküli területeket."
     },
     "ha_list_services": {
       "title": "Elérhető szolgáltatások listázása",
@@ -870,8 +870,8 @@
       "description": "Keresés entitások (lámpák, szenzorok, kapcsolók, klíma stb.) között név, tartomány vagy terület alapján – VALAMINT az automatizálásokon/szkripteken belül"
     },
     "ha_set_area_or_floor": {
-      "title": "Terület vagy szint létrehozása vagy frissítése",
-      "description": "Home Assistant terület vagy szint létrehozása vagy frissítése."
+      "title": "Területek vagy szintek létrehozása, frissítése vagy átrendezése",
+      "description": "Home Assistant területek vagy szintek létrehozása, frissítése vagy átrendezése."
     },
     "ha_set_device": {
       "title": "Eszköz beállítása",

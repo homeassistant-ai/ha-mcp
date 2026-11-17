@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Izlistaj spratove i oblasti",
-      "description": "Izlistajte spratove sortirane po nivou u rastućem redosledu, svaki sa svojim pridruženim oblastima, plus oblasti bez sprata."
+      "description": "Prikazuje spratove redosledom kojim ih Home Assistant čuva, svaki sa ugnježdenim dodeljenim oblastima, kao i oblasti bez sprata."
     },
     "ha_list_services": {
       "title": "Izlistaj dostupne usluge",
@@ -870,8 +870,8 @@
       "description": "Pretražite entitete (svetla, senzore, prekidače, klimatizaciju itd.) po imenu, domenu ili oblasti — KAO I unutar automatizacija/skripti"
     },
     "ha_set_area_or_floor": {
-      "title": "Kreirajte ili ažurirajte oblast ili sprat",
-      "description": "Kreirajte ili ažurirajte Home Assistant oblast ili sprat."
+      "title": "Kreiranje, ažuriranje ili promena redosleda oblasti ili spratova",
+      "description": "Kreirajte, ažurirajte ili promenite redosled oblasti ili spratova u sistemu Home Assistant."
     },
     "ha_set_device": {
       "title": "Podesite uređaj",

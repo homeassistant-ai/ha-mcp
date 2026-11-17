@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Mərtəbə və sahələri siyahı şəklində göstər",
-      "description": "Mərtəbələri səviyyəyə görə artan sıra ilə, hər mərtəbəyə təyin edilmiş sahələri onun daxilində, mərtəbəsi olmayan sahələri isə ayrıca siyahı şəklində göstərin."
+      "description": "Home Assistant-ın saxladığı ardıcıllıqla mərtəbələri siyahıya alır, hər biri üçün təyin olunmuş zonalar iç-içə yerləşir, üstəgəl mərtəbəsi olmayan zonalar."
     },
     "ha_list_services": {
       "title": "Mövcud xidmətləri siyahı şəklində göstər",
@@ -901,8 +901,8 @@
       "description": "Obyektləri (işıqlar, sensorlar, açarlar, iqlim cihazları və s.) ada, domenə və ya sahəyə görə axtarın — HƏMÇİNİN avtomatlaşdırmaların, skriptlərin və səhnələrin daxilində axtarış edin."
     },
     "ha_set_area_or_floor": {
-      "title": "Sahə və ya mərtəbə yarat və ya yenilə",
-      "description": "Home Assistant sahəsi və ya mərtəbəsi yaradın və ya yeniləyin."
+      "title": "Zonaları və ya Mərtəbələri Yaradın, Yeniləyin və ya Yenidən Sıralayın",
+      "description": "Home Assistant zonalarını və ya mərtəbələrini yaradın, yeniləyin və ya yenidən sıralayın."
     },
     "ha_set_device": {
       "title": "Cihazı təyin et",

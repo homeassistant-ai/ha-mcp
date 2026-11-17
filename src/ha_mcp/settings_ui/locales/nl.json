@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Lijst Verdiepingen en Gebieden",
-      "description": "Lijst verdiepingen gesorteerd op niveau oplopend, elk met hun toegewezen geneste gebieden, plus gebieden zonder verdieping."
+      "description": "Lijst verdiepingen in de volgorde waarin Home Assistant ze bijhoudt, elk met hun toegewezen ruimtes genest, plus ruimtes zonder verdieping."
     },
     "ha_list_services": {
       "title": "Lijst Beschikbare Services",
@@ -870,8 +870,8 @@
       "description": "Zoek naar entiteiten (lampen, sensoren, schakelaars, klimaat, etc.) op naam, domein of gebied — EN binnen automatisering/script/s"
     },
     "ha_set_area_or_floor": {
-      "title": "Gebied of Verdieping Aanmaken of Bijwerken",
-      "description": "Maak een Home Assistant gebied of verdieping aan of werk deze bij."
+      "title": "Ruimtes of verdiepingen aanmaken, bijwerken of herordenen",
+      "description": "Maak, werk of herorden Home Assistant-ruimtes of -verdiepingen bij."
     },
     "ha_set_device": {
       "title": "Apparaat Instellen",

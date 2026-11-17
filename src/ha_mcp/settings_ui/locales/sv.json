@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Lista Våningar och Områden",
-      "description": "Lista våningar sorterade efter nivå stigande, var och en med sina tilldelade områden kapslade, plus områden utan våning."
+      "description": "Lista våningsplan i den ordning Home Assistant sparar dem, var och en med tillhörande områden inbäddade, samt områden utan våningsplan."
     },
     "ha_list_services": {
       "title": "Lista Tillgängliga Tjänster",
@@ -870,8 +870,8 @@
       "description": "Sök efter entiteter (lampor, sensorer, strömbrytare, klimat, etc.) efter namn, domän eller område — OCH inuti automatiseringar/skript"
     },
     "ha_set_area_or_floor": {
-      "title": "Skapa eller uppdatera område eller våning",
-      "description": "Skapa eller uppdatera ett Home Assistant-område eller en våning."
+      "title": "Skapa, uppdatera eller ändra ordning på områden eller våningsplan",
+      "description": "Skapa, uppdatera eller ändra ordning på områden eller våningsplan i Home Assistant."
     },
     "ha_set_device": {
       "title": "Ställ in enhet",

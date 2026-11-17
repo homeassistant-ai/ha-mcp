@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Listar plantas y áreas",
-      "description": "Muestra las plantas con sus áreas anidadas, incluidas las áreas sin planta."
+      "description": "Lista los pisos en el orden en que Home Assistant los mantiene, cada uno con sus áreas asignadas anidadas, además de las áreas sin piso."
     },
     "ha_list_services": {
       "title": "Listar servicios disponibles",
@@ -901,8 +901,8 @@
       "description": "Busca entidades (luces, sensores, interruptores, climatización, etc.) por nombre, dominio o área, y también dentro de configuraciones de automatizaciones, scripts, escenas, auxiliares y paneles, en una sola llamada."
     },
     "ha_set_area_or_floor": {
-      "title": "Crear o actualizar área o planta",
-      "description": "Crea o actualiza un área o una planta de Home Assistant."
+      "title": "Crear, actualizar o reordenar áreas o pisos",
+      "description": "Crea, actualiza o reordena áreas o pisos de Home Assistant."
     },
     "ha_set_device": {
       "title": "Modificar dispositivo",

@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "列出樓層與區域",
-      "description": "依層級升冪排序列出樓層，每個樓層巢狀包含指派的區域，外加沒有樓層的區域。"
+      "description": "列出 Home Assistant 中保持的樓層順序，每個樓層都巢狀包含其指定的區域，以及沒有樓層的區域。"
     },
     "ha_list_services": {
       "title": "列出可用服務",
@@ -870,8 +870,8 @@
       "description": "透過名稱、網域或區域搜尋實體（燈光、感測器、開關、恆溫器等）— 以及自動化/手稿/s 內部"
     },
     "ha_set_area_or_floor": {
-      "title": "建立或更新區域或樓層",
-      "description": "建立或更新 Home Assistant 區域或樓層。"
+      "title": "建立、更新或重新排序區域或樓層",
+      "description": "建立、更新或重新排序 Home Assistant 的區域或樓層。"
     },
     "ha_set_device": {
       "title": "設定裝置",

@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Listigi Etaĝojn kaj Areojn",
-      "description": "Listigu etaĝojn ordigitajn laŭ nivelo kreskante, ĉiu kun siaj asignitaj areoj nestitaj, plus areoj sen etaĝo."
+      "description": "Listu etaĝojn en la ordo, kiel Home Assistant konservas ilin, ĉiu kun siaj asignitaj areoj ennestigitaj, kaj krome areojn sen etaĝo."
     },
     "ha_list_services": {
       "title": "Listigi Disponeblajn Servojn",
@@ -870,8 +870,8 @@
       "description": "Serĉi entojn (lumoj, sensiloj, ŝaltiloj, klimato, ktp.) laŭ nomo, domajno, aŭ areo — KAJ ene de aŭtomatigo/skripto/j"
     },
     "ha_set_area_or_floor": {
-      "title": "Krei aŭ Ĝisdatigi Areon aŭ Etaĝon",
-      "description": "Krei aŭ ĝisdatigi areon aŭ etaĝon de Home Assistant."
+      "title": "Krei, Ĝisdatigi aŭ Reordigi Areojn aŭ Etaĝojn",
+      "description": "Krei, ĝisdatigi aŭ reordigi areojn aŭ etaĝojn de Home Assistant."
     },
     "ha_set_device": {
       "title": "Agordi Aparaton",

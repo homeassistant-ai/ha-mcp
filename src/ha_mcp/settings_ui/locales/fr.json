@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Lister les étages et zones",
-      "description": "Affiche les étages avec les zones imbriquées, y compris les zones sans étage."
+      "description": "Lister les étages dans l'ordre où Home Assistant les conserve, chacun avec ses zones assignées imbriquées, ainsi que les zones sans étage."
     },
     "ha_list_services": {
       "title": "Lister les services",
@@ -901,8 +901,8 @@
       "description": "Recherche dans les entités et le contenu des automatisations, scripts, scènes, assistants et tableaux de bord."
     },
     "ha_set_area_or_floor": {
-      "title": "Créer/mettre à jour une zone ou un étage",
-      "description": "Crée ou met à jour une zone ou un étage dans Home Assistant."
+      "title": "Créer, mettre à jour ou réorganiser des zones ou des étages",
+      "description": "Créer, mettre à jour ou réorganiser les zones ou les étages de Home Assistant."
     },
     "ha_set_device": {
       "title": "Mettre à jour l'appareil",

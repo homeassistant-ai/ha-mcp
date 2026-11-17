@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Wyświetl piętra i obszary",
-      "description": "Wyświetl piętra posortowane rosnąco według poziomu, każde z zagnieżdżonymi przypisanymi obszarami, plus obszary bez przypisanego piętra."
+      "description": "Wyświetl listę pięter w kolejności utrzymywanej przez Home Assistant, każde z przypisanymi do niego obszarami oraz obszary bez przypisanego piętra."
     },
     "ha_list_services": {
       "title": "Wyświetl dostępne usługi",
@@ -870,8 +870,8 @@
       "description": "Szukaj encji (świateł, czujników, przełączników, klimatyzacji itp.) według nazwy, domeny lub obszaru — ORAZ wewnątrz automatyzacji/skryptów"
     },
     "ha_set_area_or_floor": {
-      "title": "Utwórz lub zaktualizuj obszar lub piętro",
-      "description": "Utwórz lub zaktualizuj obszar lub piętro Home Assistant."
+      "title": "Tworzenie, aktualizacja lub zmiana kolejności obszarów lub pięter",
+      "description": "Twórz, aktualizuj lub zmieniaj kolejność obszarów lub pięter w Home Assistant."
     },
     "ha_set_device": {
       "title": "Ustaw urządzenie",

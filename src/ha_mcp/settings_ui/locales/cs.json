@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Vypsat patra a oblasti",
-      "description": "Vypsat patra seřazená vzestupně podle úrovně, každé s vnořenými přiřazenými oblastmi, plus oblasti bez patra."
+      "description": "Vypíše patra v pořadí, v jakém je uchovává Home Assistant, každé s vnořenými přiřazenými oblastmi a plus oblasti bez patra."
     },
     "ha_list_services": {
       "title": "Vypsat dostupné služby",
@@ -870,8 +870,8 @@
       "description": "Hledat entity (světla, senzory, vypínače, klima atd.) podle názvu, domény nebo oblasti — A uvnitř automatizace/skriptu/ů"
     },
     "ha_set_area_or_floor": {
-      "title": "Vytvořit nebo aktualizovat oblast nebo patro",
-      "description": "Vytvořit nebo aktualizovat oblast nebo patro Home Assistant."
+      "title": "Vytvořit, aktualizovat nebo změnit uspořádání oblastí nebo pater",
+      "description": "Vytvořte, aktualizujte nebo změňte uspořádání oblastí nebo pater v Home Assistant."
     },
     "ha_set_device": {
       "title": "Nastavit zařízení",
