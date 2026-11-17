@@ -383,6 +383,11 @@ def _sync(tmp_path, monkeypatch, pyproject_text, requires_by_distribution):
         ("cryptography>=48.0.0,<51", "cryptography>=51.0", "cryptography>=48.0.0,<51"),
         ("pydantic-monty==0.0.18", "pydantic-monty>=0.0.19", "pydantic-monty==0.0.18"),
         ("anyio>=4.10", "anyio>=5.0; python_version < '3.14'", "anyio>=4.10"),
+        (
+            "authlib>=1.6.11",
+            "authlib>=1.9.5; python_full_version >= '3.14.2'",
+            "authlib>=1.9.5",
+        ),
     ],
     ids=[
         "raised",
@@ -392,6 +397,7 @@ def _sync(tmp_path, monkeypatch, pyproject_text, requires_by_distribution):
         "past-ceiling",
         "exact-pin",
         "unsupported-python",
+        "later-patch-release",
     ],
 )
 def test_vendor_sync_raises_the_floors_a_bump_needs_so_installs_upgrade(

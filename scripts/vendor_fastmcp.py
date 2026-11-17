@@ -297,24 +297,42 @@ _PLATFORMS = {
 }
 
 
-def _supported_environments(pyproject: str) -> list[dict[str, str]]:
-    """Marker environments for every supported Python on every platform."""
+# Every patch release a marker could name (``python_full_version``); no Python
+# line has come close to this many.
+_PATCH_RELEASES = range(100)
+
+
+def supported_pythons(pyproject: str) -> list[str]:
+    """The ``X.Y`` Python lines the project's classifiers declare."""
     classifiers = tomllib.loads(pyproject)["project"].get("classifiers", [])
-    pythons = [
+    return [
         c.removeprefix(_PYTHON_CLASSIFIER)
         for c in classifiers
         if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
     ]
+
+
+def marker_environments(python: str, sys_platform: str) -> list[dict[str, str]]:
+    """Marker environments for every patch release of ``python`` on a platform."""
+    system, os_name = _PLATFORMS[sys_platform]
     return [
         {
             "python_version": python,
-            "python_full_version": f"{python}.0",
+            "python_full_version": f"{python}.{patch}",
             "sys_platform": sys_platform,
             "platform_system": system,
             "os_name": os_name,
         }
-        for python in pythons
-        for sys_platform, (system, os_name) in _PLATFORMS.items()
+        for patch in _PATCH_RELEASES
+    ]
+
+
+def _supported_environments(pyproject: str) -> list[dict[str, str]]:
+    return [
+        environment
+        for python in supported_pythons(pyproject)
+        for sys_platform in _PLATFORMS
+        for environment in marker_environments(python, sys_platform)
     ]
 
 

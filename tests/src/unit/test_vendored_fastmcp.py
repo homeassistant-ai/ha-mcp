@@ -54,14 +54,9 @@ def _declared() -> list[Requirement]:
     return [Requirement(d) for d in pyproject["project"]["dependencies"]]
 
 
-_PYTHON_CLASSIFIER = "Programming Language :: Python :: "
-_SUPPORTED_PYTHONS = [
-    c.removeprefix(_PYTHON_CLASSIFIER)
-    for c in tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))[
-        "project"
-    ]["classifiers"]
-    if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
-]
+_SUPPORTED_PYTHONS = vendor_fastmcp.supported_pythons(
+    (_REPO_ROOT / "pyproject.toml").read_text("utf-8")
+)
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
@@ -202,28 +197,25 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
     dependency, a ceiling, or a floor the declared entry cannot take (an exact
     pin, a ceiling it passes) fails here rather than only inside Home
     Assistant, where Core's constraints can hold an older version back. Check
-    each supported Python and desktop/server platform,
+    each supported Python (every patch release) and desktop/server platform,
     including requirements that do not apply on the runner's own platform.
     """
-    environment = {
-        "python_version": python_version,
-        "python_full_version": f"{python_version}.0",
-        "sys_platform": sys_platform,
-        "platform_system": {
-            "linux": "Linux",
-            "darwin": "Darwin",
-            "win32": "Windows",
-        }[sys_platform],
-        "os_name": "nt" if sys_platform == "win32" else "posix",
-    }
+    environments = vendor_fastmcp.marker_environments(python_version, sys_platform)
+
+    def applies(requirement: Requirement) -> bool:
+        return requirement.marker is None or any(
+            requirement.marker.evaluate(environment) for environment in environments
+        )
+
     declared: dict[str, list[Requirement]] = {}
     for requirement in _declared():
-        if requirement.marker and not requirement.marker.evaluate(environment):
-            continue
-        declared.setdefault(canonicalize_name(requirement.name), []).append(requirement)
+        if applies(requirement):
+            declared.setdefault(canonicalize_name(requirement.name), []).append(
+                requirement
+            )
     problems = []
     for needed in _vendored_requirements(spec.package):
-        if needed.marker and not needed.marker.evaluate(environment):
+        if not applies(needed):
             continue
         name = canonicalize_name(needed.name)
         if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
