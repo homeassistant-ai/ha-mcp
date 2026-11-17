@@ -149,7 +149,8 @@ class TestCalendarEvents:
         """
         Test: Get events with invalid entity format
 
-        Verifies validation of entity_id format.
+        Core's calendar view answers a bare 400; the leading hint says what
+        that can mean.
         """
         logger.info(
             "Testing ha_config_get_calendar_events with invalid entity format..."
@@ -162,11 +163,9 @@ class TestCalendarEvents:
             {"entity_id": "not_a_calendar_entity"},
         )
 
-        # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
-        )
+        hint = data["error"]["suggestions"][0]
+        assert "'not_a_calendar_entity' is not a calendar entity" in hint, hint
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid format test completed")
@@ -400,8 +399,8 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
+        assert "is an invalid entity ID" in extract_error_message(data), (
+            "Error should carry Core's reason"
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
@@ -741,8 +740,8 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
+        assert "is an invalid entity ID" in extract_error_message(data), (
+            "Error should carry Core's reason"
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
@@ -1023,7 +1022,7 @@ class TestCalendarEventLifecycle:
         """
         Test: Update event with invalid calendar entity
 
-        Verifies the entity_id format guard fires in update mode too.
+        Core's entity_id check reaches the caller in update mode too.
         """
         logger.info(
             "Testing ha_config_set_calendar_event update with invalid entity..."
@@ -1043,7 +1042,7 @@ class TestCalendarEventLifecycle:
                 "end": end,
                 "uid": "some-event-uid",
             },
-            expected_error="calendar.",
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
