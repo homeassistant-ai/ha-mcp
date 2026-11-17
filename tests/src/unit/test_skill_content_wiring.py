@@ -356,12 +356,12 @@ def _emit_file_refs() -> list[str]:
 def _canonical_files_mappings() -> list[tuple[str, str]]:
     """Statically extract every canonical-file mapping from the 6 write tools."""
     mapping_names = {
-        "_AUTOMATION_SKILL_FILES",
-        "_SCRIPT_SKILL_FILES",
-        "_SCENE_SKILL_FILES",
-        "_HELPER_SKILL_FILES",
-        "_DASHBOARD_SKILL_FILES",
-        "_YAML_SKILL_FILES",
+        "AUTOMATION_SKILL_FILES",
+        "SCRIPT_SKILL_FILES",
+        "SCENE_SKILL_FILES",
+        "HELPER_SKILL_FILES",
+        "DASHBOARD_SKILL_FILES",
+        "YAML_SKILL_FILES",
     }
     out: list[tuple[str, str]] = []
     for module_file, _ in WRITE_TOOLS:

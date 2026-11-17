@@ -2,7 +2,7 @@
 
 ## Custom Component (ha_mcp_tools)
 
-- Component is installed into the Docker container by `_install_custom_component` in `src/e2e/_conftest_seed.py`
+- Component is installed into the Docker container by `install_custom_component` in `src/e2e/_conftest_seed.py`
 - HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}`. Most tools unwrap it with `unwrap_service_response()` (`src/ha_mcp/tools/util_helpers.py`); `ha_call_service` instead *splits* it, projecting `changed_states` into `result` and surfacing `service_response` once at the top level (issue #2085)
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
@@ -47,7 +47,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
 - **The File & YAML Tools entry** (the privileged filesystem and YAML
-  services) is set up on every lane by `_install_custom_component` EXCEPT the
+  services) is set up on every lane by `install_custom_component` EXCEPT the
   no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see below), where that config entry
   is absent and the privileged services never register. A test that
   relies on tools-entry behaviour must carry `requires_tools_entry`;
@@ -84,12 +84,12 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 
 | Lane | Topology |
 |---|---|
-| container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
+| container (`E2E_BACKEND` unset) | **no component at all** — `install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
 | container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
 | HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot, and the baked server entry stays disabled until a test enables it (`haos_only/test_embedded_server_haos.py` does, on every HAOS lane but `embedded`) |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
 
-The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
+The staging lives in `_conftest_testcontainer.prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
 refreshers, and raises rather than warning: a silent no-op would leave the
@@ -219,16 +219,13 @@ fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
 which is why the third rule exists.
 
-Test files written before a check are listed with it, in the rule's `ignores`.
-Only the reply rule still has a list; the hand-made `hass`, fake Core object,
-shared-client, suppression and fixture-annotation rules and the `sys.modules`
-guard have none, so every test complies with them. Converting a
-file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
-the mypy list below. A file taken off one list and left on another fails the
-ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
-listed file that no longer violates fails it, as does a violating file that is
-not listed); a rule without a list fails any violating file in the
-`ast-grep scan` Fast Checks runs.
+Test files written before a check were listed with it. No ast-grep rule has a
+list any more, and neither have the `sys.modules` guard and the mypy check
+below, so every test complies with them: a violating file fails the
+`ast-grep scan` or the mypy run in Fast Checks. Only the `SLF001` lists
+remain. `src/unit/test_core_reply_rules.py` keeps them exact (a listed file
+that no longer violates fails it, as does a violating file that is not
+listed).
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
@@ -245,7 +242,8 @@ request changes, the same script counts what the check refuses at the base
 and in the pull request, and fails when the count rises. A test added to a listed file goes in
 a new file on real Core, or the file is converted.
 
-Two more checks run on these trees, each with a list under the same rules:
+Two more checks run on these trees; `SLF001` has its lists under the same
+rules, and mypy has none:
 
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
   member access. Setting a private attribute on a Core object forces a state
@@ -266,10 +264,9 @@ Two more checks run on these trees, each with a list under the same rules:
   An unannotated fixture parameter is `Any` and mypy checks nothing done to
   it, so a test annotates the Core fixtures it takes with their real types
   (`hass: HomeAssistant`, `core_client: HomeAssistantClient`); this is the one
-  exception to tests needing no type hints. The files written before the check are
-  the `ignore_errors` modules under `tests.` in `pyproject.toml`; the script
-  runs mypy without that list and fails on an error in an unlisted module and
-  on a listed module that has none left.
+  exception to tests needing no type hints. No module is exempt:
+  `pyproject.toml` has no `ignore_errors` list for `tests.`, and the ratchet
+  fails a pull request that adds one.
 
 The plugin enforces, for every test:
 

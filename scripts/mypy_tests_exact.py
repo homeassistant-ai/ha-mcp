@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run mypy on the unit and app tests and keep the list of exempt modules exact.
 
-``pyproject.toml`` lists the test modules written before mypy ran on the tests
-(``ignore_errors`` under ``[[tool.mypy.overrides]]``). This runs mypy without
-that list and compares the modules that have errors with it. A module with
+``pyproject.toml`` listed the test modules written before mypy ran on the tests
+(``ignore_errors`` under ``[[tool.mypy.overrides]]``); none is left, and
+``stand_in_lists_ratchet.py`` refuses a new one. This runs mypy without any
+such list and compares the modules that have errors with it. A module with
 errors that is not listed fails, as plain mypy would. So does a listed module
 with no errors left: a fixed file comes off the list, which keeps it checked.
 """

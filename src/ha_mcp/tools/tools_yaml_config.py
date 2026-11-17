@@ -45,7 +45,7 @@ from .yaml_extra_keys import effective_extra_yaml_write_keys
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most
 # subtle bugs. template-guidelines.md is the relevant default.
-_YAML_SKILL_FILES: tuple[str, ...] = ("references/template-guidelines.md",)
+YAML_SKILL_FILES: tuple[str, ...] = ("references/template-guidelines.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -481,7 +481,7 @@ class YamlConfigTools:
                     # and single-call writes keep it — pre-write guidance is
                     # the whole point of MandatoryBPS.
                     MandatoryBPS=MandatoryBPS and confirm_token is None,
-                    canonical_files=_YAML_SKILL_FILES,
+                    canonical_files=YAML_SKILL_FILES,
                     referenced_files=None,
                 )
                 return result

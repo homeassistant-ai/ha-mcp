@@ -95,7 +95,7 @@ logger = logging.getLogger(__name__)
 
 # Attached with MandatoryBPS=True and on any best-practice hit; paths are
 # relative to the home-assistant-best-practices skill directory.
-_AUTOMATION_SKILL_FILES: tuple[str, ...] = (
+AUTOMATION_SKILL_FILES: tuple[str, ...] = (
     "references/triggers-and-conditions.md",
     "references/automation-actions.md",
     "references/template-guidelines.md",
@@ -651,7 +651,7 @@ class AutomationConfigTools:
                 attach_skill_content(
                     runtime_only_response,
                     MandatoryBPS=MandatoryBPS,
-                    canonical_files=_AUTOMATION_SKILL_FILES,
+                    canonical_files=AUTOMATION_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
                 return runtime_only_response
@@ -1209,7 +1209,7 @@ class AutomationConfigTools:
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=_AUTOMATION_SKILL_FILES,
+            canonical_files=AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
         merge_validation_meta(response, references)
@@ -1335,7 +1335,7 @@ class AutomationConfigTools:
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
-            canonical_files=_AUTOMATION_SKILL_FILES,
+            canonical_files=AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
         return response

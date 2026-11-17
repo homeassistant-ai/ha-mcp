@@ -11,6 +11,7 @@ Core's ``aioclient_mock``.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -28,13 +29,17 @@ from urllib.parse import urlparse
 
 import aiohttp
 import pytest
+import yarl
 from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient
 from homeassistant.auth import auth_manager_from_config
 from homeassistant.components.http import ApiConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
+from pytest_homeassistant.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
 from pytest_homeassistant.typing import ClientSessionGenerator
 
 from tests.addon.webhook_proxy._auth_modes import HA_AUTH, proxy_config
@@ -281,6 +286,24 @@ async def sign_in_through_proxy(
     return WrappedSession(client_id, envelope, unwrapped[0])
 
 
+class _PiecewiseResponse(AiohttpClientMockResponse):
+    """A reply whose body arrives one piece per loop turn, as a slow server sends it."""
+
+    def __init__(self, method: str, url: yarl.URL, pieces: list[bytes]) -> None:
+        super().__init__(method, url)
+        self._pieces = pieces
+
+    @property
+    def content(self) -> aiohttp.StreamReader:
+        loop = asyncio.get_running_loop()
+        stream = aiohttp.StreamReader(MagicMock(_reading_paused=False), limit=2**16)
+        stream.feed_data(self._pieces[0])
+        for piece in self._pieces[1:]:
+            loop.call_soon(stream.feed_data, piece)
+        loop.call_soon(stream.feed_eof)
+        return stream
+
+
 @dataclass
 class CimdWeb:
     """The public internet's view of client metadata documents."""
@@ -309,6 +332,17 @@ class CimdWeb:
             "redirect_uris": redirect_uris,
         }
         self.mocker.get(url, text=json.dumps(document), **kwargs)
+
+    def serve_in_pieces(self, client_id: str, pieces: list[bytes]) -> None:
+        """Publish a document whose body arrives one piece per loop turn."""
+        self.mocker.clear_requests()
+
+        async def reply(method: str, url: yarl.URL, _data: Any) -> _PiecewiseResponse:
+            return _PiecewiseResponse(method, url, pieces)
+
+        self.mocker.get(
+            f"https://{PUBLIC_ADDRESS}{urlparse(client_id).path}", side_effect=reply
+        )
 
     async def attach(self, proxy: Proxy, monkeypatch: pytest.MonkeyPatch) -> None:
         """Make the proxy's metadata lookups use this web."""

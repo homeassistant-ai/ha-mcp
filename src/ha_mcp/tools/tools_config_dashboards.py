@@ -137,7 +137,7 @@ class DashboardScreenshotOptions:
 
 
 # Live card fields replace the static reference only on capable components.
-_DASHBOARD_SKILL_FILES: tuple[str, ...] = ("references/dashboard-guide.md",)
+DASHBOARD_SKILL_FILES: tuple[str, ...] = ("references/dashboard-guide.md",)
 
 
 async def _attach_dashboard_skill(
@@ -148,7 +148,7 @@ async def _attach_dashboard_skill(
     Delegates to the shared :func:`attach_skill_content` so the
     missing-vendor-warning path is consistent across every write tool.
     """
-    files = _DASHBOARD_SKILL_FILES
+    files = DASHBOARD_SKILL_FILES
     if MandatoryBPS and not component_supports(
         await get_component_caps(client), "dashboard_cards"
     ):

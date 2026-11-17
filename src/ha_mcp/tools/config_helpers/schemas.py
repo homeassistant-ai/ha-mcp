@@ -9,7 +9,7 @@ from ..config_write_helpers import attach_skill_content
 __all__ = [
     "SIMPLE_HELPER_TYPES",
     "StorageHelperType",
-    "_HELPER_SKILL_FILES",
+    "HELPER_SKILL_FILES",
     "SIMPLE_CONFIG_KEYS_DESCRIPTION",
     "HelperResponse",
     "_attach_helper_skill",
@@ -19,7 +19,7 @@ __all__ = [
 
 # helper-selection.md guides which helper type fits the agent's use case
 # (input_*, counter, timer, template, group, utility_meter, etc.).
-_HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
+HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
 
 
 def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
@@ -34,7 +34,7 @@ def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
     attach_skill_content(
         response,
         MandatoryBPS=MandatoryBPS,
-        canonical_files=_HELPER_SKILL_FILES,
+        canonical_files=HELPER_SKILL_FILES,
         referenced_files=None,
     )
 
