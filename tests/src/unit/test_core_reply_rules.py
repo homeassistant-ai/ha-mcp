@@ -34,6 +34,8 @@ _SUPPRESSIONS = "no-stand-in-suppressions"
 _TYPED = "no-untyped-core-fixtures"
 _WS_REPLIES = "no-test-websocket-replies"
 _STORE_WRITES = "no-test-registry-store-writes"
+_OBJECTS = "no-typed-core-objects"
+_FRAMES = "no-typed-core-frames"
 
 
 @pytest.mark.parametrize(
@@ -584,6 +586,104 @@ def test_only_a_write_into_a_registry_store_is_refused(
 def test_no_test_writes_into_a_registry_store() -> None:
     """The rule has no grandfather list: every unit test complies."""
     path = RULES / f"{_STORE_WRITES}.yml"
+    assert "ignores" not in yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert scan(path, REPO, "tests") == []
+
+
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param(
+            'S = {"entity_id": "light.a", "state": "on", "attributes": {}}\n',
+            True,
+            id="state",
+        ),
+        pytest.param(
+            'R = {"entity_id": "light.a", "unique_id": "a", "platform": "demo"}\n',
+            True,
+            id="registry-row-naming-its-platform",
+        ),
+        pytest.param(
+            'D = {"id": "d", "identifiers": [["x", "1"]]}\n', True, id="device"
+        ),
+        pytest.param('E = {"entry_id": "e", "title": "T"}\n', True, id="config-entry"),
+        pytest.param(
+            'T = {"trigger": "state", "entity_id": "light.a", "to": "on"}\n',
+            False,
+            id="trigger-config",
+        ),
+        pytest.param(
+            'C = {"condition": "state", "entity_id": "light.a", "state": "on"}\n',
+            False,
+            id="condition-config",
+        ),
+        pytest.param(
+            'P = {"platform": "state", "entity_id": "light.a", "to": "on"}\n',
+            False,
+            id="legacy-trigger-config",
+        ),
+        pytest.param(
+            'N = {"entity_id": "light.a", "state": "on"}\n', False, id="scene-entity"
+        ),
+        pytest.param(
+            'A = {"domain": "zha", "entry_id": "e"}\n', False, id="tool-arguments"
+        ),
+        pytest.param(
+            'assert got == {"entity_id": "light.a", "state": "on", "attributes": {}}\n',
+            False,
+            id="expected-in-an-assert",
+        ),
+        pytest.param(
+            'hass_storage[er.STORAGE_KEY] = {"data": {"entities": [\n'
+            '    {"entity_id": "light.a", "unique_id": "a", "platform": "gone"}]}}\n',
+            False,
+            id="registry-file-core-loads",
+        ),
+    ],
+)
+def test_only_a_typed_core_object_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """A state, registry row or config entry comes from Core; a user's config,
+    a tool's arguments, an expectation and a file Core loads do not."""
+    assert flagged(_OBJECTS, source, tmp_path) is refused
+
+
+@pytest.mark.parametrize(
+    ("source", "refused"),
+    [
+        pytest.param(
+            'R = {"id": 1, "type": "result", "success": True}\n', True, id="result"
+        ),
+        pytest.param('E = {"id": 1, "type": "event", "event": {}}\n', True, id="event"),
+        pytest.param(
+            'A = {"type": "auth_ok", "ha_version": "1"}\n', True, id="auth-ok"
+        ),
+        pytest.param(
+            'C = {"id": 1, "type": "subscribe_events"}\n', False, id="command-to-core"
+        ),
+        pytest.param(
+            'L = {"type": "auth", "access_token": token}\n', False, id="login-to-core"
+        ),
+        pytest.param(
+            'assert answer == {"success": True, "type": "pong"}\n',
+            False,
+            id="expected-in-an-assert",
+        ),
+    ],
+)
+def test_only_a_typed_core_frame_is_refused(
+    source: str, refused: bool, tmp_path: Path
+) -> None:
+    """What Core sends over its WebSocket comes from Core; what a client sends
+    it, and an expectation of Core's reply, do not."""
+    assert flagged(_FRAMES, source, tmp_path) is refused
+
+
+@pytest.mark.parametrize("rule", [_OBJECTS, _FRAMES])
+def test_no_test_types_a_core_object_or_frame(rule: str) -> None:
+    """Neither rule has a grandfather list: every unit test complies."""
+    path = RULES / f"{rule}.yml"
     assert "ignores" not in yaml.safe_load(path.read_text(encoding="utf-8"))
     assert scan(path, REPO, "tests") == []
 
