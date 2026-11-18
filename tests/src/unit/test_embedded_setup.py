@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import ifaddr
+import jwt
 import pytest
 from homeassistant.components import persistent_notification
 from homeassistant.components.persistent_notification import (
@@ -136,14 +137,22 @@ def server_requires_component(
     monkeypatch.setitem(sys.modules, SERVER_MODULE, module)
 
 
-def nabu_casa_url(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:
-    """Answer the cloud integration's remote URL (its requirements are not
-    installed with Core, so the component's own lookup is replaced)."""
+async def log_in_to_nabu_casa(hass: HomeAssistant, url: str) -> None:
+    """Home Assistant Cloud set up and logged in, with remote access on ``url``.
 
-    def remote_url(hass: HomeAssistant) -> str | None:
-        return url
+    The login is the account token Core's cloud tests use; nothing reaches
+    Nabu Casa's servers.
+    """
+    from homeassistant.components.cloud.const import DATA_CLOUD
 
-    monkeypatch.setattr(esetup, "cloud_remote_url", remote_url)
+    assert await async_setup_component(hass, "cloud", {"cloud": {}})
+    cloud = hass.data[DATA_CLOUD]
+    cloud.id_token = jwt.encode(
+        {"email": "user@example.com", "custom:sub-exp": "2099-01-01"}, "test"
+    )
+    await cloud.client.prefs.async_update(
+        remote_enabled=True, remote_domain=url.removeprefix("https://")
+    )
 
 
 async def set_internal_url(hass: HomeAssistant, url: str) -> None:
@@ -421,7 +430,7 @@ class TestConnectUrlSurfaces:
         notices: Notices,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = add_server_entry(
             hass,
@@ -549,7 +558,7 @@ class TestBuildConnectUrls:
     ) -> None:
         """A configured external URL leads the list (webhook-proxy app parity),
         ahead of Nabu Casa and the local address."""
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = _entry(hass, options={OPT_EXTERNAL_URL: "https://ha.example.com/"})
 
@@ -628,7 +637,7 @@ class TestBuildConnectUrls:
     ) -> None:
         """The webhook is never registered, so the external, Nabu Casa and local
         webhook forms are all suppressed while the direct URL stays."""
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = _entry(hass, options={OPT_EXTERNAL_URL: "https://ha.example.com"})
 
