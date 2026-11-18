@@ -117,7 +117,6 @@ async def test_a_failed_restore_tells_the_user_what_was_changed(
     restore_fails_with(snapshot_manager, "label", error)
     reply = await restore_through(
         "settings" if consumer == "script" else consumer,
-        snapshot_manager,
         core_client,
         monkeypatch,
         saved_label.name,
@@ -167,9 +166,7 @@ async def test_a_restore_without_its_safety_snapshot_is_refused_with_the_backup_
         )
     else:
         fill_the_disk(snapshot_manager, monkeypatch)
-    reply = await restore_through(
-        consumer, snapshot_manager, core_client, monkeypatch, saved_label.name
-    )
+    reply = await restore_through(consumer, core_client, monkeypatch, saved_label.name)
 
     if consumer == "settings":
         assert reply.status == 409
@@ -203,9 +200,7 @@ async def test_a_deleted_integration_entry_is_reported_as_not_found(
     assert snapshot is not None
     assert await hass.config_entries.async_remove(entry.entry_id)
 
-    reply = await restore_through(
-        consumer, snapshot_manager, core_client, monkeypatch, snapshot.name
-    )
+    reply = await restore_through(consumer, core_client, monkeypatch, snapshot.name)
 
     if consumer == "settings":
         assert reply.status == 404
@@ -237,7 +232,6 @@ async def test_a_preview_follows_the_original_entry_after_its_entity_id_is_reuse
     for consumer in ("settings", "mcp"):
         reply = await diff_through(
             consumer,
-            snapshot_manager,
             core_client,
             monkeypatch,
             unchanged_template.snapshot.name,
@@ -274,8 +268,8 @@ async def test_a_preview_shows_only_what_a_restore_would_change(
     if missing:
         assert await hass.config_entries.async_remove(unchanged_template.entry.entry_id)
 
-    settings = await settings_route("diff_backup", snapshot_manager, monkeypatch, name)
-    tool = await diff_through("mcp", snapshot_manager, core_client, monkeypatch, name)
+    settings = await settings_route("diff_backup", core_client, monkeypatch, name)
+    tool = await diff_through("mcp", core_client, monkeypatch, name)
 
     assert settings.status == 200
     assert tool.payload["success"]
@@ -292,7 +286,7 @@ async def test_a_preview_shows_only_what_a_restore_would_change(
         assert tool.payload["data"]["unchanged"] is not changed
         if changed:
             assert "saved" in diff and "edited" in diff
-    viewed = await settings_route("view_backup", snapshot_manager, monkeypatch, name)
+    viewed = await settings_route("view_backup", core_client, monkeypatch, name)
     stored: dict[str, Any] = yaml.safe_load(
         (snapshot_manager.backup_dir / name).read_text()
     )
@@ -318,7 +312,7 @@ async def test_a_recreated_helper_shows_its_new_identity_in_the_page(
         hass, snapshot_manager, entity_registry, keep_mapping=keep_mapping
     )
     reply = await restore_through(
-        "settings", snapshot_manager, component_core_client, monkeypatch, snapshot.name
+        "settings", component_core_client, monkeypatch, snapshot.name
     )
 
     assert reply.status == 200
@@ -369,7 +363,7 @@ async def test_the_tool_moves_a_recreation_warning_to_its_envelope(
         hass, snapshot_manager, entity_registry, keep_mapping=keep_mapping
     )
     reply = await restore_through(
-        "mcp", snapshot_manager, component_core_client, monkeypatch, snapshot.name
+        "mcp", component_core_client, monkeypatch, snapshot.name
     )
 
     assert reply.payload["success"] is True
@@ -393,7 +387,6 @@ async def test_a_restore_over_an_existing_helper_warns_that_home_assistant_was_n
     with watch_options_flow(component_core_client) as flow:
         reply = await restore_through(
             consumer,
-            snapshot_manager,
             component_core_client,
             monkeypatch,
             saved_template.snapshot.name,
@@ -431,9 +424,7 @@ async def test_a_handler_warning_and_the_safety_warning_reach_the_tool_together(
         {"type": "zone/update", "zone_id": zone_id, **zone, "icon": "mdi:briefcase"}
     )
 
-    reply = await restore_through(
-        consumer, snapshot_manager, core_client, monkeypatch, snapshot.name
-    )
+    reply = await restore_through(consumer, core_client, monkeypatch, snapshot.name)
 
     assert reply.payload["success"] is True
     result = reply.payload["data"]["result"]
@@ -532,7 +523,6 @@ async def test_a_recreation_that_stopped_half_way_names_the_new_helper(
     )
     reply = await restore_through(
         "settings",
-        snapshot_manager,
         component_core_client,
         monkeypatch,
         saved_template.snapshot.name,
@@ -571,7 +561,7 @@ async def test_a_saved_entity_id_that_is_taken_refuses_the_recreation(
     )
     hass.states.async_set("sensor.custom", "taken")
     reply = await restore_through(
-        "settings", snapshot_manager, component_core_client, monkeypatch, snapshot.name
+        "settings", component_core_client, monkeypatch, snapshot.name
     )
 
     assert reply.status == 409
@@ -608,7 +598,6 @@ async def test_a_restore_refused_for_a_changed_name_says_which_field_and_changes
     with watch_options_flow(core_client) as flow:
         reply = await restore_through(
             "settings" if consumer == "script" else consumer,
-            snapshot_manager,
             core_client,
             monkeypatch,
             saved_template.snapshot.name,
@@ -653,7 +642,6 @@ async def test_a_restore_that_cannot_take_its_safety_snapshot_starts_no_flow(
     with watch_options_flow(core_client) as flow:
         reply = await restore_through(
             "settings" if consumer == "script" else consumer,
-            snapshot_manager,
             core_client,
             monkeypatch,
             saved_template.snapshot.name,
@@ -695,7 +683,6 @@ async def test_a_restore_whose_submit_gets_no_answer_names_the_safety_snapshot(
     )
     reply = await restore_through(
         "settings" if consumer == "script" else consumer,
-        snapshot_manager,
         core_client,
         monkeypatch,
         saved_template.snapshot.name,
