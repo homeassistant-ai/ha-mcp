@@ -452,7 +452,7 @@ class TestReleaseNeedsNewerPython:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """uvx runs the script named like the package: ha-mcp is stdio."""
-        monkeypatch.setattr(sys, "argv", ["/venv/bin/ha-mcp-web"])
+        monkeypatch.setattr(update_check.sys, "argv", ["/venv/bin/ha-mcp-web"])
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
         hint = update_command_hint("9.1.2", info)
         assert "uvx --python 3.14 --from ha-mcp@latest ha-mcp-web" in hint
