@@ -801,16 +801,32 @@ jobs:
         run: |
           # Each phase sets its own -m and worker count, and pytest keeps the
           # last of either, so the dispatch arguments may not set them. The
-          # loop splits them exactly as the pytest commands below do.
+          # loop splits them as the pytest commands below do, and reads a
+          # short-option cluster such as -vn2 the way pytest does.
           set -f
           # shellcheck disable=SC2086
           for argument in $PYTEST_ARGS; do
             case "$argument" in
-              -m*|--markexpr*|-n*|--numprocesses*)
-                echo "::error::pytest_args cannot set $argument here; narrow with -k or pytest_paths."
-                exit 1 ;;
+              --markexpr*|--numprocesses*) refused=$argument ;;
+              --*) ;;
+              -?*)
+                cluster=${argument#-}
+                while [ -n "$cluster" ]; do
+                  case "$cluster" in
+                    [mn]*) refused=$argument; break ;;
+                    # These take a value: the rest of the cluster is that value.
+                    [cokprW]*) break ;;
+                  esac
+                  cluster=${cluster#?}
+                done ;;
             esac
+            if [ -n "${refused:-}" ]; then
+              echo "::error::pytest_args cannot set $refused here; narrow with -k or pytest_paths."
+              exit 1
+            fi
           done
+          # pytest_paths may hold filename patterns, expanded after cd tests.
+          set +f
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta

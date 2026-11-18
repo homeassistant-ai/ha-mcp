@@ -83,6 +83,7 @@ def _cache_key_consumers(
 # Every HAOS lane boots the shared image, so each one restores it before it
 # would build; a lost restore leaves the lane rebuilding on every run while the
 # consumer count above still passes on its key or save step.
+_SHARED_IMAGE_KEY = "${{ steps.key.outputs.cache-key }}"
 _IMAGE_RESTORING_LANES = (
     (_STABLE_WORKFLOW, "haos-e2e"),
     (_STABLE_WORKFLOW, "haos-e2e-embedded"),
@@ -103,10 +104,20 @@ def test_every_haos_lane_restores_the_shared_image() -> None:
         ]
         assert restores, f"{workflow}::{job_id} no longer restores the HAOS image"
         # The external lane saves under this key; any other key never hits.
-        assert all(
-            step["with"]["key"] == "${{ steps.key.outputs.cache-key }}"
-            for step in restores
-        ), f"{workflow}::{job_id} restores a key the external lane does not save"
+        assert all(step["with"]["key"] == _SHARED_IMAGE_KEY for step in restores), (
+            f"{workflow}::{job_id} restores a key the external lane does not save"
+        )
+    saves = [
+        step
+        for step in _job_steps(
+            _workflow(_WORKFLOW_DIR / _STABLE_WORKFLOW)["jobs"]["haos-e2e"]
+        )
+        if str(step.get("uses", "")).partition("@")[0] == "actions/cache/save"
+    ]
+    assert saves, "the external HAOS lane no longer saves the image"
+    assert all(step["with"]["key"] == _SHARED_IMAGE_KEY for step in saves), (
+        "the external HAOS lane saves a key the other lanes do not restore"
+    )
 
 
 _TWO_PHASE_LANES = (
@@ -117,10 +128,15 @@ _TWO_PHASE_LANES = (
 
 
 def _run_two_phase_step(
-    tmp_path: Path, workflow: str, job_id: str, pytest_args: str, exits: str = ""
-) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run a two-phase lane's real shell with a ``uv`` that records each call
-    and answers with the next code in ``exits`` (0 once they run out)."""
+    tmp_path: Path,
+    workflow: str,
+    job_id: str,
+    pytest_args: str,
+    exits: str = "",
+    pytest_paths: str = "src/e2e/",
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+    """Run a two-phase lane's real shell with a ``uv`` that records each call's
+    arguments and answers with the next code in ``exits`` (0 once they run out)."""
     job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
     step = next(
         step
@@ -132,21 +148,22 @@ def _run_two_phase_step(
     uv = bin_dir / "uv"
     uv.write_text(
         "#!/bin/sh\n"
-        'echo "$*" >> "$UV_CALLS"\n'
-        'n=$(wc -l < "$UV_CALLS")\n'
+        'n=$(($(ls "$UV_CALLS" | wc -l) + 1))\n'
+        'printf "%s\\n" "$@" > "$UV_CALLS/$n"\n'
         'code=$(echo "$UV_EXITS" | cut -d, -f"$n")\n'
         'exit "${code:-0}"\n'
     )
     uv.chmod(0o755)
-    (tmp_path / "tests").mkdir()
     calls = tmp_path / "calls"
+    calls.mkdir()
+    (tmp_path / "tests" / "src" / "e2e").mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
         cwd=tmp_path,
         env={
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "PYTEST_ARGS": pytest_args,
-            "PYTEST_PATHS": "src/e2e/",
+            "PYTEST_PATHS": pytest_paths,
             "UV_CALLS": str(calls),
             "UV_EXITS": exits,
         },
@@ -154,13 +171,29 @@ def _run_two_phase_step(
         text=True,
         check=False,
     )
-    return result, calls.read_text().splitlines() if calls.exists() else []
+    return result, [
+        (calls / name).read_text().splitlines()
+        for name in sorted(os.listdir(calls), key=int)
+    ]
+
+
+def _selection(call: list[str]) -> tuple[str, str]:
+    """The marker expression and worker count a pytest call runs with."""
+    last = max(index for index, arg in enumerate(call) if arg == "-m")
+    marker = call[last + 1]
+    workers = next(arg for arg in reversed(call) if arg.startswith("-n"))
+    return marker, workers
 
 
 @pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
 @pytest.mark.parametrize(
     "pytest_args",
-    ["-m haos_stdio_only", "-k visibility\t-m addon_disruptive", "-k visibility -n2"],
+    [
+        "-m haos_stdio_only",
+        "-k visibility\t-m addon_disruptive",
+        "-k visibility -n2",
+        "-vn2",
+    ],
 )
 def test_a_dispatch_cannot_reset_a_phase_marker_or_worker_count(
     tmp_path: Path, workflow: str, job_id: str, pytest_args: str
@@ -187,12 +220,36 @@ def test_one_empty_phase_does_not_stop_the_other(
     parallel phase empty (pytest exit 5); the serial phase must still run.
     A selection matching nothing at all, or a failed phase, still fails."""
     result, calls = _run_two_phase_step(
-        tmp_path, workflow, job_id, "-k visibility", exits
+        tmp_path, workflow, job_id, "-vv -k visibility", exits
     )
 
     assert (result.returncode == 0) is passes, result.stdout + result.stderr
+    assert _selection(calls[0]) == ("not addon_disruptive", "-n2")
     if exits != "1,0":
         assert len(calls) == 2
+        assert _selection(calls[1]) == ("addon_disruptive", "-n0")
+
+
+@pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
+def test_pytest_paths_keep_their_filename_patterns(
+    tmp_path: Path, workflow: str, job_id: str
+) -> None:
+    """A dispatch may name test modules by pattern, expanded after ``cd tests``."""
+    module = tmp_path / "tests" / "src" / "e2e" / "test_search_x.py"
+    module.parent.mkdir(parents=True)
+    module.touch()
+
+    result, calls = _run_two_phase_step(
+        tmp_path,
+        workflow,
+        job_id,
+        "-k visibility",
+        pytest_paths="src/e2e/test_search*.py",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(calls) == 2
+    assert all("src/e2e/test_search_x.py" in call for call in calls)
 
 
 def _cache_key_command(path: Path, job_id: str) -> str:
