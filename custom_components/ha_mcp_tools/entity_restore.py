@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 WS_ENTITY_ENTRY = "ha_mcp_tools/entity_entry"
 WS_ENTITY_RESTORE = "ha_mcp_tools/entity_restore"
-COMMANDS = (WS_ENTITY_ENTRY, WS_ENTITY_RESTORE)
 # Advertised by websocket_api's info; the server's entity backup restore uses
 # these and falls back to Core's config/entity_registry commands.
 CAPABILITIES = ("entity_entry", "entity_restore")

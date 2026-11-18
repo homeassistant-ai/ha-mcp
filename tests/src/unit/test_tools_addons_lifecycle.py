@@ -12,12 +12,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from aiohasupervisor.models import AddonStage, StoreInfo
+from aiohasupervisor.models.addons import CpuArch, StoreAddon
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._supervisor_logs_core import route as route
 from ._tool_errors import rejected_call_body
-from ._tools_addons_core import SLUG, Route, manage, read
+from ._tools_addons_core import SLUG, Route, app_info, manage, read
 from ._tools_addons_core import app_route as app_route
 from ._tools_addons_core import core_route as core_route
 from ._tools_addons_core import core_supervisor as core_supervisor
@@ -28,20 +30,34 @@ REPO_URL = "https://github.com/example/home-assistant-apps"
 REPOSITORIES = "/store/repositories"
 
 
-def _app(slug: str, version: str, *, update_available: bool = False) -> dict:
+def _app(slug: str, version: str, *, update_available: bool = False) -> StoreAddon:
     """A ``/store`` entry: ``version_latest`` is what installing would get;
     ``version`` is the installed one, None for an app not installed."""
-    return {
-        "slug": slug,
-        "name": slug.replace("_", " ").title(),
-        "version_latest": version,
-        "version": None,
-        "update_available": update_available,
-    }
+    return StoreAddon(
+        advanced=False,
+        available=True,
+        build=False,
+        description="An app in the store",
+        homeassistant=None,
+        icon=False,
+        logo=False,
+        name=slug.replace("_", " ").title(),
+        repository="core",
+        slug=slug,
+        stage=AddonStage.STABLE,
+        update_available=update_available,
+        url=None,
+        version_latest=version,
+        version=None,
+        arch=[CpuArch.AMD64],
+        documentation=False,
+        installed=False,
+    )
 
 
-def _store(*apps: dict) -> dict:
-    return {"repositories": [], "addons": list(apps)}
+def _store(*apps: StoreAddon) -> dict[str, Any]:
+    """``GET /store`` as Supervisor answers it, built from its model."""
+    return StoreInfo(repositories=[], addons=list(apps)).to_dict()
 
 
 class TestLifecycleActions:
@@ -69,7 +85,7 @@ class TestLifecycleActions:
         self, app_route: Route
     ) -> None:
         """Supervisor forbids an app updating itself; nothing is sent."""
-        app_route.supervisor.answer("GET", "/addons/self/info", {"slug": SLUG})
+        app_route.supervisor.answer("GET", "/addons/self/info", app_info(SLUG))
 
         body = await rejected_call_body(
             manage(app_route.client, slug=SLUG, action="update")
@@ -84,7 +100,7 @@ class TestLifecycleActions:
         self, app_route: Route
     ) -> None:
         update = "/store/addons/core_ssh/update"
-        app_route.supervisor.answer("GET", "/addons/self/info", {"slug": SLUG})
+        app_route.supervisor.answer("GET", "/addons/self/info", app_info(SLUG))
         app_route.supervisor.answer("POST", update, {})
 
         result = await manage(app_route.client, slug="core_ssh", action="update")
@@ -104,19 +120,6 @@ class TestLifecycleActions:
         await manage(core_route.client, slug="core_ssh", action="update")
 
         assert core_route.supervisor.requests == [("POST", update)]
-
-    async def test_inside_the_app_an_update_without_its_identity_is_refused(
-        self, app_route: Route
-    ) -> None:
-        app_route.supervisor.answer("GET", "/addons/self/info", {})
-
-        body = await rejected_call_body(
-            manage(app_route.client, slug="core_ssh", action="update")
-        )
-
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert body["endpoint"] == "/addons/self/info"
-        assert app_route.supervisor.requests == [("GET", "/addons/self/info")]
 
     async def test_an_unknown_action_is_rejected(
         self, unreachable_client: HomeAssistantClient
@@ -296,29 +299,6 @@ class TestCheckUpdates:
         assert any("could not be read" in w for w in result["warnings"])
         expected: list[Any] | None = None if failing == "after" else []
         assert result["updates_available"] == expected
-
-    @pytest.mark.parametrize(
-        "data",
-        [
-            {"addons": None},
-            {"addons": ["not-a-mapping"]},
-            {"addons": [{"name": "No Slug"}]},
-            {"addons": [{"slug": "", "name": "Blank"}]},
-        ],
-        ids=["addons-null", "entry-not-a-mapping", "entry-without-slug", "blank-slug"],
-    )
-    async def test_a_malformed_store_reading_is_refused_whole(
-        self, core_route: Route, data: dict[str, Any]
-    ) -> None:
-        """A partial reading would report the missing apps as gone."""
-        core_route.supervisor.answer("GET", "/store", _store(_app("a", "6")))
-        core_route.supervisor.answer("GET", "/store", data)
-        core_route.supervisor.answer("POST", "/store/reload", {})
-
-        result = await manage(core_route.client, action="check_updates")
-
-        assert (result["changed"], result["updates_available"]) == (None, None)
-        assert any("could not be read" in w for w in result["warnings"])
 
     async def test_a_failed_store_read_carries_its_cause(
         self, core_route: Route

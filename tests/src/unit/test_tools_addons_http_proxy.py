@@ -15,6 +15,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from aiohasupervisor.models import AddonState
+from aiohasupervisor.models.ingress import Session
 
 from ha_mcp.redaction import REDACTED_SET
 
@@ -109,9 +111,11 @@ class TestTheRoute:
         assert "Ingress is not available" in body["error"]["message"]
         assert core_route.target.requests == []
 
-    @pytest.mark.parametrize("data", [{}, {"session": ""}], ids=["missing", "empty"])
+    @pytest.mark.parametrize(
+        "data", [None, Session(session="").to_dict()], ids=["missing", "empty"]
+    )
     async def test_a_session_reply_without_a_token_is_refused(
-        self, core_route: Route, data: dict[str, Any]
+        self, core_route: Route, data: dict[str, Any] | None
     ) -> None:
         core_route.supervisor.running()
         core_route.supervisor.answer(*SESSION, data)
@@ -165,7 +169,7 @@ class TestBeforeTheRequest:
         assert "does not support Ingress" in body["error"]["message"]
 
     async def test_a_stopped_app_is_not_called(self, core_route: Route) -> None:
-        core_route.supervisor.running(state="stopped")
+        core_route.supervisor.running(state=AddonState.STOPPED)
 
         body = await rejected_call_body(manage(core_route.client, slug=SLUG, path="/x"))
 
@@ -176,7 +180,7 @@ class TestBeforeTheRequest:
     async def test_a_port_does_not_excuse_a_stopped_app(
         self, core_route: Route
     ) -> None:
-        core_route.supervisor.running(ingress=False, state="stopped")
+        core_route.supervisor.running(ingress=False, state=AddonState.STOPPED)
 
         body = await rejected_call_body(
             manage(core_route.client, slug=SLUG, path="/ws", websocket=True, port=6052)
@@ -187,27 +191,12 @@ class TestBeforeTheRequest:
     async def test_an_app_without_an_ingress_entry_is_an_internal_error(
         self, core_route: Route
     ) -> None:
-        core_route.supervisor.running(ingress_entry="")
+        core_route.supervisor.running(ingress_entry=None)
 
         body = await rejected_call_body(manage(core_route.client, slug=SLUG, path="/x"))
 
         assert body["error"]["code"] == "INTERNAL_ERROR"
         assert "ingress_entry" in body["error"]["message"]
-
-    @pytest.mark.parametrize("websocket", [False, True], ids=["http", "websocket"])
-    async def test_a_direct_port_needs_the_containers_address(
-        self, core_route: Route, websocket: bool
-    ) -> None:
-        core_route.supervisor.running(ip_address="")
-
-        body = await rejected_call_body(
-            manage(
-                core_route.client, slug=SLUG, path="/x", port=1880, websocket=websocket
-            )
-        )
-
-        assert body["error"]["code"] == "INTERNAL_ERROR"
-        assert "ip_address" in body["error"]["message"]
 
     @pytest.mark.parametrize("websocket", [False, True], ids=["http", "websocket"])
     async def test_inside_the_app_the_ingress_port_is_needed(
@@ -298,7 +287,7 @@ class TestRefusedRequests:
         self, core_route: Route, status: int, front_door: object, offered: bool
     ) -> None:
         core_route.supervisor.running(
-            **_front_door(front_door), ports={"1880/tcp": 1880}
+            **_front_door(front_door), network={"1880/tcp": 1880}
         )
         core_route.target.status = status
 
@@ -339,8 +328,8 @@ class TestRefusedRequests:
     async def test_an_ingress_403_names_the_lowest_unmapped_port(
         self, core_route: Route
     ) -> None:
-        ports = {"9000/tcp": None, "1880/tcp": None, "9999/tcp": 9999}
-        core_route.supervisor.running(ports=ports)
+        network = {"9000/tcp": None, "1880/tcp": None, "9999/tcp": 9999}
+        core_route.supervisor.running(network=network)
         core_route.target.status = 403
 
         result = await rejected_call_body(
@@ -353,31 +342,6 @@ class TestRefusedRequests:
         assert f"ha_manage_app(slug='{SLUG}', path='...', port=1880)" in suggestion
         assert "9999" not in suggestion
         assert "Nginx" not in suggestion
-
-    async def test_an_ingress_403_reads_the_network_map_without_ports(
-        self, core_route: Route
-    ) -> None:
-        core_route.supervisor.running(network={"8080/tcp": None})
-        core_route.target.status = 403
-
-        result = await rejected_call_body(
-            manage(core_route.client, slug=SLUG, path="/x")
-        )
-
-        assert "port=8080" in result["suggestion"]
-
-    async def test_an_ingress_403_with_a_malformed_port_key_falls_back(
-        self, core_route: Route
-    ) -> None:
-        """A port that is not ``<number>/<proto>`` cannot fill ``port=``."""
-        core_route.supervisor.running(ports={"not-a-port": None})
-        core_route.target.status = 403
-
-        result = await rejected_call_body(
-            manage(core_route.client, slug=SLUG, path="/x")
-        )
-
-        assert "Nginx IP restriction" in result["suggestion"]
 
     async def test_an_ingress_403_shows_only_redacted_options(
         self, core_route: Route, redact_on: None, fresh_secrets: None

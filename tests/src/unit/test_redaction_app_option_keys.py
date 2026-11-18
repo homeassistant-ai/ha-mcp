@@ -20,11 +20,11 @@ from ha_mcp.redaction import (
     REDACTED_SET,
     collect_addon_secret_values,
     known_secret_values,
-    redact_addon_options,
 )
 from ha_mcp.tools.tools_addons import get_addon_info, register_addon_tools
 
 from ._redaction_registry import clean_registry as clean_registry
+from ._redaction_registry import redacted_options
 from ._supervisor_core import load_supervisor_api
 
 BACKUP_SLUG = "1a2b3c4d_hassio_google_drive_backup"
@@ -90,7 +90,7 @@ def test_listed_key_is_redacted_in_every_app_and_nothing_else(
     _settings(monkeypatch, "backup_password")
 
     for slug in (BACKUP_SLUG, "core_samba"):
-        out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, slug)
+        out = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, slug)
         assert out["backup_password"] == REDACTED_SET
         assert out["upload"]["backup_password"] == REDACTED_SET
         assert out["days_between_backups"] == 3
@@ -101,8 +101,8 @@ def test_slug_scoped_key_leaves_other_apps_untouched(
 ) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
 
-    scoped = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
-    other = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, "core_samba")
+    scoped = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+    other = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, "core_samba")
 
     assert scoped["backup_password"] == REDACTED_SET
     assert other == BACKUP_OPTIONS
@@ -113,7 +113,7 @@ def test_a_scope_without_the_repository_prefix_still_names_the_app(
 ) -> None:
     _settings(monkeypatch, "hassio_google_drive_backup:backup_password")
 
-    out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["backup_password"] == REDACTED_SET
 
@@ -123,7 +123,7 @@ def test_listing_a_group_redacts_every_option_inside_it(
 ) -> None:
     _settings(monkeypatch, "upload")
 
-    out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
     values = collect_addon_secret_values(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["upload"] == {"backup_password": REDACTED_SET}
@@ -138,7 +138,7 @@ def test_a_listed_option_the_schema_dropped_is_still_redacted(
     _settings(monkeypatch, "old_password")
     options = {**BACKUP_OPTIONS, "old_password": "left-over-password"}
 
-    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
     values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["old_password"] == REDACTED_SET
@@ -151,7 +151,7 @@ def test_a_listed_name_inside_a_group_the_schema_dropped_is_redacted(
     _settings(monkeypatch, "inner")
     options = {**BACKUP_OPTIONS, "old_group": {"inner": "inner-secret", "x": "1"}}
 
-    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
     values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["old_group"] == {"inner": REDACTED_SET, "x": "1"}
@@ -164,7 +164,7 @@ def test_a_listed_group_covers_a_stored_child_its_schema_dropped(
     _settings(monkeypatch, "upload")
     options = {**BACKUP_OPTIONS, "upload": {"backup_password": "a-pw", "old": "b-pw"}}
 
-    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
     values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["upload"] == {"backup_password": REDACTED_SET, "old": REDACTED_SET}
@@ -177,7 +177,7 @@ def test_a_listed_group_the_schema_dropped_keeps_its_shape_and_feeds_the_scrub(
     _settings(monkeypatch, "old_group")
     options = {**BACKUP_OPTIONS, "old_group": {"inner": "inner-secret"}}
 
-    out = redact_addon_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(options, BACKUP_SCHEMA, BACKUP_SLUG)
     values = collect_addon_secret_values(options, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["old_group"] == {"inner": REDACTED_SET}
@@ -196,7 +196,7 @@ def test_a_listed_name_in_a_group_the_schema_turned_into_a_field_is_redacted(
         "logins": [{"password": "multi-era-pw", "user": "a"}],
     }
 
-    out = redact_addon_options(options, schema, BACKUP_SLUG)
+    out = redacted_options(options, schema, BACKUP_SLUG)
     values = collect_addon_secret_values(options, schema, BACKUP_SLUG)
 
     assert out == {
@@ -217,7 +217,7 @@ def test_a_listed_group_stored_as_a_plain_value_is_redacted(
     ]
     options = {"creds": "field-era-pw", "tokens": ["field-era-tok"], "unset": None}
 
-    out = redact_addon_options(options, schema, BACKUP_SLUG)
+    out = redacted_options(options, schema, BACKUP_SLUG)
     values = collect_addon_secret_values(options, schema, BACKUP_SLUG)
 
     assert out == {"creds": REDACTED_SET, "tokens": [REDACTED_SET], "unset": None}
@@ -229,7 +229,7 @@ def test_spacing_newlines_and_empty_entries_in_the_list_are_ignored(
 ) -> None:
     _settings(monkeypatch, " , days_between_backups\n,, other_app: backup_password ,")
 
-    out = redact_addon_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
+    out = redacted_options(BACKUP_OPTIONS, BACKUP_SCHEMA, BACKUP_SLUG)
 
     assert out["days_between_backups"] == REDACTED_SET
     assert out["backup_password"] == BACKUP_PASSWORD

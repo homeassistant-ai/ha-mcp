@@ -178,19 +178,32 @@ class TestRealStateRead:
 
 class TestOtherResultShapes:
     async def test_nested_record_naming_hidden_entity_is_dropped_whole(
-        self, mw: _ChainedEnforcement, only_person_visible: None
+        self, hass: HomeAssistant, mw: _ChainedEnforcement, only_person_visible: None
     ) -> None:
         """Its sibling fields (a friendly_name) would leak the hidden entity."""
+        hass.states.async_set(
+            "person.allowed", "home", {"friendly_name": "Allowed person"}
+        )
+        hass.states.async_set(
+            "device_tracker.hidden_a", "home", {"friendly_name": "Secret"}
+        )
+        person, tracker = (
+            hass.states.get(entity_id)
+            for entity_id in ("person.allowed", "device_tracker.hidden_a")
+        )
+        assert person is not None and tracker is not None
+        # A record carrying a related entity's state, as Core reports both.
         payload = {
             "data": {
-                "entity_id": "person.allowed",
-                "state": "home",
-                "attributes": {"friendly_name": "Allowed person"},
+                **{key: person.as_dict()[key] for key in ("entity_id", "state")},
+                "attributes": dict(person.attributes),
                 "related": [
                     {
-                        "entity_id": "device_tracker.hidden_a",
-                        "state": "home",
-                        "friendly_name": "Secret",
+                        **{
+                            key: tracker.as_dict()[key]
+                            for key in ("entity_id", "state")
+                        },
+                        **tracker.attributes,
                     }
                 ],
             }

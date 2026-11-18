@@ -152,10 +152,7 @@ def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
         resolved = _static_value(value.value, scope)
         if resolved is UNRESOLVED:
             return UNRESOLVED
-        convert = _CONVERSIONS.get(value.conversion)
-        if convert is None:
-            return UNRESOLVED
-        parts.append(convert(resolved))
+        parts.append(_CONVERSIONS[value.conversion](resolved))
     return "".join(parts)
 
 

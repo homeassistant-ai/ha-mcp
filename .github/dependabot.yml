@@ -93,6 +93,7 @@ updates:
       - dependency-name: "gazetteer-matcher"
       - dependency-name: "ha-silabs-firmware-client"
       - dependency-name: "hassil"
+      - dependency-name: "home-assistant-frontend"
       - dependency-name: "home-assistant-intents"
       - dependency-name: "ical"
       - dependency-name: "infrared-protocols"

@@ -38,8 +38,7 @@ PROBE_TIMEOUT_EXIT = 3
 #: no-tools lanes still expose well above this.
 MIN_TOOL_COUNT = 60
 
-#: Pure helpers the probe runs on schemas. Kept as a separate source string so
-#: the unit tier can ``exec`` them without the runner's imports and side effects.
+#: Pure helpers the probe runs on schemas, ahead of the runner that uses them.
 PROBE_HELPERS_SOURCE = """
 import traceback
 

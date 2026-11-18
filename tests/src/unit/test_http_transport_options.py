@@ -114,9 +114,9 @@ def test_existing_fastmcp_defaults_and_positional_arguments(
 
 
 async def test_settings_ui_persists_independent_toggles(tmp_path):
-    from ha_mcp.settings_ui._handlers_advanced import build_advanced_handlers
+    from ha_mcp.settings_ui import build_settings_handlers
 
-    handlers = build_advanced_handlers(None)
+    handlers = build_settings_handlers(None)
     changes = {"http_transport_diagnostics": True, "http_json_response": False}
 
     async def receive():
@@ -130,7 +130,8 @@ async def test_settings_ui_persists_independent_toggles(tmp_path):
     settings = get_global_settings()
     assert settings.http_transport_diagnostics is True
     assert settings.http_json_response is False
-    assert json.loads((tmp_path / "feature_flags.json").read_text()) == changes
+    stored = await asyncio.to_thread((tmp_path / "feature_flags.json").read_text)
+    assert json.loads(stored) == changes
 
 
 async def test_diagnostics_observe_without_changing_messages(caplog):
@@ -145,8 +146,8 @@ async def test_diagnostics_observe_without_changing_messages(caplog):
         {"type": "http.response.body", "body": b"result", "more_body": True},
         {"type": "http.response.body", "body": b"", "more_body": False},
     ]
-    seen = []
-    sent = []
+    seen: list[dict[str, object]] = []
+    sent: list[dict[str, object]] = []
 
     async def receive():
         return incoming[len(seen)]

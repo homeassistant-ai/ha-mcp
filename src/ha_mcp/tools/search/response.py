@@ -287,11 +287,9 @@ def _finalize_partial_state(
 ) -> None:
     """Apply the orchestrator-local partial state to the response.
 
-    Sets ``partial: True`` when a branch raised, AND extends ``errors[]``
-    with the orchestrator-tagged surface errors — extending, not clobbering,
-    so any payload-side errors already accumulated by
-    ``_merge_payload_metadata`` survive. Extracted from the orchestrator
-    so the no-clobber contract is unit-testable.
+    Sets ``partial: True`` when a branch raised, adds the orchestrator-tagged
+    surface errors to ``errors[]``, and appends their reason after any reason
+    a surface already gave, rather than writing over it.
     """
     if partial_local:
         response["partial"] = True
@@ -390,32 +388,26 @@ def _merge_payload_metadata(
     """Shallow-merge non-conflicting metadata from a sub-helper payload into the
     orchestrator response.
 
-    Accumulating keys — extend / OR-merge across branches so neither side's
-    diagnostic data is silently dropped: ``warnings`` (list[str], extend),
-    ``errors`` (list[dict], extend), ``partial`` (bool, OR),
-    ``partial_reason`` (str, separator-concat with de-dup).
+    Accumulating keys, so neither surface's diagnostics are dropped:
+    ``warnings`` extends the response's list, ``partial`` (only ever sent as
+    True) marks it, and ``partial_reason`` is appended.
 
     Other keys use first-wins shadow-protect so orchestrator-owned fields
-    (``success``, ``query``, ``search_types``, ...) survive payload echoes.
+    (``success``, ``query``, ``search_types``, ``errors``, ...) survive payload
+    echoes. A surface that fails raises; ``_finalize_partial_state`` records
+    that in ``errors``.
     """
     for key, value in payload.items():
         if key in skip_keys:
             continue
-        if key == "warnings" and isinstance(value, list):
-            _merge_list_key(response, key, value)
-            continue
-        if key == "errors" and isinstance(value, list):
-            _merge_list_key(response, key, value)
-            continue
-        if key == "partial" and isinstance(value, bool):
-            response["partial"] = bool(response.get("partial")) or value
-            continue
-        if key == "partial_reason" and isinstance(value, str) and value:
+        if key == "warnings":
+            response["warnings"].extend(value)
+        elif key == "partial":
+            response["partial"] = True
+        elif key == "partial_reason":
             _merge_partial_reason(response, value)
-            continue
-        if key in response:
-            continue
-        response[key] = value
+        elif key not in response:
+            response[key] = value
 
 
 def _build_pagination_metadata(
@@ -442,28 +434,10 @@ _project_records = project_records
 _result_fields_warning = result_fields_warning
 
 
-def _merge_list_key(response: dict[str, Any], key: str, value: list[Any]) -> None:
-    """Extend an existing list key or replace a non-list value with a new list.
-
-    The non-list branch handles a broken upstream state where ``key`` is already
-    present but not a list — that violates the ``list[str]`` contract.  Replace
-    with the payload's well-typed list rather than crash on ``.extend``.
-    """
-    current = response.get(key)
-    if isinstance(current, list):
-        current.extend(value)
-    else:
-        response[key] = list(value)
-
-
 def _merge_partial_reason(response: dict[str, Any], value: str) -> None:
-    """Concatenate a new partial_reason string with de-duplication."""
+    """Append a partial_reason fragment after any reason already set."""
     current = response.get("partial_reason")
-    if isinstance(current, str) and current:
-        if value not in current:
-            response["partial_reason"] = f"{current} ; {value}"
-    else:
-        response["partial_reason"] = value
+    response["partial_reason"] = f"{current} ; {value}" if current else value
 
 
 def _format_search_diagnostics(diagnostics: dict[str, Any]) -> str | None:

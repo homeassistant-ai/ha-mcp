@@ -500,7 +500,7 @@ def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
     return sorted(".".join(groups) for groups in counted.elements())
 
 
-def _parity_fault(
+def parity_fault(
     english: str,
     translated: str,
     *,

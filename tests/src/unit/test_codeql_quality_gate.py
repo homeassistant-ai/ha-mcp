@@ -66,15 +66,7 @@ def _ineffectual_allowlist(
     )
 
 
-@pytest.fixture(autouse=True)
-def _clear_source_cache():
-    """Source lines are cached per path; keep reads from leaking between tests."""
-    gate._source_lines.cache_clear()
-    yield
-    gate._source_lines.cache_clear()
-
-
-def test_load_findings_sorted_and_parsed(tmp_path: Path) -> None:
+def test_findings_sorted_and_parsed(tmp_path: Path) -> None:
     path = _write_sarif(
         tmp_path,
         [
@@ -83,7 +75,7 @@ def test_load_findings_sorted_and_parsed(tmp_path: Path) -> None:
             _result("py/unused", "src/a.py", 2, "Unused a earlier"),
         ],
     )
-    findings = gate.load_findings(path)
+    findings = gate.classify(path)[0]
     # Sorted by (rule, file, line): empty-except first, then unused by line.
     assert findings == [
         ("src/z.py", 5, "py/empty-except", "Empty except"),
@@ -95,7 +87,7 @@ def test_load_findings_sorted_and_parsed(tmp_path: Path) -> None:
 def test_rule_id_resolved_from_rules_table(tmp_path: Path) -> None:
     """A result without ruleId falls back to the driver rules table by index."""
     path = _write_sarif(tmp_path, [_result(None, "src/a.py", 1, "x")])
-    findings = gate.load_findings(path)
+    findings = gate.classify(path)[0]
     assert findings[0][2] == "py/rule-0"
 
 
@@ -120,7 +112,7 @@ def test_render_groups_and_counts(tmp_path: Path) -> None:
             _result("py/y", "src/c.py", 3, "third"),
         ],
     )
-    report = gate.render(gate.load_findings(path))
+    report = gate.render(gate.classify(path)[0])
     assert "CodeQL code-quality findings: 3" in report
     assert "2  py/x" in report
     assert "## py/y (1)" in report
@@ -167,7 +159,7 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
             _result("py/empty-except", "src/a.py", 1, "first-party"),
         ],
     )
-    findings = gate.load_findings(path)
+    findings = gate.classify(path)[0]
     assert [f[0] for f in findings] == [
         "src/a.py",
         "src/ha_mcp/_vendor/__init__.py",
@@ -368,23 +360,26 @@ def test_other_ineffectual_statement_in_same_file_still_gates(
     assert gate.main(["prog", str(path)]) == 1
 
 
-def test_oauth_path_suppression_is_pinned_to_public_constant(monkeypatch) -> None:
+def test_oauth_path_suppression_is_pinned_to_public_constant(tmp_path: Path) -> None:
     """A different clear-text finding in mcp_webhook must still gate."""
-    file = "custom_components/ha_mcp_tools/mcp_webhook.py"
+    webhook = _SCRIPT.parents[1] / "custom_components/ha_mcp_tools/mcp_webhook.py"
+    lines = webhook.read_text(encoding="utf-8").splitlines()
+    pinned = next(n for n, text in enumerate(lines, 1) if "OAUTH_BASE," in text)
+    other = next(n for n, text in enumerate(lines, 1) if "OAUTH_BASE" not in text)
     rule = "py/clear-text-logging-sensitive-data"
     message = "This expression is logged as clear text."
-    monkeypatch.setattr(
-        gate,
-        "_source_line",
-        lambda _file, line: (
-            "            OAUTH_BASE,"
-            if line == 731
-            else "        _LOGGER.warning(client_secret)"
-        ),
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(rule, str(webhook), pinned, message),
+            _result(rule, str(webhook), other, message),
+        ],
     )
 
-    assert gate._allowlist_reason(file, 731, rule, message) is not None
-    assert gate._allowlist_reason(file, 900, rule, message) is None
+    findings, suppressed = gate.classify(path)
+
+    assert [f[1] for f in findings] == [other]
+    assert [f[1] for f in suppressed] == [pinned]
 
 
 def test_code_scoped_entry_fails_closed_when_source_is_unreadable(
@@ -470,7 +465,7 @@ def test_result_without_location_still_gates(tmp_path: Path) -> None:
     }
     path = tmp_path / "q.sarif"
     path.write_text(json.dumps(sarif), encoding="utf-8")
-    findings = gate.load_findings(path)
+    findings = gate.classify(path)[0]
     assert findings == [("<no-location>", 0, "py/no-loc", "x")]
 
 
@@ -493,7 +488,7 @@ def test_missing_region_and_message_default_cleanly(tmp_path: Path) -> None:
     }
     path = tmp_path / "q.sarif"
     path.write_text(json.dumps(sarif), encoding="utf-8")
-    findings = gate.load_findings(path)
+    findings = gate.classify(path)[0]
     assert findings == [("a.py", 0, "py/x", "")]
 
 

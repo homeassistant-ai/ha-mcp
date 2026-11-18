@@ -273,20 +273,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "allowed in a conftest below the root directory.",
     ),
     (
-        "py/import-and-import-from",
-        "tests/src/unit/test_translate_locales.py",
-        "Module 'translate_locales' is imported with both",
-        "import translate_locales",
-        "Both forms are load-bearing in this one file. The module object is "
-        "what the monkeypatch sites need — translate_locales.time, .httpx and "
-        "._call_gemini are replaced per test, twenty-three attributes in all — "
-        "while the from-imports name the API under test at seventy call sites. "
-        "Collapsing either direction requalifies those without making anything "
-        "clearer. The pair predates this entry and is unchanged from master; "
-        "it began reporting once scripts/ gained a second module importing "
-        "translate_locales, which is what lets the extractor resolve the name.",
-    ),
-    (
         "py/catch-base-exception",
         "homeassistant-addon/start.py",
         "BaseException",
@@ -696,11 +682,6 @@ def classify(
     findings.sort(key=lambda f: (f[2], f[0], f[1]))
     suppressed.sort(key=lambda f: (f[2], f[0], f[1]))
     return findings, suppressed
-
-
-def load_findings(sarif_path: Path) -> list[tuple[str, int, str, str]]:
-    """Return the sorted list of gating (file, line, rule_id, message) findings."""
-    return classify(sarif_path)[0]
 
 
 def render(findings: list[tuple[str, int, str, str]]) -> str:

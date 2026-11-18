@@ -1482,9 +1482,8 @@ def get_home_assistant_http_config(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict):
-        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
-    return result
+    config: dict[str, Any] = result
+    return config
 
 
 def configure_home_assistant_http(
@@ -1508,11 +1507,8 @@ def configure_home_assistant_http(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
-        raise RuntimeError(
-            f"http/config/configure returned an invalid result: {result!r}"
-        )
-    return result["restart"]
+    restart: bool = result["restart"]
+    return restart
 
 
 def promote_home_assistant_http_config(
@@ -1523,17 +1519,13 @@ def promote_home_assistant_http_config(
     verify_ssl: bool = True,
 ) -> None:
     """Promote Core's live pending HTTP config to the stable slot."""
-    result = _home_assistant_ws_command(
+    _home_assistant_ws_command(
         base_url,
         token,
         {"type": "http/config/promote"},
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if result is not None:
-        raise RuntimeError(
-            f"http/config/promote returned an unexpected result: {result!r}"
-        )
 
 
 def enable_config_entry(
@@ -2520,7 +2512,7 @@ def _wait_supervisor_update_done(
     head. ``/store/reload`` and ``/addons/{slug}/update`` are both
     SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
     first" / "No update available", #1594) if they fire while need_update is
-    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    still True. Mirror ``build_image.wait_supervisor_ready``: wait until
     update_available is false (and a version_latest is present, so a pre-fetch
     latest=None does not read as a false clear).
 

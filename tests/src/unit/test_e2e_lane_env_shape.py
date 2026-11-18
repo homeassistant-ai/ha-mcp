@@ -29,6 +29,8 @@ from typing import Any
 import pytest
 import yaml
 
+pytest_plugins = ["pytester"]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _TOPOLOGY_PATH = (
@@ -38,6 +40,7 @@ _TOPOLOGY_PATH = (
 
 def _load_topology():
     spec = importlib.util.spec_from_file_location("e2e_topology", _TOPOLOGY_PATH)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -131,34 +134,58 @@ def test_no_tools_haos_inaddon_has_no_component_surface(
     assert topology.component_surface_available() is False
 
 
-def test_requires_component_surface_skips_only_without_the_surface() -> None:
-    """The gated item is skipped exactly where ``component_surface_available()``
-    is False; an inverted condition would skip it on every lane that has the
-    surface."""
-    from tests.src.e2e import _conftest_collection
+@pytest.mark.parametrize(
+    ("lane_env", "gated_runs"),
+    [
+        pytest.param({}, True, id="ordinary"),
+        pytest.param({"E2E_NO_TOOLS_ENTRY": "1"}, False, id="no-component"),
+        pytest.param(
+            {"E2E_NO_TOOLS_ENTRY": "1", "E2E_BACKEND": "embedded"},
+            True,
+            id="embedded-server-only",
+        ),
+    ],
+)
+def test_requires_component_surface_skips_only_without_the_surface(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+    lane_env: dict[str, str],
+    gated_runs: bool,
+) -> None:
+    """The E2E suite's collection hook skips a gated test exactly on the lanes
+    without the surface; an inverted condition would skip it on every lane that
+    has it, and an ungated test runs everywhere."""
+    for name, value in lane_env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("HAOS_TEST_IMAGE_PATH", raising=False)
+    pytester.makeconftest(
+        "from tests.src.e2e._conftest_collection import pytest_collection_modifyitems"
+    )
+    pytester.makeini(
+        "[pytest]\nmarkers =\n    requires_component_surface: needs the surface\n"
+    )
+    pytester.makepyfile(
+        """
+        import pytest
 
-    class Item:
-        def __init__(self, *, gated: bool) -> None:
-            self.keywords = {"requires_component_surface": True} if gated else {}
-            self.markers: list[Any] = []
+        @pytest.mark.requires_component_surface
+        def test_gated():
+            pass
 
-        def add_marker(self, marker: Any) -> None:
-            self.markers.append(marker)
+        def test_ordinary():
+            pass
+        """
+    )
 
-    marker = object()
-    apply = _conftest_collection._apply_requires_component_surface_skip
+    # Only pytest and this conftest: the plugins installed for the unit tests
+    # (Core's among them) are not the E2E suite's.
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
 
-    absent = Item(gated=True)
-    apply(absent, False, marker)
-    assert absent.markers == [marker]
+    result = pytester.runpytest("-p", "no:cacheprovider")
 
-    present = Item(gated=True)
-    apply(present, True, marker)
-    assert present.markers == []
-
-    ordinary = Item(gated=False)
-    apply(ordinary, False, marker)
-    assert ordinary.markers == []
+    result.assert_outcomes(
+        passed=2 if gated_runs else 1, skipped=0 if gated_runs else 1
+    )
 
 
 # --------------------------------------------------------------------------
