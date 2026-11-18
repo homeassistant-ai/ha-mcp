@@ -633,3 +633,26 @@ class TestRebuildCategoryCache:
             await reader("ha_get_state", {}, ctx)
         # Repeated unchanged catalog requests must still dispatch successfully.
         assert await writer("ha_get_state", {}, ctx) == "tool_result"
+
+
+@pytest.mark.parametrize(
+    ("name", "admitted"),
+    [
+        ("ha_manage_backup", True),
+        ("ha_dev_manage_server", True),
+        ("ha_config_set_automation", False),
+        ("ha_manager", False),
+    ],
+)
+async def test_delete_proxy_admits_manage_names_without_matching_manager(name, admitted):
+    transform = CategorizedSearchTransform()
+    set_catalog(transform, [_make_tool(name, destructive=True)])
+    call = await proxy_function(transform, "delete")
+    ctx = _make_ctx()
+    if admitted:
+        assert await call(name, {}, ctx) == "tool_result"
+        ctx.fastmcp.call_tool.assert_awaited_once_with(name, {})
+    else:
+        with pytest.raises(ToolError):
+            await call(name, {}, ctx)
+        ctx.fastmcp.call_tool.assert_not_awaited()

@@ -77,6 +77,17 @@ class TestVersionCompare:
         assert info is None or info.update_available is False
 
 
+    @pytest.mark.parametrize("current", ["unknown", "garbage", "7.x", ""])
+    async def test_unparseable_current_version_is_never_newer(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI, current: str
+    ) -> None:
+        monkeypatch.setattr(update_check, "get_version", lambda: current)
+        pypi.publish("ha-mcp", "7.9.0")
+        info = await asyncio.to_thread(get_update_info)
+        assert info is None or info.update_available is False
+        assert pypi.asked == ([] if current == "unknown" else ["ha-mcp"])
+
+
 class TestGetUpdateInfoGating:
     """No-op (no network) for the excluded cases."""
 
@@ -84,13 +95,17 @@ class TestGetUpdateInfoGating:
         self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         monkeypatch.setenv(update_check.DISABLE_ENV, "1")
-        assert get_update_info() is None
+        pypi.publish("ha-mcp", "7.9.0")
+        assert await asyncio.to_thread(get_update_info) is None
+        assert pypi.asked == []
 
     async def test_unknown_version_returns_none(
         self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         monkeypatch.setattr(update_check, "get_version", lambda: "unknown")
-        assert get_update_info() is None
+        pypi.publish("ha-mcp", "7.9.0")
+        assert await asyncio.to_thread(get_update_info) is None
+        assert pypi.asked == []
 
     @pytest.mark.parametrize(
         "val,enabled",
@@ -231,14 +246,19 @@ class TestAddonSupervisorSource:
         monkeypatch.setenv("SUPERVISOR_BASE_URL", refused_url())
         assert get_update_info() is None
 
-    def test_addon_disable_env_short_circuits(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_addon_disable_env_short_circuits(
+        self, monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, pypi: PyPI
     ) -> None:
         """The opt-out is honored before any add-on source is consulted."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        app_store(
+            monkeypatch, supervisor, installed="7.8.0", latest="7.9.0",
+            update_available=True,
+        )
         monkeypatch.setenv(update_check.DISABLE_ENV, "1")
 
-        assert get_update_info() is None
+        assert await asyncio.to_thread(get_update_info) is None
+        assert supervisor.requests == []
+        assert pypi.asked == []
 
     async def test_dev_non_addon_still_uses_pypi(
         self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
@@ -267,6 +287,14 @@ class TestInMemoryMemo:
 
 
 class TestFetchLatestFromPypi:
+    def test_connection_refusal_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, socket_enabled: None
+    ) -> None:
+        monkeypatch.setattr(
+            update_check, "PYPI_JSON_URL", refused_url() + "/pypi/{package}/json"
+        )
+        assert get_update_info() is None
+
     async def test_malformed_payload_returns_none(self, pypi: PyPI) -> None:
         pypi.releases["ha-mcp"] = {}
         assert await asyncio.to_thread(get_update_info) is None

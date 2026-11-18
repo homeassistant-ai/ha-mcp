@@ -8,6 +8,8 @@ import pytest
 
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
+from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.transforms.categorized_search import (
     DEFAULT_PINNED_TOOLS,
     CategorizedSearchTransform,
@@ -123,6 +125,15 @@ class TestCategorizeTool:
             )
             == "read"
         )
+
+
+@pytest.mark.parametrize("name", sorted(READ_ONLY_EXEMPT_TOOLS))
+async def test_every_read_exemption_advertises_the_read_proxy(name):
+    """A mixed tool accepted for reads must tell a search client that route exists."""
+    tool = _make_tool(name, destructive=True, description="Manage the resource")
+    [result] = await render_search_results(CategorizedSearchTransform(), [tool])
+    assert result["name"] == name
+    assert "ha_call_read_tool" in result["execute_via"]
 
 
 class TestRenderResults:
@@ -550,7 +561,8 @@ async def test_keywords_are_served_in_both_catalog_modes(
     monkeypatch.setenv("ENABLE_LITE_DOCSTRINGS", "false")
     server = build_server(monkeypatch, core_client)
     # Public get_tool returns the enriched hidden definition even in search mode.
-    tool = await server.mcp.get_tool("ha_config_set_automation")
+    with catalog_endpoint("search" if search_enabled else "full"):
+        tool = await server.mcp.get_tool("ha_config_set_automation")
     assert tool is not None
     for term in ("create", "update", "modify", "edit", "new", "save"):
         assert term in tool.description.lower()
@@ -624,6 +636,29 @@ async def test_search_vocabulary_reaches_the_served_tool(
     monkeypatch.setenv("ENABLE_LITE_DOCSTRINGS", "false")
     server = build_server(monkeypatch, core_client)
     tool = await server.mcp.get_tool(tool_name)
+    assert tool is not None
+    for term in terms:
+        assert term in tool.description.lower()
+
+
+@pytest.mark.parametrize(
+    ("name", "terms"),
+    [
+        ("ha_config_set_script", ("create", "new", "save")),
+        ("ha_config_set_helper", ("mold_indicator", "generic_hygrostat")),
+        ("ha_search", ("device_tracker", "binary_sensor")),
+        ("ha_manage_app", ("nodered", "appdaemon", "influxdb")),
+    ],
+)
+async def test_native_search_receives_the_issue_940_tool_vocabulary(
+    core_client: HomeAssistantClient, monkeypatch, name, terms
+):
+    from ._real_server import build_server
+
+    monkeypatch.setenv("ENABLE_LITE_DOCSTRINGS", "false")
+    server = build_server(monkeypatch, core_client)
+    with catalog_endpoint("full"):
+        tool = await server.mcp.get_tool(name)
     assert tool is not None
     for term in terms:
         assert term in tool.description.lower()

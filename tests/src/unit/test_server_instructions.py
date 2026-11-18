@@ -6,16 +6,15 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import Settings, get_global_settings
-from ha_mcp.settings_ui import save_tool_config
-
-from ._server_factory import make_server
-
 from ha_mcp.server_instructions import (
     build_skills_instructions,
     compose_instructions,
     skill_tool_hidden,
 )
 from ha_mcp.server_tool_text import ISSUE_FILING_INSTRUCTIONS, SKILL_TOOL_NAME
+from ha_mcp.settings_ui import save_tool_config
+
+from ._server_factory import make_server
 
 
 @pytest.fixture
@@ -188,9 +187,14 @@ async def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
     """The served search description must point only to available guidance."""
     assert save_tool_config({"tools": {SKILL_TOOL_NAME: "disabled"} if hidden else {}})
     server = make_server(
-        core_client, monkeypatch, enable_tool_search=True, enable_strict_mandatory_bps=False
+        core_client,
+        monkeypatch,
+        enable_tool_search=True,
+        enable_strict_mandatory_bps=False,
     )
-    tool = next(tool for tool in await server.mcp.list_tools() if tool.name == "ha_search_tools")
+    tool = next(
+        tool for tool in await server.mcp.list_tools() if tool.name == "ha_search_tools"
+    )
     description = tool.description
     if hidden:
         assert SKILL_TOOL_NAME not in description

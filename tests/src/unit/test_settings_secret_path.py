@@ -40,6 +40,8 @@ async def test_truthy_values_disable_even_an_explicit_path(monkeypatch, value):
 async def test_falsy_or_unset_values_keep_settings_enabled(monkeypatch, value):
     paths = await _paths(monkeypatch, HA_MCP_DISABLE_SETTINGS_UI=value)
     assert any(p.startswith("/private_") and p.endswith("/settings") for p in paths)
+    assert "/mcp/api/settings/advanced" not in paths
+    assert "/settings" not in paths
     assert is_http_settings_mounted()
     assert get_http_settings_prefix() is None
 

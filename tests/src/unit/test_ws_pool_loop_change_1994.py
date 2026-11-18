@@ -64,7 +64,9 @@ async def owning_loop(core_client: HomeAssistantClient) -> AsyncIterator[LoopWor
         await worker.close()
 
 
-async def get_client(core_client: HomeAssistantClient, token: str | None = None):
+async def get_client(
+    core_client: HomeAssistantClient, token: str | None = None
+) -> HomeAssistantWebSocketClient:
     return await websocket_manager.get_client(
         url=core_client.base_url, token=token or core_client.token, verify_ssl=False
     )
@@ -72,14 +74,14 @@ async def get_client(core_client: HomeAssistantClient, token: str | None = None)
 
 async def get_client_on(
     worker: LoopWorker, core_client: HomeAssistantClient, token: str | None = None
-):
+) -> HomeAssistantWebSocketClient:
     client = await worker.run(get_client(core_client, token))
     worker.clients.append(client)
     assert await worker.run(client.ping())
     return client
 
 
-def pooled(core_client: HomeAssistantClient):
+def pooled(core_client: HomeAssistantClient) -> HomeAssistantWebSocketClient | None:
     return websocket_manager.pooled_client(
         url=core_client.base_url, token=core_client.token, verify_ssl=False
     )
@@ -94,8 +96,10 @@ async def settled(worker: LoopWorker) -> None:
 
 
 async def test_get_client_recovers_after_the_owning_loop_was_closed(
-    core_client, owning_loop, monkeypatch
-):
+    core_client: HomeAssistantClient,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stale = await get_client_on(owning_loop, core_client)
     # Close the socket on its owner before closing the loop, without clearing
     # the manager's pool. This reproduces a reload without leaking a transport.
@@ -112,14 +116,16 @@ async def test_get_client_recovers_after_the_owning_loop_was_closed(
 
 
 async def test_stale_disconnect_runs_on_a_still_running_owning_loop(
-    core_client, owning_loop, monkeypatch
-):
+    core_client: HomeAssistantClient,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stale = await get_client_on(owning_loop, core_client)
     original_disconnect = stale.disconnect
     finished = threading.Event()
-    cleanup_loops = []
+    cleanup_loops: list[asyncio.AbstractEventLoop] = []
 
-    async def disconnect():
+    async def disconnect() -> None:
         cleanup_loops.append(asyncio.get_running_loop())
         await original_disconnect()
         finished.set()
@@ -136,14 +142,16 @@ async def test_stale_disconnect_runs_on_a_still_running_owning_loop(
 
 
 async def test_stale_disconnect_is_deferred_to_a_stopped_owning_loop(
-    core_client, owning_loop, monkeypatch
-):
+    core_client: HomeAssistantClient,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stale = await get_client_on(owning_loop, core_client)
     original_disconnect = stale.disconnect
     finished = threading.Event()
-    cleanup_loops = []
+    cleanup_loops: list[asyncio.AbstractEventLoop] = []
 
-    async def disconnect():
+    async def disconnect() -> None:
         cleanup_loops.append(asyncio.get_running_loop())
         await original_disconnect()
         finished.set()
@@ -164,13 +172,13 @@ async def test_stale_disconnect_is_deferred_to_a_stopped_owning_loop(
 
 
 async def test_disconnect_clears_the_pool_even_when_a_client_raises(
-    core_client, monkeypatch
-):
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     failing = await get_client(core_client)
     original_disconnect = failing.disconnect
-    pool_at_disconnect = []
+    pool_at_disconnect: list[HomeAssistantWebSocketClient | None] = []
 
-    async def disconnect():
+    async def disconnect() -> None:
         pool_at_disconnect.append(pooled(core_client))
         await original_disconnect()
         raise RuntimeError(CROSS_LOOP_MESSAGE)
@@ -186,13 +194,16 @@ async def test_disconnect_clears_the_pool_even_when_a_client_raises(
 
 
 async def test_a_stale_disconnect_cancelled_with_its_loop_is_logged(
-    core_client, owning_loop, monkeypatch, caplog
-):
+    core_client: HomeAssistantClient,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     stale = await get_client_on(owning_loop, core_client)
     started = threading.Event()
-    cleanup_tasks = []
+    cleanup_tasks: list[asyncio.Task[Any]] = []
 
-    async def disconnect():
+    async def disconnect() -> None:
         task = asyncio.current_task()
         assert task is not None
         cleanup_tasks.append(task)
@@ -212,8 +223,11 @@ async def test_a_stale_disconnect_cancelled_with_its_loop_is_logged(
 
 
 async def test_a_failed_stale_disconnect_is_reported(
-    core_client, owning_loop, monkeypatch, caplog
-):
+    core_client: HomeAssistantClient,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     stale = await get_client_on(owning_loop, core_client)
     cleanup = AsyncMock(side_effect=RuntimeError(CROSS_LOOP_MESSAGE))
     monkeypatch.setattr(stale, "disconnect", cleanup)
@@ -230,20 +244,28 @@ async def test_a_failed_stale_disconnect_is_reported(
 
 
 async def test_a_loop_closing_mid_schedule_does_not_stop_the_cleanup(
-    core_client, hass_read_only_access_token, owning_loop, monkeypatch, caplog
-):
+    core_client: HomeAssistantClient,
+    hass_read_only_access_token: str,
+    owning_loop: LoopWorker,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     first = await get_client_on(owning_loop, core_client)
     second = await get_client_on(owning_loop, core_client, hass_read_only_access_token)
     calls = 0
 
-    def raise_runtime(_coro, _loop):
+    def raise_runtime(
+        _coro: Coroutine[Any, Any, None], _loop: asyncio.AbstractEventLoop
+    ) -> None:
         nonlocal calls
         calls += 1
         raise RuntimeError("Event loop is closed")
 
     caplog.set_level(logging.DEBUG, logger=websocket_client.logger.name)
     with monkeypatch.context() as patched:
-        patched.setattr(websocket_client.asyncio, "run_coroutine_threadsafe", raise_runtime)
+        patched.setattr(
+            websocket_client.asyncio, "run_coroutine_threadsafe", raise_runtime
+        )
         fresh = await get_client(core_client)
 
     assert fresh is not first

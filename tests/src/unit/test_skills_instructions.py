@@ -13,7 +13,6 @@ from ha_mcp.server_tool_text import SKILL_TOOL_NAME
 from ha_mcp.utils.skill_loader import BEST_PRACTICES_SKILL_NAME, parse_skill_frontmatter
 
 from ._server_factory import make_server
-
 from ._symlink_support import symlink_or_skip
 
 
@@ -21,6 +20,7 @@ from ._symlink_support import symlink_or_skip
 def server(core_client: HomeAssistantClient, monkeypatch):
     def build(skills_dir=None):
         return make_server(core_client, monkeypatch, skills_dir)
+
     return build
 
 
@@ -329,9 +329,7 @@ class TestHandleSkillGuideCall:
         attach, before it had read any of them.
         """
         skill_md = await _guide(server, skills_dir)
-        reference = await _guide(server,
-            skills_dir, "references/reference.md"
-        )
+        reference = await _guide(server, skills_dir, "references/reference.md")
         assert "skill_content_hint" not in skill_md
         assert "MandatoryBPS=false" in reference["skill_content_hint"]
 
@@ -450,16 +448,21 @@ async def test_skill_catalog_keeps_aliases_keywords_annotations_and_tags(
     """Both healthy and degraded catalogs tell old clients where to go."""
     from ha_mcp.server_tool_text import SEARCH_KEYWORDS
 
-    tool = await server(populated_dir if available else None).mcp.get_tool(SKILL_TOOL_NAME)
+    tool = await server(populated_dir if available else None).mcp.get_tool(
+        SKILL_TOOL_NAME
+    )
     assert tool is not None
     for old_name in (
-        "ha_list_resources", "ha_read_resource",
+        "ha_list_resources",
+        "ha_read_resource",
         "ha_get_skill_home_assistant_best_practices",
     ):
         assert old_name in tool.description
         assert old_name in SEARCH_KEYWORDS[SKILL_TOOL_NAME]
     for anchor in (
-        "Use BEFORE:", "creating or editing automations", "writing triggers",
+        "Use BEFORE:",
+        "creating or editing automations",
+        "writing triggers",
         "ha_config_set_automation",
     ):
         assert anchor in tool.description
@@ -505,7 +508,9 @@ async def test_resource_provider_failure_keeps_guide_tool(
 
         monkeypatch.setattr(builtins, "__import__", import_module)
     else:
-        from ha_mcp._vendor.fastmcp.server.providers.skills import SkillsDirectoryProvider
+        from ha_mcp._vendor.fastmcp.server.providers.skills import (
+            SkillsDirectoryProvider,
+        )
 
         original_add = HttpTransportFastMCP.add_provider
 
@@ -541,8 +546,10 @@ def test_guide_registration_failure_is_reported_without_aborting_startup(
     monkeypatch.setattr(HttpTransportFastMCP, "tool", tool)
     with caplog.at_level(logging.WARNING):
         server(populated_dir)
-    assert any(SKILL_TOOL_NAME in r.message and "Failed to register" in r.message
-               for r in caplog.records)
+    assert any(
+        SKILL_TOOL_NAME in r.message and "Failed to register" in r.message
+        for r in caplog.records
+    )
     summaries = [r for r in caplog.records if "Skill system summary" in r.message]
     assert len(summaries) == 1
     assert summaries[0].levelno == logging.WARNING

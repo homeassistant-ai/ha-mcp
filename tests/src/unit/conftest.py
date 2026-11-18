@@ -196,7 +196,9 @@ def _no_threads_left_by_the_test(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     pool_type = concurrent.futures.ThreadPoolExecutor
     original_init = pool_type.__init__
 
-    def record_pool(pool: concurrent.futures.ThreadPoolExecutor, *args: Any, **kwargs: Any) -> None:
+    def record_pool(
+        pool: concurrent.futures.ThreadPoolExecutor, *args: Any, **kwargs: Any
+    ) -> None:
         original_init(pool, *args, **kwargs)
         if str(kwargs.get("thread_name_prefix", "")).startswith("quickjs-worker"):
             pools.append(pool)
