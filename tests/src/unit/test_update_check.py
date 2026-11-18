@@ -38,11 +38,16 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     # Runtime simulations belong to update_check, not aiohttp/pytest or
     # other threads sharing the interpreter. Keep real argv and environ.
     monkeypatch.setattr(
-        update_check, "sys", SimpleNamespace(version_info=sys.version_info, argv=sys.argv)
+        update_check,
+        "sys",
+        SimpleNamespace(version_info=sys.version_info, argv=sys.argv),
     )
     monkeypatch.setattr(
-        update_check, "os",
-        SimpleNamespace(environ=os.environ, path=SimpleNamespace(exists=os.path.exists)),
+        update_check,
+        "os",
+        SimpleNamespace(
+            environ=os.environ, path=SimpleNamespace(exists=os.path.exists)
+        ),
     )
     monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
