@@ -13,6 +13,7 @@ from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.core
 @pytest.mark.parametrize(
@@ -157,6 +158,7 @@ async def test_core_display_conversion_labels_the_converted_values(
             assert cleared["success"], cleared
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.core
 async def test_mixed_energy_cost_and_water_keep_unconverted_metadata(

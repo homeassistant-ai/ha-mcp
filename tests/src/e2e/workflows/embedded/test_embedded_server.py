@@ -425,7 +425,7 @@ class TestEmbeddedServerEndToEnd:
         ``container_only`` + ``not_on_embedded`` (see the file-level
         ``pytestmark``), so this test is SKIPPED on the haos, haos_inaddon,
         haos_embedded, and embedded lanes and RUNS only on the container lane.
-        Each such skip counts toward ``_SKIP_CEILING_PER_LANE`` in
+        Each such skip counts toward ``SKIP_CEILING_PER_LANE`` in
         tests/src/e2e/basic/test_backend_dispatch_smoke.py — adding this test
         tripped ``test_session_skipped_count_below_ceiling`` until those four
         ceilings were bumped by 1. Any future marker-gated test added here will

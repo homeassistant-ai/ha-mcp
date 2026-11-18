@@ -72,6 +72,9 @@ _READY_POLL_S = 5
 # to sit just above _READY_TIMEOUT_S. The fixture's own 600s AssertionError still
 # fires first with an actionable message; this is only the safety ceiling above it.
 pytestmark = [
+    # Enabling the server entry changes the shared surface for later tests.
+    # Keep it out of a combined worker's component-absent phase.
+    pytest.mark.installs_component_surface,
     pytest.mark.slow,
     pytest.mark.haos_only,
     # These tests enable the baked entry and drive the webhook per-test. On the

@@ -36,6 +36,7 @@ async def _restore(mcp: MCPAssertions, backup_name: str) -> dict:
     return restored
 
 
+@pytest.mark.component_topology
 @pytest.mark.helper
 @pytest.mark.cleanup
 async def test_utility_meter_edit_is_backed_up_and_restored(mcp_client: Client) -> None:
@@ -288,6 +289,7 @@ async def solar_plane(
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.helper
 @pytest.mark.cleanup
 async def test_subentry_edit_is_backed_up_and_restored(
@@ -320,6 +322,7 @@ async def test_subentry_edit_is_backed_up_and_restored(
         assert (await _plane_titles(mcp, entry_id))[subentry_id].endswith("1000W")
 
 
+@pytest.mark.component_topology
 @pytest.mark.helper
 @pytest.mark.cleanup
 async def test_deleted_subentry_is_backed_up_and_created_again(

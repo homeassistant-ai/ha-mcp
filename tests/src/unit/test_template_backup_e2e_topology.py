@@ -2,69 +2,88 @@
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock
-
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
-from ..e2e.workflows.auto_backup.test_capture_and_restore import (
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client.rest_client import HomeAssistantClient
+
+from ..e2e.utilities.assertions import MCPAssertions
+from ..e2e.workflows.auto_backup.test_template_capture_restore import (
     TestTemplateHelperCaptureRestore as TemplateHelperScenario,
 )
+from ._real_server import build_server
+from ._template_helper_core import create_template_sensor
 
 
-@pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
-@pytest.mark.parametrize("haos", [False, True], ids=["container", "haos_inaddon"])
 async def test_missing_component_never_creates_or_edits_helper(
-    monkeypatch: pytest.MonkeyPatch, template_type: str, haos: bool
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Execute the real E2E scenario with read/capture-only protocol replies.
-
-    Any native helper write or options-flow call is an assertion failure,
-    including accidental cleanup of a helper that should never be created.
+    """Run the real E2E scenario through the real server on Core without the
+    component. Its absent-component branch must get the server's refusals and
+    leave Home Assistant without a template helper it would have to clean up.
     """
     monkeypatch.setenv("E2E_NO_TOOLS_ENTRY", "1")
     monkeypatch.delenv("E2E_BACKEND", raising=False)
-    monkeypatch.setenv("HAOS_TEST_MODE", "inaddon" if haos else "external")
-    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.delenv("HAOS_TEST_MODE", raising=False)
+    assert await async_setup_component(hass, "config", {})
+    server = build_server(monkeypatch, core_client)
 
-    async def call_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
-        calls.append((name, params))
-        if name == "ha_config_list_helpers":
-            assert params == {"helper_type": "template"}
-            return {
-                "success": False,
-                "error": {
-                    "code": "COMPONENT_NOT_INSTALLED",
-                    "message": "Template helpers require the ha_mcp_tools component",
-                },
-            }
-        assert name == "ha_manage_backup", f"Unexpected native write: {name}"
-        assert params["scope"] == "edits"
-        assert params["domain"] == "helper_template"
-        if params["action"] == "create":
-            return {
-                "success": False,
-                "error": {
-                    "code": "BACKUP_CAPTURE_FAILED",
-                    "message": "Persisted options could not be read",
-                },
-            }
-        assert params["action"] == "list", f"Unexpected backup action: {params}"
-        return {"success": True, "data": {"backups": []}}
+    async with Client(server.mcp) as mcp_client:
+        await TemplateHelperScenario().test_template_options_full_loop(
+            mcp_client=mcp_client,
+            ha_client=core_client,
+            ha_container_with_fresh_config={},
+            template_type="sensor",
+        )
 
-    mcp = AsyncMock()
-    mcp.call_tool.side_effect = call_tool
-    ha = AsyncMock()
-    await TemplateHelperScenario().test_template_options_full_loop(
-        mcp_client=mcp,
-        ha_client=ha,
-        template_type=template_type,
-        ha_container_with_fresh_config={},
-    )
-    assert [name for name, _ in calls] == [
-        "ha_config_list_helpers",
-        "ha_manage_backup",
-        "ha_manage_backup",
-    ]
-    assert calls[1][1]["entity_id"] == calls[2][1]["entity_id"]
-    assert ha.mock_calls == []
+    assert hass.config_entries.async_entries("template") == []
+
+
+async def test_an_existing_template_helper_is_not_captured_without_the_component(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scenario above asks for a made-up id, which is refused either way.
+    A real helper must be refused too: without the component the server cannot
+    read its stored options, so nothing is saved and the helper is unchanged."""
+    entry = await create_template_sensor(hass, "saved")
+    entity_id = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)[
+        0
+    ].entity_id
+    options = dict(entry.options)
+    entry_id = entry.entry_id
+    server = build_server(monkeypatch, core_client)
+
+    async with Client(server.mcp) as mcp_client:
+        mcp = MCPAssertions(mcp_client)
+        refused = await mcp.call_tool_failure(
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "create",
+                "domain": "helper_template",
+                "entity_id": entity_id,
+            },
+        )
+        # Snapshots are stored under the entry id; the entity alias lists none.
+        listing = await mcp.call_tool_success(
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "list",
+                "domain": "helper_template",
+                "entity_id": entry_id,
+            },
+        )
+
+    assert refused["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+    assert listing["data"]["backups"] == []
+    live = hass.config_entries.async_get_entry(entry_id)
+    assert live is not None, "the refused capture removed the helper"
+    assert dict(live.options) == options
