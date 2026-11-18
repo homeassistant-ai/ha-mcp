@@ -22,6 +22,7 @@ from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import calendar_config_dir, local_calendar, write_event
+from ._ha_timezone import unresolvable_zone
 from ._module_clock import set_module_clock
 from ._tool_errors import error_of
 
@@ -145,35 +146,46 @@ async def test_a_bound_with_an_offset_pairs_with_the_default_of_the_other(
 
 
 @pytest.mark.parametrize(
-    "bounds",
-    [{}, {"start": "2026-06-12T08:00:00"}, {"start": "2026-06-12T08:00:00+00:00"}],
-    ids=["none", "start_without_offset", "start_with_offset"],
+    ("bounds", "failure", "code"),
+    [
+        ({}, "unreachable", "CONNECTION_FAILED"),
+        ({"start": "2026-06-12T08:00:00"}, "unreachable", "CONNECTION_FAILED"),
+        ({"start": "2026-06-12T08:00:00+00:00"}, "unreachable", "CONNECTION_FAILED"),
+        ({}, "unresolvable", "VALIDATION_INVALID_PARAMETER"),
+    ],
+    ids=["none", "start_without_offset", "start_with_offset", "zone_unresolvable"],
 )
 async def test_a_default_bound_needs_the_time_zone(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     bounds: dict[str, str],
+    failure: str,
+    code: str,
 ) -> None:
     """A default end counts seven days on Home Assistant's calendar, and a
     default beside a bound without an offset sits on its clock; without its
-    time zone they would be counted in UTC, so the read is refused."""
+    time zone, unreachable or unknown to this server, they would be counted
+    in UTC, so the read is refused."""
     set_module_clock(
         monkeypatch, tools_calendar, dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     )
     await local_calendar(hass, "Test")
-    monkeypatch.setattr(
-        core_client,
-        "get_config",
-        AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
-    )
+    if failure == "unreachable":
+        monkeypatch.setattr(
+            core_client,
+            "get_config",
+            AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
+        )
+    else:
+        await unresolvable_zone(hass, monkeypatch)
 
     with pytest.raises(ToolError) as exc_info:
         await CalendarTools(core_client).ha_config_get_calendar_events(
             "calendar.test", **bounds
         )
 
-    assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
+    assert error_of(exc_info)["code"] == code
 
 
 @pytest.mark.parametrize(

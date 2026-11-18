@@ -28,7 +28,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .response_helpers import fetch_ha_timezone, resolve_local_timezone
+from .response_helpers import require_ha_timezone
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
@@ -196,20 +196,11 @@ class CalendarTools:
         be an hour more or less than 168 hours: a default built in another
         zone would shift the window.
         """
-        ha_timezone, fetch_failed = await fetch_ha_timezone(self._client)
-        if fetch_failed:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Could not get Home Assistant's time zone, which a "
-                    "default start or end needs",
-                    suggestions=[
-                        "Check the Home Assistant connection, then retry",
-                        "Or pass both start and end",
-                    ],
-                )
-            )
-        local_tz, _ = resolve_local_timezone(ha_timezone)
+        local_tz = await require_ha_timezone(
+            self._client,
+            needed_for="a default start or end needs",
+            workaround="Or pass both start and end",
+        )
         return datetime.now(local_tz)
 
     @tool(
