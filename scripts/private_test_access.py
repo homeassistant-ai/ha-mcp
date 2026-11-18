@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import ast
 import itertools
+import math
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -28,6 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 TREES = ("tests/src/unit", "tests/addon")
 UNKNOWN = "\0"
 MAX_ALTERNATIVES = 256
+TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
 REFLECTION = {"getattr", "hasattr", "setattr", "delattr"}
 DUNDER_REFLECTION = {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
 PATCH_MULTIPLE_OPTIONS = {
@@ -168,7 +170,14 @@ def _parametrized(function: ast.FunctionDef | ast.AsyncFunctionDef) -> Scope:
         else:
             elements = names.elts if isinstance(names, _SEQUENCES) else []
             fields = [str(e.value) for e in elements if isinstance(e, ast.Constant)]
-        for row in rows.elts if isinstance(rows, _SEQUENCES) else []:
+        if not isinstance(rows, _SEQUENCES):
+            # Rows named by a constant: each field is one item of it.
+            for index, field in enumerate(fields):
+                item = _Item()
+                item.iterable, item.index = rows, (index if len(fields) > 1 else None)
+                scope.setdefault(field, []).append(item)
+            continue
+        for row in rows.elts:
             if isinstance(row, ast.Call) and _dotted(row.func, {}).endswith("param"):
                 cells = list(row.args)
             elif len(fields) > 1 and isinstance(row, (ast.Tuple, ast.List)):
@@ -271,8 +280,10 @@ def strings(
     parts = _parts(node)
     if parts is None:
         return {UNKNOWN}
-    combos = itertools.product(*(sorted(strings(p, chain, seen)) for p in parts))
-    return {"".join(combo) for combo in itertools.islice(combos, MAX_ALTERNATIVES)}
+    alternatives = [sorted(strings(p, chain, seen)) for p in parts]
+    if math.prod(len(a) for a in alternatives) > MAX_ALTERNATIVES:
+        return {TOO_MANY}
+    return {"".join(combo) for combo in itertools.product(*alternatives)}
 
 
 # --- Which arguments name a target --------------------------------------------
@@ -311,13 +322,16 @@ def _patch_targets(call: ast.Call, tail: str, aliases: dict[str, str]) -> list:
             return []
         return [_argument(call, 1, "attribute")]
     if tail == "multiple":
-        return [
-            _argument(call, 0, "target"),
-            *_keyword_names(call, PATCH_MULTIPLE_OPTIONS),
-        ]
+        target = _argument(call, 0, "target")
+        if _own(target):
+            return []
+        return [target, *_keyword_names(call, PATCH_MULTIPLE_OPTIONS)]
     target = _argument(call, 0, "in_dict")
-    if _namespace(target, aliases) is None:
+    namespace = _namespace(target, aliases)
+    if namespace is None:
         return [target]
+    if _own(namespace):
+        return []
     values = _argument(call, 1, "values")
     keys = values.keys if isinstance(values, ast.Dict) else []
     return [*keys, *_keyword_names(call, PATCH_DICT_OPTIONS)]
@@ -367,7 +381,7 @@ def _call_targets(call: ast.Call, aliases: dict[str, str]) -> list:
     ):
         return _attribute_targets(call, name, tail)
     if tail == "getattr_static":
-        return [_argument(call, 1, "attr")]
+        return [] if _own(_argument(call, 0)) else [_argument(call, 1, "attr")]
     if tail == "attrgetter":
         return list(call.args)
     if tail in {"import_module", "__import__"}:
@@ -386,11 +400,11 @@ class _Scanner:
     def __init__(self, tree: ast.Module) -> None:
         self.tree = tree
         self.aliases = _import_aliases(tree)
-        self.signatures = {
-            node.name: _parameters(node)
-            for node in ast.walk(tree)
-            if isinstance(node, _FUNCTIONS)
-        }
+        # Every definition of a name: a call may reach any of them.
+        self.signatures: dict[str, list[list[str]]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, _FUNCTIONS):
+                self.signatures.setdefault(node.name, []).append(_parameters(node))
         self.passed: Passed = {}
         self.findings: set[tuple[int, str]] = set()
 
@@ -409,18 +423,18 @@ class _Scanner:
     ) -> None:
         for target in targets:
             self.findings.update(
-                (line, s) for s in strings(target, chain) if private(s)
+                (line, s) for s in strings(target, chain) if s == TOO_MANY or private(s)
             )
 
     def record_arguments(self, call: ast.Call, chain: list[Scope]) -> None:
         if not isinstance(call.func, ast.Name) or call.func.id not in self.signatures:
             return
-        parameters = self.signatures[call.func.id]
         named = [(k.arg, k.value) for k in call.keywords if k.arg]
-        for index, value in enumerate(call.args):
-            if isinstance(value, ast.Starred) or index >= len(parameters):
-                break
-            named.append((parameters[index], value))
+        for parameters in self.signatures[call.func.id]:
+            for index, value in enumerate(call.args):
+                if isinstance(value, ast.Starred) or index >= len(parameters):
+                    break
+                named.append((parameters[index], value))
         for parameter, value in named:
             known = strings(value, chain) - {UNKNOWN}
             self.passed.setdefault((call.func.id, parameter), set()).update(known)
@@ -481,7 +495,13 @@ def main(argv: list[str] | None = None) -> int:
                 violations.append(f"{name}:{error.lineno}: {error.msg}")
                 continue
             violations.extend(
-                f"{name}:{line}: private name {target!r} reached through a string"
+                f"{name}:{line}: "
+                + (
+                    f"more than {MAX_ALTERNATIVES} possible names to check; "
+                    "name the targets directly"
+                    if target == TOO_MANY
+                    else f"private name {target!r} reached through a string"
+                )
                 for line, target in scan(module)
             )
     if violations:

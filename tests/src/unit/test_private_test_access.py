@@ -97,6 +97,16 @@ REFUSED = {
         "def outer(name):\n    inner(attribute=name)\n"
         "outer('_helper')\n"
     ),
+    "parametrize-constant-rows": (
+        "NAMES = ['public', '_helper']\n"
+        "@pytest.mark.parametrize('name', NAMES)\n"
+        "def test_it(name):\n    getattr(mod, name)\n"
+    ),
+    "same-named-helpers-in-two-scopes": (
+        "def test_one():\n    def check(target):\n        getattr(mod, target)\n"
+        "    check('_helper')\n"
+        "def test_two():\n    def check(name):\n        pass\n    check('public')\n"
+    ),
     "default-argument": "def test_it(value=getattr(mod, '_helper')):\n    pass\n",
     "suppression-comment": "getattr(mod, '_helper')  # noqa: SLF001\n",
 }
@@ -136,6 +146,9 @@ ALLOWED = {
         "    def test_it(self):\n        getattr(mod, NAME)\n"
     ),
     "namespace-of-self": "vars(self)['_helper']\n",
+    "getattr-static-own": "inspect.getattr_static(self, '_helper')\n",
+    "patch-multiple-own": "patch.multiple(self, _helper=1)\n",
+    "patch-dict-own-namespace": "patch.dict(vars(self), {'_helper': 1})\n",
     "f-string-format-spec": "NAME = '_helper'\ngetattr(mod, f'{NAME!r}')\n",
 }
 
@@ -148,6 +161,24 @@ def test_public_targets_and_data_strings_are_allowed(guard, tmp_path, capsys, so
         0,
         "No private string targets in 3 unit and app test files.\n",
     )
+
+
+def test_too_many_alternatives_fail_instead_of_passing_unchecked(
+    guard, tmp_path, capsys
+):
+    """The last of 289 combinations is private; none may be dropped unchecked."""
+    prefixes = ", ".join(repr(c) for c in "ABCDEFGHIJKLMNOP_")
+    suffixes = ", ".join(repr(c) for c in "abcdefghijklmnopq")
+    source = (
+        f"for prefix in ({prefixes}):\n"
+        f"    for suffix in ({suffixes}):\n"
+        "        getattr(mod, prefix + suffix)\n"
+    )
+
+    status, out = _run(guard, _repo(tmp_path, source), capsys)
+
+    assert status == 1
+    assert out.startswith("tests/src/unit/test_sample.py:3: ")
 
 
 def test_app_tests_are_checked_and_the_call_line_is_reported(guard, tmp_path, capsys):

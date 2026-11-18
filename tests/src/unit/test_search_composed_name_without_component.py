@@ -112,7 +112,10 @@ async def test_an_empty_search_with_a_current_component_carries_no_hint(
     assert await async_setup_component(hass, "config", {})
     hass.states.async_set("light.kitchen", "on", {"friendly_name": "Kitchen Light"})
 
+    failed: list[str] = []
+
     def _fails(*args: Any, **kwargs: Any) -> None:
+        failed.append("search_entities")
         raise HomeAssistantError("boom")
 
     # The current component's search fails, so the legacy path answers.
@@ -126,6 +129,7 @@ async def test_an_empty_search_with_a_current_component_carries_no_hint(
 
     data = await tools.ha_search(query="nothing is called this")
 
+    assert failed == ["search_entities"]
     assert data["count"] == 0
     warnings = data.get("warnings", [])
     assert not any("No ha_mcp_tools component detected" in w for w in warnings)
