@@ -83,7 +83,6 @@ def _cache_key_consumers(
 # Every HAOS lane boots the shared image, so each one restores it before it
 # would build; a lost restore leaves the lane rebuilding on every run while the
 # consumer count above still passes on its key or save step.
-_SHARED_IMAGE_KEY = "${{ steps.key.outputs.cache-key }}"
 _IMAGE_RESTORING_LANES = (
     (_STABLE_WORKFLOW, "haos-e2e"),
     (_STABLE_WORKFLOW, "haos-e2e-embedded"),
@@ -92,34 +91,36 @@ _IMAGE_RESTORING_LANES = (
 )
 
 
-def test_every_haos_lane_restores_the_shared_image() -> None:
-    for workflow, job_id in _IMAGE_RESTORING_LANES:
-        job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
-        restores = [
-            step
-            for step in _job_steps(job)
-            if str(step.get("uses", "")).partition("@")[0] == "actions/cache/restore"
-            and _HAOS_IMAGE_CACHE_PATH
-            in str(step.get("with", {}).get("path", "")).splitlines()
-        ]
-        assert restores, f"{workflow}::{job_id} no longer restores the HAOS image"
-        # The external lane saves under this key; any other key never hits.
-        assert all(step["with"]["key"] == _SHARED_IMAGE_KEY for step in restores), (
-            f"{workflow}::{job_id} restores a key the external lane does not save"
-        )
-    saves = [
+def _image_cache_steps(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
+    return [
         step
-        for step in _job_steps(
-            _workflow(_WORKFLOW_DIR / _STABLE_WORKFLOW)["jobs"]["haos-e2e"]
-        )
-        if str(step.get("uses", "")).partition("@")[0] == "actions/cache/save"
+        for step in _job_steps(job)
+        if str(step.get("uses", "")).partition("@")[0] == action
         and _HAOS_IMAGE_CACHE_PATH
         in str(step.get("with", {}).get("path", "")).splitlines()
     ]
-    assert saves, "the external HAOS lane no longer saves the image"
-    assert all(step["with"]["key"] == _SHARED_IMAGE_KEY for step in saves), (
-        "the external HAOS lane saves a key the other lanes do not restore"
-    )
+
+
+def _cache_identity(step: dict[str, Any]) -> tuple[str, list[str]]:
+    """What Actions matches a restore against a save by: the key, and the
+    path list, which goes into the cache version."""
+    paths = str(step["with"]["path"]).splitlines()
+    return step["with"]["key"], sorted(path.strip() for path in paths if path.strip())
+
+
+def test_every_haos_lane_restores_the_image_the_external_lane_saves() -> None:
+    external = _workflow(_WORKFLOW_DIR / _STABLE_WORKFLOW)["jobs"]["haos-e2e"]
+    saves = _image_cache_steps(external, "actions/cache/save")
+    assert len(saves) == 1, "the external HAOS lane must save the image once"
+    saved = _cache_identity(saves[0])
+    for workflow, job_id in _IMAGE_RESTORING_LANES:
+        job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
+        restores = _image_cache_steps(job, "actions/cache/restore")
+        assert restores, f"{workflow}::{job_id} no longer restores the HAOS image"
+        assert all(_cache_identity(step) == saved for step in restores), (
+            f"{workflow}::{job_id} restores a key or path list the external "
+            "lane does not save, so it rebuilds the image on every run"
+        )
 
 
 _TWO_PHASE_LANES = (
