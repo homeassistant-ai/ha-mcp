@@ -145,20 +145,15 @@ def custom_cards() -> Iterator[cc.CustomCards]:
 
 
 @pytest.fixture
-def fresh_card_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No card index, index build, custom-card refresh or download failure from
-    another test is held, and none this test makes outlives it.
-
-    The component has no public way to drop this state: unloading its config
-    entries leaves ``card_definitions`` and ``custom_cards`` untouched, so this
-    fixture is the one place a test still sets their module state.
-    """
-    for module, names in (
-        (cd, ("_definitions", "_build_task", "_build_failed_at")),
-        (cc, ("_custom", "_refresh_task", "_dom_failed_at", "_resource_error")),
-    ):
-        for name in names:
-            monkeypatch.setattr(module, name, None)
+def fresh_card_state() -> Iterator[None]:
+    """Each test starts and ends without cached cards or failed downloads."""
+    cd.reset_card_definitions_state()
+    cc.reset_custom_cards_state()
+    try:
+        yield
+    finally:
+        cd.reset_card_definitions_state()
+        cc.reset_custom_cards_state()
 
 
 class FrontendLocation:

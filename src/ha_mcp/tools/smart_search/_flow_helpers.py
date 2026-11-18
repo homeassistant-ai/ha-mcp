@@ -68,7 +68,7 @@ class FlowHelperSearchMixin(ScoringMixin):
 
         scored = await asyncio.gather(
             *(
-                self._score_flow_entry(
+                self.score_flow_entry(
                     e,
                     query_lower,
                     exact_match,
@@ -119,7 +119,7 @@ class FlowHelperSearchMixin(ScoringMixin):
             return None
         return [e for e in response if isinstance(e, dict) and e.get("domain") in flows]
 
-    async def _score_flow_entry(
+    async def score_flow_entry(
         self,
         entry: dict[str, Any],
         query_lower: str,

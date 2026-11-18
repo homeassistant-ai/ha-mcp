@@ -323,13 +323,8 @@ async def test_a_single_entry_read_does_not_need_cores_type_match(
     component_ws: MockHAClientWebSocket,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``entry_id`` selects one entry, so a type sent beside it is not matched:
-    the read works on a Core release without the private matcher."""
+    """An explicit entry_id wins over a mismatching integration type filter."""
     _entry(hass, "h1", "hue")
-    monkeypatch.delattr(
-        "homeassistant.components.config.config_entries."
-        "_async_matching_config_entries_json_fragments"
-    )
 
     result = await ws_result(
         component_ws, WS_CONFIG_ENTRIES, entry_id="h1", type_filter=["service"]

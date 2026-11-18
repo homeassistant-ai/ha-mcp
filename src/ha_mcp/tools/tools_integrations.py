@@ -89,7 +89,7 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_removed
 logger = logging.getLogger(__name__)
 
 # First wait between helper registry lookups; each later retry doubles it.
-_REGISTRY_RETRY_BASE_DELAY = 0.5
+REGISTRY_RETRY_BASE_DELAY = 0.5
 
 
 def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
@@ -2572,7 +2572,7 @@ class IntegrationTools:
                         logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                         break
                 if attempt < max_retries - 1:
-                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
+                    wait_time = REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     logger.debug(
                         f"Registry lookup failed for {entity_id}, "
                         f"waiting {wait_time}s before retry..."
@@ -2584,7 +2584,7 @@ class IntegrationTools:
                 # re-reported as ENTITY_NOT_FOUND in the fallback below.
                 logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
+                    wait_time = REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     await asyncio.sleep(wait_time)
         return unique_id, registry_result
 

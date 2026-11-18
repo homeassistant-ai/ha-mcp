@@ -70,7 +70,7 @@ _VALID_DOMAINS = ("automation", "script")
 # for -- it enriches a refused delete, or adds ``used_by`` to a get -- so
 # inheriting send_command's 30s default would make either hang far longer
 # than the operation itself. Same reasoning and same leash as
-# ``smart_search/_graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the client;
+# ``smart_search/graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the client;
 # never reaches Home Assistant.
 _RELATED_TIMEOUT_S = 5.0
 

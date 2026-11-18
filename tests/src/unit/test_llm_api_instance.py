@@ -29,9 +29,9 @@ from ._llm_api_server import (
     api_instance,
     call,
     payload,
+    refused_port,
     serve,
     tool_named,
-    unused_port,
 )
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
@@ -112,8 +112,11 @@ class TestFullMode:
     async def test_an_unreachable_server_raises_homeassistanterror(
         self, hass: HomeAssistant
     ) -> None:
-        with pytest.raises(HomeAssistantError, match="Could not reach"):
-            await api_instance(hass, unused_port(), EXPOSURE_FULL)
+        with (
+            refused_port() as port,
+            pytest.raises(HomeAssistantError, match="Could not reach"),
+        ):
+            await api_instance(hass, port, EXPOSURE_FULL)
 
     async def test_a_wedged_server_times_out_as_homeassistanterror(
         self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch

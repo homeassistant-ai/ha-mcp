@@ -23,12 +23,12 @@ def _no_definitions() -> dict[str, Any]:
 
 
 async def _describe(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-    definitions = await cd.async_get_definitions(hass, timeout=cd._CARD_WORK_SECONDS)
+    definitions = await cd.async_get_definitions(hass, timeout=cd.CARD_WORK_SECONDS)
     if definitions is None:
         return _no_definitions()
     card_type = msg.get("card_type") or None
     custom = (
-        await cd.async_get_custom_cards(hass, timeout=cd._CUSTOM_WAIT_SECONDS)
+        await cd.async_get_custom_cards(hass, timeout=cd.CUSTOM_WAIT_SECONDS)
         if card_type is None or card_type.startswith("custom:")
         else None
     )
@@ -81,7 +81,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
 
     async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         try:
-            async with asyncio.timeout(cd._CARD_WORK_SECONDS):
+            async with asyncio.timeout(cd.CARD_WORK_SECONDS):
                 return await _describe(hass, msg)
         except TimeoutError:
             if cd._definitions is not None:  # the index is loaded; describe was slow

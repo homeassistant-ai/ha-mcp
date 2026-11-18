@@ -16,7 +16,7 @@ from .helpers import exception_to_structured_error, raise_tool_error
 logger = logging.getLogger(__name__)
 
 # Embedded mode: delay before the restart fires, so ha_restart's reply flushes
-# to the client first. Same value as tools_dev._SELF_ACTION_FLUSH_DELAY_S.
+# to the client first. Same value as tools_dev.SELF_ACTION_FLUSH_DELAY_S.
 EMBEDDED_RESTART_DELAY_S = 1.0
 
 # Strong references to in-flight deferred restarts (the event loop holds tasks

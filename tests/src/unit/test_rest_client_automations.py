@@ -226,7 +226,7 @@ async def test_an_entity_that_never_appears_is_reported_unverified(
     automation never runs; the write still succeeded."""
     await set_up_config_api(hass, included=("script", "scene"))
     # The wait for the entity, cut from seconds to keep the test fast.
-    monkeypatch.setattr(HomeAssistantClient, "_POLL_BUDGET_S", 0.2)
+    monkeypatch.setattr(HomeAssistantClient, "POLL_BUDGET_S", 0.2)
 
     result = await core_client.upsert_automation_config(
         dict(BODY), wait_for_entity=True

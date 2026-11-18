@@ -82,7 +82,7 @@ def _preinstalls(script: str) -> list[str]:
     return script.split("pip install ")[1:]
 
 
-def _run_entrypoint(
+def run_entrypoint(
     script: str, tmp_path: Path, pip_status: int
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the entrypoint against stand-ins for the container's ``pip``,
@@ -265,7 +265,7 @@ async def test_a_failed_preinstall_still_hands_the_cache_back(
     await _boot(hass, session)
 
     result, invocations = await hass.async_add_executor_job(
-        _run_entrypoint, session.entrypoint_script(), tmp_path, 3
+        run_entrypoint, session.entrypoint_script(), tmp_path, 3
     )
 
     assert result.returncode == 3, result.stderr
@@ -293,7 +293,7 @@ async def test_a_successful_preinstall_still_boots_home_assistant(
     )
 
     result, invocations = await hass.async_add_executor_job(
-        _run_entrypoint, script, tmp_path, 0
+        run_entrypoint, script, tmp_path, 0
     )
 
     assert result.returncode == 7, result.stderr

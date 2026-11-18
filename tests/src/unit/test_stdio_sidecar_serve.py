@@ -15,6 +15,7 @@ import re
 import socket
 import sys
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -28,7 +29,7 @@ from starlette.testclient import TestClient
 from ha_mcp import stdio_settings_sidecar as sidecar
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.config import reset_global_settings
-from ha_mcp.settings_ui import register_settings_routes
+from ha_mcp.settings_ui import register_settings_routes, reset_http_settings_state
 
 from ._core_client import free_port
 from ._stdio_sidecar_core import (
@@ -42,6 +43,15 @@ from ._stdio_sidecar_core import served as served
 
 LOGGER = "ha_mcp.stdio_settings_sidecar"
 SERVING_FILES = {"ui.pid", "ui.url"}
+
+
+@pytest.fixture
+def isolated_http_settings_state() -> Iterator[None]:
+    reset_http_settings_state()
+    try:
+        yield
+    finally:
+        reset_http_settings_state()
 
 
 def _messages(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -484,13 +494,13 @@ class TestServedApp:
         assert current["deny_entity_ids"] == ["light.bed_light"]
         assert current["restrict_report_issue"] is True
 
+    @pytest.mark.usefixtures("isolated_http_settings_state")
     def test_every_shared_settings_route_but_restart_is_served(
-        self, served: Serving, monkeypatch: pytest.MonkeyPatch
+        self, served: Serving
     ) -> None:
         """The sidecar mounts the HTTP modes' settings surface; a route added
         there and missing here is a dead button in stdio mode."""
         mcp = FastMCP("test")
-        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
         register_settings_routes(
             mcp, MagicMock(), secret_path=served.prefix, advertise_prefix=False
         )
@@ -567,7 +577,7 @@ class TestShutdownEndpoint:
         urllib's request shape (loopback Host, no Origin): requiring Origin
         would break every replace."""
         # The sidecar runs in this process, so its pid never exits.
-        monkeypatch.setattr(sidecar, "_OLD_SIDECAR_EXIT_WAIT", 0.0)
+        monkeypatch.setattr(sidecar, "OLD_SIDECAR_EXIT_WAIT", 0.0)
         quiet_uvicorn_logging(monkeypatch)
         serving = threading.Event()
         servers: list[uvicorn.Server] = []

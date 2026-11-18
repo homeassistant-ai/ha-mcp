@@ -1303,7 +1303,7 @@ def stage_embedded_server_feature_flags_in_qcow2(
     boots and before the entry is enabled) with no post-boot service-availability
     or ordering dependency, which is why it's preferred over calling the baked
     ``ha_mcp_tools`` write_file service after boot. The integration's
-    ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
+    ``prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
     pre-created dir + file is picked up rather than clobbered (proven on the
     container embedded lane, which pre-seeds the identical files).
 
@@ -2007,7 +2007,7 @@ def _is_transient_link_error(err: BaseException) -> bool:
     return isinstance(err, (*_addon_link_transient_leaves(), asyncio.CancelledError))
 
 
-def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
+def probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
     """Make one MCP call that needs Home Assistant; raise if it does not work.
 
     ``budget`` bounds this single attempt. Without it the attempt inherits
@@ -2093,7 +2093,7 @@ def wait_for_addon_ha_link_ready(
             break
         attempts += 1
         try:
-            _probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
+            probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
         except transient as e:
             if not _is_transient_link_error(e):
                 raise

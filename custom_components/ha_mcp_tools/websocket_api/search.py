@@ -39,7 +39,7 @@ from .registry import (
     _resolve_registries,
     _unambiguous_device_entries,
 )
-from .search_config import _search_config_surface, _search_helpers
+from .search_config import _search_helpers, search_config_surface
 from .search_score import _apply_hidden_penalty, _text_tier, _tokenize
 from .secrets import (
     SCRUB_DEGRADED_MATCH_WARNING,
@@ -54,7 +54,7 @@ from .visibility import (
 )
 
 
-def _do_search(  # noqa: PLR0915
+def do_search(  # noqa: PLR0915
     hass: HomeAssistant,
     params: dict[str, Any],
     *,
@@ -125,7 +125,7 @@ def _do_search(  # noqa: PLR0915
     entity_total = 0
     entity_has_more = False
     if SEARCH_TYPE_ENTITY in search_types:
-        scored_entities = _search_entities(
+        scored_entities = search_entities(
             hass,
             view,
             query_lower,
@@ -140,7 +140,7 @@ def _do_search(  # noqa: PLR0915
         # Opt-in visibility filter: a hard exclude applied BEFORE counts/pagination,
         # exactly where the legacy path drops ``visibility_hidden`` entities at the
         # top of ``_match_exact_search_entity`` (independent of ``include_hidden``,
-        # which the ``_search_entities`` join already applied). See
+        # which the ``search_entities`` join already applied). See
         # :func:`_visibility_hidden_set`.
         if isinstance(visibility, Mapping) and visibility:
             states_list = _iter_states(hass)
@@ -195,7 +195,7 @@ def _do_search(  # noqa: PLR0915
         if domain in search_types:
             combined.extend(
                 (domain, rec)
-                for rec in _search_config_surface(
+                for rec in search_config_surface(
                     hass,
                     view,
                     domain,
@@ -319,7 +319,7 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
     executor via :meth:`hass.async_add_executor_job` so the WS handler never
     blocks the event loop. The loaded set, and for a helper search the degraded
     flag and the :func:`_flow_helper_domains` keys, are handed to
-    :func:`_do_search`.
+    :func:`do_search`.
     """
     search_types = msg.get("search_types") or ALL_SEARCH_TYPES
     scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
@@ -337,7 +337,7 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
 
 
 # --- Entity join + scoring ---------------------------------------------------
-def _search_entities(
+def search_entities(
     hass: HomeAssistant,
     view: _RegistryView,
     query_lower: str,

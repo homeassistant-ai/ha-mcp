@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from ipaddress import IPv4Address
@@ -482,14 +482,16 @@ def quick_app_http(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def quick_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     """A job-group collision is retried after milliseconds, not seconds."""
-    monkeypatch.setattr(tools_addons, "_JOB_COLLISION_RETRY_INITIAL_DELAY", 0.001)
-    monkeypatch.setattr(tools_addons, "_JOB_COLLISION_RETRY_MAX_DELAY", 0.002)
+    monkeypatch.setattr(tools_addons, "JOB_COLLISION_RETRY_INITIAL_DELAY", 0.001)
+    monkeypatch.setattr(tools_addons, "JOB_COLLISION_RETRY_MAX_DELAY", 0.002)
 
 
 @pytest.fixture
-def fresh_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An empty set of remembered secret values, restored after the test."""
-    monkeypatch.setattr(redaction, "_known_secrets", set())
+def fresh_secrets() -> Iterator[None]:
+    """Do not let remembered secret values escape the test that registered them."""
+    redaction.clear_known_secret_values()
+    yield
+    redaction.clear_known_secret_values()
 
 
 def timers(hass: HomeAssistant) -> set[asyncio.TimerHandle]:

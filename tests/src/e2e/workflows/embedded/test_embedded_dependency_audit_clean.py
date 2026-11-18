@@ -1,6 +1,6 @@
 """The #2239 dependency audit must stay silent on a healthy install.
 
-``EmbeddedServerManager._async_warn_on_dependency_conflicts`` runs on EVERY
+``EmbeddedServerManager.async_warn_on_dependency_conflicts`` runs on EVERY
 bring-up and logs a WARNING whenever the audit finds an unsatisfied
 requirement reachable from the ha-mcp distribution. That makes its
 false-positive rate a user-facing property: a warning that fires on a perfectly

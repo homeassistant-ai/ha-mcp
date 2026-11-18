@@ -139,7 +139,7 @@ KNOWN_CLIENT_ISSUES_HINT = (
 )
 
 # A slow or missing Supervisor must not hold up the whole report.
-_SUPERVISOR_PROBE_TIMEOUT = 10.0
+SUPERVISOR_PROBE_TIMEOUT = 10.0
 
 
 def _detect_installation_method() -> str:
@@ -594,7 +594,7 @@ class BugReportTools:
         try:
             response = await asyncio.wait_for(
                 _supervisor_api_call(self._client, "/info"),
-                timeout=_SUPERVISOR_PROBE_TIMEOUT,
+                timeout=SUPERVISOR_PROBE_TIMEOUT,
             )
         except Exception as e:  # noqa: BLE001
             logger.info("Supervisor info probe failed: %s (%s)", e, type(e).__name__)

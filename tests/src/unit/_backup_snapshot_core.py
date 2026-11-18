@@ -78,8 +78,8 @@ APPS = ("core_mosquitto", "core_ssh")
 @pytest.fixture(autouse=True)
 def bounded_backup_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """A missed terminal event fails within seconds instead of 30 minutes."""
-    monkeypatch.setattr(backup_snapshot, "_BACKUP_MAX_WAIT_S", 10)
-    monkeypatch.setattr(backup_snapshot_restore, "_BACKUP_MAX_WAIT_S", 10)
+    monkeypatch.setattr(backup_snapshot, "BACKUP_MAX_WAIT_S", 10)
+    monkeypatch.setattr(backup_snapshot_restore, "BACKUP_MAX_WAIT_S", 10)
 
 
 class RemoteAgent(BackupAgent):

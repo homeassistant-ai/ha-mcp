@@ -90,6 +90,11 @@ _REFUSAL_LOG_INTERVAL = 60.0
 _refusal_log: dict[str, float] = {"last": float("-inf"), "suppressed": 0}
 
 
+def reset_callback_refusal_log() -> None:
+    """Clear the refusal-log rate limit between isolated component lifecycles."""
+    _refusal_log.update(last=float("-inf"), suppressed=0)
+
+
 def _log_refused_callback(redirect_uri: str) -> None:
     now = time.monotonic()
     if now - _refusal_log["last"] < _REFUSAL_LOG_INTERVAL:

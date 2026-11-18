@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
 import importlib.metadata
 import importlib.util
 import socket
@@ -9,26 +11,39 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
-import custom_components.ha_mcp_tools.embedded_server as es
 
+class _SurfaceFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Imports the stub modules by name, as a purge's re-import would."""
 
-@pytest.fixture(autouse=True)
-def _no_manifest_pin(monkeypatch):
-    """``async_start`` reads the manifest pin through the HA loader (a stub
-    here); default to a source checkout's "no pin". Tests that need a pin
-    patch it via ``_paired``; ``TestPairedServerRequirement`` calls the real
-    reader."""
-    monkeypatch.setattr(
-        es, "_async_paired_server_requirement", AsyncMock(return_value=None)
-    )
+    def __init__(self, modules: dict[str, ModuleType]) -> None:
+        self._modules = modules
+
+    def find_spec(
+        self, fullname: str, path: Any, target: Any = None
+    ) -> importlib.machinery.ModuleSpec | None:
+        if fullname not in self._modules:
+            return None
+        return importlib.util.spec_from_loader(
+            fullname, self, is_package=fullname == "ha_mcp"
+        )
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType:
+        return self._modules[spec.name]
+
+    def exec_module(self, module: ModuleType) -> None:
+        return None
 
 
 def _stub_ha_mcp_surface(
-    monkeypatch, *, mcp, landing_mod=None, log_filters_mod=None
+    monkeypatch,
+    *,
+    mcp,
+    landing_mod=None,
+    log_filters_mod=None,
+    served: dict[str, ModuleType] | None = None,
 ) -> None:
     """Install a minimal in-memory ``ha_mcp`` package so ``_serve`` runs hermetically.
 
@@ -44,6 +59,10 @@ def _stub_ha_mcp_surface(
     (``uv sync``) adds a meta-path finder that resolves ``ha_mcp.*`` by name and
     would re-import the REAL module even though the parent ``ha_mcp`` is faked
     with an empty ``__path__`` (live-found in CI).
+
+    ``served`` adds modules (the listener helpers). A finder ahead of the
+    editable install's serves every stub by name, so the worker imports them
+    again after the start's module purge.
     """
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
@@ -84,6 +103,11 @@ def _stub_ha_mcp_surface(
         log_filters_mod = ModuleType("ha_mcp.log_filters")
     ha_mcp_mod.log_filters = log_filters_mod
     mods["ha_mcp.log_filters"] = log_filters_mod
+    mods.update(served or {})
+    finder = _SurfaceFinder({n: m for n, m in mods.items() if n.startswith("ha_mcp")})
+    # An imported package has a spec; find_spec("ha_mcp") reads it.
+    ha_mcp_mod.__spec__ = finder.find_spec("ha_mcp", None)
+    monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
 

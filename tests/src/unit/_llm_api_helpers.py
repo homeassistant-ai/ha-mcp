@@ -63,7 +63,7 @@ def fake_session(
     raise_on_open: BaseException | None = None,
     delay: float = 0.0,
 ) -> SimpleNamespace:
-    """Patch ``llm_api._mcp_session`` with a fake and return the session."""
+    """Patch ``llm_api.mcp_session`` with a fake and return the session."""
     # The default lists ha_search exposed, the tool the call tests forward;
     # every forwarded call re-reads exposure from this list.
     listed = [tool_entry()] if tools is None else tools
@@ -75,7 +75,7 @@ def fake_session(
 
     @asynccontextmanager
     async def fake_mcp_session(url):
-        """Stand in for ``_mcp_session``: record the url, yield the fake session."""
+        """Stand in for ``mcp_session``: record the url, yield the fake session."""
         session.url = url
         if raise_on_open is not None:
             raise raise_on_open
@@ -83,7 +83,7 @@ def fake_session(
             await asyncio.sleep(delay)
         yield session, init_result
 
-    monkeypatch.setattr(llm_api, "_mcp_session", fake_mcp_session)
+    monkeypatch.setattr(llm_api, "mcp_session", fake_mcp_session)
     return session
 
 

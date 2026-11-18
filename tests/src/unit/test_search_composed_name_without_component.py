@@ -117,7 +117,7 @@ async def test_an_empty_search_with_a_current_component_carries_no_hint(
 
     # The current component's search fails, so the legacy path answers.
     monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api.search._search_entities",
+        "custom_components.ha_mcp_tools.websocket_api.search.search_entities",
         _fails,
     )
     tools = SearchTools(

@@ -31,7 +31,7 @@ _CACHE: _Cache = weakref.WeakKeyDictionary()
 _CORE_CACHE: _Cache = weakref.WeakKeyDictionary()
 
 
-async def _fetch_helper_flow_types(client: Any) -> frozenset[str]:
+async def fetch_helper_flow_types(client: Any) -> frozenset[str]:
     domains = await client._request(
         "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
     )
@@ -99,7 +99,7 @@ async def _read(
 
 async def helper_flow_types(client: Any, *, refresh: bool = False) -> frozenset[str]:
     """The helper types the connected Home Assistant offers as config flows."""
-    return await _read(_CACHE, _fetch_helper_flow_types, client, refresh=refresh)
+    return await _read(_CACHE, fetch_helper_flow_types, client, refresh=refresh)
 
 
 async def core_helper_domains(client: Any) -> frozenset[str]:

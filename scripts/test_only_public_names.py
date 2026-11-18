@@ -67,6 +67,9 @@ EXEMPT = frozenset(
         "src/ha_mcp/redaction.py:clear_known_secret_values",
         "src/ha_mcp/policy/value_sources.py:clear_value_source_cache",
         "custom_components/ha_mcp_tools/llm_api.py:reset_schema_converter",
+        "custom_components/ha_mcp_tools/card_definitions.py:reset_card_definitions_state",
+        "custom_components/ha_mcp_tools/custom_cards.py:reset_custom_cards_state",
+        "custom_components/ha_mcp_tools/oauth_autoapprove.py:reset_callback_refusal_log",
         "src/ha_mcp/utils/usage_logger.py:shutdown_usage_logger",
         "src/ha_mcp/stdio_settings_sidecar.py:retire_sidecar",
     }

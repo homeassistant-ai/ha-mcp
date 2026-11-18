@@ -178,8 +178,8 @@ def test_a_cards_own_error_hides_the_editors_copy_of_it(
 def test_a_resource_skipped_for_memory_is_named_in_the_coverage(
     tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", _PER_CARD)
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _PER_CARD)  # room for one card
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD)  # room for one card
     files = [card_file(tmp_path / f"card-{i}.js", f"card-{i}") for i in range(2)]
 
     custom_cards.refresh(files)
@@ -282,7 +282,7 @@ async def test_a_blank_card_type_lists_the_cards(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
 
     result = await describe_mod.describe_card_response(component_core_client, "")
 
@@ -315,7 +315,7 @@ async def test_describing_a_builtin_card_does_not_load_the_custom_resources(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
 
     described = await describe_mod.describe_card_response(component_core_client, "tile")
     assert described["name"]

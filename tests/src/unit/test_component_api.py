@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
+from freezegun.api import TickingDateTimeFactory
 from homeassistant.auth.const import GROUP_ID_ADMIN
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
@@ -65,14 +66,10 @@ FAILURE_WINDOW_S = 30
 ABSENCE_WINDOW_S = 300
 # A capability the running component gains when it is upgraded.
 UPGRADED = "added_by_the_upgrade"
-
-
-@pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """The capability cache's monotonic clock; a test advances ``clock[0]``."""
-    now = [1000.0]
-    monkeypatch.setattr(component_api, "_monotonic", lambda: now[0])
-    return now
+# Core's freezer also freezes the event loop's clock; a ticking one keeps
+# the client's WebSocket handshake polling. Each jump drops the real time
+# since the previous one, hence a second's margin past every window.
+TICKING = pytest.mark.freeze_time(tick=True)
 
 
 def _info_probes(spy: AsyncMock) -> int:
@@ -139,10 +136,11 @@ async def test_one_info_probe_serves_every_later_call(
 
 
 @pytest.mark.parametrize("absence", ["no_component", "unsupported_schema"])
+@TICKING
 async def test_an_absent_component_is_not_asked_again_for_five_minutes(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
     monkeypatch: pytest.MonkeyPatch,
     absence: str,
 ) -> None:
@@ -151,25 +149,27 @@ async def test_an_absent_component_is_not_asked_again_for_five_minutes(
     if absence == "unsupported_schema":
         component_commands.async_register_commands(hass)
         monkeypatch.setattr(system, "SCHEMA_VERSION", SUPPORTED_SCHEMA_VERSION + 1)
-    start = clock[0]
     socket = await pooled_socket(core_client)
 
     with sent_commands(socket) as sent:
         assert await get_component_caps(core_client) is None
-        clock[0] = start + FAILURE_WINDOW_S + 1
+        freezer.tick(FAILURE_WINDOW_S + 1)
         assert await get_component_caps(core_client, strict=True) is None
-        clock[0] = start + ABSENCE_WINDOW_S - 1
+        freezer.tick(ABSENCE_WINDOW_S - FAILURE_WINDOW_S - 2)
         assert await get_component_caps(core_client) is None
 
     assert _info_probes(sent) == 1
 
 
+@TICKING
 async def test_a_component_installed_after_the_probe_is_adopted_after_five_minutes(
-    hass: HomeAssistant, core_client: HomeAssistantClient, clock: list[float]
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    freezer: TickingDateTimeFactory,
 ) -> None:
     assert await get_component_caps(core_client) is None
     component_commands.async_register_commands(hass)
-    clock[0] += ABSENCE_WINDOW_S + 1
+    freezer.tick(ABSENCE_WINDOW_S + 1)
 
     assert isinstance(await get_component_caps(core_client), ComponentCaps)
 
@@ -195,10 +195,11 @@ async def test_an_unsupported_schema_version_is_logged_once(
     assert str(SUPPORTED_SCHEMA_VERSION) in warnings[0]
 
 
+@TICKING
 async def test_a_probe_that_lost_its_connection_is_retried_after_30_seconds(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
 ) -> None:
     """While Home Assistant is unreachable each call answers from the cache
     instead of waiting on another connect (review-5 M8); once the window has
@@ -208,10 +209,10 @@ async def test_a_probe_that_lost_its_connection_is_retried_after_30_seconds(
         assert await get_component_caps(component_core_client) is None
 
     with received(hass, WS_INFO) as seen:
-        clock[0] += FAILURE_WINDOW_S - 1
+        freezer.tick(FAILURE_WINDOW_S - 1)
         assert await get_component_caps(component_core_client) is None
         assert not seen[WS_INFO]
-        clock[0] += 2
+        freezer.tick(2)
         assert isinstance(
             await get_component_caps(component_core_client), ComponentCaps
         )
@@ -231,11 +232,12 @@ async def test_invalidated_caps_are_probed_again(
     assert len(seen[WS_INFO]) == 1
 
 
+@TICKING
 async def test_working_caps_outlive_every_negative_window(
-    component_core_client: HomeAssistantClient, clock: list[float]
+    component_core_client: HomeAssistantClient, freezer: TickingDateTimeFactory
 ) -> None:
     first = await get_component_caps(component_core_client)
-    clock[0] += ABSENCE_WINDOW_S * 10
+    freezer.tick(ABSENCE_WINDOW_S * 10)
 
     assert isinstance(first, ComponentCaps)
     assert await get_component_caps(component_core_client) is first
@@ -298,10 +300,11 @@ async def test_a_reprobe_that_loses_its_connection_keeps_the_caps_that_worked(
     assert component_supports(after, UPGRADED)
 
 
+@TICKING
 async def test_a_component_still_starting_after_a_restart_is_found_within_30_seconds(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
 ) -> None:
     """Core answers before the component has registered its commands; that
     ``unknown_command`` must not hide the component for five minutes."""
@@ -311,7 +314,7 @@ async def test_a_component_still_starting_after_a_restart_is_found_within_30_sec
     during = await get_component_caps(component_core_client)
 
     component_commands.async_register_commands(hass)
-    clock[0] += FAILURE_WINDOW_S + 1
+    freezer.tick(FAILURE_WINDOW_S + 1)
 
     assert during is None
     assert isinstance(await get_component_caps(component_core_client), ComponentCaps)
@@ -335,10 +338,11 @@ async def test_a_command_the_component_does_not_advertise_is_not_sent(
     assert not seen[WS_REGISTRY_FIELDS]
 
 
+@TICKING
 async def test_a_command_refused_while_starting_leaves_the_short_window(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
 ) -> None:
     """A component command refused in the same restart gap drops the caps; the
     probe that follows, still in the gap, gets the 30 seconds too."""
@@ -349,20 +353,21 @@ async def test_a_command_refused_while_starting_leaves_the_short_window(
     assert await get_component_caps(component_core_client) is None
 
     component_commands.async_register_commands(hass)
-    clock[0] += FAILURE_WINDOW_S + 1
+    freezer.tick(FAILURE_WINDOW_S + 1)
     assert isinstance(await get_component_caps(component_core_client), ComponentCaps)
 
 
+@TICKING
 async def test_a_failed_reprobe_never_hands_a_malformed_snapshot_to_a_strict_caller(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
 ) -> None:
     """Caps read from a malformed ``info`` are not caps that worked."""
     socket = await pooled_socket(component_core_client)
     with patch.object(system, "SCHEMA_VERSION", "1"):
         assert await get_component_caps(component_core_client) is not None
-    clock[0] += FAILURE_WINDOW_S + 1
+    freezer.tick(FAILURE_WINDOW_S + 1)
 
     with (
         dropped_on(hass, WS_INFO, socket),
@@ -479,10 +484,11 @@ async def _failing_info(
 @pytest.mark.parametrize(
     "failure", ["connection", "command", "unexpected", "malformed", "malformed_caps"]
 )
+@TICKING
 async def test_failed_discovery_refuses_strict_callers_for_30_seconds(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
     failure: str,
 ) -> None:
     """A strict caller (a write) must not take a failed probe for an absent
@@ -502,11 +508,11 @@ async def test_failed_discovery_refuses_strict_callers_for_30_seconds(
         assert cached.value.__cause__ is None
         assert component_probe_auth_kind(client) is None
 
-    clock[0] += FAILURE_WINDOW_S - 1
+    freezer.tick(FAILURE_WINDOW_S - 1)
     assert await get_component_caps(client) is first_read
     with pytest.raises(ComponentDiscoveryError):
         await get_component_caps(client, strict=True)
-    clock[0] += 1
+    freezer.tick(2)
     assert component_supports(await get_component_caps(client, strict=True), "search")
 
 
@@ -525,12 +531,13 @@ async def test_a_component_without_a_command_lets_strict_callers_fall_back(
     assert not component_supports(caps, "dashboard_edit")
 
 
+@TICKING
 async def test_a_refused_probe_is_a_permission_refusal_until_one_succeeds(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     read_only_client: HomeAssistantClient,
     hass_read_only_user: MockUser,
-    clock: list[float],
+    freezer: TickingDateTimeFactory,
 ) -> None:
     """A fire tool stops before sending with a token Core refused; the mark
     goes once the user may use the component."""
@@ -538,7 +545,7 @@ async def test_a_refused_probe_is_a_permission_refusal_until_one_succeeds(
     assert component_probe_auth_kind(read_only_client) == "permission"
 
     await hass.auth.async_update_user(hass_read_only_user, group_ids=[GROUP_ID_ADMIN])
-    clock[0] += FAILURE_WINDOW_S + 1
+    freezer.tick(FAILURE_WINDOW_S + 1)
 
     assert await get_component_caps(read_only_client) is not None
     assert component_probe_auth_kind(read_only_client) is None

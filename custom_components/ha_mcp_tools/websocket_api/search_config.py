@@ -28,7 +28,7 @@ from .secrets import _scrub_secret_values
 
 
 # --- Config surfaces (automation/script/scene) -------------------------------
-def _search_config_surface(
+def search_config_surface(
     hass: HomeAssistant,
     view: _RegistryView,
     domain: str,
@@ -153,7 +153,7 @@ def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
     non-runtime facts instead: ``id`` / ``name`` / ``icon`` plus the entity-id
     KEYS of ``states`` (so "which scenes touch ``light.x``" still matches) — no
     State values, no timestamps or contexts. Used for MATCHING only; the scene
-    record never emits a ``config`` body (see :func:`_search_config_surface`).
+    record never emits a ``config`` body (see :func:`search_config_surface`).
     """
     if scene_config is None:
         return None

@@ -172,7 +172,7 @@ class TestSpawnLock:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """An import hang in the child must not wedge stdio startup."""
-        monkeypatch.setattr(sidecar, "_CHILD_PUBLISH_WAIT", 0.0)
+        monkeypatch.setattr(sidecar, "CHILD_PUBLISH_WAIT", 0.0)
         spawned.publishes = False
 
         with caplog.at_level(logging.WARNING, logger=LOGGER):

@@ -30,7 +30,7 @@ installs the checkout's wheel plus its whole dependency tree, then downgrades
 the pinned package alone (``--no-deps``, so nothing else moves) before HA's
 ``/init``. The seeded config entry then pins ``pip_spec`` to the exact version
 that wheel installed and stores the same spec as ``last_pip_spec``, which is
-what puts ``_async_ensure_package`` on its FAST path: an unchanged, non-URL,
+what puts ``async_ensure_package`` on its FAST path: an unchanged, non-URL,
 already-satisfied index spec is handed to HA's requirements manager, which
 runs no pip at all. That is the production shape of this incident — a
 force-install would re-resolve the graph and quietly repair the pin, which is
@@ -128,7 +128,7 @@ _FAILURE_NEEDLE = "HA-MCP in-process server failed to start"
 # alongside the failure needle so a healed environment fails fast and says so,
 # instead of burning the whole bring-up budget on a message that will never come.
 _SUCCESS_NEEDLE = "HA-MCP in-process server is listening on"
-# Opening clause of _async_warn_on_dependency_conflicts' WARNING.
+# Opening clause of async_warn_on_dependency_conflicts' WARNING.
 _PREFLIGHT_NEEDLE = "the installed dependency tree is inconsistent"
 
 _PINNED_VERSION_PROBE = f"""
@@ -315,7 +315,7 @@ def _seed_config(config_path: Path, wheel_name: str, wheel_version: str) -> None
                 # The component no longer provisions an administrator (#2427).
                 "admin_token": TEST_TOKEN,
                 # Equal to the option below: an UNCHANGED spec is half of what
-                # puts _async_ensure_package on its no-install fast path.
+                # puts async_ensure_package on its no-install fast path.
                 _DATA_LAST_PIP_SPEC: pip_spec,
             },
             "disabled_by": None,
@@ -419,7 +419,7 @@ def _wait_for_bringup_outcome(log_file: Path, container: Any) -> str:
                 raise AssertionError(
                     "the in-process server started successfully, so the #2239 "
                     "repro premise is gone: either the seeded pin no longer "
-                    "reaches _async_ensure_package's fast path (something "
+                    "reaches async_ensure_package's fast path (something "
                     "reinstalled the dependency tree and repaired the pin) or "
                     f"{_PINNED_PACKAGE} {_PINNED_VERSION} no longer breaks the "
                     "fastmcp import. Re-read the fast-path rationale in this module's "

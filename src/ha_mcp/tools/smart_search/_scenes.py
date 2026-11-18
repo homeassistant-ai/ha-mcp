@@ -15,7 +15,7 @@ from ._config import (
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCENE_CONFIG_TIME_BUDGET,
 )
-from ._fetch import (
+from .fetch import (
     ConfigFetchMixin,
     http_500_diagnosis_hint,
     is_timeout_error,

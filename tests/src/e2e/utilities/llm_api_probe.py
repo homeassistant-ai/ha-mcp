@@ -185,7 +185,7 @@ async def _run():
         return
 
     async with asyncio.timeout(TIMEOUT_S):
-        async with llm_api._mcp_session(url) as (session, _init):
+        async with llm_api.mcp_session(url) as (session, _init):
             tools = (await session.list_tools()).tools
         _convert_all(
             tools,

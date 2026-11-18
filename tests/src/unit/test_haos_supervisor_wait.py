@@ -10,9 +10,11 @@ real Core with the Supervisor stand-in behind ``supervisor/api``
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
+from websockets.sync.client import ClientConnection
 
 from tests.haos_image_build.build_image import (
     HAWebSocket,
@@ -160,6 +162,8 @@ async def test_a_readiness_timeout_names_a_failed_reconnect(haos: Haos) -> None:
     haos.supervisor.answer("GET", "/supervisor/info", PENDING)
 
     def signed_out_and_cut() -> None:
+        # Finish the client close before revocation starts Core's close handshake.
+        ws.__exit__()
         haos.revoke_login()
         haos.relay.cut()
 
@@ -612,16 +616,56 @@ async def test_a_core_version_that_never_arrives_is_reported(haos: Haos) -> None
     assert repr(CORE_OLD) in str(raised.value)
 
 
-async def test_the_right_core_version_answered_too_late_is_not_accepted(
-    haos: Haos,
+@pytest.mark.parametrize(
+    "elapsed",
+    [pytest.param(0.0, id="before-deadline"), pytest.param(1.0, id="at-deadline")],
+)
+async def test_the_right_core_version_is_accepted_only_before_the_deadline(
+    haos: Haos, elapsed: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    core_request_id: int | None = None
+    real_send = ClientConnection.send
+    real_recv = ClientConnection.recv
+
+    def send(self: ClientConnection, message: Any, *args: Any, **kwargs: Any) -> None:
+        nonlocal core_request_id
+        payload = json.loads(message)
+        if payload.get("endpoint") == "/core/info":
+            core_request_id = payload["id"]
+        real_send(self, message, *args, **kwargs)
+
+    def recv(self: ClientConnection, *args: Any, **kwargs: Any) -> Any:
+        frame = real_recv(self, *args, **kwargs)
+        payload = json.loads(frame)
+        if (
+            core_request_id is not None
+            and payload.get("type") == "result"
+            and payload.get("id") == core_request_id
+        ):
+            haos.clock.advance(elapsed)
+        return frame
+
+    monkeypatch.setattr(ClientConnection, "send", send)
+    monkeypatch.setattr(ClientConnection, "recv", recv)
     haos.supervisor.answer("GET", "/supervisor/info", supervisor_info())
     haos.supervisor.answer("GET", "/core/info", CORE_NEW)
-    haos.supervisor.when("GET", "/core/info", lambda: haos.clock.advance(1.0))
     ws = await haos.connected()
 
-    with pytest.raises(TimeoutError, match="receive exceeded its deadline"):
-        await haos.run(wait_core_version, ws, "2026.8.3", timeout=1.0)
+    if elapsed:
+        with pytest.raises(
+            TimeoutError,
+            match="supervisor/api get /core/info receive exceeded its deadline",
+        ):
+            await haos.run(wait_core_version, ws, "2026.8.3", timeout=1.0)
+    else:
+        assert (
+            await haos.run(wait_core_version, ws, "2026.8.3", timeout=1.0) == CORE_NEW
+        )
+
+    assert haos.supervisor.requests == [
+        ("GET", "/supervisor/info"),
+        ("GET", "/core/info"),
+    ]
 
 
 async def test_no_core_version_read_starts_after_the_reconnect_spent_the_budget(

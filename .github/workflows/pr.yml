@@ -393,6 +393,10 @@ jobs:
         echo "$changed_py" | sed 's/^/  /'
         echo "$changed_py" | xargs uv run ruff format --check
 
+    - name: Check private names reached through strings
+      if: success() || failure()
+      run: uv run python scripts/private_test_access.py
+
     - name: Run ast-grep
       if: success() || failure()
       run: uv run ast-grep scan

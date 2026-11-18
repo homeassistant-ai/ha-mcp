@@ -247,8 +247,8 @@ def _merge_options(base: dict, override: dict) -> dict:
 # that must NOT be retried on this schedule.
 _JOB_COLLISION_MARKER = "another job is running for job group"
 _JOB_COLLISION_RETRY_WINDOW = 60.0
-_JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
-_JOB_COLLISION_RETRY_MAX_DELAY = 5.0
+JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
+JOB_COLLISION_RETRY_MAX_DELAY = 5.0
 # Matches Supervisor's canonical app slug grammar. A whole-segment "." or
 # ".." also matches that grammar, but is not a valid identifier here because
 # an HTTP client can normalize it as path traversal.
@@ -701,7 +701,7 @@ async def _supervisor_api_call(
         # the final retry and total elapsed time may extend past that window.
         # Any other failure raises immediately.
         deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
-        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
+        delay = JOB_COLLISION_RETRY_INITIAL_DELAY
         attempts = 0
         while True:
             attempts += 1
@@ -772,7 +772,7 @@ async def _supervisor_api_call(
                 error_text,
             )
             await asyncio.sleep(min(delay, remaining))
-            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
+            delay = min(delay * 2, JOB_COLLISION_RETRY_MAX_DELAY)
 
     except ToolError:
         raise

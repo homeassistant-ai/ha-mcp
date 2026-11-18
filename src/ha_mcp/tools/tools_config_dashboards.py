@@ -3245,7 +3245,7 @@ class DashboardConfigTools:
         )
         return dashboard_exists, dashboard_id, metadata_updated, warning
 
-    async def _check_dashboard_replace_hash(
+    async def check_dashboard_replace_hash(
         self,
         url_path: str,
         config_hash: str | None,
@@ -3492,7 +3492,7 @@ class DashboardConfigTools:
 
         warning: str | None = None
         if dashboard_exists:
-            warning = await self._check_dashboard_replace_hash(
+            warning = await self.check_dashboard_replace_hash(
                 url_path, config_hash, config_dict
             )
 

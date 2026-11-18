@@ -33,11 +33,11 @@ from .response import (
     _finalize_partial_state,
     _mirror_partial_to_warnings,
     _new_search_response,
-    _prefetch_shared_search_snapshots,
     _project_response_fields,
     _ResolvedSearch,
     _synthesize_combined_pagination,
     _validate_search_types,
+    prefetch_shared_search_snapshots,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class LegacySearchMixin(EntityModesMixin):
         # machine (/api/states) and the entity-registry list; fetch each once and
         # thread the snapshots down so the two branches share one of each instead
         # of fetching two.
-        shared_states, shared_registry = await _prefetch_shared_search_snapshots(
+        shared_states, shared_registry = await prefetch_shared_search_snapshots(
             self._client,
             registry_eligible=req.registry_eligible,
             body_eligible=req.body_eligible,
