@@ -72,6 +72,7 @@ EXEMPT = frozenset(
         "custom_components/ha_mcp_tools/oauth_autoapprove.py:reset_callback_refusal_log",
         "src/ha_mcp/utils/usage_logger.py:shutdown_usage_logger",
         "src/ha_mcp/stdio_settings_sidecar.py:retire_sidecar",
+        "src/ha_mcp/tools/integration_flow_steps.py:reset_opened_flows",
     }
 )
 
