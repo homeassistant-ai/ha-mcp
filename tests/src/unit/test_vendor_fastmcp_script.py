@@ -159,28 +159,53 @@ def test_stage_package_refuses_path_traversal(tmp_path):
         vendor.stage_package(spec, wheel, b"MIT", _PINS, tmp_path / "mcp")
 
 
-def test_promote_restores_every_tree_when_a_swap_fails(tmp_path, monkeypatch):
-    _sync(tmp_path, monkeypatch, _project("authlib>=1.0"), {})
+@pytest.mark.parametrize("failed_package", [spec.package for spec in vendor.PACKAGES])
+def test_promote_restores_every_tree_when_a_swap_fails(
+    tmp_path, monkeypatch, failed_package
+):
+    _sync(tmp_path, monkeypatch, _project("authlib>=1.0"), {}, revision="original")
     vendor_dir = tmp_path / "_vendor"
     before = {
         spec.package: vendor.manifest_lines(vendor_dir / spec.package)
         for spec in vendor.PACKAGES
     }
     real_rename = Path.rename
+    promoted: list[str] = []
+    packages = [spec.package for spec in vendor.PACKAGES]
 
     def failing_rename(self, target):
-        if self == vendor_dir / "mcp.incoming":
+        if self == vendor_dir / f"{failed_package}.incoming":
+            assert promoted == packages[: packages.index(failed_package)]
+            # Prove the fault happens after earlier replacements reached their
+            # final paths, while every unswapped replacement is still staged.
+            for package in packages:
+                tree = vendor_dir / (
+                    package if package in promoted else f"{package}.incoming"
+                )
+                assert (tree / "revision.txt").read_text() == f"{package}:replacement"
+                assert vendor.manifest_lines(tree) != before[package]
             raise OSError("simulated")
-        return real_rename(self, target)
+        result = real_rename(self, target)
+        if self.name.endswith(".incoming"):
+            promoted.append(self.name.removesuffix(".incoming"))
+        return result
 
     monkeypatch.setattr(Path, "rename", failing_rename)
     with pytest.raises(OSError, match="simulated"):
-        _sync(tmp_path, monkeypatch, _project("authlib>=1.0"), {})
+        _sync(
+            tmp_path, monkeypatch, _project("authlib>=1.0"), {}, revision="replacement"
+        )
+    assert promoted == packages[: packages.index(failed_package)]
     assert {
         spec.package: vendor.manifest_lines(vendor_dir / spec.package)
         for spec in vendor.PACKAGES
     } == before
+    for package in packages:
+        assert (
+            vendor_dir / package / "revision.txt"
+        ).read_text() == f"{package}:original"
     assert not list(vendor_dir.glob("*.incoming"))
+    assert not list(vendor_dir.glob("*.previous"))
 
 
 def test_rewrite_handles_a_backslash_continued_from_import():
@@ -380,23 +405,31 @@ def _serve_wheels(monkeypatch, wheels):
     monkeypatch.setattr(vendor.urllib.request, "urlopen", open_release)
 
 
-def _sync(tmp_path, monkeypatch, pyproject_text, requires_by_distribution):
+def _sync(
+    tmp_path, monkeypatch, pyproject_text, requires_by_distribution, *, revision=None
+):
     """Run the sync with each distribution's wheel declaring the given needs."""
     vendor_dir, pyproject = _vendor_paths(tmp_path, pyproject_text)
     wheels = {}
     for distribution in (*_PINS, "fastmcp"):
         needs = requires_by_distribution.get(distribution, [])
-        wheels[distribution] = _wheel(
-            {
-                "fastmcp/__init__.py": _FASTMCP_INIT,
-                "mcp/__init__.py": "",
-                "mcp_types/__init__.py": "",
-                "pkg-9.9.9.dist-info/METADATA": "".join(
-                    f"Requires-Dist: {need}\n" for need in needs
-                ),
-                "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
-            }
-        )
+        members = {
+            "fastmcp/__init__.py": _FASTMCP_INIT,
+            "mcp/__init__.py": "",
+            "mcp_types/__init__.py": "",
+            "pkg-9.9.9.dist-info/METADATA": "".join(
+                f"Requires-Dist: {need}\n" for need in needs
+            ),
+            "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
+        }
+        if revision is not None:
+            members.update(
+                {
+                    f"{spec.package}/revision.txt": f"{spec.package}:{revision}"
+                    for spec in vendor.PACKAGES
+                }
+            )
+        wheels[distribution] = _wheel(members)
 
     _serve_wheels(monkeypatch, wheels)
     vendor.main(vendor_dir, pyproject)

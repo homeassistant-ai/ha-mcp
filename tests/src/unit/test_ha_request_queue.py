@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 
 import anyio
 import pytest
-from mcp.types import CallToolRequestParams
 
 import ha_mcp.ha_request_queue as queue_module
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
+from ha_mcp._vendor.mcp_types import CallToolRequestParams
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 HomeAssistantRequestQueueMiddleware = queue_module.HomeAssistantRequestQueueMiddleware
