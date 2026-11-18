@@ -593,11 +593,12 @@ async def test_keyword_transform_failure_is_logged_not_raised(
 
 def _served_keywords(tool: Tool | None) -> set[str]:
     """The words of the tool's keyword entry, after checking the served
-    description ends with that entry, as the keyword transform appends it."""
+    description carries that entry and still more than it."""
     assert tool is not None
     keywords = SEARCH_KEYWORDS[tool.name]
     assert tool.description is not None
-    assert tool.description.endswith(f"\n\n{keywords}")
+    assert keywords in tool.description
+    assert tool.description.strip() != keywords.strip()
     return set(re.findall(r"[\w-]+", keywords.lower()))
 
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from typing import Any
 
 import pytest
 
-from ha_mcp.__main__ import run_oidc_server
+from ha_mcp.__main__ import main_oidc
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.server.auth.auth import AuthProvider
 
@@ -24,7 +26,7 @@ def make_mock_oidc_proxy(capture: dict[str, Any]) -> type[AuthProvider]:
     The real ``HaMcpOIDCProxy`` fetches the provider's discovery document over
     the network, so the provider is the one thing replaced. Unlike a
     ``**kwargs``-catch-all mock, this has an explicit signature with exactly the
-    kwargs ``run_oidc_server`` passes: a kwarg not listed here raises TypeError
+    kwargs OIDC startup passes: a kwarg not listed here raises TypeError
     (``TestOIDCProxySignatureSubset`` checks the other direction). The optional
     arguments default to ``_UNSET`` and are recorded only when passed.
     """
@@ -76,35 +78,41 @@ async def started_oidc_server(
     path: str = "/mcp",
     **env: str | None,
 ) -> tuple[FastMCP, dict[str, Any], dict[str, Any]]:
-    """Run ``run_oidc_server`` with ``env`` (``None`` unsets) and the serve call
-    returning at once: the real server it served, what the provider was given,
-    and the serve call's arguments."""
-    monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:8123")
-    # OIDC mode shares one Home Assistant credential across its users.
-    monkeypatch.setenv("HOMEASSISTANT_TOKEN", "oidc-shared-token")
-    monkeypatch.delenv("MCP_SETTINGS_SECRET_PATH", raising=False)
-    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    for name, value in env.items():
+    """Run ``ha-mcp-oidc`` (``main_oidc``) with ``env`` (``None`` unsets) on top
+    of a valid OIDC setup, the serve call returning at once: the real server it
+    served, what the provider was given, and the serve call's arguments."""
+    for name, value in {
+        "OIDC_CONFIG_URL": CONFIG_URL,
+        "OIDC_CLIENT_ID": "test-id",
+        "OIDC_CLIENT_SECRET": "test-secret",
+        "MCP_BASE_URL": BASE_URL,
+        "MCP_PORT": str(port),
+        "MCP_SECRET_PATH": path,
+        "HOMEASSISTANT_URL": "http://127.0.0.1:8123",
+        # OIDC mode shares one Home Assistant credential across its users.
+        "HOMEASSISTANT_TOKEN": "oidc-shared-token",
+        "MCP_SETTINGS_SECRET_PATH": None,
+        "SUPERVISOR_TOKEN": None,
+        **env,
+    }.items():
         if value is None:
             monkeypatch.delenv(name, raising=False)
         else:
             monkeypatch.setenv(name, value)
     capture: dict[str, Any] = {}
     monkeypatch.setattr(OIDC_PROXY_PATCH_TARGET, make_mock_oidc_proxy(capture))
+    # caplog listens on the root logger, which the CLI's setup replaces.
+    monkeypatch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
+    runs: list[Coroutine[Any, Any, Any]] = []
+    monkeypatch.setattr("ha_mcp.__main__.run_entrypoint", lambda c, _: runs.append(c))
     served: list[tuple[FastMCP, dict[str, Any]]] = []
 
     async def serve(self: FastMCP, **kwargs: Any) -> None:
         served.append((self, kwargs))
 
     monkeypatch.setattr(FastMCP, "run_async", serve)
-    await run_oidc_server(
-        config_url=CONFIG_URL,
-        client_id="test-id",
-        client_secret="test-secret",
-        base_url=BASE_URL,
-        host="0.0.0.0",
-        port=port,
-        path=path,
-    )
+    main_oidc()
+    [run] = runs
+    await asyncio.gather(run)
     [(mcp, run_kwargs)] = served
     return mcp, capture, run_kwargs

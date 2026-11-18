@@ -74,65 +74,6 @@ class TestMainOidcValidation:
 
             assert exc_info.value.code == 1
 
-    def test_valid_config_calls_run_entrypoint(self):
-        """main_oidc should call run_entrypoint with valid config."""
-        import ha_mcp.__main__ as main_module
-
-        entrypoint_called = False
-
-        def mock_run_entrypoint(coro, label):
-            nonlocal entrypoint_called
-            entrypoint_called = True
-            # Close the coroutine to avoid warning
-            coro.close()
-
-        with (
-            patch.dict(os.environ, self.VALID_OIDC_ENV, clear=True),
-            patch.object(
-                main_module, "run_entrypoint", side_effect=mock_run_entrypoint
-            ),
-        ):
-            main_module.main_oidc()
-
-        assert entrypoint_called, "run_entrypoint was not called"
-
-    def test_run_oidc_server_args_wired_correctly(self):
-        """main_oidc must bind each env var to the matching run_oidc_server param.
-
-        Regression test for the call site using seven positional args (four
-        adjacent strings) with nothing asserting they land in the right
-        parameter. Uses four distinct sentinel-like values so a transposition
-        (e.g. client_id/client_secret swapped) would be caught.
-        """
-        import ha_mcp.__main__ as main_module
-
-        env = dict(self.VALID_OIDC_ENV)
-        env["OIDC_CONFIG_URL"] = "https://config-url.example.com/sentinel"
-        env["OIDC_CLIENT_ID"] = "sentinel-client-id"
-        env["OIDC_CLIENT_SECRET"] = "sentinel-client-secret"
-        env["MCP_BASE_URL"] = "https://base-url.example.com/sentinel"
-
-        captured_bound = {}
-
-        def mock_run_entrypoint(coro, label):
-            # Bound parameters are visible on a not-yet-started coroutine's
-            # frame locals; read them before closing (close() clears cr_frame).
-            captured_bound.update(coro.cr_frame.f_locals)
-            coro.close()
-
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch.object(
-                main_module, "run_entrypoint", side_effect=mock_run_entrypoint
-            ),
-        ):
-            main_module.main_oidc()
-
-        assert captured_bound["config_url"] == "https://config-url.example.com/sentinel"
-        assert captured_bound["client_id"] == "sentinel-client-id"
-        assert captured_bound["client_secret"] == "sentinel-client-secret"
-        assert captured_bound["base_url"] == "https://base-url.example.com/sentinel"
-
 
 class TestMainOidcLogging:
     """Tests for OIDC mode logging configuration."""

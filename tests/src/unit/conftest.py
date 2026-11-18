@@ -142,11 +142,14 @@ def _unit_test_env(monkeypatch):
     get_data_dir.cache_clear()
     reset_global_settings()
     # A test that ran an entry point leaves its server and settings mount behind.
-    from ha_mcp.__main__ import reset_main_runtime
-    from ha_mcp.settings_ui import reset_http_settings_state
-
-    reset_main_runtime()
-    reset_http_settings_state()
+    # Only the modules loaded now: a test may still have stand-ins in their place.
+    for module, reset in (
+        ("ha_mcp.__main__", "reset_main_runtime"),
+        ("ha_mcp.settings_ui", "reset_http_settings_state"),
+    ):
+        clear = getattr(sys.modules.get(module), reset, None)
+        if clear is not None:
+            clear()
 
 
 @pytest.fixture

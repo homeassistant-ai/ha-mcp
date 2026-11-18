@@ -1621,7 +1621,7 @@ def main_oidc() -> None:
     host, port, path = _get_http_runtime(default_port=8086)
 
     run_entrypoint(
-        run_oidc_server(
+        _run_oidc_server(
             config_url=oidc_config_url,
             client_id=oidc_client_id,
             client_secret=oidc_client_secret,
@@ -1634,7 +1634,7 @@ def main_oidc() -> None:
     )
 
 
-async def run_oidc_server(
+async def _run_oidc_server(
     config_url: str,
     client_id: str,
     client_secret: str,
