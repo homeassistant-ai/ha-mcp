@@ -1,6 +1,6 @@
 """Pin the no-tools lane env (#2292) — the workflow half and the parser half.
 
-A dropped env var here degenerates a required lane into a green duplicate of
+A dropped env var here degenerates a no-tools lane into a green duplicate of
 its ordinary sibling: `E2E_NO_TOOLS_ENTRY` is what strips the component's
 "File & YAML Tools" config entry, and the backend selector next to it is what
 decides WHICH no-tools topology the lane runs. Every downstream guard keys off
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,12 @@ topology = _load_topology()
 @pytest.fixture(autouse=True)
 def _clear_lane_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every parser test from a lane-less environment."""
-    for name in ("E2E_NO_TOOLS_ENTRY", "E2E_BACKEND", "HAOS_TEST_MODE"):
+    for name in (
+        "E2E_NO_TOOLS_ENTRY",
+        "E2E_COMBINE_TOPOLOGIES",
+        "E2E_BACKEND",
+        "HAOS_TEST_MODE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -92,6 +98,16 @@ def test_unrecognized_values_raise_instead_of_guessing_off(
     monkeypatch.setenv("E2E_NO_TOOLS_ENTRY", value)
     with pytest.raises(RuntimeError, match="E2E_NO_TOOLS_ENTRY"):
         topology.tools_entry_absent()
+
+
+@pytest.mark.parametrize("value", ["01", "ja", "TRUE!"])
+def test_unrecognized_combine_values_raise_instead_of_guessing_off(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Reading a typo as "off" would drop a lane's absent phase silently."""
+    monkeypatch.setenv("E2E_COMBINE_TOPOLOGIES", value)
+    with pytest.raises(RuntimeError, match="E2E_COMBINE_TOPOLOGIES"):
+        topology.combined_topologies()
 
 
 def test_no_tools_without_a_backend_has_no_component_surface(
@@ -190,6 +206,7 @@ def test_requires_component_surface_skips_only_without_the_surface(
 _PR = "pr.yml"
 _E2E = "e2e-tests.yml"
 _HAOS = "haos-e2e-tests.yml"
+_STDIO = "haos-e2e-stdio.yml"
 _BETA = "haos-e2e-beta-tests.yml"
 _CBETA = "e2e-beta-tests.yml"
 
@@ -198,12 +215,8 @@ _CBETA = "e2e-beta-tests.yml"
 # lanes must NOT name a backend, or they run the embedded topology instead of
 # the plain-container one they exist to cover.
 _NO_TOOLS_LANES: dict[tuple[str, str], dict[str, str]] = {
-    (_PR, "e2e-validation-no-component"): {},
-    (_PR, "e2e-validation-embedded-server-only"): {"E2E_BACKEND": "embedded"},
     (_E2E, "e2e-tests-no-component"): {},
     (_E2E, "e2e-tests-embedded-server-only"): {"E2E_BACKEND": "embedded"},
-    (_HAOS, "haos-e2e-embedded-no-tools"): {"HAOS_TEST_MODE": "embedded"},
-    (_HAOS, "haos-e2e-inaddon-no-tools"): {"HAOS_TEST_MODE": "inaddon"},
     (_CBETA, "e2e-tests-no-component"): {},
     (_CBETA, "e2e-tests-embedded-server-only"): {"E2E_BACKEND": "embedded"},
 }
@@ -222,9 +235,7 @@ _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_E2E, "e2e-tests-embedded"),
     (_E2E, "e2e-tests-update-path"),
     (_HAOS, "haos-e2e"),
-    (_HAOS, "haos-e2e-embedded"),
-    (_HAOS, "haos-e2e-inaddon"),
-    (_HAOS, "haos-e2e-stdio"),
+    (_STDIO, "haos-e2e-stdio"),
     (_BETA, "haos-e2e-inaddon-beta"),
     (_BETA, "haos-e2e-embedded-beta"),
     (_CBETA, "e2e-tests"),
@@ -232,13 +243,19 @@ _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_CBETA, "e2e-tests-update-path"),
 )
 
+# HAOS lanes whose whole-run topology a dispatch input picks: combined on pull
+# requests, or without the tools entry throughout. They carry
+# E2E_NO_TOOLS_ENTRY as an expression, so neither table above fits them.
+_SELECTABLE_LANES: dict[tuple[str, str], dict[str, str]] = {
+    (_HAOS, "haos-e2e-embedded"): {"HAOS_TEST_MODE": "embedded"},
+    (_HAOS, "haos-e2e-inaddon"): {"HAOS_TEST_MODE": "inaddon"},
+}
+
 # The container no-tools lanes are whole-topology audits: pyproject.toml's
 # --maxfail=3 would stop them after three failures, which is exactly the run
 # that needs the full list. (The HAOS lanes already carry --maxfail=0 for their
 # own triage reasons, stated in their step comments.)
 _AUDIT_LANES: tuple[tuple[str, str], ...] = (
-    (_PR, "e2e-validation-no-component"),
-    (_PR, "e2e-validation-embedded-server-only"),
     (_E2E, "e2e-tests-no-component"),
     (_E2E, "e2e-tests-embedded-server-only"),
     (_CBETA, "e2e-tests-no-component"),
@@ -279,7 +296,7 @@ _E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/([^\s\"']*)")
 # Floor on the discovered count, so a predicate that quietly stops matching (a
 # workflow restructure, a renamed input) fails here rather than reporting an
 # empty sweep as full coverage.
-_MIN_DISCOVERED_LANES = 23
+_MIN_DISCOVERED_LANES = 19
 
 
 def _job(workflow: str, job_id: str) -> dict[str, Any]:
@@ -382,7 +399,7 @@ def test_no_tools_lane_selects_its_own_backend_topology(
 def test_ordinary_lane_does_not_carry_the_no_tools_env(
     workflow: str, job_id: str
 ) -> None:
-    """The component-present sibling must stay component-present."""
+    """A retained lane must not be pinned permanently to its absent phase."""
     job = _job(workflow, job_id)
     job_env = job.get("env") or {}
     assert "E2E_NO_TOOLS_ENTRY" not in job_env, f"{workflow}::{job_id} job env"
@@ -394,6 +411,127 @@ def test_ordinary_lane_does_not_carry_the_no_tools_env(
             "component entry, so the lane no longer covers the ordinary "
             "topology it is paired against"
         )
+
+
+# The expression shapes these workflows use for topology selection:
+# ``${{ matrix.x }}`` and ``${{ <matrix|inputs>.x == 'v' && 'a' || 'b' }}``.
+_EXPRESSION = re.compile(
+    r"\$\{\{\s*(?P<ref>(?:matrix|inputs)\.\w+)"
+    r"(?:\s*==\s*'(?P<eq>[^']*)'\s*&&\s*'(?P<yes>[^']*)'\s*\|\|\s*'(?P<no>[^']*)')?"
+    r"\s*\}\}"
+)
+
+
+def _resolve(text: str, context: dict[str, str]) -> str:
+    """Evaluate the expressions above as Actions would for one run.
+
+    An absent context key is an unset input (a pull_request run has no
+    inputs). ``cond && '' || 'b'`` yields ``'b'`` in Actions, so an empty
+    ``yes`` branch falls through like it does there.
+    """
+
+    def evaluate(match: re.Match[str]) -> str:
+        value = context.get(match["ref"])
+        if match["eq"] is None:
+            return value or ""
+        return match["yes"] if value == match["eq"] and match["yes"] else match["no"]
+
+    resolved = _EXPRESSION.sub(evaluate, text)
+    assert "${{" not in resolved, f"unsupported expression in {text!r}"
+    return resolved
+
+
+def _pytest_arguments(run: str) -> list[str]:
+    """The arguments of the step's ``uv run pytest`` command, continuations
+    joined and a trailing shell comment dropped, as bash would."""
+    commands = _uncommented(run).replace("\\\n", " ").splitlines()
+    command = next(line for line in commands if "uv run pytest" in line)
+    return shlex.split(command, comments=True)
+
+
+def _failure_cap(arguments: list[str]) -> str | None:
+    """The ``--maxfail`` pytest applies: the last of ``--maxfail`` and ``-x``."""
+    cap = None
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--maxfail="):
+            cap = argument.partition("=")[2]
+        elif argument == "--maxfail":
+            cap = arguments[index + 1]
+        elif argument in ("-x", "--exitfirst"):
+            cap = "1"
+    return cap
+
+
+@pytest.mark.parametrize("job_id", ["e2e-validation", "e2e-validation-embedded"])
+def test_pull_requests_run_the_suite_in_both_tool_entry_states(
+    monkeypatch: pytest.MonkeyPatch, job_id: str
+) -> None:
+    """Pull requests have no whole-run no-tools container lane any more.
+
+    A combined row must cover the absent state, a component-present row must
+    keep running the general suite with the entry, and the combined row lifts
+    pyproject.toml's --maxfail=3 so one phase's failures cannot hide the
+    other's.
+    """
+    step = _pytest_step(_PR, job_id)
+    states = set()
+    for row in _job(_PR, job_id)["strategy"]["matrix"]["include"]:
+        context = {f"matrix.{key}": str(value) for key, value in row.items()}
+        monkeypatch.setenv(
+            "E2E_COMBINE_TOPOLOGIES",
+            _resolve(str(_step_env(step)["E2E_COMBINE_TOPOLOGIES"]), context),
+        )
+        combined = topology.combined_topologies()
+        states.add(combined)
+        if combined:
+            arguments = _pytest_arguments(_resolve(str(step["run"]), context))
+            assert _failure_cap(arguments) == "0", (
+                f"{job_id} {row['os']} stops after three failures"
+            )
+    assert states == {True, False}, f"{job_id} covers only combined={states}"
+
+
+@pytest.mark.parametrize(("workflow", "job_id"), list(_SELECTABLE_LANES))
+@pytest.mark.parametrize(
+    ("chosen", "combined", "absent"),
+    [
+        (None, True, False),
+        ("combined", True, False),
+        ("without-tools", False, True),
+    ],
+    ids=["pull_request", "dispatch-combined", "dispatch-without-tools"],
+)
+def test_haos_topology_input_selects_the_lane_topology(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow: str,
+    job_id: str,
+    chosen: str | None,
+    combined: bool,
+    absent: bool,
+) -> None:
+    """Pull requests run combined; a dispatch can keep the entry absent.
+
+    The whole-run no-tools HAOS lanes are this input now. If the expression
+    stops resolving, a manual no-tools run silently re-tests the combined
+    topology, or a pull request loses its absent phase.
+    """
+    data = yaml.safe_load((_WORKFLOW_DIR / workflow).read_text(encoding="utf-8"))
+    options = data[True]["workflow_dispatch"]["inputs"]["topology"]["options"]
+    if chosen is not None:
+        assert chosen in options
+    context = {} if chosen is None else {"inputs.topology": chosen}
+    env = _step_env(_pytest_step(workflow, job_id))
+    for name in ("E2E_COMBINE_TOPOLOGIES", "E2E_NO_TOOLS_ENTRY"):
+        monkeypatch.setenv(name, _resolve(str(env[name]), context))
+    assert topology.combined_topologies() is combined
+    assert topology.tools_entry_absent() is absent
+    selectors = {name: env[name] for name in _SELECTOR_NAMES if name in env}
+    assert selectors == _SELECTABLE_LANES[(workflow, job_id)]
+
+
+def test_stdio_lane_never_allocates_a_pull_request_runner() -> None:
+    data = yaml.safe_load((_WORKFLOW_DIR / _STDIO).read_text(encoding="utf-8"))
+    assert set(data[True]) == {"workflow_dispatch"}
 
 
 @pytest.mark.parametrize(("workflow", "job_id"), _AUDIT_LANES, ids=lambda v: v)
@@ -439,8 +577,8 @@ def _discover_e2e_lanes(directory: Path | None = None) -> set[tuple[str, str]]:
 
 
 def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
-    """Both lane tables are hand-maintained, so a lane added later belongs to
-    neither and is exempt from every env-contract check above: it is
+    """The lane tables are hand-maintained, so a lane added later belongs to
+    none and is exempt from every env-contract check above: it is
     parametrized nowhere, and nothing goes red for it (#2302 review).
 
     Completeness is all this test claims, and classification stays the tables'
@@ -455,6 +593,7 @@ def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
     tables = {
         "_NO_TOOLS_LANES": set(_NO_TOOLS_LANES),
         "_ORDINARY_LANES": set(_ORDINARY_LANES),
+        "_SELECTABLE_LANES": set(_SELECTABLE_LANES),
     }
 
     for lane in sorted(discovered):
@@ -464,8 +603,9 @@ def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
             f"{workflow}::{job_id} runs the e2e suite but is claimed by "
             f"{claimants or 'no table'}, not by exactly one. Add it to "
             "_NO_TOOLS_LANES (with the backend selectors its pytest step must "
-            "carry) if it sets E2E_NO_TOOLS_ENTRY=1, otherwise to "
-            "_ORDINARY_LANES — a lane in neither table is checked by nothing "
+            "carry) if it sets E2E_NO_TOOLS_ENTRY=1, to _SELECTABLE_LANES if "
+            "a dispatch input picks its topology, otherwise to "
+            "_ORDINARY_LANES — a lane in no table is checked by nothing "
             "in this module, and a lane in both is contradicting itself"
         )
 

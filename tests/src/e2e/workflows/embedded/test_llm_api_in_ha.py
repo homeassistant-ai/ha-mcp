@@ -23,7 +23,7 @@ server rather than booting one of their own.
 
 NOTE (skip-ceiling coupling): both tests are marker-gated, so each adds a
 collection-time skip on every lane it does not run on. That consumes
-``_SKIP_CEILING_PER_LANE`` budget in
+``SKIP_CEILING_PER_LANE`` budget in
 tests/src/e2e/basic/test_backend_dispatch_smoke.py — see that module's
 docstring; the ceilings were bumped when these landed.
 """

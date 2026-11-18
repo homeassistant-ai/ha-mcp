@@ -227,6 +227,7 @@ class TestConfigEntryFlow:
             {"target": entry_id, "confirm": True},
         )
 
+    @pytest.mark.component_topology
     async def test_update_template_sensor_availability(self, mcp_client):
         """Persist and read a template field nested under additional options."""
         config = {

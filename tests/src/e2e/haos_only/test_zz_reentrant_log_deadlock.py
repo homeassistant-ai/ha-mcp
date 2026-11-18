@@ -35,6 +35,7 @@ from haos_runtime import HA_MCP_SERVER_WEBHOOK_ID, _wait_http_ok, ssh_exec
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
+from .._conftest_embedded import _wait_for_embedded_webhook_ready
 from ..utilities.assertions import MCPAssertions
 from ..utilities.cleanup import CleanupSteps
 from ..utilities.logger_seed import with_probe_logger_config
@@ -377,3 +378,8 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
                 )
             with cleanup.step():
                 _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
+            with cleanup.step():
+                assert _wait_for_embedded_webhook_ready(
+                    ha_container_with_fresh_config["embedded_webhook_url"],
+                    timeout=HA_RETURN_TIMEOUT_S,
+                ), "Embedded MCP server did not return after probe cleanup"

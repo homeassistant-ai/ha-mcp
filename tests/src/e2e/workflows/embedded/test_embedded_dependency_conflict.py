@@ -76,7 +76,7 @@ from ..._conftest_seed import is_server_requirement
 #
 # NOTE (skip-ceiling coupling): every test in this module skips on the haos,
 # haos_stdio, haos_inaddon and haos_embedded lanes, and each such skip counts
-# toward ``_SKIP_CEILING_PER_LANE`` in
+# toward ``SKIP_CEILING_PER_LANE`` in
 # tests/src/e2e/basic/test_backend_dispatch_smoke.py. Adding or removing a test
 # here moves those four ceilings by the same amount.
 pytestmark = [

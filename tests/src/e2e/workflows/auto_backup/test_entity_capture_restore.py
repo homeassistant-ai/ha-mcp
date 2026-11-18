@@ -108,6 +108,7 @@ class TestEntityCaptureRestore:
                     )
                 await _delete_leftover_backup(mcp_client, backup_name)
 
+    @pytest.mark.component_topology
     async def test_a_removed_entity_says_what_core_keeps(
         self, mcp_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
