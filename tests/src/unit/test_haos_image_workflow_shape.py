@@ -91,21 +91,26 @@ _IMAGE_RESTORING_LANES = (
 )
 
 
+def _cache_paths(step: dict[str, Any]) -> list[str]:
+    """The paths as actions/cache reads them: one per line, trimmed, in order.
+    The order goes into the cache version, so it is kept."""
+    paths = str(step.get("with", {}).get("path", "")).splitlines()
+    return [path.strip() for path in paths if path.strip()]
+
+
 def _image_cache_steps(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
     return [
         step
         for step in _job_steps(job)
         if str(step.get("uses", "")).partition("@")[0] == action
-        and _HAOS_IMAGE_CACHE_PATH
-        in str(step.get("with", {}).get("path", "")).splitlines()
+        and _HAOS_IMAGE_CACHE_PATH in _cache_paths(step)
     ]
 
 
 def _cache_identity(step: dict[str, Any]) -> tuple[str, list[str]]:
     """What Actions matches a restore against a save by: the key, and the
     path list, which goes into the cache version."""
-    paths = str(step["with"]["path"]).splitlines()
-    return step["with"]["key"], sorted(path.strip() for path in paths if path.strip())
+    return step["with"]["key"], _cache_paths(step)
 
 
 def test_every_haos_lane_restores_the_image_the_external_lane_saves() -> None:
