@@ -113,6 +113,8 @@ def test_every_haos_lane_restores_the_shared_image() -> None:
             _workflow(_WORKFLOW_DIR / _STABLE_WORKFLOW)["jobs"]["haos-e2e"]
         )
         if str(step.get("uses", "")).partition("@")[0] == "actions/cache/save"
+        and _HAOS_IMAGE_CACHE_PATH
+        in str(step.get("with", {}).get("path", "")).splitlines()
     ]
     assert saves, "the external HAOS lane no longer saves the image"
     assert all(step["with"]["key"] == _SHARED_IMAGE_KEY for step in saves), (
@@ -193,6 +195,7 @@ def _selection(call: list[str]) -> tuple[str, str]:
         "-k visibility\t-m addon_disruptive",
         "-k visibility -n2",
         "-vn2",
+        "-k visibility @selection.args",
     ],
 )
 def test_a_dispatch_cannot_reset_a_phase_marker_or_worker_count(
@@ -225,7 +228,9 @@ def test_one_empty_phase_does_not_stop_the_other(
 
     assert (result.returncode == 0) is passes, result.stdout + result.stderr
     assert _selection(calls[0]) == ("not addon_disruptive", "-n2")
-    if exits != "1,0":
+    if exits == "1,0":
+        assert len(calls) == 1, "the serial phase booted HAOS after a failure"
+    else:
         assert len(calls) == 2
         assert _selection(calls[1]) == ("addon_disruptive", "-n0")
 

@@ -802,12 +802,13 @@ jobs:
           # Each phase sets its own -m and worker count, and pytest keeps the
           # last of either, so the dispatch arguments may not set them. The
           # loop splits them as the pytest commands below do, and reads a
-          # short-option cluster such as -vn2 the way pytest does.
+          # short-option cluster such as -vn2 the way pytest does. An @file
+          # argument would add options the loop cannot see.
           set -f
           # shellcheck disable=SC2086
           for argument in $PYTEST_ARGS; do
             case "$argument" in
-              --markexpr*|--numprocesses*) refused=$argument ;;
+              @*|--markexpr*|--numprocesses*) refused=$argument ;;
               --*) ;;
               -?*)
                 cluster=${argument#-}
