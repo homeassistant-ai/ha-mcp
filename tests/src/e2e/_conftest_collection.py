@@ -19,9 +19,7 @@ from haos_runtime import (
     is_haos_stdio_mode,
 )
 
-from ._conftest_embedded import (
-    _is_embedded_backend_selected,
-)
+from ._conftest_embedded import _is_embedded_backend_selected
 from ._conftest_topology import order_topologies
 from .utilities.topology import component_surface_available, item_tools_entry_absent
 

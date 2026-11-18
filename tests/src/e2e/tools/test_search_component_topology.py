@@ -60,7 +60,7 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
         # REST path, whose /config/scene/config endpoint serves only storage
         # scenes — a YAML-defined scene carrying an ``id:`` is indistinguishable
         # in the registry and then 404s. That gap is structural, not a fetch
-        # outage, and the sibling src fix reclassifies the 404 as
+        # outage, and ``smart_search/_scenes.py`` classifies the 404 as
         # ``yaml_skipped`` so the wording says so. This branch pins that wording
         # as the ONLY degradation this topology may produce: a fetch failure or
         # any other non-404 cause still has to fail the test.

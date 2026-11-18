@@ -5,8 +5,12 @@ name: HAOS E2E Tests
 # entry through its config flow and run the tests that need it
 # (E2E_COMBINE_TOPOLOGIES, tests/AGENTS.md). A manual dispatch can instead keep
 # them without the entry for the whole run (`topology: without-tools`). The
-# stdio lane is manual-only in haos-e2e-stdio.yml. All lanes share the baked
-# image; external is its sole cache writer.
+# stdio lane is manual-only in haos-e2e-stdio.yml.
+#
+# Image: each lane restores the qcow2 from the Actions cache (keyed on the bake
+# inputs) and builds it locally on a miss; only the external lane saves it.
+# One job per lane on purpose: the ~7 GB qcow2 stays on that runner's disk
+# from build to test, with no cross-job upload and download.
 
 on:
   # No workflow-level `paths:` filter on purpose. These checks are REQUIRED
@@ -416,12 +420,12 @@ jobs:
         id: key
         # Shared with every other HAOS lane (``haos-e2e``, ``haos-e2e-inaddon``
         # and haos-e2e-stdio.yml): all consume the same byte-identical qcow2.
-        # The bake seeds the
-        # in-process MCP server config entry (of ha_mcp_tools) into the image
+        # The bake seeds the in-process MCP server config entry (of
+        # ha_mcp_tools) into the image
         # (build_image._stage_embedded_server_integration), and the per-worker
         # wheel/feature-flag staging happens IN-VM at test time on each worker's
-        # overlay — never on the cached base — so this lane needs no distinct key.
-        # ``custom_components/ha_mcp_tools`` is already one of the hashed
+        # overlay — never on the cached base — so this lane needs no distinct
+        # key. ``custom_components/ha_mcp_tools`` is already one of the hashed
         # paths, so a change to the integration invalidates the shared image.
         run: |
           hash=$(git ls-tree -r HEAD \
@@ -657,13 +661,12 @@ jobs:
       - name: Compute image cache key
         id: key
         # Shared with the ``haos-e2e`` lane and every other HAOS lane: all
-        # consume the same qcow2. The bake
-        # (build_image.py::build) unconditionally calls
-        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
-        # image is already addon-baked and works for both tiers. Inaddon's
-        # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
-        # test time, so PR-level addon changes don't need to invalidate the
-        # cache here.
+        # consume the same qcow2. The bake (build_image.py::build)
+        # unconditionally calls stage_dev_addon_source +
+        # install_ha_mcp_dev_addon, so the baked image is already addon-baked
+        # and works for both tiers. Inaddon's refresh_dev_addon_source_in_qcow2
+        # overwrites the addon source at test time, so PR-level addon changes
+        # don't need to invalidate the cache here.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -731,15 +734,13 @@ jobs:
             --output /tmp/haos-test-image.qcow2
 
       # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and always tries to save the
-      # same qcow2; the automatic lanes start in
-      # parallel on the same PR push, so whichever lost the save race
-      # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
-      # the actions/cache service then refused with
-      # "another job may be creating this cache." Letting only the
-      # external lane save eliminates the wasted work without
-      # changing what gets cached — every other lane still restores from
-      # the shared key on the next run.
+      # computes the same cache key (#1407) and always tries to save the same
+      # qcow2; the automatic lanes start in parallel on the same PR push, so
+      # whichever lost the save race was burning ~25s on a tar+zstd-write of a
+      # 12 GB qcow2 that the actions/cache service then refused with "another
+      # job may be creating this cache." Letting only the external lane save
+      # eliminates the wasted work without changing what gets cached — every
+      # other lane still restores from the shared key on the next run.
       #
       # The shared-key bet is safe because every lane consumes the SAME
       # byte-identical qcow2: the cache key hashes the bake-input paths

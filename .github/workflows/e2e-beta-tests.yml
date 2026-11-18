@@ -208,8 +208,9 @@ jobs:
 
   # Container backend with the ha_mcp_tools component ABSENT (#2292) for the
   # whole run. Pull requests cover this state in the first phase of pr.yml's
-  # combined x64 container lane. The same full E2E suite runs with the component's "File & YAML Tools" config entry never
-  # created (E2E_NO_TOOLS_ENTRY=1) — the app (add-on) / Docker / PyPI user who never
+  # combined x64 container lane. The same full E2E suite runs with the
+  # component's "File & YAML Tools" config entry never created
+  # (E2E_NO_TOOLS_ENTRY=1) — the app (add-on) / Docker / PyPI user who never
   # installed the component from HACS: the majority install, and the one every
   # component-present lane hides, because the e2e fixtures set the component up
   # everywhere. Every component-backed capability must therefore either fall
@@ -406,14 +407,15 @@ jobs:
 
   # Embedded backend with ONLY the server entry (#2292) for the whole run: the
   # exact topology the issue reports, which pull requests cover in the first
-  # phase of pr.yml's combined x64 embedded lane. The in-process MCP server entry is present — the
-  # WS command surface rides that entry (#2289/#2291), so search and the other
-  # command-backed reads keep working — while the component's "File & YAML
-  # Tools" entry stays absent (E2E_NO_TOOLS_ENTRY=1), so the filesystem/YAML
-  # services are not registered. Both entries belong to the same component and
-  # every other lane creates both, which is why the split is invisible until a
-  # user hits it. One ubuntu-latest lane at -n2, matching the per-worker wheel
-  # build + in-container preinstall cost of the embedded matrix above.
+  # phase of pr.yml's combined x64 embedded lane. The in-process MCP server
+  # entry is present — the WS command surface rides that entry (#2289/#2291), so
+  # search and the other command-backed reads keep working — while the
+  # component's "File & YAML Tools" entry stays absent (E2E_NO_TOOLS_ENTRY=1),
+  # so the filesystem/YAML services are not registered. Both entries belong to
+  # the same component and every other lane creates both, which is why the split
+  # is invisible until a user hits it. One ubuntu-latest lane at -n2, matching
+  # the per-worker wheel build + in-container preinstall cost of the embedded
+  # matrix above.
   e2e-tests-embedded-server-only:
     name: E2E Tests (Embedded Server, server entry only)
     runs-on: ubuntu-latest

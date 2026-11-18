@@ -2,8 +2,10 @@
 
 The no-tools lanes (``E2E_NO_TOOLS_ENTRY=1``) come in two shapes, and tests that
 degrade differently between them need to tell the shapes apart without each
-re-deriving the env logic. See the "No-tools lanes" section of
-``tests/AGENTS.md`` for the full lane table.
+re-deriving the env logic. Combined lanes (``E2E_COMBINE_TOPOLOGIES=1``) run
+both states in one session, so a collected item's own phase decides which
+state it sees (``item_topology``). See the "Combined PR lanes" and "No-tools
+lanes" sections of ``tests/AGENTS.md``.
 """
 
 from __future__ import annotations
@@ -30,8 +32,11 @@ def item_topology(item: Any) -> str | None:
 
 
 def item_tools_entry_absent(item: Any) -> bool:
+    """The item's phase on combined lanes; the lane's env everywhere else."""
     phase = item_topology(item)
-    return phase == "topology_without_tools" if phase else tools_entry_absent()
+    if phase is not None:
+        return phase == "topology_without_tools"
+    return tools_entry_absent()
 
 
 def tools_entry_absent() -> bool:
@@ -73,6 +78,10 @@ def component_surface_available(*, no_tools_entry: bool | None = None) -> bool:
     those capabilities have no source and server code must degrade to whatever
     the legacy REST path can see. On HAOS inaddon a test can still enable the
     baked server entry later in the session; this predicate does not track it.
+
+    ``no_tools_entry`` overrides the env for a state other than the current
+    one. Collection uses it to ask whether a combined lane's absent phase has
+    the surface, before ``E2E_NO_TOOLS_ENTRY`` reflects that phase.
     """
     # Same normalization as conftest's backend selectors, so a padded or
     # differently-cased env value can't make this predicate disagree with

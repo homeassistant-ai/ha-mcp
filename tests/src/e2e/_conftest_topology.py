@@ -62,6 +62,10 @@ def pytest_xdist_make_scheduler(config: Any, log: Any) -> Any:
     from xdist.scheduler.loadscope import LoadScopeScheduling
 
     class TopologyScheduling(LoadScopeScheduling):
+        # loadscope hands out scopes in collection order, which
+        # order_topologies made absent-first. Prefixing the phase keeps a
+        # module's two phases in separate scopes, so no scope straddles the
+        # installation.
         def _split_scope(self, nodeid: str) -> str:
             phase = WITHOUT_TOOLS if WITHOUT_TOOLS in nodeid else WITH_TOOLS
             return f"{phase}:{super()._split_scope(nodeid)}"
@@ -71,15 +75,27 @@ def pytest_xdist_make_scheduler(config: Any, log: Any) -> Any:
 
 def order_topologies(items: list[Any]) -> None:
     if combined_topologies():
-        # Stable sort preserves the existing final-TLS ordering within a phase.
+        # Stable sort preserves the final-TLS ordering within a phase, so this
+        # must run after _move_haos_tls_items_last.
         items.sort(key=lambda item: item_topology(item) == WITH_TOOLS)
 
 
-def _wait_for_core_job(env: dict[str, Any], timeout: float = 300) -> None:
+def _pending_core_jobs(jobs: list[dict[str, Any]]) -> list[str]:
+    pending = []
+    for job in jobs:
+        name = job.get("name") or ""
+        if not job["done"] and name.startswith("home_assistant_core_"):
+            pending.append(name)
+        pending.extend(_pending_core_jobs(job["child_jobs"]))
+    return pending
+
+
+def wait_for_core_job(env: dict[str, Any], timeout: float = 300) -> None:
     """A restored HTTP endpoint can precede Supervisor releasing its restart lock."""
     from haos_runtime import _home_assistant_ws_command
 
     deadline = time.monotonic() + timeout
+    pending: list[str] = []
     while time.monotonic() < deadline:
         result = _home_assistant_ws_command(
             env["base_url"],
@@ -87,23 +103,27 @@ def _wait_for_core_job(env: dict[str, Any], timeout: float = 300) -> None:
             {"type": "supervisor/api", "endpoint": "/jobs/info", "method": "get"},
             timeout=min(30, max(deadline - time.monotonic(), 0.1)),
         )
-        pending = list(result["jobs"])
-        while pending:
-            job = pending.pop()
-            if not job["done"] and (job.get("name") or "").startswith(
-                "home_assistant_core_"
-            ):
-                break
-            pending.extend(job["child_jobs"])
-        else:
+        pending = _pending_core_jobs(result["jobs"])
+        if not pending:
             return
         time.sleep(1)
-    raise RuntimeError("Supervisor's previous Core job did not finish before restart")
+    raise RuntimeError(
+        f"Supervisor's previous Core job did not finish before restart: {pending}"
+    )
+
+
+def _check(response: requests.Response, action: str) -> requests.Response:
+    """Raise with Core's reply body, which names the reason a request failed."""
+    if not response.ok:
+        raise RuntimeError(
+            f"{action} failed: HTTP {response.status_code}: {response.text}"
+        )
+    return response
 
 
 def _restart_core(env: dict[str, Any]) -> None:
     if env["backend"].startswith("haos"):
-        _wait_for_core_job(env)
+        wait_for_core_job(env)
     headers = {"Authorization": f"Bearer {env['token']}"}
     base_url = env["base_url"]
     try:
@@ -113,7 +133,7 @@ def _restart_core(env: dict[str, Any]) -> None:
             json={},
             timeout=30,
         )
-        response.raise_for_status()
+        _check(response, "Core restart request")
     except requests.ConnectionError:
         logger.debug("Core closed the restart request during shutdown")
     deadline = time.monotonic() + 120
@@ -145,16 +165,14 @@ def _create_tools_entry(env: dict[str, Any]) -> str:
     response = requests.post(
         url, headers=headers, json={"handler": "ha_mcp_tools"}, timeout=120
     )
-    response.raise_for_status()
-    step = response.json()
+    step = _check(response, "Starting the File & YAML Tools flow").json()
     for answer in ({"next_step_id": "tools"}, {}):
         if step["type"] not in ("menu", "form"):
             raise RuntimeError(f"Unexpected File & YAML Tools setup step: {step}")
         response = requests.post(
             f"{url}/{step['flow_id']}", headers=headers, json=answer, timeout=120
         )
-        response.raise_for_status()
-        step = response.json()
+        step = _check(response, f"File & YAML Tools step {step['step_id']}").json()
     if step["type"] != "create_entry":
         raise RuntimeError(f"File & YAML Tools setup did not create an entry: {step}")
     return step["result"]["entry_id"]
@@ -187,8 +205,8 @@ def install_tools_entry(env: dict[str, Any]) -> None:
         response = requests.get(
             f"{env['base_url']}/api/services", headers=headers, timeout=15
         )
-        response.raise_for_status()
-        if any(row["domain"] == "ha_mcp_tools" for row in response.json()):
+        services = _check(response, "Listing services").json()
+        if any(row["domain"] == "ha_mcp_tools" for row in services):
             break
         time.sleep(1)
     else:

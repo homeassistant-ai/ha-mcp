@@ -113,9 +113,9 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # The external HAOS lane is the sole writer for this shared key. A
-      # simultaneous cache miss can build here, but this parallel lane must not
-      # race it with a second cache save.
+      # The external HAOS lane is the sole writer for this shared key. A cache
+      # miss builds here without saving, so a dispatch that runs alongside a
+      # pull request's external lane cannot race its save.
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3

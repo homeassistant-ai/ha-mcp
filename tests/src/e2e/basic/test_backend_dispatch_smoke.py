@@ -1,9 +1,9 @@
 """Multi-layer smoke tests for backend dispatch correctness.
 
 The e2e CI lanes set env vars that ``conftest.ha_container_with_fresh_config``
-reads to choose a backend. Every HAOS lane below is a job of the one
-``haos-e2e-tests.yml`` workflow (the beta lanes are jobs of
-``haos-e2e-beta-tests.yml``):
+reads to choose a backend. The HAOS lanes below are jobs of
+``haos-e2e-tests.yml``, except the manual ``haos-e2e-stdio.yml`` (the beta
+lanes are jobs of ``haos-e2e-beta-tests.yml``):
 
 | Lane                          | HAOS_TEST_IMAGE_PATH | HAOS_TEST_MODE | expected backend |
 | ----------------------------- | -------------------- | -------------- | ---------------- |
@@ -21,7 +21,9 @@ the container.
 ``E2E_NO_TOOLS_ENTRY=1`` (#2292) is a third, orthogonal axis: the backend is
 unchanged, but the "File & YAML Tools" entry is absent, so a completely
 different set of tests is marker-skipped. Only the skip ceiling below cares —
-it keys those lanes separately, as ``<backend>_no_tools``.
+it keys those lanes separately, as ``<backend>_no_tools``. Combined lanes
+(``E2E_COMBINE_TOPOLOGIES=1``) run both states in one session and keep the
+base key, because they still run every component-present test.
 
 Three layers of guard, each catching a different silent-failure mode:
 
@@ -181,8 +183,8 @@ _SKIP_CEILING_BASELINE = {
     # Read future changes from CI instead of deriving them.
     # #2270 stable observed 118 marker skips; beta observed 117.
     "haos_embedded": 127,  # was 118; +8 #2292 no_tools_only; +1 #2361 (its embedded_only half)
-    # No-tools topology keys (#2292). On the ``E2E_NO_TOOLS_ENTRY=1`` lanes the
-    # lookup key gains a ``_no_tools`` suffix, because those lanes skip a
+    # No-tools topology keys (#2292). On whole-run ``E2E_NO_TOOLS_ENTRY=1``
+    # lanes (not combined lanes) the lookup key gains a ``_no_tools`` suffix, because those lanes skip a
     # completely different — and much larger — set: every ``requires_tools_entry``
     # module (the whole filesystem / YAML suite) skips, while the 8
     # ``no_tools_only`` items run. Sharing the base key would force one ceiling
@@ -249,7 +251,7 @@ def _skip_ceilings_with_fragments() -> dict[str, int]:
     return ceilings
 
 
-_SKIP_CEILING_PER_LANE = _skip_ceilings_with_fragments()
+SKIP_CEILING_PER_LANE = _skip_ceilings_with_fragments()
 
 
 def test_backend_dispatch_matches_workflow_env(
@@ -423,10 +425,16 @@ def test_session_collected_test_count_above_floor(request: Any) -> None:
     reduced coverage. Collection count varies by a handful across
     modes (parametrize/fixture-driven — currently 912 container vs
     915 HAOS lanes); the floor sits well below all three lanes' actuals.
+
+    A combined session collects each test once per phase it runs in, so the
+    count is of distinct tests across both phases: a module that only runs
+    after installation still counts, and one that runs twice counts once.
     """
-    total = sum(
-        item_topology(item) == item_topology(request.node)
-        for item in request.session.items
+    total = len(
+        {
+            item.nodeid.replace(item_topology(item) or "", "")
+            for item in request.session.items
+        }
     )
     assert total >= _COLLECTION_FLOOR, (
         f"Only {total} tests collected, expected >= {_COLLECTION_FLOOR}. "
@@ -439,7 +447,7 @@ def test_session_skipped_count_below_ceiling(
     request: Any,
     ha_container_with_fresh_config: dict[str, Any],
 ) -> None:
-    """Per-lane skip-count must stay below ``_SKIP_CEILING_PER_LANE[backend]``.
+    """Per-lane skip-count must stay below ``SKIP_CEILING_PER_LANE[backend]``.
 
     Catches the inverse of the collection-floor check: the suite still
     collects the expected total, but tests transition pass→skip silently
@@ -459,11 +467,13 @@ def test_session_skipped_count_below_ceiling(
     their own ``<backend>_no_tools`` keys rather than sharing the backend's.
     """
     backend = ha_container_with_fresh_config["backend"]
-    combined = combined_topologies()
-    lane = f"{backend}_no_tools" if tools_entry_absent() and not combined else backend
-    ceiling = _SKIP_CEILING_PER_LANE.get(lane)
+    if tools_entry_absent() and not combined_topologies():
+        lane = f"{backend}_no_tools"
+    else:
+        lane = backend
+    ceiling = SKIP_CEILING_PER_LANE.get(lane)
     assert ceiling is not None, (
-        f"Unknown lane {lane!r} — add to _SKIP_CEILING_PER_LANE at the top of this file"
+        f"Unknown lane {lane!r} — add to SKIP_CEILING_PER_LANE at the top of this file"
     )
     # Items in request.session.items already have skip markers applied
     # by pytest_collection_modifyitems (which ran before any test).

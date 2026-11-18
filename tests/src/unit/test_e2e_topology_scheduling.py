@@ -6,37 +6,122 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from ..e2e.basic.test_backend_dispatch_smoke import (
-    _SKIP_CEILING_PER_LANE,
-)
-from ..e2e.basic.test_backend_dispatch_smoke import (
-    test_session_skipped_count_below_ceiling as check_skip_ceiling,
-)
+pytest_plugins = ["pytester"]
 
 
-def test_installed_phase_excess_skips_fail_the_combined_gate(monkeypatch):
+def test_installed_phase_excess_skips_fail_the_combined_gate(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A combined lane keeps the component-present skip ceiling.
+
+    Its absent phase sets E2E_NO_TOOLS_ENTRY, so reading the lane key from that
+    alone would grant the much larger no-tools allowance and hide installed-
+    phase tests that skip. The real smoke check runs here in a combined
+    session whose installed phase skips one test more than the ceiling.
+    """
     monkeypatch.setenv("E2E_COMBINE_TOPOLOGIES", "1")
-    monkeypatch.setenv("E2E_NO_TOOLS_ENTRY", "1")
-    absent = SimpleNamespace(
-        callspec=SimpleNamespace(params={"e2e_topology": "topology_without_tools"}),
-        iter_markers=lambda: iter(()),
+    monkeypatch.setenv("E2E_NO_TOOLS_ENTRY", "0")
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.delenv("E2E_BACKEND", raising=False)
+    monkeypatch.delenv("HAOS_TEST_MODE", raising=False)
+    pytester.makeini("[pytest]\nmarkers =\n    requires_tools_entry\n")
+    pytester.makeconftest(
+        """
+        import pytest
+        from tests.src.e2e._conftest_topology import (
+            order_topologies, pytest_configure, pytest_generate_tests,
+        )
+
+        def pytest_collection_modifyitems(items):
+            order_topologies(items)
+
+        @pytest.fixture(scope="session", autouse=True)
+        def e2e_topology(request):
+            yield request.param
+
+        @pytest.fixture(scope="session")
+        def ha_container_with_fresh_config():
+            return {"backend": "container"}
+        """
     )
-    installed = SimpleNamespace(
-        callspec=SimpleNamespace(params={"e2e_topology": "topology_with_tools"}),
-        iter_markers=lambda: iter((pytest.mark.skip.mark,)),
+    pytester.makepyfile(
+        """
+        import pytest
+        from tests.src.e2e.basic.test_backend_dispatch_smoke import (
+            SKIP_CEILING_PER_LANE,
+            test_session_skipped_count_below_ceiling,
+        )
+
+        @pytest.mark.requires_tools_entry
+        @pytest.mark.skip(reason="installed-phase skip")
+        @pytest.mark.parametrize("n", range(SKIP_CEILING_PER_LANE["container"] + 1))
+        def test_installed_only(n):
+            pass
+        """
     )
-    request = SimpleNamespace(
-        node=absent,
-        session=SimpleNamespace(
-            items=[absent] + [installed] * (_SKIP_CEILING_PER_LANE["container"] + 1)
+
+    result = pytester.runpytest("-p", "no:cacheprovider")
+
+    result.stdout.fnmatch_lines(["*exceeds the ceiling*"])
+    assert result.parseoutcomes()["failed"] == 1
+
+
+def _run_combined_session(
+    tmp_path: Path, workers: int, dist: str, backend: str = ""
+) -> subprocess.CompletedProcess[str]:
+    root = Path(__file__).resolve().parents[3]
+    env = os.environ | {
+        "PYTHONPATH": os.pathsep.join(
+            (str(root), str(root / "src"), str(root / "tests"), str(root / "tests/src"))
         ),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTEST_ADDOPTS": "",
+        "E2E_COMBINE_TOPOLOGIES": "1",
+        "E2E_BACKEND": backend,
+        "HAOS_TEST_MODE": "",
+        "HA_MCP_CONFIG_DIR": str(tmp_path / "settings"),
+    }
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "xdist.plugin",
+            "-n",
+            str(workers),
+            "--dist",
+            dist,
+            "-q",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
-    with pytest.raises(AssertionError, match="exceeds the ceiling"):
-        check_skip_ceiling(request, {"backend": "container"})
+
+
+def test_a_scheduler_that_splits_modules_across_phases_is_refused(
+    tmp_path: Path,
+) -> None:
+    """`--dist load` hands single tests to any worker, so one could install the
+    component while another still runs the module's absent-phase tests."""
+    (tmp_path / "conftest.py").write_text(
+        "from tests.src.e2e._conftest_topology import pytest_configure\n"
+    )
+    (tmp_path / "test_any.py").write_text("def test_any():\n    pass\n")
+
+    result = _run_combined_session(tmp_path, 2, "load")
+
+    assert result.returncode != 0
+    assert "Combined topologies require --dist loadscope" in (
+        result.stdout + result.stderr
+    )
 
 
 @pytest.mark.parametrize(
@@ -46,7 +131,6 @@ def test_component_installation_is_one_way_per_worker(
     tmp_path: Path, workers: int, backend: str, expected: int
 ) -> None:
     """Exercise real pytest session parameters and xdist scope dispatch together."""
-    root = Path(__file__).resolve().parents[3]
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\nmarkers =\n    requires_tools_entry\n    component_topology\n"
         "    requires_component_surface\n    installs_component_surface\n"
@@ -98,37 +182,7 @@ def test_shared_surface_runs_when_available(e2e_topology):
     expected = "topology_without_tools" if os.environ.get("E2E_BACKEND") == "embedded" else "topology_with_tools"
     assert e2e_topology == expected
 """)
-    env = os.environ | {
-        "PYTHONPATH": os.pathsep.join(
-            (str(root), str(root / "src"), str(root / "tests"), str(root / "tests/src"))
-        ),
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-        "PYTEST_ADDOPTS": "",
-        "E2E_COMBINE_TOPOLOGIES": "1",
-        "E2E_BACKEND": backend,
-        "HAOS_TEST_MODE": "",
-        "HA_MCP_CONFIG_DIR": str(tmp_path / "settings"),
-    }
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "xdist.plugin",
-            "-n",
-            str(workers),
-            "--dist",
-            "loadscope",
-            "-q",
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    result = _run_combined_session(tmp_path, workers, "loadscope", backend)
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"{expected} passed" in result.stdout, result.stdout
     traces = [path.read_text().splitlines() for path in tmp_path.glob("*.trace")]

@@ -99,6 +99,16 @@ def test_unrecognized_values_raise_instead_of_guessing_off(
         topology.tools_entry_absent()
 
 
+@pytest.mark.parametrize("value", ["01", "ja", "TRUE!"])
+def test_unrecognized_combine_values_raise_instead_of_guessing_off(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Reading a typo as "off" would drop a lane's absent phase silently."""
+    monkeypatch.setenv("E2E_COMBINE_TOPOLOGIES", value)
+    with pytest.raises(RuntimeError, match="E2E_COMBINE_TOPOLOGIES"):
+        topology.combined_topologies()
+
+
 def test_no_tools_without_a_backend_has_no_component_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
