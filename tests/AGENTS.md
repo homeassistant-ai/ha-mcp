@@ -102,10 +102,11 @@ scopes together within each phase and preserves absent-before-present order
 on every worker. Do not add an unrelated test to `component_topology` just to
 make it run twice. Its assertions must cover a component-dependent branch.
 
-The separate no-tools jobs and HAOS stdio job remain available manually:
-`pr.yml` has `legacy_lanes`; `haos-e2e-tests.yml` has a `lane` selector. Normal
-PR updates use eight E2E jobs. ARM64, update-path, HAOS external, and the
-post-merge stable/beta workflows retain their existing coverage.
+Pull requests do not run a whole-run no-tools lane. For one, dispatch
+`e2e-tests.yml` (its no-component and server-entry-only jobs also run on every
+`master` push) or `haos-e2e-tests.yml` with `topology: without-tools`. HAOS
+stdio is manual-only in `haos-e2e-stdio.yml`. ARM64, update-path and HAOS
+external run as before.
 
 ## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 

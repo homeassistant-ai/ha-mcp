@@ -38,7 +38,7 @@ E2E_COMBINE_TOPOLOGIES=1 uv run pytest tests/src/e2e/ -n2 --dist loadscope -v
 ```
 
 See [combined PR lanes](AGENTS.md#combined-pr-lanes-e2e_combine_topologies1)
-for phase selection and the manual-only legacy jobs.
+for phase selection and the manual-only no-tools and stdio runs.
 
 ### Manual Branch Testing
 

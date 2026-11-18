@@ -14,9 +14,9 @@ _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _STABLE_WORKFLOW = "haos-e2e-tests.yml"
 _BETA_WORKFLOW = "haos-e2e-beta-tests.yml"
 _CONTAINER_BETA_WORKFLOW = "e2e-beta-tests.yml"
-# 7 actual consumers (the six HAOS lanes + the image builder); the floor is what
-# catches a lane that silently loses its image-cache step.
-_CACHE_KEY_CONSUMER_FLOOR = 7
+# 6 actual consumers (the four HAOS lanes, the image builder and the dev env);
+# the floor is what catches a lane that silently loses its image-cache step.
+_CACHE_KEY_CONSUMER_FLOOR = 6
 _CACHE_KEY_OUTPUT_MARKER = "cache-key=haos-image-"
 _HAOS_IMAGE_CACHE_PATH = "/tmp/haos-test-image.qcow2"
 _CACHE_ACTIONS = {
