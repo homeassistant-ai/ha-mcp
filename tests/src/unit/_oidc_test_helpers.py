@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
-from ha_mcp.__main__ import reset_main_runtime, run_oidc_server
+from ha_mcp.__main__ import run_oidc_server
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.server.auth.auth import AuthProvider
-from ha_mcp.settings_ui import reset_http_settings_state
 
 # Sentinel used by MockOIDCProxy below to distinguish "kwarg not passed" from
 # "kwarg passed with a falsy/None value" for the optional constructor args.
@@ -69,18 +67,6 @@ def make_mock_oidc_proxy(capture: dict[str, Any]) -> type[AuthProvider]:
             )
 
     return MockOIDCProxy
-
-
-@pytest.fixture(autouse=True)
-def isolated_oidc_runtime() -> Iterator[None]:
-    """Clear startup state before a test and on every exit after it."""
-    reset_main_runtime()
-    reset_http_settings_state()
-    try:
-        yield
-    finally:
-        reset_main_runtime()
-        reset_http_settings_state()
 
 
 async def started_oidc_server(

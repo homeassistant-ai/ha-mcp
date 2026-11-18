@@ -7,8 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from ._oidc_test_helpers import isolated_oidc_runtime as isolated_oidc_runtime
-
 
 class TestMainOidcValidation:
     """Tests for main_oidc() environment variable validation."""

@@ -6,7 +6,6 @@ from ha_mcp._vendor.fastmcp.server.auth.oidc_proxy import OIDCProxy
 from ha_mcp.settings_ui import get_http_settings_prefix, is_http_settings_mounted
 
 from ._oauth_startup import route_paths
-from ._oidc_test_helpers import isolated_oidc_runtime as isolated_oidc_runtime
 from ._oidc_test_helpers import make_mock_oidc_proxy, started_oidc_server
 
 

@@ -9,7 +9,6 @@ from ha_mcp.settings_ui import (
     is_http_settings_mounted,
 )
 
-from ._oauth_startup import isolated_oauth_runtime as isolated_oauth_runtime
 from ._oauth_startup import route_paths, started_oauth_server
 
 

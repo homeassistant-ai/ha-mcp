@@ -5,7 +5,6 @@ import pytest
 from ha_mcp._vendor import fastmcp
 
 from ._oidc_test_helpers import BASE_URL, CONFIG_URL, started_oidc_server
-from ._oidc_test_helpers import isolated_oidc_runtime as isolated_oidc_runtime
 
 _ABSENT = object()
 
