@@ -475,6 +475,13 @@ def test_session_skipped_count_below_ceiling(
     assert ceiling is not None, (
         f"Unknown lane {lane!r} — add to SKIP_CEILING_PER_LANE at the top of this file"
     )
+    if combined_topologies():
+        # The base lane's ceiling counts the no_tools_only tests as skips; a
+        # combined session runs them in its absent phase instead.
+        ceiling -= sum(
+            item.get_closest_marker("no_tools_only") is not None
+            for item in request.session.items
+        )
     # Items in request.session.items already have skip markers applied
     # by pytest_collection_modifyitems (which ran before any test).
     # Under pytest-xdist with --dist loadscope, each worker collects

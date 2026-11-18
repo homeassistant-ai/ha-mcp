@@ -250,6 +250,13 @@ jobs:
         # parallel run excludes them; a single-worker phase runs them after,
         # when nothing else can be in flight.
         run: |
+          # Each phase sets its own -m; a second -m in the dispatch arguments
+          # would replace it, and both phases would run the same tests.
+          case " $PYTEST_ARGS " in
+            *" -m"*|*" --markexpr"*)
+              echo "::error::pytest_args cannot set -m here; narrow with -k or pytest_paths."
+              exit 1 ;;
+          esac
           cd tests
           # Inputs are data, intentionally word-split into pytest arguments.
           # shellcheck disable=SC2086

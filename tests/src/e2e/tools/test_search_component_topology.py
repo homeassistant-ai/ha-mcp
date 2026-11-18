@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import MCPAssertions
 from ..utilities.scene_fragments import is_structural_scene_fragment
 from ..utilities.topology import component_surface_available
 
@@ -27,6 +27,9 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
+    assert fragments or data.get("partial") is not True, (
+        f"A partial result must say why: {data}"
+    )
     offenders = [text for text in fragments if not is_structural_scene_fragment(text)]
     assert not offenders, (
         "Only the structural YAML-scene fragments are acceptable without a "
@@ -43,11 +46,11 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     """
     logger.info("Testing successful fuzzy search has no fallback indicators")
 
-    result = await mcp_client.call_tool(
-        "ha_search",
-        {"query": "light", "limit": 5, "exact_match": False},
-    )
-    data = assert_mcp_success(result, "Fuzzy search success")
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success(
+            "ha_search",
+            {"query": "light", "limit": 5, "exact_match": False},
+        )
 
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"

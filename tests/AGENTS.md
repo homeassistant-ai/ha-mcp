@@ -101,7 +101,10 @@ Core so its cached absence verdict does not carry into the installed phase.
 
 Use `--dist loadscope` (or `-n0`). The topology scheduler keeps module/class
 scopes together within each phase and preserves absent-before-present order
-on every worker. Do not add an unrelated test to `component_topology` just to
+on every worker. A crashed worker stops a combined session instead of being
+replaced, because xdist would hand its absent scopes to workers that have
+already installed. The skip ceiling uses the lane's component-present key,
+less the `no_tools_only` tests the absent phase runs instead of skipping. Do not add an unrelated test to `component_topology` just to
 make it run twice. Its assertions must cover a component-dependent branch.
 
 Pull requests do not run a whole-run no-tools lane. For one, dispatch

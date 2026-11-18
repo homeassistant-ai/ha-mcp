@@ -71,6 +71,10 @@ jobs:
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
+          # A forced build only asks whether the image is cached, so the
+          # external lane still skips its save, without downloading the
+          # image that the build replaces.
+          lookup-only: ${{ github.event.inputs.force_local_build == 'true' }}
 
       - name: Report image-acquisition path
         run: |
@@ -138,6 +142,13 @@ jobs:
         # retaining the two-phase contract makes that isolation fail-safe if
         # their transport coverage is widened later.
         run: |
+          # Each phase sets its own -m; a second -m in the dispatch arguments
+          # would replace it, and both phases would run the same tests.
+          case " $PYTEST_ARGS " in
+            *" -m"*|*" --markexpr"*)
+              echo "::error::pytest_args cannot set -m here; narrow with -k or pytest_paths."
+              exit 1 ;;
+          esac
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta

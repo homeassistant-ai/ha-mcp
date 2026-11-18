@@ -38,6 +38,10 @@ def pytest_configure(config: Any) -> None:
         if config.getoption("dist", "no") not in ("no", "loadscope"):
             raise pytest.UsageError("Combined topologies require --dist loadscope")
         config.option.loadscopereorder = False
+        # xdist requeues a crashed worker's unfinished scopes onto the other
+        # workers, and one that has installed cannot run an absent scope again.
+        # Stop at the first crash instead of failing unrelated scopes.
+        config.option.maxworkerrestart = "0"
 
 
 def pytest_generate_tests(metafunc: Any) -> None:

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -440,6 +441,13 @@ def _resolve(text: str, context: dict[str, str]) -> str:
     return resolved
 
 
+def _pytest_arguments(run: str) -> list[str]:
+    """The arguments of the step's ``uv run pytest`` command, continuations joined."""
+    commands = _uncommented(run).replace("\\\n", " ").splitlines()
+    command = next(line for line in commands if "uv run pytest" in line)
+    return shlex.split(command)
+
+
 @pytest.mark.parametrize("job_id", ["e2e-validation", "e2e-validation-embedded"])
 def test_pull_requests_run_the_suite_in_both_tool_entry_states(
     monkeypatch: pytest.MonkeyPatch, job_id: str
@@ -462,8 +470,8 @@ def test_pull_requests_run_the_suite_in_both_tool_entry_states(
         combined = topology.combined_topologies()
         states.add(combined)
         if combined:
-            run = _resolve(_uncommented(str(step["run"])), context)
-            assert "--maxfail=0" in run.split(), (
+            arguments = _pytest_arguments(_resolve(str(step["run"]), context))
+            assert "--maxfail=0" in arguments, (
                 f"{job_id} {row['os']} stops after three failures"
             )
     assert states == {True, False}, f"{job_id} covers only combined={states}"

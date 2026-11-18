@@ -1,9 +1,12 @@
 """Guard shared HAOS workflow contracts without restructuring proven lanes."""
 
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -75,6 +78,82 @@ def _cache_key_consumers(
         f"{[(path.name, job_id) for path, job_id in consumers]}"
     )
     return consumers
+
+
+# Every HAOS lane boots the shared image, so each one restores it before it
+# would build; a lost restore leaves the lane rebuilding on every run while the
+# consumer count above still passes on its key or save step.
+_IMAGE_RESTORING_LANES = (
+    (_STABLE_WORKFLOW, "haos-e2e"),
+    (_STABLE_WORKFLOW, "haos-e2e-embedded"),
+    (_STABLE_WORKFLOW, "haos-e2e-inaddon"),
+    ("haos-e2e-stdio.yml", "haos-e2e-stdio"),
+)
+
+
+def test_every_haos_lane_restores_the_shared_image() -> None:
+    for workflow, job_id in _IMAGE_RESTORING_LANES:
+        job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
+        restores = [
+            step
+            for step in _job_steps(job)
+            if str(step.get("uses", "")).partition("@")[0] == "actions/cache/restore"
+            and _HAOS_IMAGE_CACHE_PATH
+            in str(step.get("with", {}).get("path", "")).splitlines()
+        ]
+        assert restores, f"{workflow}::{job_id} no longer restores the HAOS image"
+
+
+_TWO_PHASE_LANES = (
+    (_STABLE_WORKFLOW, "haos-e2e-inaddon"),
+    ("haos-e2e-stdio.yml", "haos-e2e-stdio"),
+    (_BETA_WORKFLOW, "haos-e2e-inaddon-beta"),
+)
+
+
+@pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
+@pytest.mark.parametrize(
+    ("pytest_args", "runs"), [("-m haos_stdio_only", False), ("-k visibility", True)]
+)
+def test_a_dispatch_marker_cannot_merge_the_two_phases(
+    tmp_path: Path, workflow: str, job_id: str, pytest_args: str, runs: bool
+) -> None:
+    """pytest keeps only the last ``-m``, so one in ``pytest_args`` would replace
+    each phase's own and run the same tests in both, the self-restarting app
+    tests among the parallel ones."""
+    job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
+    step = next(
+        step
+        for step in _job_steps(job)
+        if "not addon_disruptive" in step.get("run", "")
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    uv = bin_dir / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    uv.chmod(0o755)
+    (tmp_path / "tests").mkdir()
+
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "PYTEST_ARGS": pytest_args,
+            "PYTEST_PATHS": "src/e2e/",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if runs:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert calls.read_text().count("pytest") == 2
+    else:
+        assert result.returncode != 0
+        assert not calls.exists(), "a phase ran with the dispatch's -m"
 
 
 def _cache_key_command(path: Path, job_id: str) -> str:
