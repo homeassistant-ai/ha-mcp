@@ -56,8 +56,7 @@ def _cache_key_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
 def _uses_haos_image_cache(job: dict[str, Any]) -> bool:
     return any(
         str(step.get("uses", "")).partition("@")[0] in _CACHE_ACTIONS
-        and _HAOS_IMAGE_CACHE_PATH
-        in str(step.get("with", {}).get("path", "")).splitlines()
+        and _HAOS_IMAGE_CACHE_PATH in _cache_paths(step)
         for step in _job_steps(job)
     )
 
