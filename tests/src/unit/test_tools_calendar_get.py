@@ -66,26 +66,31 @@ async def test_a_bound_without_an_offset_pairs_with_a_default_on_home_assistants
     """A bound without an offset, as the tool's example gives it, must not
     fail against the default of the other: Core cannot compare it with a
     time that has an offset. Core reads both on Home Assistant's clock, so
-    the default must sit there too, not on this server's or UTC's."""
+    the default must sit there too, not on this server's or UTC's. The
+    given bound itself is kept."""
     now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)
     await local_calendar(hass, "Test")
     ws = await hass_ws_client(hass)
     local_now = dt_util.as_local(now).replace(tzinfo=None)
-    await write_event(ws, "calendar.test", "Soon", local_now + dt.timedelta(hours=1))
-    await write_event(
-        ws, "calendar.test", "Beyond", local_now + dt.timedelta(days=7, hours=1)
-    )
-    bound = {
-        "start": local_now,
-        "end": local_now + dt.timedelta(hours=2),
+    for summary, delta in [
+        ("Past", dt.timedelta(hours=-1)),
+        ("Now", dt.timedelta()),
+        ("Soon", dt.timedelta(hours=1)),
+        ("Later", dt.timedelta(hours=3)),
+        ("Beyond", dt.timedelta(days=7, hours=1)),
+    ]:
+        await write_event(ws, "calendar.test", summary, local_now + delta)
+    bound, expected = {
+        "start": (local_now + dt.timedelta(minutes=30), ["Soon", "Later"]),
+        "end": (local_now + dt.timedelta(hours=2), ["Now", "Soon"]),
     }[given]
 
     listed = await CalendarTools(core_client).ha_config_get_calendar_events(
         "calendar.test", **{given: bound.isoformat()}
     )
 
-    assert [event["summary"] for event in listed["events"]] == ["Soon"]
+    assert [event["summary"] for event in listed["events"]] == expected
 
 
 async def test_a_start_python_cannot_read_pairs_like_one_without_an_offset(
@@ -140,13 +145,23 @@ async def test_a_bound_with_an_offset_pairs_with_the_default_of_the_other(
     assert [event["summary"] for event in listed["events"]] == ["Soon"]
 
 
-async def test_a_default_beside_a_bound_without_an_offset_needs_the_time_zone(
+@pytest.mark.parametrize(
+    "bounds",
+    [{}, {"start": "2026-06-12T08:00:00"}, {"start": "2026-06-12T08:00:00+00:00"}],
+    ids=["none", "start_without_offset", "start_with_offset"],
+)
+async def test_a_default_bound_needs_the_time_zone(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
+    bounds: dict[str, str],
 ) -> None:
-    """Without Home Assistant's time zone the default would sit on UTC's
-    clock, a window shifted by Home Assistant's offset from UTC."""
+    """A default without an offset sits on Home Assistant's clock, and a
+    default end counts seven days on its calendar; without its time zone
+    both would be counted in UTC, so the read is refused."""
+    set_module_clock(
+        monkeypatch, tools_calendar, dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
+    )
     await local_calendar(hass, "Test")
     monkeypatch.setattr(
         core_client,
@@ -156,10 +171,44 @@ async def test_a_default_beside_a_bound_without_an_offset_needs_the_time_zone(
 
     with pytest.raises(ToolError) as exc_info:
         await CalendarTools(core_client).ha_config_get_calendar_events(
-            "calendar.test", start="2026-06-12T08:00:00"
+            "calendar.test", **bounds
         )
 
     assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
+
+
+@pytest.mark.parametrize(
+    "start_given", [False, True], ids=["no_bound", "start_with_offset"]
+)
+async def test_the_default_end_is_seven_days_on_home_assistants_calendar(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    hass_ws_client: WebSocketGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    start_given: bool,
+) -> None:
+    """Across a DST change seven days on Home Assistant's calendar are an
+    hour more or less than 168 hours; the default end must keep the local
+    hour, so an event just before it stays in the window."""
+    now = dt.datetime(2026, 10, 30, 12, tzinfo=dt.UTC)
+    set_module_clock(monkeypatch, tools_calendar, now)
+    local_now = dt_util.as_local(now)
+    local_end = (local_now.replace(tzinfo=None) + dt.timedelta(days=7)).replace(
+        tzinfo=local_now.tzinfo
+    )
+    hours = local_end.astimezone(dt.UTC) - local_now.astimezone(dt.UTC)
+    assert hours > dt.timedelta(days=7), "no fall-back DST change"
+    await local_calendar(hass, "Test")
+    ws = await hass_ws_client(hass)
+    edge = local_end.replace(tzinfo=None) - dt.timedelta(minutes=30)
+    await write_event(ws, "calendar.test", "Edge", edge)
+    bounds = {"start": (now - dt.timedelta(hours=1)).isoformat()} if start_given else {}
+
+    listed = await CalendarTools(core_client).ha_config_get_calendar_events(
+        "calendar.test", **bounds
+    )
+
+    assert [event["summary"] for event in listed["events"]] == ["Edge"]
 
 
 async def test_a_read_core_refuses_names_what_its_bare_400_can_mean(

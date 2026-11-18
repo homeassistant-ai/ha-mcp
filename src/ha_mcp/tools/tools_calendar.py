@@ -9,7 +9,7 @@ Use ha_search(query='calendar', domain_filter='calendar') to find calendar entit
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -189,7 +189,7 @@ class CalendarTools:
         self._client = client
 
     async def _local_now(self) -> datetime:
-        """Now on Home Assistant's clock, without an offset.
+        """Now in Home Assistant's time zone.
 
         Core reads a time without an offset in Home Assistant's time zone,
         which need not be this server's: a default built in another zone
@@ -200,16 +200,16 @@ class CalendarTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONNECTION_FAILED,
-                    "Could not get Home Assistant's time zone, which the "
-                    "default bound needs when the other has no offset",
+                    "Could not get Home Assistant's time zone, which a "
+                    "default start or end needs",
                     suggestions=[
-                        "Pass both start and end",
-                        "Or give the bound an offset, e.g. '2024-01-01T00:00:00+01:00'",
+                        "Check the Home Assistant connection, then retry",
+                        "Or pass both start and end",
                     ],
                 )
             )
         local_tz, _ = resolve_local_timezone(ha_timezone)
-        return datetime.now(local_tz).replace(tzinfo=None)
+        return datetime.now(local_tz)
 
     @tool(
         name="ha_config_get_calendar_events",
@@ -255,17 +255,18 @@ class CalendarTools:
         """
         try:
             if start is None or end is None:
+                now = await self._local_now()
                 # Core cannot compare a time with an offset against one
                 # without, so a default takes the form Python reads in the
                 # bound given.
                 given = end if start is None else start
-                if given is None or _has_offset(given):
-                    now = datetime.now(UTC)
-                else:
-                    now = await self._local_now()
+                if given is None or not _has_offset(given):
+                    now = now.replace(tzinfo=None)
                 if start is None:
                     start = now.isoformat()
                 if end is None:
+                    # Seven days on Home Assistant's calendar, also across a
+                    # DST change: Python adds to the local time.
                     end = (now + timedelta(days=7)).isoformat()
 
             # The client adds the /api prefix to Core's calendar view.
