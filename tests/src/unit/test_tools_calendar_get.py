@@ -9,7 +9,7 @@ Core's Local Calendar.
 """
 
 import datetime as dt
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -29,15 +29,14 @@ from ._tool_errors import error_of
 hass_config_dir = calendar_config_dir
 
 
-async def test_the_default_window_is_the_next_seven_days_on_home_assistants_clock(
+async def test_the_default_window_is_the_next_seven_days(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     hass_ws_client: WebSocketGenerator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The window must not move by the offset between this server's time zone
-    and Home Assistant's: an event an hour away and one an hour before the
-    window closes are both in it."""
+    """The window runs from now to seven days later: an event an hour away
+    and one an hour before the window closes are both in it."""
     now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)
     await local_calendar(hass, "Test")
@@ -156,9 +155,9 @@ async def test_a_default_bound_needs_the_time_zone(
     monkeypatch: pytest.MonkeyPatch,
     bounds: dict[str, str],
 ) -> None:
-    """A default without an offset sits on Home Assistant's clock, and a
-    default end counts seven days on its calendar; without its time zone
-    both would be counted in UTC, so the read is refused."""
+    """A default end counts seven days on Home Assistant's calendar, and a
+    default beside a bound without an offset sits on its clock; without its
+    time zone they would be counted in UTC, so the read is refused."""
     set_module_clock(
         monkeypatch, tools_calendar, dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     )
@@ -189,7 +188,8 @@ async def test_the_default_end_is_seven_days_on_home_assistants_calendar(
 ) -> None:
     """Across a DST change seven days on Home Assistant's calendar are an
     hour more or less than 168 hours; the default end must keep the local
-    hour, so an event just before it stays in the window."""
+    hour, so an event just before it stays in the window and one just after
+    it stays out."""
     now = dt.datetime(2026, 10, 30, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)
     local_now = dt_util.as_local(now)
@@ -200,8 +200,11 @@ async def test_the_default_end_is_seven_days_on_home_assistants_calendar(
     assert hours > dt.timedelta(days=7), "no fall-back DST change"
     await local_calendar(hass, "Test")
     ws = await hass_ws_client(hass)
-    edge = local_end.replace(tzinfo=None) - dt.timedelta(minutes=30)
-    await write_event(ws, "calendar.test", "Edge", edge)
+    wall_end = local_end.replace(tzinfo=None)
+    for summary, minutes in [("Edge", -30), ("Late", 30)]:
+        await write_event(
+            ws, "calendar.test", summary, wall_end + dt.timedelta(minutes=minutes)
+        )
     bounds = {"start": (now - dt.timedelta(hours=1)).isoformat()} if start_given else {}
 
     listed = await CalendarTools(core_client).ha_config_get_calendar_events(
@@ -209,6 +212,35 @@ async def test_the_default_end_is_seven_days_on_home_assistants_calendar(
     )
 
     assert [event["summary"] for event in listed["events"]] == ["Edge"]
+
+
+async def test_the_default_start_is_now_also_in_a_repeated_hour(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In the second pass of the hour a fall-back DST change repeats, a time
+    without an offset names the first pass; Core's view must still hand the
+    calendar now as the start.
+
+    Local Calendar compares the events it creates by wall time in Home
+    Assistant's zone, where both passes look alike, so the start is read where
+    the view hands it on.
+    """
+    now = dt.datetime(2026, 11, 1, 9, 30, tzinfo=dt.UTC)
+    set_module_clock(monkeypatch, tools_calendar, now)
+    first_pass = dt_util.as_local(now - dt.timedelta(hours=1))
+    assert first_pass.replace(tzinfo=None) == dt_util.as_local(now).replace(
+        tzinfo=None
+    ), "no repeated hour"
+    entity = await local_calendar(hass, "Test")
+
+    with patch.object(
+        entity, "async_get_events", wraps=entity.async_get_events
+    ) as reads:
+        await CalendarTools(core_client).ha_config_get_calendar_events("calendar.test")
+
+    assert [dt_util.as_utc(call.args[1]) for call in reads.await_args_list] == [now]
 
 
 async def test_a_read_core_refuses_names_what_its_bare_400_can_mean(

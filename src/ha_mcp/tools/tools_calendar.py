@@ -192,8 +192,9 @@ class CalendarTools:
         """Now in Home Assistant's time zone.
 
         Core reads a time without an offset in Home Assistant's time zone,
-        which need not be this server's: a default built in another zone
-        would shift the window by the difference.
+        which need not be this server's, and seven days on its calendar can
+        be an hour more or less than 168 hours: a default built in another
+        zone would shift the window.
         """
         ha_timezone, fetch_failed = await fetch_ha_timezone(self._client)
         if fetch_failed:
@@ -256,11 +257,12 @@ class CalendarTools:
         try:
             if start is None or end is None:
                 now = await self._local_now()
-                # Core cannot compare a time with an offset against one
-                # without, so a default takes the form Python reads in the
-                # bound given.
+                # A default keeps its offset, which also tells apart the two
+                # passes of an hour a DST change repeats. Core cannot compare
+                # a time with an offset against one without, so beside a given
+                # bound without one (as Python reads it) the default drops it.
                 given = end if start is None else start
-                if given is None or not _has_offset(given):
+                if given is not None and not _has_offset(given):
                     now = now.replace(tzinfo=None)
                 if start is None:
                     start = now.isoformat()
