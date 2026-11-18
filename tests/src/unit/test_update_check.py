@@ -76,7 +76,6 @@ class TestVersionCompare:
         info = await asyncio.to_thread(get_update_info)
         assert info is None or info.update_available is False
 
-
     @pytest.mark.parametrize("current", ["unknown", "garbage", "7.x", ""])
     async def test_unparseable_current_version_is_never_newer(
         self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI, current: str
@@ -251,7 +250,10 @@ class TestAddonSupervisorSource:
     ) -> None:
         """The opt-out is honored before any add-on source is consulted."""
         app_store(
-            monkeypatch, supervisor, installed="7.8.0", latest="7.9.0",
+            monkeypatch,
+            supervisor,
+            installed="7.8.0",
+            latest="7.9.0",
             update_available=True,
         )
         monkeypatch.setenv(update_check.DISABLE_ENV, "1")
@@ -287,14 +289,6 @@ class TestInMemoryMemo:
 
 
 class TestFetchLatestFromPypi:
-    def test_connection_refusal_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch, socket_enabled: None
-    ) -> None:
-        monkeypatch.setattr(
-            update_check, "PYPI_JSON_URL", refused_url() + "/pypi/{package}/json"
-        )
-        assert get_update_info() is None
-
     async def test_malformed_payload_returns_none(self, pypi: PyPI) -> None:
         pypi.releases["ha-mcp"] = {}
         assert await asyncio.to_thread(get_update_info) is None

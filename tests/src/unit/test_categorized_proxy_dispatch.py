@@ -644,7 +644,9 @@ class TestRebuildCategoryCache:
         ("ha_manager", False),
     ],
 )
-async def test_delete_proxy_admits_manage_names_without_matching_manager(name, admitted):
+async def test_delete_proxy_admits_manage_names_without_matching_manager(
+    name, admitted
+):
     transform = CategorizedSearchTransform()
     set_catalog(transform, [_make_tool(name, destructive=True)])
     call = await proxy_function(transform, "delete")
