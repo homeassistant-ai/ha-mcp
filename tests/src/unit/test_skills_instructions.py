@@ -24,8 +24,9 @@ def server(core_client: HomeAssistantClient, monkeypatch):
     return build
 
 
-async def _guide(server, skills_dir, file="SKILL.md"):
-    result = await server(skills_dir).mcp.call_tool(SKILL_TOOL_NAME, {"file": file})
+async def _guide(server, skills_dir, file=None):
+    arguments = {} if file is None else {"file": file}
+    result = await server(skills_dir).mcp.call_tool(SKILL_TOOL_NAME, arguments)
     assert result.structured_content is not None
     return result.structured_content
 

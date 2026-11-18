@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -14,6 +15,18 @@ from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.settings_ui import reset_http_settings_state
 
 PUBLIC_URL = "https://connector.example"
+
+
+@pytest.fixture(autouse=True)
+def isolated_oauth_runtime() -> Iterator[None]:
+    """Keep startup state through route assertions, then clear it on every exit."""
+    reset_main_runtime()
+    reset_http_settings_state()
+    try:
+        yield
+    finally:
+        reset_main_runtime()
+        reset_http_settings_state()
 
 
 async def started_oauth_server(
@@ -32,7 +45,7 @@ async def started_oauth_server(
             monkeypatch.delenv(name, raising=False)
         else:
             monkeypatch.setenv(name, value)
-    # Startup state of the process, put back after the test.
+    # Each startup starts clean; isolated_oauth_runtime handles test teardown.
     reset_main_runtime()
     reset_http_settings_state()
     # caplog listens on the root logger, which the CLI's setup replaces.

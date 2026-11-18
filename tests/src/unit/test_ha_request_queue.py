@@ -189,18 +189,54 @@ async def test_nested_depth_is_restored_when_inner_call_raises() -> None:
     ) -> str:
         return context.message.name
 
-    result = await middleware.on_call_tool(
-        make_context("ha_get_overview"), outer_call_next
-    )
+    start_blocker = anyio.Event()
+    blocker_entered = anyio.Event()
+    release_blocker = anyio.Event()
+    recovered_attempted = anyio.Event()
+    recovered_entered = anyio.Event()
 
-    assert result == "ha_get_state"
+    async def hold_slot(_context: MiddlewareContext[CallToolRequestParams]) -> None:
+        blocker_entered.set()
+        await release_blocker.wait()
+
+    async def block_from_clean_context() -> None:
+        await start_blocker.wait()
+        await middleware.on_call_tool(make_context("ha_get_history"), hold_slot)
+
+    async def release_after_contention() -> None:
+        await recovered_attempted.wait()
+        await anyio.lowlevel.checkpoint()
+        try:
+            assert not recovered_entered.is_set()
+        finally:
+            release_blocker.set()
+
+    async def recovered_call_next(
+        context: MiddlewareContext[CallToolRequestParams],
+    ) -> str:
+        recovered_entered.set()
+        return context.message.name
+
     with anyio.fail_after(1):
-        assert (
-            await middleware.on_call_tool(
-                make_context("ha_get_overview"), succeeding_inner
+        async with anyio.create_task_group() as tasks:
+            # Start before the failure so this task inherits a clean context,
+            # even if the caller's depth-reset logic regresses.
+            tasks.start_soon(block_from_clean_context)
+            tasks.start_soon(release_after_contention)
+            result = await middleware.on_call_tool(
+                make_context("ha_get_overview"), outer_call_next
             )
-            == "ha_get_overview"
-        )
+            assert result == "ha_get_state"
+            start_blocker.set()
+            await blocker_entered.wait()
+            recovered_attempted.set()
+            assert (
+                await middleware.on_call_tool(
+                    make_context("ha_get_overview"), recovered_call_next
+                )
+                == "ha_get_overview"
+            )
+    assert recovered_entered.is_set()
 
 
 @pytest.mark.anyio

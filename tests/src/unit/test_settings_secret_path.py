@@ -7,17 +7,10 @@ import pytest
 from ha_mcp.settings_ui import (
     get_http_settings_prefix,
     is_http_settings_mounted,
-    reset_http_settings_state,
 )
 
+from ._oauth_startup import isolated_oauth_runtime as isolated_oauth_runtime
 from ._oauth_startup import route_paths, started_oauth_server
-
-
-@pytest.fixture(autouse=True)
-def reset_settings():
-    reset_http_settings_state()
-    yield
-    reset_http_settings_state()
 
 
 async def _paths(monkeypatch, **env):

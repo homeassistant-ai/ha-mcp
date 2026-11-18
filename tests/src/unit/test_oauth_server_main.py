@@ -15,6 +15,7 @@ import pytest
 from ha_mcp.config import OAUTH_MODE_TOKEN
 
 from ._oauth_startup import PUBLIC_URL, route_paths, started_oauth_server
+from ._oauth_startup import isolated_oauth_runtime as isolated_oauth_runtime
 
 
 @pytest.mark.parametrize(

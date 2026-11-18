@@ -296,7 +296,7 @@ class TestFallbacks:
         assert get_data_dir() == tmp_path
         assert list(tmp_path.iterdir()) == []
 
-    def test_write_probe_reports_the_error_for_a_missing_dir(
+    def test_dir_removed_after_mkdir_falls_back_to_tmpdir(
         self, monkeypatch, tmp_path
     ):
         """A directory removed between mkdir and the probe triggers fallback."""

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -33,6 +35,15 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     ``SUPERVISOR_TOKEN`` is cleared so the default path is non-add-on (PyPI);
     add-on tests set it explicitly.
     """
+    # Runtime simulations belong to update_check, not aiohttp/pytest or
+    # other threads sharing the interpreter. Keep real argv and environ.
+    monkeypatch.setattr(
+        update_check, "sys", SimpleNamespace(version_info=sys.version_info, argv=sys.argv)
+    )
+    monkeypatch.setattr(
+        update_check, "os",
+        SimpleNamespace(environ=os.environ, path=SimpleNamespace(exists=os.path.exists)),
+    )
     monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")

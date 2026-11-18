@@ -19,10 +19,10 @@ from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
 @pytest.fixture
 def search_dashboard(hass: HomeAssistant, core_client: HomeAssistantClient):
 
-    async def search(config, *, url_path=SEARCH_URL_PATH, **criteria):
+    async def search(config, *, scoped: bool = True, **criteria):
         await store_dashboard(hass, core_client, config)
         return await DashboardConfigTools(core_client).ha_config_get_dashboard(
-            url_path=SEARCH_URL_PATH if url_path is not None else None,
+            url_path=SEARCH_URL_PATH if scoped else None,
             include_config=False,
             **criteria,
         )
@@ -322,20 +322,20 @@ class TestSearchResultScope:
         ]
     }
 
-    async def _search(self, search_dashboard, url_path: str | None) -> dict[str, Any]:
+    async def _search(self, search_dashboard, scoped: bool) -> dict[str, Any]:
         return await search_dashboard(
-            self.CONFIG, card_type="picture-elements", url_path=url_path
+            self.CONFIG, card_type="picture-elements", scoped=scoped
         )
 
     async def test_scoped_search_locations_name_no_dashboard(self, search_dashboard):
-        result = await self._search(search_dashboard, "only")
+        result = await self._search(search_dashboard, True)
         assert any(".views[0].cards[1].elements" in w for w in result["warnings"])
         assert not any("card-search:" in w for w in result["warnings"])
 
     async def test_search_across_dashboards_names_the_dashboard_in_locations(
         self, search_dashboard
     ):
-        result = await self._search(search_dashboard, None)
+        result = await self._search(search_dashboard, False)
         assert result["config_hash"] is None
         assert any(
             "card-search:.views[0].cards[1].elements" in w for w in result["warnings"]
@@ -418,32 +418,32 @@ class TestBadgeCriteria:
     }
 
     async def _unread_search(
-        self, search_dashboard, url_path: str | None, **criteria: str
+        self, search_dashboard, scoped: bool, **criteria: str
     ) -> dict[str, Any]:
-        return await search_dashboard(self.UNREAD, **criteria, url_path=url_path)
+        return await search_dashboard(self.UNREAD, **criteria, scoped=scoped)
 
     @pytest.mark.parametrize(
-        ("url_path", "criteria", "prefix"),
+        ("scoped", "criteria", "prefix"),
         [
-            ("d", {"card_type": "badge"}, ""),
-            (None, {"query": "sensor"}, "card-search:"),
+            (True, {"card_type": "badge"}, ""),
+            (False, {"query": "sensor"}, "card-search:"),
         ],
     )
     async def test_unread_badge_entries_are_reported_not_listed(
         self,
-        url_path: str | None,
+        scoped: bool,
         criteria: dict[str, str],
         prefix: str,
         search_dashboard,
     ):
-        result = await self._unread_search(search_dashboard, url_path, **criteria)
+        result = await self._unread_search(search_dashboard, scoped, **criteria)
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[2]"]
         [warning] = [
             item
             for item in result["warnings"]
             if item.startswith("Not searched as cards or badges")
         ]
-        if url_path is None:
+        if not scoped:
             assert any(
                 "default dashboard was not searched" in item
                 for item in result["warnings"]
@@ -452,7 +452,7 @@ class TestBadgeCriteria:
         assert f"{prefix}.views[0].badges[1]" in warning
 
     async def test_out_of_scope_badges_are_not_reported(self, search_dashboard):
-        result = await self._unread_search(search_dashboard, "d", card_type="tile")
+        result = await self._unread_search(search_dashboard, True, card_type="tile")
         assert "warnings" not in result
 
     async def test_heading_excludes_badges(self, search_dashboard):
@@ -479,7 +479,7 @@ class TestUnreadContainers:
     }
 
     async def test_every_unreadable_container_is_named(self, search_dashboard):
-        result = await search_dashboard(self.CONFIG, entity_id="light.a", url_path="d")
+        result = await search_dashboard(self.CONFIG, entity_id="light.a", scoped=True)
         assert [m["jq_path"] for m in result["matches"]] == [".views[1].cards[1]"]
         [warning] = result["warnings"]
         for path in (
@@ -493,7 +493,7 @@ class TestUnreadContainers:
             assert path in warning
 
     async def test_badge_search_reports_only_badge_containers(self, search_dashboard):
-        result = await search_dashboard(self.CONFIG, card_type="badge", url_path="d")
+        result = await search_dashboard(self.CONFIG, card_type="badge", scoped=True)
         [warning] = result["warnings"]
         assert ".views[1].badges" in warning
         assert ".views[1].cards[0]" not in warning
@@ -554,7 +554,7 @@ class TestReviewedSearchEdges:
     async def _search(
         search_dashboard, config: dict[str, Any], **criteria: str
     ) -> dict[str, Any]:
-        return await search_dashboard(config, **criteria, url_path="d")
+        return await search_dashboard(config, **criteria, scoped=True)
 
     async def test_deeply_nested_card_options_do_not_fail_the_search(
         self, search_dashboard
