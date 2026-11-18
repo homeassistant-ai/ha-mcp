@@ -94,7 +94,12 @@ def test_installed_phase_excess_skips_fail_the_combined_gate(
 
 
 def _run_combined_session(
-    tmp_path: Path, workers: int, dist: str, backend: str = ""
+    tmp_path: Path,
+    workers: int,
+    dist: str,
+    backend: str = "",
+    combine: str = "1",
+    no_tools: str = "",
 ) -> subprocess.CompletedProcess[str]:
     root = Path(__file__).resolve().parents[3]
     env = os.environ | {
@@ -103,7 +108,8 @@ def _run_combined_session(
         ),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTEST_ADDOPTS": "",
-        "E2E_COMBINE_TOPOLOGIES": "1",
+        "E2E_COMBINE_TOPOLOGIES": combine,
+        "E2E_NO_TOOLS_ENTRY": no_tools,
         "E2E_BACKEND": backend,
         "HAOS_TEST_MODE": "",
         "HA_MCP_CONFIG_DIR": str(tmp_path / "settings"),
@@ -146,6 +152,59 @@ def test_a_scheduler_that_splits_modules_across_phases_is_refused(
     assert "Combined topologies require --dist loadscope" in (
         result.stdout + result.stderr
     )
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_a_whole_run_no_tools_session_enables_the_entry_last(
+    tmp_path: Path, workers: int
+) -> None:
+    """A test that enables the server entry leaves it behind, and once the
+    app's cached absence expires it reports the component. On each worker every
+    test expecting the entry absent must run first. The enabling module is the
+    largest, which xdist's default scope order would schedule first."""
+    (tmp_path / "pytest.ini").write_text(
+        "[pytest]\nmarkers =\n    installs_component_surface\n"
+    )
+    (tmp_path / "conftest.py").write_text("""
+from tests.src.e2e._conftest_topology import (
+    pytest_configure, pytest_xdist_make_scheduler, order_topologies,
+)
+
+def pytest_collection_modifyitems(items):
+    order_topologies(items)
+""")
+    record = """
+import os
+from pathlib import Path
+
+def record(kind):
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "serial")
+    with open(Path(__file__).parent / (worker + ".order"), "a") as order:
+        order.write(kind + "\\n")
+"""
+    # Named to collect first, and fast while the absent tests are slow: without
+    # the ordering, the worker that finishes it would take an absent module.
+    (tmp_path / "test_a_enables_entry.py").write_text(
+        record
+        + "import pytest\npytestmark = pytest.mark.installs_component_surface\n"
+        + "".join(f"def test_enable_{n}(): record('enables')\n" for n in range(6))
+    )
+    for name in ("test_absent_a", "test_absent_b", "test_absent_c"):
+        (tmp_path / f"{name}.py").write_text(
+            record + "import time\n"
+            "def test_absent():\n    time.sleep(0.5)\n    record('absent')\n"
+        )
+
+    result = _run_combined_session(
+        tmp_path, workers, "loadscope", combine="0", no_tools="1"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    orders = [path.read_text().split() for path in tmp_path.glob("*.order")]
+    assert sum(order.count("absent") for order in orders) == 3
+    for order in orders:
+        enabled = order.index("enables") if "enables" in order else len(order)
+        assert "absent" not in order[enabled:], order
 
 
 def test_a_crashed_worker_stops_the_combined_session(tmp_path: Path) -> None:

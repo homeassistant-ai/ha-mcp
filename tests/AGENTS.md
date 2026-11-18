@@ -31,7 +31,7 @@ before adding a gate:
 | `no_tools_only` | whole-run no-tools lanes, and the first phase of combined lanes — the mirror of `requires_tools_entry` |
 | `requires_component_surface` | needs an active component entry (`src/e2e/utilities/topology.py::component_surface_available`); on combined lanes, before installation where an embedded server entry already provides it and after installation elsewhere; skips on whole-run lanes without it |
 | `component_topology` | tests whose assertions exercise different component and fallback behavior; both states on combined lanes without an embedded server entry (container external, HAOS app), once on embedded lanes, whose server already provides the shared surface |
-| `installs_component_surface` | tests that enable a shared component entry themselves; run only after the absent phase in combined lanes |
+| `installs_component_surface` | tests that enable a shared component entry themselves; run only after the absent phase in combined lanes, and after every other test on a worker in whole-run no-tools sessions |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,

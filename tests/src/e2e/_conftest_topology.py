@@ -23,6 +23,7 @@ from .utilities.topology import (
     combined_topologies,
     component_surface_available,
     item_topology,
+    tools_entry_absent,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,10 @@ def pytest_configure(config: Any) -> None:
         # workers, and one that has installed cannot run an absent scope again.
         # Stop at the first crash instead of failing unrelated scopes.
         config.option.maxworkerrestart = "0"
+    elif tools_entry_absent():
+        # order_topologies puts the entry-enabling tests last; xdist's default
+        # largest-scope-first order would undo that.
+        config.option.loadscopereorder = False
 
 
 def pytest_generate_tests(metafunc: Any) -> None:
@@ -82,6 +87,15 @@ def order_topologies(items: list[Any]) -> None:
         # Stable sort preserves the final-TLS ordering within a phase, so this
         # must run after _move_haos_tls_items_last.
         items.sort(key=lambda item: item_topology(item) == WITH_TOOLS)
+    elif tools_entry_absent():
+        # A test that enables a component entry leaves it behind, and the app
+        # reports the component once its cached absence expires (300 s). Run
+        # those tests after every test that expects the entry absent.
+        items.sort(
+            key=lambda item: (
+                item.get_closest_marker("installs_component_surface") is not None
+            )
+        )
 
 
 def _pending_core_jobs(jobs: list[dict[str, Any]]) -> list[str]:
