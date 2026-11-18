@@ -1,12 +1,12 @@
 """Guards a python_transform can use to refuse an edit (#2995)."""
 
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_config_automations import AutomationConfigTools, _Target
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils.python_sandbox import (
     PythonSandboxExecutionError,
     format_sandbox_error,
@@ -14,6 +14,9 @@ from ha_mcp.utils.python_sandbox import (
     safe_execute,
     validate_expression,
 )
+
+from ._automation_core import load_automations_file, upserts
+from ._config_writes import automation_tools
 
 
 def _actions(*aliases: str) -> dict[str, Any]:
@@ -67,22 +70,33 @@ class TestGuards:
         _, suggestions = format_sandbox_error(exc_info.value, expr)
         assert not any("guard" in s for s in suggestions)
 
-    @pytest.mark.anyio
-    async def test_failed_guard_writes_nothing(self, monkeypatch) -> None:
-        client = AsyncMock()
-        tools = AutomationConfigTools(client)
+    async def test_failed_guard_writes_nothing(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tools = await automation_tools(hass, core_client, monkeypatch)
+        config = {
+            "id": "guard_no_match",
+            "alias": "Guard no match",
+            "triggers": [{"trigger": "event", "event_type": "guard_test"}],
+            "actions": [{"alias": "X", "stop": "Do nothing"}],
+        }
+        await load_automations_file(hass, "automations.yaml", [config])
+        before = await tools.ha_config_get_automation("guard_no_match")
 
-        async def get_config(_: str) -> tuple[dict[str, Any], str, _Target]:
-            return _actions("X"), "hash", _Target("id", None, None)
+        with upserts(core_client) as upsert:
+            with pytest.raises(ToolError, match="unpack"):
+                await tools.ha_config_set_automation(
+                    entity_id="guard_no_match",
+                    config_hash=before["config_hash"],
+                    python_transform=self.ONE_MATCH,
+                )
+            upsert.assert_not_awaited()
 
-        monkeypatch.setattr(tools, "_get_automation_config_internal", get_config)
-
-        with pytest.raises(ToolError, match="unpack"):
-            await tools._run_python_transform(
-                "id", "hash", self.ONE_MATCH, None, False, None, False
-            )
-
-        client.upsert_automation_config.assert_not_awaited()
+        after = await tools.ha_config_get_automation("guard_no_match")
+        assert after["config"] == before["config"]
 
     def test_assert_rejection_points_at_guards(self) -> None:
         valid, error = validate_expression("assert config")

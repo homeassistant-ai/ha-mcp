@@ -17,17 +17,20 @@ embedded-awareness itself is covered hermetically in ``test_version_embedded``.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import json
+from pathlib import Path
 
 import pytest
 
-config = pytest.importorskip("ha_mcp.config")
-config_backup = pytest.importorskip("ha_mcp.config_backup")
-config_overrides = pytest.importorskip("ha_mcp.config_overrides")
+from ha_mcp import config
+from ha_mcp.utils.data_paths import get_data_dir
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+    get_data_dir.cache_clear()
+    config.reset_global_settings()
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     config.reset_embedded_connection()
@@ -37,6 +40,7 @@ def _clean_env(monkeypatch):
     # later test's Settings.
     config.reset_embedded_connection()
     config.reset_global_settings()
+    get_data_dir.cache_clear()
 
 
 def _a_backup_env_name() -> str:
@@ -104,54 +108,41 @@ class TestFeatureFlagOrigin:
         )
 
 
-class TestApplyBackupOverrides:
-    def test_addon_short_circuits_without_reading_file(self, monkeypatch):
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
-        reader = MagicMock(return_value={})
-        monkeypatch.setattr(config_backup, "_read_backup_override_file", reader)
-        config._apply_backup_overrides(MagicMock())
-        reader.assert_not_called()
-
-    def test_embedded_reads_override_file(self, monkeypatch):
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+@pytest.mark.parametrize("embedded", [False, True])
+def test_backup_override_follows_deployment_mode(monkeypatch, tmp_path, embedded):
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+    if embedded:
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-        reader = MagicMock(return_value={})
-        monkeypatch.setattr(config_backup, "_read_backup_override_file", reader)
-        config._apply_backup_overrides(MagicMock())
-        reader.assert_called_once()
+    monkeypatch.delenv("AUTO_BACKUP_RETAIN_PER_ENTITY", raising=False)
+    (tmp_path / "backup_settings.json").write_text(
+        json.dumps({"auto_backup_retain_per_entity": 37})
+    )
+    reads = []
+    original_read = Path.read_text
+
+    def read(path, *args, **kwargs):
+        reads.append(path)
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    settings = config.get_global_settings()
+    assert (settings.auto_backup_retain_per_entity == 37) is embedded
+    assert ((tmp_path / "backup_settings.json") in reads) is embedded
 
 
-class TestApplyFeatureFlagOverrides:
-    """The 4th routed site: a non-beta override is applied in embedded mode but
-    skipped in add-on mode (where start.py owns the env)."""
-
-    def test_non_beta_override_applied_when_embedded(self, monkeypatch):
-        field, env_name = _a_plain_bool_feature_flag_field()
-        monkeypatch.delenv(env_name, raising=False)  # env-var-wins must not fire
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+@pytest.mark.parametrize("embedded", [False, True])
+def test_feature_override_follows_deployment_mode(monkeypatch, tmp_path, embedded):
+    field, env_name = _a_plain_bool_feature_flag_field()
+    monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+    if embedded:
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-        monkeypatch.setattr(
-            config_overrides, "_read_feature_flag_override_file", lambda: {field: True}
-        )
-        settings = MagicMock()
-        settings.enable_beta_features = True  # keep the master gate from clearing
-        config._apply_feature_flag_overrides(settings)
-        assert getattr(settings, field) is True
-
-    def test_non_beta_override_skipped_in_addon(self, monkeypatch):
-        field, env_name = _a_plain_bool_feature_flag_field()
-        monkeypatch.delenv(env_name, raising=False)
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")  # add-on, not embedded
-        monkeypatch.setattr(
-            config_overrides, "_read_feature_flag_override_file", lambda: {field: True}
-        )
-        settings = MagicMock()
-        settings.enable_beta_features = True
-        sentinel = object()
-        setattr(settings, field, sentinel)
-        config._apply_feature_flag_overrides(settings)
-        # Add-on mode short-circuits the non-beta field, leaving it untouched.
-        assert getattr(settings, field) is sentinel
+    default = getattr(config.get_global_settings(), field)
+    (tmp_path / "feature_flags.json").write_text(json.dumps({field: not default}))
+    config.reset_global_settings()
+    assert getattr(config.get_global_settings(), field) is (
+        not default if embedded else default
+    )
 
 
 class TestEmbeddedConnection:
@@ -160,20 +151,16 @@ class TestEmbeddedConnection:
 
     def test_set_then_apply_sets_url_and_token(self):
         config.set_embedded_connection("http://127.0.0.1:8123/", "tok123")
-        settings = config.Settings(_env_file=None)
-        config._apply_embedded_connection(settings)
+        settings = config.get_global_settings()
         assert (
             settings.homeassistant_url == "http://127.0.0.1:8123"
         )  # trailing / trimmed
         assert settings.homeassistant_token == "tok123"
 
-    def test_apply_is_noop_when_unregistered(self):
-        settings = config.Settings(
-            _env_file=None,
-            HOMEASSISTANT_URL="http://ha.local:8123",
-            HOMEASSISTANT_TOKEN="orig",
-        )
-        config._apply_embedded_connection(settings)  # nothing registered
+    def test_apply_is_noop_when_unregistered(self, monkeypatch):
+        monkeypatch.setenv("HOMEASSISTANT_URL", "http://ha.local:8123")
+        monkeypatch.setenv("HOMEASSISTANT_TOKEN", "orig")
+        settings = config.get_global_settings()
         assert settings.homeassistant_token == "orig"
 
     def test_reaches_settings_and_survives_reset(self, tmp_path, monkeypatch):
@@ -229,8 +216,7 @@ class TestEmbeddedConnection:
         config.set_embedded_connection(
             "https://127.0.0.1:8123", "tok123", verify_ssl=False
         )
-        settings = config.Settings(_env_file=None)
-        config._apply_embedded_connection(settings)
+        settings = config.get_global_settings()
         assert settings.homeassistant_url == "https://127.0.0.1:8123"
         assert settings.verify_ssl is False
 
@@ -239,8 +225,7 @@ class TestEmbeddedConnection:
         # url+token; Settings.verify_ssl keeps its own resolution (default
         # True, or whatever HA_VERIFY_SSL/the override file said).
         config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
-        settings = config.Settings(_env_file=None)
-        config._apply_embedded_connection(settings)
+        settings = config.get_global_settings()
         assert settings.verify_ssl is True
 
     def test_verify_ssl_reregistration_without_flag_clears_it(self):
@@ -251,8 +236,7 @@ class TestEmbeddedConnection:
             "https://127.0.0.1:8123", "tok123", verify_ssl=False
         )
         config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
-        settings = config.Settings(_env_file=None)
-        config._apply_embedded_connection(settings)
+        settings = config.get_global_settings()
         assert settings.verify_ssl is True
 
     def test_config_dir_is_read_back_only_through_the_getter(self):
@@ -264,8 +248,7 @@ class TestEmbeddedConnection:
             "http://127.0.0.1:8123", "tok123", config_dir="/config"
         )
         assert config.get_embedded_config_dir() == "/config"
-        settings = config.Settings(_env_file=None)
-        config._apply_embedded_connection(settings)
+        settings = config.get_global_settings()
         assert not hasattr(settings, "embedded_config_dir")
         assert not hasattr(settings, "config_dir")
 

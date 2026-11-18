@@ -8,19 +8,19 @@ point at the tool list, without taking a result slot from hidden tools.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import reset_global_settings
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
+from ._real_server import build_server
 from ._search_noop_tools import noop_tool
 
 # These tests exercise the search tools a search-mode connection gets.
@@ -51,24 +51,38 @@ async def test_cached_search_uses_current_tool_schema(reverse_catalog: bool) -> 
         "properties": {"entity_id": {"type": "string"}},
     }
     other = noop_tool("ha_unrelated", "unrelated operation")
-    transform = CategorizedSearchTransform()
-    await transform._search([original, other], "look up an entity")
-
-    updated = original.model_copy(
-        update={
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entity_id": {"type": "array", "items": {"type": "string"}}
-                },
+    mcp = FastMCP("schema-cache")
+    mcp.add_tool(original)
+    mcp.add_tool(other)
+    mcp.add_transform(CategorizedSearchTransform())
+    async with Client(mcp) as client:
+        before = await client.call_tool(
+            "ha_search_tools", {"query": "look up an entity"}
+        )
+        updated = original.model_copy(
+            update={
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "array", "items": {"type": "string"}}
+                    },
+                }
             }
-        }
-    )
-    catalog = [other, updated] if reverse_catalog else [updated, other]
-    results = await transform._search(catalog, "look up an entity")
-
-    assert results[0].name == "ha_lookup"
-    assert results[0].parameters["properties"]["entity_id"]["type"] == "array"
+        )
+        mcp.local_provider.remove_tool("ha_lookup")
+        if not reverse_catalog:
+            mcp.local_provider.remove_tool("ha_unrelated")
+            mcp.add_tool(updated)
+            mcp.add_tool(other)
+        else:
+            mcp.add_tool(updated)
+        after = await client.call_tool(
+            "ha_search_tools", {"query": "look up an entity"}
+        )
+    assert before.data[0]["name"] == "ha_lookup"
+    assert after.data[0]["name"] == "ha_lookup"
+    assert after.data[0]["params"] != before.data[0]["params"]
+    assert "[]" in after.data[0]["params"]
 
 
 @pytest.mark.anyio
@@ -164,32 +178,16 @@ async def test_unmatched_query_returns_nothing_even_with_pinned_tools() -> None:
     assert results == []
 
 
-@asynccontextmanager
-async def _no_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
-    yield {}
-
-
 @pytest.fixture
 def toolsearch_server(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
 ) -> Iterator[server_module.HomeAssistantSmartMCPServer]:
-    """The real catalog behind the search transform, no Home Assistant.
-
-    The client double carries no credentials, so the component probe
-    returns without connecting, and the lifespan is replaced so the
-    admin-token check and HACS nudge never open a socket. Pins and
-    disables from the developer's environment are cleared so the ranking
-    assertions see the default catalog.
-    """
+    """Search the real catalog backed by Core, with fresh default pins."""
     monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
     monkeypatch.setenv("PINNED_TOOLS", "")
     monkeypatch.setenv("DISABLED_TOOLS", "")
-    monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
-    monkeypatch.delenv("HOMEASSISTANT_TOKEN", raising=False)
-    monkeypatch.setattr(server_module, "server_lifespan", _no_lifespan)
-    reset_global_settings()
     try:
-        yield server_module.HomeAssistantSmartMCPServer(client=MagicMock(spec=[]))
+        yield build_server(monkeypatch, core_client)
     finally:
         reset_global_settings()
 

@@ -24,9 +24,9 @@ from .tools.helpers import raise_tool_error, safe_progress
 
 logger = logging.getLogger(__name__)
 
-_QUEUE_WAIT_TIMEOUT_SECONDS = 60.0
-_QUEUE_WAIT_HEARTBEAT_SECONDS = 15.0
-_QUEUE_WAIT_WARNING_SECONDS = 15.0
+QUEUE_WAIT_TIMEOUT_SECONDS = 60.0
+QUEUE_WAIT_HEARTBEAT_SECONDS = 15.0
+QUEUE_WAIT_WARNING_SECONDS = 15.0
 
 
 def _bypasses_outer_queue(name: str, args: dict[str, Any]) -> bool:
@@ -73,7 +73,7 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
 
         while True:
             elapsed = loop.time() - started
-            remaining = _QUEUE_WAIT_TIMEOUT_SECONDS - elapsed
+            remaining = QUEUE_WAIT_TIMEOUT_SECONDS - elapsed
             if remaining <= 0:
                 logger.warning(
                     "HA tool queue: timed out waiting for slot tool=%s wait=%.1fs",
@@ -83,7 +83,7 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
                 raise_tool_error(
                     create_timeout_error(
                         "Home Assistant tool queue admission",
-                        _QUEUE_WAIT_TIMEOUT_SECONDS,
+                        QUEUE_WAIT_TIMEOUT_SECONDS,
                         details=(
                             f"Tool '{name}' did not start because all configured "
                             "Home Assistant tool slots remained busy."
@@ -102,11 +102,11 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
             try:
                 await asyncio.wait_for(
                     self._semaphore.acquire(),
-                    timeout=min(_QUEUE_WAIT_HEARTBEAT_SECONDS, remaining),
+                    timeout=min(QUEUE_WAIT_HEARTBEAT_SECONDS, remaining),
                 )
             except TimeoutError:
                 elapsed = loop.time() - started
-                if not warned and elapsed >= _QUEUE_WAIT_WARNING_SECONDS:
+                if not warned and elapsed >= QUEUE_WAIT_WARNING_SECONDS:
                     warned = True
                     logger.warning(
                         "HA tool queue: still waiting for slot tool=%s wait=%.1fs",

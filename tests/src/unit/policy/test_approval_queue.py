@@ -39,11 +39,10 @@ def test_remember_cache_hit_within_ttl():
     assert q.is_remembered("ha_x", "deadbeef") is True
 
 
-def test_remember_cache_expired():
+def test_remember_cache_expired(freezer):
     q = ApprovalQueue()
     q.remember("ha_x", "deadbeef", minutes=5)
-    # rewind expiry into the past
-    q._remember[("ha_x", "deadbeef")] = datetime.now(UTC) - timedelta(seconds=1)
+    freezer.tick(timedelta(minutes=6))
     assert q.is_remembered("ha_x", "deadbeef") is False
 
 
@@ -64,20 +63,24 @@ def test_find_returns_none_for_unknown():
     assert q.find("ha_x", "abc") is None
 
 
-def test_approve_sets_decision_and_fires_event():
+@pytest.mark.anyio
+async def test_approve_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
     assert q.approve(p.token) is True
     assert p.decision == "approved"
-    assert p._event.is_set()
+    with anyio.fail_after(1):
+        assert await p.wait() == p.decision
 
 
-def test_deny_sets_decision_and_fires_event():
+@pytest.mark.anyio
+async def test_deny_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
     assert q.deny(p.token) is True
     assert p.decision == "denied"
-    assert p._event.is_set()
+    with anyio.fail_after(1):
+        assert await p.wait() == p.decision
 
 
 def test_approve_unknown_token_returns_false():
@@ -308,67 +311,6 @@ def test_create_after_sweep_still_evicts_when_pending_fills_cap():
         assert q.get(entry.token) is not None
 
 
-@pytest.mark.anyio
-async def test_find_or_create_lock_blocks_concurrent_create_under_real_race():
-    """The previous test_find_or_create_concurrent_callers_share_entry
-    passes even without the lock because find() and create() are both
-    sync and run to completion in one task before another can start.
-    To actually exercise the lock, monkey-patch find() to await — now
-    a missing lock would let multiple tasks pass the find()==None
-    check before any of them runs create().
-    """
-    q = ApprovalQueue()
-    orig_find = q.find
-
-    def slow_find(tool_name: str, args_hash: str):
-        # Use a synchronous sleep equivalent — anyio yield wrapped in
-        # the underlying find. Easiest: replace with a coroutine via
-        # closure that the lock-holding flow awaits inside.
-        return orig_find(tool_name, args_hash)
-
-    # Instead of patching find (which is sync), insert a yield point
-    # inside find_or_create by patching the queue's create to await.
-    orig_create = q.create
-
-    async def slow_create_path(*args, **kwargs):
-        # Yield to the scheduler so any other waiting find_or_create
-        # task gets a chance to slip past its own find() check before
-        # we actually create. With the lock this is impossible; without
-        # it, the test would observe multiple tokens.
-        await anyio.sleep(0.01)
-        return orig_create(*args, **kwargs)
-
-    # Patch the bound method so find_or_create's internal call goes
-    # through the slow path. We patch via dunder rather than setattr
-    # because async-vs-sync mismatch would explode the signature; do
-    # a wrapper inside the test instead.
-    async def racing_find_or_create():
-        async with q._create_lock:
-            existing = q.find("ha_x", "abc")
-            if existing is not None:
-                return existing
-            return await slow_create_path("ha_x", "abc", {}, ttl_minutes=5)
-
-    tokens: list[str] = []
-
-    async def race(idx: int) -> None:
-        entry = await racing_find_or_create()
-        tokens.append(entry.token)
-
-    async with anyio.create_task_group() as tg:
-        for i in range(5):
-            tg.start_soon(race, i)
-
-    # With the lock, all 5 see the same token (the first task creates,
-    # the rest find it). Without the lock, all 5 would race past find()
-    # and each create a fresh token.
-    assert len(set(tokens)) == 1, f"lock failed; got {set(tokens)} tokens"
-    assert len(q.list_pending()) == 1
-    # Silence the slow_find reference so ruff doesn't complain about
-    # the unused helper — kept in the source for future strengthening.
-    _ = slow_find
-
-
 # --- Issue #2387: consumption is one-shot ---
 
 
@@ -396,7 +338,7 @@ def test_swept_approved_entry_is_still_claimable_by_its_waiter():
     entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
     entry.decide("approved")
     entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    q._sweep_expired()
+    assert q.list_pending() == []
     assert q.get(entry.token) is None
     assert q.consume_and_maybe_remember(entry, remember_minutes=0) is True
 

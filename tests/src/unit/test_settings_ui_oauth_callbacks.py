@@ -1,220 +1,172 @@
-"""Settings-panel editor for the embedded server's OAuth callback allowlist (#2427)."""
+"""Settings-panel callback editing against the real component's WebSocket API."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.common import MockConfigEntry
+from starlette.requests import Request
+from starlette.types import Message
 
-from ha_mcp.settings_ui import _handlers_oauth_callbacks as oc
+from custom_components.ha_mcp_tools.const import OPT_OAUTH_REDIRECT_ALLOWLIST
+from custom_components.ha_mcp_tools.const import DEFAULT_OAUTH_REDIRECT_ALLOWLIST
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.settings_ui import build_settings_handlers
 
+from ._client_spies import sent_commands
+from ._server_entry import add_server_entry
+
 CALLBACK = "https://chatgpt.example/cb"
-# What the component fake records: (command, fields) per call.
-Calls = list[tuple[str, dict[str, Any]]]
-
-STATE = {
-    "entry_id": "srv1",
-    "allowlist": [CALLBACK],
-    "default_allowlist": ["https://claude.ai/api/mcp/auth_callback"],
-    "customized": True,
-    "applies": True,
-}
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def embedded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
 
 
 @pytest.fixture
-def not_embedded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+def entry(hass: HomeAssistant) -> MockConfigEntry:
+    return add_server_entry(hass, options={OPT_OAUTH_REDIRECT_ALLOWLIST: [CALLBACK]})
 
 
-@pytest.fixture
-def component(monkeypatch: pytest.MonkeyPatch) -> Calls:
-    """Record the component commands the handlers send; answer like the component."""
-    calls: Calls = []
+async def _call(client: HomeAssistantClient, name: str, body: Any = None) -> tuple[int, dict[str, Any]]:
+    handlers = build_settings_handlers(server=MagicMock(client=client))
+    async def receive() -> Message:
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
 
-    async def command(server: Any, name: str, **fields: Any) -> dict[str, Any]:
-        calls.append((name, fields))
-        if fields.get("allowlist") == ["http://not-loopback/cb"]:
-            return {**STATE, "saved": False, "invalid": fields["allowlist"]}
-        return {**STATE, "saved": True, "invalid": []}
-
-    monkeypatch.setattr(oc, "_component_command", command)
-    return calls
-
-
-def _request(body: Any) -> MagicMock:
-    request = MagicMock()
-    request.json = AsyncMock(return_value=body)
-    return request
-
-
-async def _call(name: str, body: Any = None) -> tuple[int, dict[str, Any]]:
-    handlers = build_settings_handlers(server=MagicMock())
-    response = await handlers[name](_request(body))
+    request = Request({"type": "http"}, receive=receive)
+    response = await handlers[name](request)
     return response.status_code, json.loads(response.body)
 
 
+@pytest.fixture
+async def component_commands(
+    core_client: HomeAssistantClient,
+) -> AsyncIterator[AsyncMock]:
+    """Observe commands while keeping every reply on the real Core transport."""
+    ws = await get_websocket_client(
+        url=core_client.base_url, token=core_client.token, verify_ssl=core_client.verify_ssl
+    )
+    with sent_commands(ws) as commands:
+        yield commands
+
+
 async def test_other_install_types_do_not_offer_the_editor(
-    not_embedded: None, component: Calls
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch, component_commands: AsyncMock
 ) -> None:
-    status, body = await _call("get_oauth_callbacks")
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+    status, body = await _call(core_client, "get_oauth_callbacks")
     assert (status, body["available"]) == (200, False)
-    assert component == []
+    component_commands.assert_not_awaited()
 
 
 async def test_the_editor_shows_the_list_in_force(
-    embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry
 ) -> None:
-    _, body = await _call("get_oauth_callbacks")
+    _, body = await _call(component_core_client, "get_oauth_callbacks")
     assert body["available"] is True
     assert body["allowlist"] == [CALLBACK]
 
 
 async def test_a_component_without_the_commands_explains_why(
-    embedded: None, monkeypatch: pytest.MonkeyPatch
+    core_client: HomeAssistantClient,
 ) -> None:
-    async def too_old(*_a: Any, **_k: Any) -> dict[str, Any]:
-        raise oc._Unavailable("Update the HA-MCP integration in HACS.")
-
-    monkeypatch.setattr(oc, "_component_command", too_old)
-    _, body = await _call("get_oauth_callbacks")
+    _, body = await _call(core_client, "get_oauth_callbacks")
     assert body["available"] is False
     assert "Update" in body["reason"]
 
 
 async def test_a_save_sends_the_list_to_the_component(
-    embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry
 ) -> None:
-    status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    callback = "https://another.example/cb"
+    status, body = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": [callback]})
     assert status == 200
-    assert component == [(oc.WS_OAUTH_CALLBACKS_UPDATE, {"allowlist": [CALLBACK]})]
+    assert body["saved"] is True
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == [callback]
 
 
 async def test_restoring_the_default_asks_the_component_to_reset(
-    embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry
 ) -> None:
-    await _call("save_oauth_callbacks", {"reset": True})
-    assert component == [(oc.WS_OAUTH_CALLBACKS_UPDATE, {"reset": True})]
+    status, body = await _call(component_core_client, "save_oauth_callbacks", {"reset": True})
+    assert status == 200
+    assert body["allowlist"] == list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
+    assert OPT_OAUTH_REDIRECT_ALLOWLIST not in entry.options
 
 
 async def test_unusable_callbacks_are_named_back(
-    embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry
 ) -> None:
-    status, body = await _call(
-        "save_oauth_callbacks", {"allowlist": ["http://not-loopback/cb"]}
-    )
+    status, body = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": ["http://not-loopback/cb"]})
     assert status == 400
     assert body["invalid"] == ["http://not-loopback/cb"]
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == [CALLBACK]
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {"allowlist": "x"},
-        {"allowlist": [1]},
-        [],
-    ],
-)
+@pytest.mark.parametrize("body", [{"allowlist": "x"}, {"allowlist": [1]}, [], {"reset": True, "allowlist": [CALLBACK]}])
 async def test_a_malformed_save_is_refused_before_the_component(
-    embedded: None, component: Calls, body: Any
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry, body: Any, component_commands: AsyncMock
 ) -> None:
-    status, _ = await _call("save_oauth_callbacks", body)
+    status, _ = await _call(component_core_client, "save_oauth_callbacks", body)
     assert status == 400
-    assert component == []
+    component_commands.assert_not_awaited()
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == [CALLBACK]
 
 
 async def test_the_list_is_bounded_by_the_component_not_the_panel(
-    embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry
 ) -> None:
-    # The component counts after trimming and de-duplicating, as Configure does.
     lines = [f"https://ex{i}.example/cb" for i in range(50)]
-    status, _ = await _call("save_oauth_callbacks", {"allowlist": [*lines, lines[0]]})
+    status, _ = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": [*lines, lines[0]]})
     assert status == 200
-    assert component[-1][1]["allowlist"] == [*lines, lines[0]]
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == lines
 
 
-async def test_a_body_that_both_resets_and_sets_is_refused(
-    embedded: None, component: Calls
+@pytest.mark.parametrize("operation,status", [("get_oauth_callbacks", 200), ("save_oauth_callbacks", 502)])
+async def test_a_failed_probe_is_a_reachability_error(
+    unreachable_client: HomeAssistantClient, operation: str, status: int
 ) -> None:
-    status, _ = await _call(
-        "save_oauth_callbacks", {"reset": True, "allowlist": [CALLBACK]}
-    )
-    assert status == 400
-    assert component == []
-
-
-async def _probe_fails_when_strict(client: Any, *, strict: bool = False) -> None:
-    # Like get_component_caps: a strict probe raises, a best-effort one returns None.
-    from ha_mcp.tools import component_api
-
-    if strict:
-        raise component_api.ComponentDiscoveryError("probe failed")
-
-
-async def test_a_failed_probe_is_a_reachability_error_on_save(
-    embedded: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Home Assistant's WebSocket is restarting: the write must say "retry",
-    # not "update the component", which is what a cached None would mean.
-    from ha_mcp.tools import component_api
-
-    monkeypatch.setattr(component_api, "get_component_caps", _probe_fails_when_strict)
-    status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
-    assert status == 502
-    assert "Could not reach" in body["error"]["message"]
-
-
-async def test_a_failed_probe_is_a_reachability_error_on_read(
-    embedded: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Same probe on the read: an up-to-date component must not be told to update.
-    from ha_mcp.tools import component_api
-
-    monkeypatch.setattr(component_api, "get_component_caps", _probe_fails_when_strict)
-    status, body = await _call("get_oauth_callbacks", None)
-    assert status == 200
-    assert body["available"] is False
-    assert "Could not reach" in body["reason"]
+    actual, body = await _call(unreachable_client, operation, {"allowlist": [CALLBACK]})
+    assert actual == status
+    if operation == "get_oauth_callbacks":
+        assert body["available"] is False
+    message = body["reason"] if operation == "get_oauth_callbacks" else body["error"]["message"]
+    assert "Could not reach" in message
 
 
 async def test_a_save_outside_the_embedded_server_is_refused(
-    not_embedded: None, component: Calls
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry, monkeypatch: pytest.MonkeyPatch, component_commands: AsyncMock
 ) -> None:
-    status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+    status, _ = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": []})
     assert status == 409
-    assert component == []
+    component_commands.assert_not_awaited()
+    assert entry.options[OPT_OAUTH_REDIRECT_ALLOWLIST] == [CALLBACK]
 
 
 async def test_a_refusal_by_the_component_is_a_400_not_a_502(
-    embedded: None, monkeypatch: pytest.MonkeyPatch
+    component_core_client: HomeAssistantClient,
 ) -> None:
-    # The component ran the command and rejected it: the panel was reached.
-    from ha_mcp.client.rest_client import HomeAssistantCommandError
-
-    async def refuse(*_a: Any, **_k: Any) -> dict[str, Any]:
-        raise HomeAssistantCommandError("Command failed: bad value")
-
-    monkeypatch.setattr(oc, "_component_command", refuse)
-    status, body = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    status, body = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 400
-    assert "bad value" in body["error"]["message"]
+    assert "no ha_mcp_tools in-process server" in body["error"]["message"]
 
 
 async def test_an_unreachable_component_is_a_502(
-    embedded: None, monkeypatch: pytest.MonkeyPatch
+    component_core_client: HomeAssistantClient, entry: MockConfigEntry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ha_mcp.client.rest_client import HomeAssistantConnectionError
+    from ha_mcp.tools.component_api import get_component_caps
 
-    async def down(*_a: Any, **_k: Any) -> dict[str, Any]:
-        raise HomeAssistantConnectionError("WebSocket not connected")
-
-    monkeypatch.setattr(oc, "_component_command", down)
-    status, _ = await _call("save_oauth_callbacks", {"allowlist": [CALLBACK]})
+    await get_component_caps(component_core_client, strict=True)
+    ws = await get_websocket_client(url=component_core_client.base_url, token=component_core_client.token, verify_ssl=False)
+    monkeypatch.setattr(ws, "send_command", AsyncMock(side_effect=HomeAssistantConnectionError("WebSocket not connected")))
+    status, _ = await _call(component_core_client, "save_oauth_callbacks", {"allowlist": [CALLBACK]})
     assert status == 502

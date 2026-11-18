@@ -288,7 +288,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "",
         "Intentional: the stdio exit routing must see BaseExceptions (e.g. the "
         "re-raised CancelledError from the #1544 hard-stop path) so they leave "
-        "via _force_exit — reaching interpreter finalization with the SDK's "
+        "via force_exit — reaching interpreter finalization with the SDK's "
         "stdin reader parked is the issue #2027 SIGABRT. The exception is "
         "logged before the forced exit.",
     ),

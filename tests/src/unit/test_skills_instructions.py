@@ -4,48 +4,36 @@ The skills section of the initialize instructions is covered in
 ``test_server_instructions.py``."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from ha_mcp.tools.config_write_helpers import _HA_BEST_PRACTICES_SKILL_NAME
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.server_tool_text import SKILL_TOOL_NAME
+from ha_mcp.utils.skill_loader import BEST_PRACTICES_SKILL_NAME, parse_skill_frontmatter
+
+from ._server_factory import make_server
 
 from ._symlink_support import symlink_or_skip
 
 
 @pytest.fixture
-def server():
-    """Create a server instance with mocked dependencies for testing."""
-    with (
-        patch("ha_mcp.server.get_global_settings") as mock_settings,
-        patch("ha_mcp.server.FastMCP"),
-    ):
-        settings = mock_settings.return_value
-        settings.mcp_server_name = "test"
-        settings.mcp_server_version = "0.0.1"
-        settings.enabled_tool_modules = "all"
-        settings.enable_dashboard_partial_tools = True
-        settings.custom_instructions = ""
+def server(core_client: HomeAssistantClient, monkeypatch):
+    def build(skills_dir=None):
+        return make_server(core_client, monkeypatch, skills_dir)
+    return build
 
-        # Patch out tool registration and skills registration
-        with (
-            patch("ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"),
-            patch(
-                "ha_mcp.server.HomeAssistantSmartMCPServer._build_skills_instructions",
-                return_value=None,
-            ),
-        ):
-            from ha_mcp.server import HomeAssistantSmartMCPServer
 
-            srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-            srv.settings = settings
-            return srv
+async def _guide(server, skills_dir, file="SKILL.md"):
+    result = await server(skills_dir).mcp.call_tool(SKILL_TOOL_NAME, {"file": file})
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 class TestParseSkillFrontmatter:
     """Tests for _parse_skill_frontmatter() YAML parsing."""
 
-    def test_valid_frontmatter(self, server, tmp_path):
+    def test_valid_frontmatter(self, tmp_path):
         """Valid SKILL.md returns frontmatter dict."""
         skill_md = tmp_path / "test-skill" / "SKILL.md"
         skill_md.parent.mkdir()
@@ -54,13 +42,13 @@ class TestParseSkillFrontmatter:
             "  Best practices for testing.\n"
             "---\n# Body\n"
         )
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is not None
         assert isinstance(result, dict)
         assert result["name"] == "test-skill"
         assert "Best practices" in result["description"]
 
-    def test_dashes_inside_description_do_not_end_frontmatter(self, server, tmp_path):
+    def test_dashes_inside_description_do_not_end_frontmatter(self, tmp_path):
         """Only an unindented ``---`` line closes the frontmatter; a value
         containing ``---``, inline or as an indented block-scalar line,
         must parse whole, or the skill would count as unavailable."""
@@ -70,57 +58,57 @@ class TestParseSkillFrontmatter:
             '---\nname: "Use --- separators"\n'
             "description: |\n  Before\n  ---\n  After\n---\n# Body\n"
         )
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is not None
         assert result["name"] == "Use --- separators"
         assert result["description"].splitlines() == ["Before", "---", "After"]
 
-    def test_horizontal_rules_in_body_are_not_frontmatter(self, server, tmp_path):
+    def test_horizontal_rules_in_body_are_not_frontmatter(self, tmp_path):
         """Frontmatter must open on the first line; two Markdown rules
         further down must not be read as frontmatter."""
         skill_md = tmp_path / "test-skill" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text("# Title\n---\ndescription: not frontmatter\n---\n")
-        assert server._parse_skill_frontmatter(skill_md) is None
+        assert parse_skill_frontmatter(skill_md) is None
 
-    def test_no_frontmatter_delimiters(self, server, tmp_path):
+    def test_no_frontmatter_delimiters(self, tmp_path):
         """File without --- delimiters returns None."""
         skill_md = tmp_path / "bad-skill" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text("# No frontmatter here\nJust content.\n")
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_invalid_yaml(self, server, tmp_path):
+    def test_invalid_yaml(self, tmp_path):
         """Malformed YAML in frontmatter returns None."""
         skill_md = tmp_path / "bad-yaml" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text("---\n: invalid: yaml: [unclosed\n---\n# Body\n")
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_non_dict_frontmatter(self, server, tmp_path):
+    def test_non_dict_frontmatter(self, tmp_path):
         """Frontmatter that parses to a non-dict (e.g., string) returns None."""
         skill_md = tmp_path / "string-fm" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text("---\njust a string\n---\n# Body\n")
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_missing_description(self, server, tmp_path):
+    def test_missing_description(self, tmp_path):
         """Frontmatter without description field returns None."""
         skill_md = tmp_path / "no-desc" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text("---\nname: no-desc\nversion: 1\n---\n# Body\n")
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_empty_description(self, server, tmp_path):
+    def test_empty_description(self, tmp_path):
         """Frontmatter with empty description returns None."""
         skill_md = tmp_path / "empty" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text('---\nname: empty\ndescription: ""\n---\n# Body\n')
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
     @pytest.mark.parametrize(
@@ -133,7 +121,7 @@ class TestParseSkillFrontmatter:
             "description: true",  # bool — truthy non-string
         ],
     )
-    def test_non_string_description_returns_none(self, server, tmp_path, yaml_desc):
+    def test_non_string_description_returns_none(self, tmp_path, yaml_desc):
         """Truthy non-string descriptions would later crash on .strip() —
         callers do ``fm["description"].strip()`` without checking type.
         Fail closed at the parser so malformed bundles only break
@@ -141,14 +129,14 @@ class TestParseSkillFrontmatter:
         skill_md = tmp_path / "bad-type" / "SKILL.md"
         skill_md.parent.mkdir()
         skill_md.write_text(f"---\nname: bad-type\n{yaml_desc}\n---\n# Body\n")
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
-    def test_file_not_readable(self, server, tmp_path):
+    def test_file_not_readable(self, tmp_path):
         """Unreadable file returns None."""
         skill_md = tmp_path / "missing" / "SKILL.md"
         # Don't create the file — read_text will raise OSError
-        result = server._parse_skill_frontmatter(skill_md)
+        result = parse_skill_frontmatter(skill_md)
         assert result is None
 
 
@@ -232,8 +220,7 @@ class TestLogSkillRegistrationSummary:
 class TestHandleSkillGuideCall:
     """Tests for the ``ha_get_skill_guide`` handler.
 
-    The handler is split out from the registered tool closure so it can
-    be unit-tested without an MCP client round-trip.
+    Each request goes through the registered MCP tool on the real server.
     """
 
     @pytest.fixture
@@ -241,7 +228,7 @@ class TestHandleSkillGuideCall:
         """A skills root holding the best-practices skill, plus a file
         outside the skill that no request may reach."""
         root = tmp_path / "skills"
-        skill = root / _HA_BEST_PRACTICES_SKILL_NAME
+        skill = root / BEST_PRACTICES_SKILL_NAME
         (skill / "references").mkdir(parents=True)
         (skill / "SKILL.md").write_text(
             "---\nname: best-practices\n"
@@ -255,43 +242,43 @@ class TestHandleSkillGuideCall:
         (tmp_path / "outside.md").write_text("# Outside\nSECRET OUTSIDE\n")
         return root
 
-    def test_no_file_returns_skill_md(self, server, skills_dir):
+    async def test_no_file_returns_skill_md(self, server, skills_dir):
         """A call with no arguments must deliver SKILL.md itself, so a
         model that makes one call gets the workflow and the table of
         reference files."""
-        result = server._handle_skill_guide_call(skills_dir)
+        result = await _guide(server, skills_dir)
         assert result["success"] is True
         assert result["file"] == "SKILL.md"
         assert "Workflow content here." in result["content"]
         assert "file=" in result["how_to_use"]
 
     @pytest.mark.parametrize("file", ["../outside.md", "references"])
-    def test_file_outside_allowlist_is_refused(self, server, skills_dir, file):
+    async def test_file_outside_allowlist_is_refused(self, server, skills_dir, file):
         """Only the exact names of regular files in the skill are served.
         A traversal to a real file, or a directory name, must fail instead
         of reading from disk."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(skills_dir, file)
+            await _guide(server, skills_dir, file)
         payload = str(excinfo.value)
         assert "SECRET OUTSIDE" not in payload
         assert "RESOURCE_NOT_FOUND" in payload
         # The error names the valid files so the model can retry.
         assert "references/reference.md" in payload
 
-    def test_symlink_in_skill_is_refused(self, server, skills_dir):
+    async def test_symlink_in_skill_is_refused(self, server, skills_dir):
         """A symlink placed inside the skill must not be followed, even
         though its name is inside the skill directory."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        skill = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME
+        skill = skills_dir / BEST_PRACTICES_SKILL_NAME
         symlink_or_skip(skill / "evil.md", skills_dir.parent / "outside.md")
         with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(skills_dir, "evil.md")
+            await _guide(server, skills_dir, "evil.md")
         assert "SECRET OUTSIDE" not in str(excinfo.value)
 
-    def test_symlinked_skill_dir_is_refused(self, server, tmp_path):
+    async def test_symlinked_skill_dir_is_refused(self, server, tmp_path):
         """A skill folder that is itself a symlink must not be walked:
         every file under its target would become readable."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -302,20 +289,20 @@ class TestHandleSkillGuideCall:
         (target / "secret.txt").write_text("SECRET OUTSIDE\n")
         root = tmp_path / "skills"
         root.mkdir()
-        symlink_or_skip(root / _HA_BEST_PRACTICES_SKILL_NAME, target)
+        symlink_or_skip(root / BEST_PRACTICES_SKILL_NAME, target)
         with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(root, "secret.txt")
+            await _guide(server, root, "secret.txt")
         assert "SECRET OUTSIDE" not in str(excinfo.value)
 
     @pytest.mark.parametrize("failure", ["permission", "invalid_utf8"])
-    def test_read_failure_raises_tool_error(
+    async def test_read_failure_raises_tool_error(
         self, server, skills_dir, monkeypatch, failure
     ):
         """A read failure must surface as a structured ToolError naming the
         file, not as a success payload or an unhandled exception."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        reference = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME / "references"
+        reference = skills_dir / BEST_PRACTICES_SKILL_NAME / "references"
         if failure == "invalid_utf8":
             (reference / "reference.md").write_bytes(b"# Ref \xff\xfe\n")
         else:
@@ -329,20 +316,20 @@ class TestHandleSkillGuideCall:
             monkeypatch.setattr(Path, "read_text", boom)
 
         with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(skills_dir, "references/reference.md")
+            await _guide(server, skills_dir, "references/reference.md")
         payload = str(excinfo.value)
         assert "reference.md" in payload
         assert "INTERNAL_ERROR" in payload
 
-    def test_optout_hint_only_on_reference_files(self, server, skills_dir):
+    async def test_optout_hint_only_on_reference_files(self, server, skills_dir):
         """The ``MandatoryBPS=false`` hint must not ride on SKILL.md.
 
         Every first call returns SKILL.md. A model that took the hint
         there would switch off the reference files the write tools
         attach, before it had read any of them.
         """
-        skill_md = server._handle_skill_guide_call(skills_dir)
-        reference = server._handle_skill_guide_call(
+        skill_md = await _guide(server, skills_dir)
+        reference = await _guide(server,
             skills_dir, "references/reference.md"
         )
         assert "skill_content_hint" not in skill_md
@@ -359,7 +346,7 @@ class TestHandleSkillGuideCall:
             "unlistable_skill_dir",
         ],
     )
-    def test_unavailable_skill_raises_with_operator_fix(
+    async def test_unavailable_skill_raises_with_operator_fix(
         self, server, tmp_path, monkeypatch, state
     ):
         """Without a usable bundled skill, the call must fail with an error
@@ -368,7 +355,7 @@ class TestHandleSkillGuideCall:
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         skills_dir = None if state == "no_skills_dir" else tmp_path / "skills"
-        skill = tmp_path / "skills" / _HA_BEST_PRACTICES_SKILL_NAME
+        skill = tmp_path / "skills" / BEST_PRACTICES_SKILL_NAME
         skill.mkdir(parents=True)
         valid = "---\nname: bp\ndescription: Best practices.\n---\n# Body\n"
         if state == "bad_frontmatter":
@@ -390,7 +377,7 @@ class TestHandleSkillGuideCall:
 
             monkeypatch.setattr(Path, "rglob", fail_walk)
         with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(skills_dir)
+            await _guide(server, skills_dir)
         assert "submodule" in str(excinfo.value)
 
 
@@ -445,395 +432,117 @@ class TestSkillToolMandatoryPinning:
         assert len(SKILL_TOOL_NAME) <= 40
 
 
-class TestSkillToolAliasKeywords:
-    """The consolidated tool must mention the names it replaced.
-
-    Two surfaces: (1) BM25 keyword enrichment so agents searching for
-    the old tool names get routed to the new one; (2) the tool's own
-    description so a human or LLM reading the catalog sees the redirect
-    inline. Both regress silently if the alias text disappears.
-    """
-
-    def test_search_keywords_mention_old_tools(self):
-        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
-
-        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS.get(SKILL_TOOL_NAME)
-        assert keywords is not None, (
-            f"{SKILL_TOOL_NAME} must have an entry in _SEARCH_KEYWORDS so "
-            "BM25 retrieval on old tool names routes to the replacement."
-        )
-        for old_name in (
-            "ha_list_resources",
-            "ha_read_resource",
-            "ha_get_skill_home_assistant_best_practices",
-        ):
-            assert old_name in keywords, (
-                f"BM25 keywords for {SKILL_TOOL_NAME} should mention {old_name} "
-                "so retrieval on the pre-#1134 name finds the replacement."
-            )
-
-    def test_tool_description_mentions_old_tools(self, server, tmp_path):
-        """The description passed to mcp.tool() must include the alias text."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        # Build a minimal valid skill so the populated-mode description
-        # branch runs.
-        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
-        skill.mkdir()
-        (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\ndescription: |\n"
-            "  Best practices for HA tasks.\n---\n"
-        )
-
-        captured: dict = {}
-
-        def fake_tool(*, name, description, **kwargs):
-            def _decorator(fn):
-                captured[name] = description
-                return fn
-
-            return _decorator
-
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(tmp_path)
-        desc = captured[SKILL_TOOL_NAME]
-
-        for old_name in (
-            "ha_list_resources",
-            "ha_read_resource",
-            "ha_get_skill_home_assistant_best_practices",
-        ):
-            assert old_name in desc, (
-                f"Tool description for {SKILL_TOOL_NAME} should mention "
-                f"{old_name} (alias redirect for agents trained on the "
-                "pre-#1134 catalog)."
-            )
-
-    def test_degraded_description_also_mentions_old_tools(self, server):
-        """Even in the no-skills-available branch, the alias text appears."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        captured: dict = {}
-
-        def fake_tool(*, name, description, **kwargs):
-            def _decorator(fn):
-                captured[name] = description
-                return fn
-
-            return _decorator
-
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(None)
-        desc = captured[SKILL_TOOL_NAME]
-
-        assert "ha_list_resources" in desc
-        assert "ha_get_skill_home_assistant_best_practices" in desc
+@pytest.fixture
+def populated_dir(tmp_path):
+    skill = tmp_path / BEST_PRACTICES_SKILL_NAME
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: best-practices\ndescription: Best practices.\n---\n"
+    )
+    (skill / "reference.md").write_text("# Ref\n")
+    return tmp_path
 
 
-class TestSkillToolRegistration:
-    """Registration-time invariants that aren't covered by the handler
-    tests in TestHandleSkillGuideCall.
+@pytest.mark.parametrize("available", [False, True])
+async def test_skill_catalog_keeps_aliases_keywords_annotations_and_tags(
+    server, populated_dir, available
+):
+    """Both healthy and degraded catalogs tell old clients where to go."""
+    from ha_mcp.server_tool_text import SEARCH_KEYWORDS
 
-    These guard against silent regressions in `mcp.tool()` arguments —
-    annotations and tags don't show up in the description, so the
-    description-based tests above don't catch a flip from
-    `readOnlyHint: True` to `destructiveHint: True`.
-    """
-
-    @pytest.fixture
-    def populated_dir(self, tmp_path):
-        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
-        skill.mkdir()
-        (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
-        )
-        (skill / "reference.md").write_text("# Ref\n")
-        return tmp_path
-
-    @pytest.fixture
-    def captor(self):
-        """A ``mcp.tool`` side_effect that records args and returns a no-op decorator."""
-        captured: dict = {}
-
-        def fake_tool(*, name, description, annotations=None, tags=None, **_kwargs):
-            def _decorator(fn):
-                captured[name] = {
-                    "description": description,
-                    "annotations": annotations or {},
-                    "tags": tags or set(),
-                    "fn": fn,
-                }
-                return fn
-
-            return _decorator
-
-        return captured, fake_tool
-
-    def test_register_returns_skill_count(self, server, populated_dir, captor):
-        """The return value feeds log_skill_registration_summary's
-        guidance_count key — a regression to ``return 0`` (or returning
-        the description length) would silently flip the operator log
-        line from info to warning."""
-        captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        result = server._register_skill_guide_tool(populated_dir)
-
-        assert result == 1, (
-            "Return value should equal the number of parseable bundled "
-            f"skills (1 here); got {result}."
-        )
-
-    def test_register_returns_zero_for_missing_dir(self, server, captor):
-        """Degraded branch returns 0 so the summary log flags 'shipped
-        but exposes nothing'."""
-        _captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        result = server._register_skill_guide_tool(None)
-
-        assert result == 0
-
-    def test_tool_annotations_are_correct(self, server, populated_dir, captor):
-        """readOnlyHint + idempotentHint must stay set — a flip to
-        destructiveHint would weaken client-side permission gating.
-
-        The ``title`` annotation must also be present so the tool shows a
-        human-readable display name in client tool lists, matching every
-        other tool (all of which carry an ``annotations.title``). Without
-        it, clients fall back to rendering the raw ``ha_get_skill_guide``
-        name."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(populated_dir)
-        annotations = captured[SKILL_TOOL_NAME]["annotations"]
-
-        assert annotations.get("readOnlyHint") is True
-        assert annotations.get("idempotentHint") is True
-        assert annotations.get("destructiveHint") is not True
-        assert (
-            annotations.get("title") == "Get Home Assistant Best Practices Skill Guide"
-        )
-
-    def test_tool_tags_are_correct(self, server, populated_dir, captor):
-        """``System`` tag drives settings-UI placement; a missing tag
-        would land the tool in ``Other`` in _get_tool_metadata."""
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(populated_dir)
-        assert "System" in captured[SKILL_TOOL_NAME]["tags"]
-
-    def test_populated_description_includes_keyword_block(
-        self, server, populated_dir, captor
+    tool = await server(populated_dir if available else None).mcp.get_tool(SKILL_TOOL_NAME)
+    assert tool is not None
+    for old_name in (
+        "ha_list_resources", "ha_read_resource",
+        "ha_get_skill_home_assistant_best_practices",
     ):
-        """``_SKILL_USE_BEFORE_KEYWORDS`` must appear in the populated-
-        mode description so BM25 retrieval ranks this tool for the
-        action-phrased queries it lists. Replaces equivalent coverage
-        from the deleted test_ha_resources_as_tools.py."""
-        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
-
-        captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(populated_dir)
-        desc = captured[SKILL_TOOL_NAME]["description"]
-
-        # Spot-check a few action-phrased anchors from the keyword block
-        # rather than the full string (description ordering is not part
-        # of the contract).
-        for anchor in (
-            "Use BEFORE:",
-            "creating or editing automations",
-            "writing triggers",
-            "ha_config_set_automation",
-        ):
-            assert anchor in desc, (
-                f"Populated description missing {anchor!r} from "
-                f"HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS — "
-                "BM25 retrieval will rank worse on action-phrased queries."
-            )
-        # Sanity: the static block must equal what the class exposes,
-        # so a future rename of the attribute would also fail here.
-        assert HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS in desc
-
-    def test_degraded_description_includes_keyword_block(self, server, captor):
-        """Same retrieval-ranking guarantee in the degraded branch — the
-        tool is mandatory-pinned so it stays in the catalog regardless,
-        but BM25 still needs the keyword block to rank it for the
-        relevant queries."""
-        from ha_mcp.server import SKILL_TOOL_NAME, HomeAssistantSmartMCPServer
-
-        captured, fake_tool = captor
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = fake_tool
-
-        server._register_skill_guide_tool(None)
-        desc = captured[SKILL_TOOL_NAME]["description"]
-
-        assert HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS in desc
-
-
-class TestRegisterSkillsOrchestration:
-    """End-to-end coverage of `_register_skills` — the outer method that
-    sequences resource provider registration and tool registration.
-
-    The always-registered-tool contract says: provider failure (import
-    error, init error, add_provider error) must NOT prevent the
-    polymorphic tool from being registered. Conversely, a tool
-    registration failure must NOT crash server startup; it should set
-    `status["tool"] = "failed"` and let the summary log emit a WARNING.
-    """
-
-    @pytest.fixture
-    def populated_dir(self, tmp_path):
-        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
-        skill.mkdir()
-        (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
-        )
-        return tmp_path
-
-    def test_provider_import_error_still_registers_tool(
-        self, server, populated_dir, monkeypatch, caplog
+        assert old_name in tool.description
+        assert old_name in SEARCH_KEYWORDS[SKILL_TOOL_NAME]
+    for anchor in (
+        "Use BEFORE:", "creating or editing automations", "writing triggers",
+        "ha_config_set_automation",
     ):
-        """If ``SkillsDirectoryProvider`` is unavailable in fastmcp, the
-        tool still registers and the summary log warns rather than
-        aborting boot."""
-        import builtins
+        assert anchor in tool.description
+    assert tool.annotations is not None
+    assert tool.annotations.read_only_hint is True
+    assert tool.annotations.idempotent_hint is True
+    assert tool.annotations.destructive_hint is not True
+    assert tool.annotations.title == "Get Home Assistant Best Practices Skill Guide"
+    assert "System" in tool.tags
+    assert ("currently not available" in tool.description) is not available
 
+
+@pytest.mark.parametrize("available", [False, True])
+def test_registration_summary_reports_available_skill_count(
+    server, populated_dir, available, caplog
+):
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        server(populated_dir if available else None)
+    summaries = [r for r in caplog.records if "Skill system summary" in r.message]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == (logging.INFO if available else logging.WARNING)
+    assert f"guidance_count={int(available)}" in summaries[0].message
+
+
+@pytest.mark.parametrize("failure", ["import", "add"])
+async def test_resource_provider_failure_keeps_guide_tool(
+    server, populated_dir, monkeypatch, caplog, failure
+):
+    import builtins
+    import logging
+
+    from ha_mcp.http_transport import HttpTransportFastMCP
+
+    if failure == "import":
         original_import = builtins.__import__
 
-        def fake_import(name, *args, **kwargs):
+        def import_module(name, *args, **kwargs):
             if name == "ha_mcp._vendor.fastmcp.server.providers.skills":
-                raise ImportError("simulated missing SkillsDirectoryProvider")
+                raise ImportError("simulated missing provider")
             return original_import(name, *args, **kwargs)
 
-        monkeypatch.setattr(builtins, "__import__", fake_import)
-        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
+        monkeypatch.setattr(builtins, "__import__", import_module)
+    else:
+        from ha_mcp._vendor.fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-        registered: list[str | None] = []
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = lambda **kwargs: (
-            lambda _fn: registered.append(kwargs.get("name"))
-        )
+        original_add = HttpTransportFastMCP.add_provider
 
-        import logging
+        def add_provider(self, provider, **kwargs):
+            if isinstance(provider, SkillsDirectoryProvider):
+                raise RuntimeError("simulated provider registration crash")
+            return original_add(self, provider, **kwargs)
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            server._register_skills()
+        monkeypatch.setattr(HttpTransportFastMCP, "add_provider", add_provider)
+    with caplog.at_level(logging.WARNING):
+        result = await _guide(server, populated_dir)
+    assert result["success"] is True
+    assert any(
+        "Skill system summary" in rec.message and rec.levelno == logging.WARNING
+        for rec in caplog.records
+    )
 
-        from ha_mcp.server import SKILL_TOOL_NAME
 
-        assert SKILL_TOOL_NAME in registered, (
-            "Provider ImportError must NOT prevent tool registration — that's "
-            "the always-registered contract from #1134."
-        )
-        # Summary must warn (provider=skipped or failed, not ok).
-        assert any(
-            "Skill system summary" in rec.message and rec.levelno == logging.WARNING
-            for rec in caplog.records
-        )
+def test_guide_registration_failure_is_reported_without_aborting_startup(
+    server, populated_dir, monkeypatch, caplog
+):
+    import logging
 
-    def test_provider_add_failure_still_registers_tool(
-        self, server, populated_dir, monkeypatch, caplog
-    ):
-        """If ``mcp.add_provider`` raises (FastMCP regression / bad
-        provider state), the tool still registers and the summary
-        marks provider=failed but tool=ok."""
-        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
+    from ha_mcp.http_transport import HttpTransportFastMCP
 
-        registered: list[str | None] = []
-        server.mcp = MagicMock()
-        server.mcp.add_provider.side_effect = RuntimeError(
-            "simulated provider registration crash"
-        )
-        server.mcp.tool.side_effect = lambda **kwargs: (
-            lambda _fn: registered.append(kwargs.get("name"))
-        )
+    original_tool = HttpTransportFastMCP.tool
 
-        import logging
+    def tool(self, *args, **kwargs):
+        if kwargs.get("name") == SKILL_TOOL_NAME:
+            raise RuntimeError("simulated tool registration crash")
+        return original_tool(self, *args, **kwargs)
 
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            server._register_skills()
-
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        assert SKILL_TOOL_NAME in registered
-        # The exception from add_provider must be logged but not propagate.
-        assert any(
-            "Failed to register skills as resources" in rec.message
-            for rec in caplog.records
-        )
-
-    def test_tool_registration_failure_marks_status_failed(
-        self, server, populated_dir, monkeypatch, caplog
-    ):
-        """A registration-time failure (FastMCP API regression) must
-        emit a WARNING summary, not crash server startup."""
-        monkeypatch.setattr(server, "_get_skills_dir", lambda: populated_dir)
-
-        server.mcp = MagicMock()
-        # Make the inner tool() call raise. add_provider succeeds so we
-        # isolate the tool-registration failure path.
-        server.mcp.tool.side_effect = RuntimeError(
-            "simulated mcp.tool() signature regression"
-        )
-
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            # Must NOT raise — the wrap inside _register_skills swallows it.
-            server._register_skills()
-
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        # The catch must log a specific error mentioning the tool name.
-        assert any(
-            SKILL_TOOL_NAME in rec.message and "Failed to register" in rec.message
-            for rec in caplog.records
-        )
-        # And the summary must be a WARNING (tool=failed).
-        summaries = [
-            rec for rec in caplog.records if "Skill system summary" in rec.message
-        ]
-        assert len(summaries) == 1
-        assert summaries[0].levelno == logging.WARNING
-
-    def test_missing_skills_dir_still_registers_tool(self, server, monkeypatch, caplog):
-        """When the skills submodule isn't checked out at all
-        (`_get_skills_dir()` returns None), the tool must still
-        register — degraded mode is the always-registered contract's
-        explicit signal."""
-        monkeypatch.setattr(server, "_get_skills_dir", lambda: None)
-
-        registered: list[str | None] = []
-        server.mcp = MagicMock()
-        server.mcp.tool.side_effect = lambda **kwargs: (
-            lambda _fn: registered.append(kwargs.get("name"))
-        )
-
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.server"):
-            server._register_skills()
-
-        from ha_mcp.server import SKILL_TOOL_NAME
-
-        assert SKILL_TOOL_NAME in registered, (
-            "Missing skills submodule must not prevent tool registration."
-        )
+    monkeypatch.setattr(HttpTransportFastMCP, "tool", tool)
+    with caplog.at_level(logging.WARNING):
+        server(populated_dir)
+    assert any(SKILL_TOOL_NAME in r.message and "Failed to register" in r.message
+               for r in caplog.records)
+    summaries = [r for r in caplog.records if "Skill system summary" in r.message]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == logging.WARNING

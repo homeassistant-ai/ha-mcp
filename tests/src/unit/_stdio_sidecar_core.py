@@ -308,15 +308,17 @@ def run_stdio_main(monkeypatch: pytest.MonkeyPatch, mcp: FastMCP) -> None:
     monkeypatch.setattr(sys, "argv", ["ha-mcp"])
     monkeypatch.setenv("HOMEASSISTANT_URL", "http://homeassistant.invalid:8123")
     monkeypatch.setenv("HOMEASSISTANT_TOKEN", "test-token")
-    monkeypatch.setattr("ha_mcp.__main__._get_server", lambda: SimpleNamespace(mcp=mcp))
-    monkeypatch.setattr("ha_mcp.__main__._check_stdin_available", lambda: True)
-    monkeypatch.setattr("ha_mcp.__main__._setup_logging", lambda *a, **kw: None)
+    monkeypatch.setattr("ha_mcp.__main__.get_server", lambda: SimpleNamespace(mcp=mcp))
+    monkeypatch.setattr("ha_mcp.__main__.check_stdin_available", lambda: True)
+    monkeypatch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "ha_mcp.__main__._run_entrypoint", lambda coro, label: coro.close()
+        "ha_mcp.__main__.run_entrypoint", lambda coro, label: coro.close()
     )
     exits: list[int] = []
-    monkeypatch.setattr("ha_mcp.__main__._force_exit", exits.append)
-    monkeypatch.setattr("ha_mcp.__main__._force_exit_on_shutdown", False)
+    monkeypatch.setattr("ha_mcp.__main__.force_exit", exits.append)
+    from ha_mcp.__main__ import reset_main_runtime
+
+    reset_main_runtime()
 
     from ha_mcp.__main__ import main
 

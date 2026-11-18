@@ -124,7 +124,7 @@ uv run ast-grep scan
 The unit and app test trees carry extra checks that keep a test on real Home
 Assistant Core: twelve ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
 and the mypy run above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
-owns the rules and the `SLF001` lists of files written before them.
+owns these rules; every grandfather list is empty.
 
 C901 complexity is capped at 10 repository-wide with no per-file exemptions;
 issue #925 removed the grandfathered list, so extract helpers instead of

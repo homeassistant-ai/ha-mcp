@@ -40,19 +40,21 @@ def start_main_web(
 
     mcp = FastMCP("test")
     handed: list[Coroutine[Any, Any, Any]] = []
-    monkeypatch.setattr("ha_mcp.__main__._get_mcp", lambda: mcp)
+    monkeypatch.setattr("ha_mcp.__main__.get_mcp", lambda: mcp)
     # The settings routes only bind the server for their handlers' later use.
-    monkeypatch.setattr("ha_mcp.__main__._get_server", lambda: None)
-    monkeypatch.setattr("ha_mcp.__main__._setup_logging", lambda *a, **kw: None)
+    monkeypatch.setattr("ha_mcp.__main__.get_server", lambda: None)
+    monkeypatch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "ha_mcp.__main__._run_entrypoint", lambda coro, label: handed.append(coro)
+        "ha_mcp.__main__.run_entrypoint", lambda coro, label: handed.append(coro)
     )
     # Process-wide state a startup leaves behind, put back after the test.
     access_log = logging.getLogger("uvicorn.access")
     monkeypatch.setattr(access_log, "filters", list(access_log.filters))
-    monkeypatch.setattr("ha_mcp.__main__._shutdown_event", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
+    from ha_mcp.__main__ import reset_main_runtime
+    from ha_mcp.settings_ui import reset_http_settings_state
+
+    reset_main_runtime()
+    reset_http_settings_state()
 
     from ha_mcp.__main__ import main_web
 

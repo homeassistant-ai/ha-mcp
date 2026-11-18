@@ -2,8 +2,7 @@
 # (private member access). A unit test that reaches into a private attribute
 # of a Home Assistant object can force a state Core never produces and then
 # pin a fallback for it; one that calls a private function skips the public
-# entry point the user reaches. Files written before the check are listed
-# below. Converting one removes it from the list; no file is ever added.
+# entry point the user reaches. Every test complies; the list below stays empty.
 extend = "../../../pyproject.toml"
 # Import sorting resolves first-party modules from the repository root, as the
 # root settings do.
@@ -13,44 +12,3 @@ src = ["../../..", "../../../src"]
 extend-select = ["SLF001"]
 
 [lint.extend-per-file-ignores]
-"_embedded_helpers.py" = ["SLF001"]
-"policy/test_approval_queue.py" = ["SLF001"]
-"test_categorized_search.py" = ["SLF001"]
-"test_config_embedded_routing.py" = ["SLF001"]
-"test_dashboard_card_search.py" = ["SLF001"]
-"test_data_paths.py" = ["SLF001"]
-"test_dev_env_mcpshim.py" = ["SLF001"]
-"test_doomed_run.py" = ["SLF001"]
-"test_extract_release_notes.py" = ["SLF001"]
-"test_generate_app_options.py" = ["SLF001"]
-"test_generate_star_history.py" = ["SLF001"]
-"test_ha_constraint_alignment.py" = ["SLF001"]
-"test_ha_request_queue.py" = ["SLF001"]
-"test_haos_bake_port_discovery.py" = ["SLF001"]
-"test_js_harness_worker.py" = ["SLF001"]
-"test_kill_signal_diagnostics.py" = ["SLF001"]
-"test_lite_docstrings.py" = ["SLF001"]
-"test_llm_api_sdk_import.py" = ["SLF001"]
-"test_oauth_metadata_http.py" = ["SLF001"]
-"test_oidc_entrypoint.py" = ["SLF001"]
-"test_python_transform_guards.py" = ["SLF001"]
-"test_readonly_endpoint.py" = ["SLF001"]
-"test_saved_tools_persistence.py" = ["SLF001"]
-"test_search_pinned_results.py" = ["SLF001"]
-"test_server_instructions.py" = ["SLF001"]
-"test_session_disconnect_log_filter.py" = ["SLF001"]
-"test_settings_secret_path.py" = ["SLF001"]
-"test_settings_ui_oauth_callbacks.py" = ["SLF001"]
-"test_skill_loader.py" = ["SLF001"]
-"test_skills_instructions.py" = ["SLF001"]
-"test_stateless_session_log_filter.py" = ["SLF001"]
-"test_tool_catalog_endpoints.py" = ["SLF001"]
-"test_tools_registry.py" = ["SLF001"]
-"test_transport_security.py" = ["SLF001"]
-"test_update_check.py" = ["SLF001"]
-"test_vendor_fastmcp_script.py" = ["SLF001"]
-"test_vendor_websockets_script.py" = ["SLF001"]
-"test_write_tool_note.py" = ["SLF001"]
-"test_ws_connect_auth_classification.py" = ["SLF001"]
-"test_ws_pool_stale_client_2127.py" = ["SLF001"]
-"visibility/conftest.py" = ["SLF001"]

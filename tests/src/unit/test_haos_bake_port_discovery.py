@@ -15,7 +15,6 @@ test_haos_supervisor_wait.py.
 
 from __future__ import annotations
 
-import socket
 import sys
 from pathlib import Path
 
@@ -63,7 +62,7 @@ class TestWaitAnyPort:
             _FakeSocket({build_image.HA_ALT_HOST_PORT}, attempts),
         )
 
-        opened = build_image._wait_any_port(
+        opened = build_image.wait_any_port(
             (build_image.HA_HOST_PORT, build_image.HA_ALT_HOST_PORT), timeout=5
         )
 
@@ -78,7 +77,7 @@ class TestWaitAnyPort:
             _FakeSocket({build_image.HA_HOST_PORT}, attempts),
         )
 
-        opened = build_image._wait_any_port(
+        opened = build_image.wait_any_port(
             (build_image.HA_HOST_PORT, build_image.HA_ALT_HOST_PORT), timeout=5
         )
 
@@ -90,7 +89,7 @@ class TestWaitAnyPort:
         monkeypatch.setattr(build_image.time, "sleep", lambda _s: None)
 
         with pytest.raises(TimeoutError) as excinfo:
-            build_image._wait_any_port(
+            build_image.wait_any_port(
                 (build_image.HA_HOST_PORT, build_image.HA_ALT_HOST_PORT),
                 timeout=0.1,
             )
@@ -123,25 +122,20 @@ class TestDiscoverHaBaseUrl:
         alt = f"http://127.0.0.1:{build_image.HA_ALT_HOST_PORT}"
         self._patch_urlopen(monkeypatch, alt)
 
-        assert build_image._discover_ha_base_url(timeout=5) == alt
+        assert build_image.discover_ha_base_url(timeout=5) == alt
 
     def test_locks_onto_the_8123_forward(self, monkeypatch):
         primary = f"http://127.0.0.1:{build_image.HA_HOST_PORT}"
         self._patch_urlopen(monkeypatch, primary)
 
-        assert build_image._discover_ha_base_url(timeout=5) == primary
+        assert build_image.discover_ha_base_url(timeout=5) == primary
 
     def test_raises_naming_both_candidates_when_nothing_answers(self, monkeypatch):
         self._patch_urlopen(monkeypatch, None)
 
         with pytest.raises(TimeoutError) as excinfo:
-            build_image._discover_ha_base_url(timeout=0.1)
+            build_image.discover_ha_base_url(timeout=0.1)
 
         message = str(excinfo.value)
         assert str(build_image.HA_HOST_PORT) in message
         assert str(build_image.HA_ALT_HOST_PORT) in message
-
-
-def test_socket_module_is_still_imported_by_the_bake():
-    """Guard the monkeypatch targets above against an import refactor."""
-    assert build_image.socket is socket
