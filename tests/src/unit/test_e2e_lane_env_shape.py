@@ -442,10 +442,24 @@ def _resolve(text: str, context: dict[str, str]) -> str:
 
 
 def _pytest_arguments(run: str) -> list[str]:
-    """The arguments of the step's ``uv run pytest`` command, continuations joined."""
+    """The arguments of the step's ``uv run pytest`` command, continuations
+    joined and a trailing shell comment dropped, as bash would."""
     commands = _uncommented(run).replace("\\\n", " ").splitlines()
     command = next(line for line in commands if "uv run pytest" in line)
-    return shlex.split(command)
+    return shlex.split(command, comments=True)
+
+
+def _failure_cap(arguments: list[str]) -> str | None:
+    """The ``--maxfail`` pytest applies: the last of ``--maxfail`` and ``-x``."""
+    cap = None
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--maxfail="):
+            cap = argument.partition("=")[2]
+        elif argument == "--maxfail":
+            cap = arguments[index + 1]
+        elif argument in ("-x", "--exitfirst"):
+            cap = "1"
+    return cap
 
 
 @pytest.mark.parametrize("job_id", ["e2e-validation", "e2e-validation-embedded"])
@@ -471,7 +485,7 @@ def test_pull_requests_run_the_suite_in_both_tool_entry_states(
         states.add(combined)
         if combined:
             arguments = _pytest_arguments(_resolve(str(step["run"]), context))
-            assert "--maxfail=0" in arguments, (
+            assert _failure_cap(arguments) == "0", (
                 f"{job_id} {row['os']} stops after three failures"
             )
     assert states == {True, False}, f"{job_id} covers only combined={states}"

@@ -21,6 +21,17 @@ _FAILURE_MARKERS = (
 )
 
 
+def is_yaml_scene_gap(text: str) -> bool:
+    """True for the YAML-defined scene gap, the one fragment that explains an
+    omission. The attribute-only note is informational: those scenes were
+    still scored."""
+    if any(marker in text for marker in _FAILURE_MARKERS):
+        return False
+    return (
+        "per-id config endpoint returned 404" in text and "YAML-defined scenes" in text
+    )
+
+
 def is_structural_scene_fragment(text: str) -> bool:
     """True only for the two structural scene classifications (#2292).
 
@@ -39,9 +50,7 @@ def is_structural_scene_fragment(text: str) -> bool:
     # The attribute-only note is matched by its COMPLETE shape, not just the
     # tail: a future non-structural message that happened to end with the same
     # suffix must not pass as the informational note.
-    return (
-        "per-id config endpoint returned 404" in text and "YAML-defined scenes" in text
-    ) or bool(
+    return is_yaml_scene_gap(text) or bool(
         re.fullmatch(
             r"\d+ integration-managed scenes are scored by attribute only "
             r"\(no per-id fetch\)\.",

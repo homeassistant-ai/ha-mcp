@@ -57,6 +57,7 @@ async def test_an_existing_template_helper_is_not_captured_without_the_component
         0
     ].entity_id
     options = dict(entry.options)
+    entry_id = entry.entry_id
     server = build_server(monkeypatch, core_client)
 
     async with Client(server.mcp) as mcp_client:
@@ -70,16 +71,19 @@ async def test_an_existing_template_helper_is_not_captured_without_the_component
                 "entity_id": entity_id,
             },
         )
+        # Snapshots are stored under the entry id; the entity alias lists none.
         listing = await mcp.call_tool_success(
             "ha_manage_backup",
             {
                 "scope": "edits",
                 "action": "list",
                 "domain": "helper_template",
-                "entity_id": entity_id,
+                "entity_id": entry_id,
             },
         )
 
     assert refused["error"]["code"] == "BACKUP_CAPTURE_FAILED"
     assert listing["data"]["backups"] == []
-    assert dict(entry.options) == options
+    live = hass.config_entries.async_get_entry(entry_id)
+    assert live is not None, "the refused capture removed the helper"
+    assert dict(live.options) == options

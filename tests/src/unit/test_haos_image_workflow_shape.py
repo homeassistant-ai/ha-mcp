@@ -102,6 +102,11 @@ def test_every_haos_lane_restores_the_shared_image() -> None:
             in str(step.get("with", {}).get("path", "")).splitlines()
         ]
         assert restores, f"{workflow}::{job_id} no longer restores the HAOS image"
+        # The external lane saves under this key; any other key never hits.
+        assert all(
+            step["with"]["key"] == "${{ steps.key.outputs.cache-key }}"
+            for step in restores
+        ), f"{workflow}::{job_id} restores a key the external lane does not save"
 
 
 _TWO_PHASE_LANES = (
@@ -111,16 +116,11 @@ _TWO_PHASE_LANES = (
 )
 
 
-@pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
-@pytest.mark.parametrize(
-    ("pytest_args", "runs"), [("-m haos_stdio_only", False), ("-k visibility", True)]
-)
-def test_a_dispatch_marker_cannot_merge_the_two_phases(
-    tmp_path: Path, workflow: str, job_id: str, pytest_args: str, runs: bool
-) -> None:
-    """pytest keeps only the last ``-m``, so one in ``pytest_args`` would replace
-    each phase's own and run the same tests in both, the self-restarting app
-    tests among the parallel ones."""
+def _run_two_phase_step(
+    tmp_path: Path, workflow: str, job_id: str, pytest_args: str, exits: str = ""
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run a two-phase lane's real shell with a ``uv`` that records each call
+    and answers with the next code in ``exits`` (0 once they run out)."""
     job = _workflow(_WORKFLOW_DIR / workflow)["jobs"][job_id]
     step = next(
         step
@@ -129,12 +129,17 @@ def test_a_dispatch_marker_cannot_merge_the_two_phases(
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    calls = tmp_path / "calls"
     uv = bin_dir / "uv"
-    uv.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    uv.write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$UV_CALLS"\n'
+        'n=$(wc -l < "$UV_CALLS")\n'
+        'code=$(echo "$UV_EXITS" | cut -d, -f"$n")\n'
+        'exit "${code:-0}"\n'
+    )
     uv.chmod(0o755)
     (tmp_path / "tests").mkdir()
-
+    calls = tmp_path / "calls"
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
         cwd=tmp_path,
@@ -142,18 +147,52 @@ def test_a_dispatch_marker_cannot_merge_the_two_phases(
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "PYTEST_ARGS": pytest_args,
             "PYTEST_PATHS": "src/e2e/",
+            "UV_CALLS": str(calls),
+            "UV_EXITS": exits,
         },
         capture_output=True,
         text=True,
         check=False,
     )
+    return result, calls.read_text().splitlines() if calls.exists() else []
 
-    if runs:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert calls.read_text().count("pytest") == 2
-    else:
-        assert result.returncode != 0
-        assert not calls.exists(), "a phase ran with the dispatch's -m"
+
+@pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
+@pytest.mark.parametrize(
+    "pytest_args",
+    ["-m haos_stdio_only", "-k visibility\t-m addon_disruptive", "-k visibility -n2"],
+)
+def test_a_dispatch_cannot_reset_a_phase_marker_or_worker_count(
+    tmp_path: Path, workflow: str, job_id: str, pytest_args: str
+) -> None:
+    """pytest keeps the last ``-m`` and ``-n``, so one in ``pytest_args`` would
+    replace a phase's own: both phases would run the same tests, or the
+    self-restarting app tests would run in parallel."""
+    result, calls = _run_two_phase_step(tmp_path, workflow, job_id, pytest_args)
+
+    assert result.returncode != 0
+    assert calls == [], "a phase ran with the dispatch's marker or worker count"
+
+
+@pytest.mark.parametrize(("workflow", "job_id"), _TWO_PHASE_LANES)
+@pytest.mark.parametrize(
+    ("exits", "passes"),
+    [("0,0", True), ("5,0", True), ("0,5", True), ("5,5", False), ("1,0", False)],
+    ids=["both", "serial-only", "parallel-only", "empty", "parallel-failed"],
+)
+def test_one_empty_phase_does_not_stop_the_other(
+    tmp_path: Path, workflow: str, job_id: str, exits: str, passes: bool
+) -> None:
+    """A ``-k`` can select only the self-restarting app tests, leaving the
+    parallel phase empty (pytest exit 5); the serial phase must still run.
+    A selection matching nothing at all, or a failed phase, still fails."""
+    result, calls = _run_two_phase_step(
+        tmp_path, workflow, job_id, "-k visibility", exits
+    )
+
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+    if exits != "1,0":
+        assert len(calls) == 2
 
 
 def _cache_key_command(path: Path, job_id: str) -> str:

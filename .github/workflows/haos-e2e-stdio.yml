@@ -142,13 +142,18 @@ jobs:
         # retaining the two-phase contract makes that isolation fail-safe if
         # their transport coverage is widened later.
         run: |
-          # Each phase sets its own -m; a second -m in the dispatch arguments
-          # would replace it, and both phases would run the same tests.
-          case " $PYTEST_ARGS " in
-            *" -m"*|*" --markexpr"*)
-              echo "::error::pytest_args cannot set -m here; narrow with -k or pytest_paths."
-              exit 1 ;;
-          esac
+          # Each phase sets its own -m and worker count, and pytest keeps the
+          # last of either, so the dispatch arguments may not set them. The
+          # loop splits them exactly as the pytest commands below do.
+          set -f
+          # shellcheck disable=SC2086
+          for argument in $PYTEST_ARGS; do
+            case "$argument" in
+              -m*|--markexpr*|-n*|--numprocesses*)
+                echo "::error::pytest_args cannot set $argument here; narrow with -k or pytest_paths."
+                exit 1 ;;
+            esac
+          done
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
@@ -156,12 +161,19 @@ jobs:
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
-            -m "not addon_disruptive" $PYTEST_ARGS
+            -m "not addon_disruptive" $PYTEST_ARGS || parallel=$?
+          # Exit 5 is an empty selection: a -k can pick only disruptive tests,
+          # or none. Either phase may be empty, not both.
+          [ "${parallel:-0}" -eq 0 ] || [ "$parallel" -eq 5 ] || exit "$parallel"
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
-            -m addon_disruptive $PYTEST_ARGS \
-            || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
+            -m addon_disruptive $PYTEST_ARGS || serial=$?
+          [ "${serial:-0}" -eq 0 ] || [ "$serial" -eq 5 ] || exit "$serial"
+          if [ "${parallel:-0}" -eq 5 ] && [ "${serial:-0}" -eq 5 ]; then
+            echo "::error::The selection matched no tests."
+            exit 5
+          fi
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2

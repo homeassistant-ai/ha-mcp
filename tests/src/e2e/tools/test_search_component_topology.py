@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from ..utilities.assertions import MCPAssertions
-from ..utilities.scene_fragments import is_structural_scene_fragment
+from ..utilities.scene_fragments import is_structural_scene_fragment, is_yaml_scene_gap
 from ..utilities.topology import component_surface_available
 
 logger = logging.getLogger(__name__)
@@ -27,9 +27,12 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
-    assert fragments or data.get("partial") is not True, (
-        f"A partial result must say why: {data}"
-    )
+    if data.get("partial") is True:
+        # Only the YAML-scene gap explains an omission; the attribute-only note
+        # describes scenes that were still scored.
+        assert any(is_yaml_scene_gap(text) for text in fragments), (
+            f"A partial result must name the YAML-scene gap: {data}"
+        )
     offenders = [text for text in fragments if not is_structural_scene_fragment(text)]
     assert not offenders, (
         "Only the structural YAML-scene fragments are acceptable without a "

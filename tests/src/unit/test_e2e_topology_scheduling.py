@@ -5,11 +5,20 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
 pytest_plugins = ["pytester"]
+
+
+_ABSENT_ONLY_TESTS = """
+@pytest.mark.no_tools_only
+@pytest.mark.parametrize("n", range(NO_TOOLS_ONLY))
+def test_absent_only(n):
+    pass
+"""
 
 
 @pytest.mark.parametrize("no_tools_only", [0, 2])
@@ -61,11 +70,7 @@ def test_installed_phase_excess_skips_fail_the_combined_gate(
         )
 
         NO_TOOLS_ONLY = {no_tools_only}
-
-        @pytest.mark.no_tools_only
-        @pytest.mark.parametrize("n", range(NO_TOOLS_ONLY))
-        def test_absent_only(n):
-            pass
+        {absent_only}
 
         @pytest.mark.requires_tools_entry
         @pytest.mark.skip(reason="installed-phase skip")
@@ -74,7 +79,12 @@ def test_installed_phase_excess_skips_fail_the_combined_gate(
         )
         def test_installed_only(n):
             pass
-        """.replace("{no_tools_only}", str(no_tools_only))
+        """.replace("{no_tools_only}", str(no_tools_only)).replace(
+            # An empty parametrize still collects a skipped placeholder that
+            # carries the marker, so the zero case has no such test at all.
+            "{absent_only}",
+            textwrap.indent(_ABSENT_ONLY_TESTS, " " * 8) if no_tools_only else "",
+        )
     )
 
     result = pytester.runpytest("-p", "no:cacheprovider")
