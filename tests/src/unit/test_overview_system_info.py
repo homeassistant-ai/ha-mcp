@@ -10,7 +10,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components import persistent_notification
@@ -31,6 +31,8 @@ from ha_mcp.config import reset_global_settings
 from ha_mcp.tool_catalog import CatalogMode, catalog_endpoint
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools, register_search_tools
+
+from ._real_server import build_server
 
 SIDECAR_URL = "http://127.0.0.1:8099/private_abc/settings"
 
@@ -439,25 +441,29 @@ async def test_no_settings_fields_without_sidecar_or_http_mount(
 
 @pytest.mark.parametrize("rejected_secret", ["", "/private_{token}"])
 async def test_rejected_registration_clears_stale_http_hint(
-    tools: SearchTools, monkeypatch: pytest.MonkeyPatch, rejected_secret: str
+    tools: SearchTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    rejected_secret: str,
 ) -> None:
     """A rejected later registration must not advertise an older server."""
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     _no_sidecar(monkeypatch)
-    monkeypatch.setattr(settings_ui, "_http_settings_prefix", None)
-    monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
-    server = MagicMock()
+    server = build_server(monkeypatch, core_client)
+    settings_ui.reset_http_settings_state()
+    try:
+        settings_ui.register_settings_routes(FastMCP("old"), server, secret_path="/old")
+        assert settings_ui.get_http_settings_prefix() == "/old"
+        settings_ui.register_settings_routes(
+            FastMCP("new"), server, secret_path=rejected_secret
+        )
 
-    settings_ui.register_settings_routes(FastMCP("old"), server, secret_path="/old")
-    assert settings_ui.get_http_settings_prefix() == "/old"
-    settings_ui.register_settings_routes(
-        FastMCP("new"), server, secret_path=rejected_secret
-    )
+        result = await tools.ha_get_overview()
 
-    result = await tools.ha_get_overview()
-
-    assert "settings_url_hint" not in result
+        assert "settings_url_hint" not in result
+    finally:
+        settings_ui.reset_http_settings_state()
 
 
 async def test_settings_url_hint_normalizes_trailing_slash(

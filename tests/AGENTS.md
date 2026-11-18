@@ -239,7 +239,8 @@ which is why the third rule exists.
 Every grandfather list is empty: the ast-grep rules, `sys.modules` guard,
 `SLF001` configurations and mypy check apply to every test. Violations fail
 Fast Checks. `src/unit/test_core_reply_rules.py` also keeps the empty
-private-access lists exact, so adding an unnecessary exemption fails too.
+private-access lists exact, so adding an unnecessary exemption fails too. The
+lists and the ratchet below stay so that no file can be put back on one.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
@@ -250,8 +251,8 @@ older files. The script also fails a rule that is removed (unless the script
 names it as retired and its list is empty), renamed or made to scan fewer
 files.
 
-A listed file is exempt for what it already holds, and an edit to it could add
-a faked test. A listed file the pull request changes is therefore converted:
+A file on a list would be exempt for what it already holds, and an edit to it
+could add a faked test, so a listed file a pull request changes is converted:
 the same script fails when it is still on any list.
 
 Production code has no public name that only the tests use

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import AsyncIterator, Coroutine
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -47,12 +48,17 @@ class LoopWorker:
             return
         if not self.loop.is_running():
             self.start()
-        for client in self.clients:
-            # Use the real cleanup even when a test injected a transport error.
-            await self.run(HomeAssistantWebSocketClient.disconnect(client))
-        await self.run(self.loop.shutdown_asyncgens())
-        await self.stop()
-        self.loop.close()
+        try:
+            for client in self.clients:
+                # Use the real cleanup even when a test injected a transport error.
+                await self.run(HomeAssistantWebSocketClient.disconnect(client))
+        finally:
+            # A disconnect that fails still leaves no loop or thread behind.
+            try:
+                await self.run(self.loop.shutdown_asyncgens())
+            finally:
+                await self.stop()
+                self.loop.close()
 
 
 @pytest.fixture
@@ -262,10 +268,12 @@ async def test_a_loop_closing_mid_schedule_does_not_stop_the_cleanup(
         raise RuntimeError("Event loop is closed")
 
     caplog.set_level(logging.DEBUG, logger=websocket_client.logger.name)
+    # Only the pool's own scheduling fails; Core's threads keep the real asyncio.
+    scoped_asyncio = SimpleNamespace(
+        **{**vars(asyncio), "run_coroutine_threadsafe": raise_runtime}
+    )
     with monkeypatch.context() as patched:
-        patched.setattr(
-            websocket_client.asyncio, "run_coroutine_threadsafe", raise_runtime
-        )
+        patched.setattr(websocket_client, "asyncio", scoped_asyncio)
         fresh = await get_client(core_client)
 
     assert fresh is not first

@@ -3,6 +3,7 @@
 import logging
 
 import anyio
+import pytest
 
 from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
@@ -207,9 +208,10 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.ERROR
 
 
-def test_nested_disconnect_groups_demote_only_when_every_leaf_is_benign():
-    for error, expected_level in (
-        (
+@pytest.mark.parametrize(
+    ("error", "expected_level"),
+    [
+        pytest.param(
             ExceptionGroup(
                 "outer",
                 [
@@ -218,8 +220,9 @@ def test_nested_disconnect_groups_demote_only_when_every_leaf_is_benign():
                 ],
             ),
             logging.WARNING,
+            id="every-leaf-a-disconnect",
         ),
-        (
+        pytest.param(
             ExceptionGroup(
                 "outer",
                 [
@@ -228,19 +231,24 @@ def test_nested_disconnect_groups_demote_only_when_every_leaf_is_benign():
                 ],
             ),
             logging.ERROR,
+            id="one-leaf-a-bug",
         ),
-    ):
-        record = logging.LogRecord(
-            name="mcp.server.streamable_http_manager",
-            level=logging.ERROR,
-            pathname="",
-            lineno=0,
-            msg="Stateless session crashed",
-            args=(),
-            exc_info=(type(error), error, None),
-        )
-        assert SessionDisconnectLogFilter().filter(record)
-        assert record.levelno == expected_level
+    ],
+)
+def test_nested_disconnect_groups_demote_only_when_every_leaf_is_benign(
+    error: ExceptionGroup, expected_level: int
+):
+    record = logging.LogRecord(
+        name="mcp.server.streamable_http_manager",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg="Stateless session crashed",
+        args=(),
+        exc_info=(type(error), error, None),
+    )
+    assert SessionDisconnectLogFilter().filter(record)
+    assert record.levelno == expected_level
 
 
 class TestSessionDisconnectLogFilterWiring:

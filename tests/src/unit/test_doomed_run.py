@@ -145,12 +145,14 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
 
 
 @pytest.mark.parametrize("when", ["setup", "teardown"])
-def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
+def test_e2e_lanes_report_each_workers_first_fixture_failure_and_count_it(when):
+    """The hook every e2e lane registers reports the first fixture failure of
+    each worker, and each failure still counts toward aborting a doomed run."""
     import importlib
 
-    from tests.src import doomed_run
+    from tests.src.e2e import _conftest_collection as e2e
 
-    importlib.reload(doomed_run)
+    doomed_run = importlib.reload(e2e.doomed_run)
     terminal = Mock()
     config = SimpleNamespace(pluginmanager=Mock())
     config.pluginmanager.get_plugin.return_value = terminal
@@ -164,21 +166,25 @@ def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
             longrepr=longrepr,
         )
 
-    doomed_run.pytest_runtest_logreport(report("gw0", "first_test", "original failure"))
-    doomed_run.pytest_runtest_logreport(
-        report("gw0", "second_test", "repeated failure")
-    )
-    doomed_run.pytest_runtest_logreport(
-        report("gw1", "other_test", "other worker failure")
-    )
+    try:
+        e2e.pytest_runtest_logreport(report("gw0", "first_test", "original failure"))
+        e2e.pytest_runtest_logreport(report("gw0", "second_test", "repeated failure"))
+        e2e.pytest_runtest_logreport(
+            report("gw1", "other_test", "other worker failure")
+        )
 
-    assert terminal.write_sep.call_args_list == [
-        (("!", f"First {when} failure on gw0: first_test"),),
-        (("!", f"First {when} failure on gw1: other_test"),),
-    ]
-    assert terminal.write_line.call_args_list == [
-        (("original failure",),),
-        (("other worker failure",),),
-    ]
-    # A genuine call resets the detector for the next test.
-    doomed_run.pytest_runtest_logreport(SimpleNamespace(when="call", outcome="passed"))
+        assert terminal.write_sep.call_args_list == [
+            (("!", f"First {when} failure on gw0: first_test"),),
+            (("!", f"First {when} failure on gw1: other_test"),),
+        ]
+        assert terminal.write_line.call_args_list == [
+            (("original failure",),),
+            (("other worker failure",),),
+        ]
+        # The three reported failures count: the run is doomed at the threshold.
+        for n in range(doomed_run.DOOMED_RUN_ERROR_STREAK - 4):
+            e2e.pytest_runtest_logreport(report("gw0", f"more_{n}", "again"))
+        with pytest.raises(pytest.exit.Exception):
+            e2e.pytest_runtest_logreport(report("gw0", "last", "again"))
+    finally:
+        importlib.reload(doomed_run)

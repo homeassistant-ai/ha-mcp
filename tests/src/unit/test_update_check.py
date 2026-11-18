@@ -37,17 +37,12 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     """
     # Runtime simulations belong to update_check, not aiohttp/pytest or
     # other threads sharing the interpreter. Keep real argv and environ.
-    monkeypatch.setattr(
-        update_check,
-        "sys",
-        SimpleNamespace(version_info=sys.version_info, argv=sys.argv),
-    )
+    # Copies of the whole modules, so a name update_check starts using is there.
+    monkeypatch.setattr(update_check, "sys", SimpleNamespace(**vars(sys)))
     monkeypatch.setattr(
         update_check,
         "os",
-        SimpleNamespace(
-            environ=os.environ, path=SimpleNamespace(exists=os.path.exists)
-        ),
+        SimpleNamespace(**{**vars(os), "path": SimpleNamespace(**vars(os.path))}),
     )
     monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
@@ -90,7 +85,8 @@ class TestVersionCompare:
     async def test_unparseable_is_never_newer(self, pypi: PyPI, bad: str) -> None:
         pypi.publish("ha-mcp", bad)
         info = await asyncio.to_thread(get_update_info)
-        assert info is None or info.update_available is False
+        assert info == UpdateInfo("7.8.0", bad, False)
+        assert pypi.asked == ["ha-mcp"]
 
     @pytest.mark.parametrize("current", ["unknown", "garbage", "7.x", ""])
     async def test_unparseable_current_version_is_never_newer(
@@ -99,8 +95,13 @@ class TestVersionCompare:
         monkeypatch.setattr(update_check, "get_version", lambda: current)
         pypi.publish("ha-mcp", "7.9.0")
         info = await asyncio.to_thread(get_update_info)
-        assert info is None or info.update_available is False
-        assert pypi.asked == ([] if current == "unknown" else ["ha-mcp"])
+        if current == "unknown":
+            # No version to compare against: PyPI is not asked at all.
+            assert info is None
+            assert pypi.asked == []
+        else:
+            assert info == UpdateInfo(current, "7.9.0", False)
+            assert pypi.asked == ["ha-mcp"]
 
 
 class TestGetUpdateInfoGating:

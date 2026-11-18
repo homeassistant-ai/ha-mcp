@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
+from ha_mcp.server_tool_text import SEARCH_KEYWORDS
 from ha_mcp.tool_catalog import catalog_endpoint
 from ha_mcp.transforms.categorized_search import (
     DEFAULT_PINNED_TOOLS,
@@ -589,6 +591,16 @@ async def test_keyword_transform_failure_is_logged_not_raised(
     assert "SearchKeywordsTransform" in caplog.text
 
 
+def _served_keywords(tool: Tool | None) -> set[str]:
+    """The words of the tool's keyword entry, after checking the served
+    description ends with that entry, as the keyword transform appends it."""
+    assert tool is not None
+    keywords = SEARCH_KEYWORDS[tool.name]
+    assert tool.description is not None
+    assert tool.description.endswith(f"\n\n{keywords}")
+    return set(re.findall(r"[\w-]+", keywords.lower()))
+
+
 @pytest.mark.parametrize(
     ("tool_name", "terms"),
     [
@@ -636,9 +648,7 @@ async def test_search_vocabulary_reaches_the_served_tool(
     monkeypatch.setenv("ENABLE_LITE_DOCSTRINGS", "false")
     server = build_server(monkeypatch, core_client)
     tool = await server.mcp.get_tool(tool_name)
-    assert tool is not None
-    for term in terms:
-        assert term in tool.description.lower()
+    assert set(terms) <= _served_keywords(tool)
 
 
 @pytest.mark.parametrize(
@@ -659,6 +669,4 @@ async def test_native_search_receives_the_issue_940_tool_vocabulary(
     server = build_server(monkeypatch, core_client)
     with catalog_endpoint("full"):
         tool = await server.mcp.get_tool(name)
-    assert tool is not None
-    for term in terms:
-        assert term in tool.description.lower()
+    assert set(terms) <= _served_keywords(tool)

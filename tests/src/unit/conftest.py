@@ -119,7 +119,7 @@ def _unit_test_env(monkeypatch):
       commits and tags. Details: *Git isolation* in ``tests/AGENTS.md``.
 
     The cached ``Settings`` is reset too, since it holds the values read for
-    the previous test. ``monkeypatch`` restores all of it after each test, so
+    the previous test, and so is what an entry point a test ran left behind. ``monkeypatch`` restores all of it after each test, so
     tests from other trees in the same session keep their own environment.
     A test that needs another value sets it with ``monkeypatch``.
     """
@@ -141,6 +141,12 @@ def _unit_test_env(monkeypatch):
     yield
     get_data_dir.cache_clear()
     reset_global_settings()
+    # A test that ran an entry point leaves its server and settings mount behind.
+    from ha_mcp.__main__ import reset_main_runtime
+    from ha_mcp.settings_ui import reset_http_settings_state
+
+    reset_main_runtime()
+    reset_http_settings_state()
 
 
 @pytest.fixture

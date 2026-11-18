@@ -82,7 +82,7 @@ class TestMainOidcValidation:
 
         entrypoint_called = False
 
-        def mockrun_entrypoint(coro, label):
+        def mock_run_entrypoint(coro, label):
             nonlocal entrypoint_called
             entrypoint_called = True
             # Close the coroutine to avoid warning
@@ -90,7 +90,9 @@ class TestMainOidcValidation:
 
         with (
             patch.dict(os.environ, self.VALID_OIDC_ENV, clear=True),
-            patch.object(main_module, "run_entrypoint", side_effect=mockrun_entrypoint),
+            patch.object(
+                main_module, "run_entrypoint", side_effect=mock_run_entrypoint
+            ),
         ):
             main_module.main_oidc()
 
@@ -114,7 +116,7 @@ class TestMainOidcValidation:
 
         captured_bound = {}
 
-        def mockrun_entrypoint(coro, label):
+        def mock_run_entrypoint(coro, label):
             # Bound parameters are visible on a not-yet-started coroutine's
             # frame locals; read them before closing (close() clears cr_frame).
             captured_bound.update(coro.cr_frame.f_locals)
@@ -122,7 +124,9 @@ class TestMainOidcValidation:
 
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(main_module, "run_entrypoint", side_effect=mockrun_entrypoint),
+            patch.object(
+                main_module, "run_entrypoint", side_effect=mock_run_entrypoint
+            ),
         ):
             main_module.main_oidc()
 
@@ -150,7 +154,7 @@ class TestMainOidcLogging:
 
         setup_logging_calls = []
 
-        def mocksetup_logging(level, force=False):
+        def mock_setup_logging(level, force=False):
             setup_logging_calls.append({"level": level, "force": force})
 
         env = dict(self.VALID_OIDC_ENV)
@@ -158,7 +162,7 @@ class TestMainOidcLogging:
 
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(main_module, "setup_logging", side_effect=mocksetup_logging),
+            patch.object(main_module, "setup_logging", side_effect=mock_setup_logging),
             patch.object(
                 main_module, "run_entrypoint", side_effect=lambda c, _l: c.close()
             ),
@@ -174,7 +178,7 @@ class TestMainOidcLogging:
 
         setup_logging_calls = []
 
-        def mocksetup_logging(level, force=False):
+        def mock_setup_logging(level, force=False):
             setup_logging_calls.append({"level": level, "force": force})
 
         env = dict(self.VALID_OIDC_ENV)
@@ -182,7 +186,7 @@ class TestMainOidcLogging:
 
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(main_module, "setup_logging", side_effect=mocksetup_logging),
+            patch.object(main_module, "setup_logging", side_effect=mock_setup_logging),
             patch.object(
                 main_module, "run_entrypoint", side_effect=lambda c, _l: c.close()
             ),
@@ -197,7 +201,7 @@ class TestMainOidcLogging:
 
         setup_logging_calls = []
 
-        def mocksetup_logging(level, force=False):
+        def mock_setup_logging(level, force=False):
             setup_logging_calls.append({"level": level, "force": force})
 
         env = dict(self.VALID_OIDC_ENV)
@@ -205,7 +209,7 @@ class TestMainOidcLogging:
 
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.object(main_module, "setup_logging", side_effect=mocksetup_logging),
+            patch.object(main_module, "setup_logging", side_effect=mock_setup_logging),
             patch.object(
                 main_module, "run_entrypoint", side_effect=lambda c, _l: c.close()
             ),
