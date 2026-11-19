@@ -148,7 +148,8 @@ async def log_in_to_nabu_casa(hass: HomeAssistant, url: str) -> None:
     assert await async_setup_component(hass, "cloud", {"cloud": {}})
     cloud = hass.data[DATA_CLOUD]
     cloud.id_token = jwt.encode(
-        {"email": "user@example.com", "custom:sub-exp": "2099-01-01"}, "test"
+        {"email": "user@example.com", "custom:sub-exp": "2099-01-01"},
+        "an-unverified-signing-key-of-32-bytes",
     )
     await cloud.client.prefs.async_update(
         remote_enabled=True, remote_domain=url.removeprefix("https://")

@@ -7,7 +7,6 @@ through the Settings page route and the ``ha_manage_backup`` tool.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -26,12 +25,8 @@ from ._backup_core import manage_backup
 from ._backup_core import snapshot_manager as snapshot_manager
 from ._backup_restore_helpers import NAME, response_for, run_restore
 
-_SAVED = {
-    "id": "example",
-    "alias": "Saved",
-    "triggers": [{"trigger": "event", "event_type": "preflight_test"}],
-    "actions": [],
-}
+_DOMAIN = "helper_input_boolean"
+_SAVED = {"id": "example", "name": "Saved"}
 
 
 @pytest.fixture
@@ -41,26 +36,18 @@ async def manager(
     backup_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> bm.BackupManager:
-    """The server's manager, with auto-backup off and Core's automations up,
-    loaded from ``automations.yaml`` as a default install does."""
+    """The server's manager, with auto-backup off and Core's toggle helpers up."""
     monkeypatch.setattr(backup_settings, "enable_auto_backup", False)
-    await hass.async_add_executor_job(
-        Path(hass.config.path("configuration.yaml")).write_text,
-        "automation: !include automations.yaml\n",
-    )
-    await hass.async_add_executor_job(
-        Path(hass.config.path("automations.yaml")).write_text, "[]\n"
-    )
-    assert await async_setup_component(hass, "automation", {})
+    assert await async_setup_component(hass, "input_boolean", {})
     snapshot_manager.backup_dir.mkdir(parents=True, exist_ok=True)
     return snapshot_manager
 
 
 def _write_snapshot(manager: bm.BackupManager) -> str:
-    """A valid automation snapshot, in the shape the manager writes."""
+    """A valid toggle-helper snapshot, in the shape the manager writes."""
     snapshot = {
         "schema_version": bm.SCHEMA_VERSION,
-        "domain": "automation",
+        "domain": _DOMAIN,
         "entity_id": "example",
         "captured": "2026-09-09T00:00:00+00:00",
         "tool": None,
@@ -70,8 +57,8 @@ def _write_snapshot(manager: bm.BackupManager) -> str:
     return NAME
 
 
-def _automations(hass: HomeAssistant) -> list[str]:
-    return hass.states.async_entity_ids("automation")
+def _helpers(hass: HomeAssistant) -> list[str]:
+    return hass.states.async_entity_ids("input_boolean")
 
 
 @pytest.mark.parametrize("consumer", ["settings", "mcp"])
@@ -100,9 +87,9 @@ async def test_restore_input_failure_reports_no_write(
 ) -> None:
     snapshot: dict[str, Any] = {
         "schema_version": bm.SCHEMA_VERSION,
-        "domain": "automation",
+        "domain": _DOMAIN,
         "entity_id": "example",
-        "config": dict(_SAVED, alias="secret-marker"),
+        "config": dict(_SAVED, name="secret-marker"),
     }
     if failure in {"domain", "entity_id", "config"}:
         snapshot.pop(failure)
@@ -137,7 +124,7 @@ async def test_restore_input_failure_reports_no_write(
     )
     assert "secret-marker" not in json.dumps(payload)
     await hass.async_block_till_done()
-    assert _automations(hass) == []
+    assert _helpers(hass) == []
 
 
 async def test_missing_snapshot_ui_reports_known_no_change(
@@ -171,10 +158,10 @@ async def test_post_dispatch_failures_do_not_claim_no_change(
         changes.append("applied")
         raise error
 
-    # The automation restore fails after it was sent.
+    # The helper restore fails after it was sent.
     manager.register(
         bm.DomainHandler(
-            domain="automation",
+            domain=_DOMAIN,
             fetch=AsyncMock(side_effect=AssertionError("auto-backup is off")),
             restore=apply,
         )
@@ -199,11 +186,16 @@ async def test_generic_disabled_restore_confirmation_does_not_promise_safety(
     monkeypatch: pytest.MonkeyPatch,
     settings_script: Any,
 ) -> None:
+    created = await core_client.send_websocket_message(
+        {"type": "input_boolean/create", "name": "Example"}
+    )
+    assert created["success"], created
     name = _write_snapshot(manager)
     response = await response_for(monkeypatch, core_client, name)
     assert response.json()["data"]["safety_backup"] is None
     await hass.async_block_till_done()
-    assert _automations(hass) == ["automation.saved"]
+    state = hass.states.get("input_boolean.example")
+    assert state is not None and state.name == "Saved"
     rendered = run_restore(
         settings_script,
         {"status": response.status_code, "json": response.json()},
