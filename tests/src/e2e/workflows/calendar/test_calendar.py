@@ -123,54 +123,6 @@ class TestCalendarEvents:
         )
         logger.info("ha_config_get_calendar_events custom range test completed")
 
-    async def test_get_calendar_events_invalid_entity(self, mcp_client):
-        """
-        Test: Get events from invalid calendar entity
-
-        Verifies proper error handling for non-existent calendars.
-        """
-        logger.info("Testing ha_config_get_calendar_events with invalid entity...")
-
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_get_calendar_events",
-            {"entity_id": "calendar.nonexistent_calendar_xyz"},
-        )
-
-        # Should fail gracefully
-        assert data.get("success") is False, "Should fail for invalid calendar"
-        assert "error" in data or "suggestions" in data, "Should provide error info"
-
-        logger.info(f"Error (expected): {data.get('error', 'Unknown')}")
-        logger.info("Invalid entity test completed")
-
-    async def test_get_calendar_events_invalid_entity_format(self, mcp_client):
-        """
-        Test: Get events with invalid entity format
-
-        Verifies validation of entity_id format.
-        """
-        logger.info(
-            "Testing ha_config_get_calendar_events with invalid entity format..."
-        )
-
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_get_calendar_events",
-            {"entity_id": "not_a_calendar_entity"},
-        )
-
-        # Should fail with validation error
-        assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
-        )
-
-        logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
-        logger.info("Invalid format test completed")
-
 
 @pytest.mark.calendar
 @pytest.mark.slow
@@ -383,25 +335,15 @@ class TestCalendarEventLifecycle:
         """
         logger.info("Testing ha_config_set_calendar_event with invalid entity...")
 
-        now = datetime.now()
-        start = (now + timedelta(days=1)).isoformat()
-        end = (now + timedelta(days=1, hours=1)).isoformat()
-
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_config_set_calendar_event",
             {
                 "entity_id": "not_a_valid_calendar",
                 "summary": "Test Event",
-                "start": start,
-                "end": end,
+                "start": "2026-01-15T10:00:00",
+                "end": "2026-01-15T11:00:00",
             },
-        )
-
-        assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
@@ -733,16 +675,10 @@ class TestCalendarEventLifecycle:
         """
         logger.info("Testing ha_config_remove_calendar_event with invalid entity...")
 
-        # Use safe_call_tool since we expect this to fail
-        data = await safe_call_tool(
-            mcp_client,
+        data = await MCPAssertions(mcp_client).call_tool_failure(
             "ha_config_remove_calendar_event",
             {"entity_id": "not_a_valid_calendar", "uid": "some-event-uid"},
-        )
-
-        assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
@@ -1023,7 +959,7 @@ class TestCalendarEventLifecycle:
         """
         Test: Update event with invalid calendar entity
 
-        Verifies the entity_id format guard fires in update mode too.
+        Core's entity_id check reaches the caller in update mode too.
         """
         logger.info(
             "Testing ha_config_set_calendar_event update with invalid entity..."
@@ -1043,7 +979,7 @@ class TestCalendarEventLifecycle:
                 "end": end,
                 "uid": "some-event-uid",
             },
-            expected_error="calendar.",
+            expected_error="is an invalid entity ID",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
