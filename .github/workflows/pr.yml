@@ -518,9 +518,9 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-jq-v1
+        key: apt-trixie-git-jq-gpp-v1
 
-    - name: Install git and jq for workflow contract tests
+    - name: Install git, jq and g++
       run: |
         # Keep cached .debs after install so the cache stays warm for
         # future runs (default Debian behaviour deletes them).
@@ -528,7 +528,9 @@ jobs:
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git jq >/dev/null
+        # git and jq for the workflow contract tests; g++ builds the cloud
+        # integration's pymicro-vad and pyspeex-noise, which ship no 3.14 wheel.
+        apt-get install -y -qq git jq g++ >/dev/null
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -653,15 +655,15 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-jq-v1
+        key: apt-trixie-git-jq-gpp-v1
 
-    - name: Install git and jq for workflow contract tests
+    - name: Install git, jq and g++
       run: |
         rm -f /etc/apt/apt.conf.d/docker-clean
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git jq >/dev/null
+        apt-get install -y -qq git jq g++ >/dev/null
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
