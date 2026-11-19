@@ -2,6 +2,10 @@
 
 from typing import Any
 
+import httpx
+
+from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
+
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -9,6 +13,16 @@ class HomeAssistantError(Exception):
 
 class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
+
+    @property
+    def timed_out(self) -> bool:
+        """Whether the transport reported a timeout while awaiting Home Assistant."""
+        cause = self.__cause__
+        if isinstance(cause, HomeAssistantConnectionError):
+            return cause.timed_out
+        return isinstance(
+            cause, (TimeoutError, httpx.TimeoutException, HomeAssistantCommandTimeout)
+        )
 
 
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
@@ -78,14 +92,22 @@ class HomeAssistantAPIError(HomeAssistantError):
         )
 
 
+def http_failure_status(error: BaseException) -> int | None:
+    """HTTP status of a refused request or WebSocket upgrade, including its cause."""
+    if isinstance(error, HomeAssistantAPIError):
+        return error.status_code
+    if isinstance(error, (httpx.HTTPStatusError, InvalidStatus, InvalidProxyStatus)):
+        return error.response.status_code
+    if isinstance(error, HomeAssistantConnectionError) and error.__cause__ is not None:
+        return http_failure_status(error.__cause__)
+    return None
+
+
 class HomeAssistantCommandError(HomeAssistantError):
     """WebSocket command returned success=False.
 
     Raised by ``WebSocketClient.send_command`` when Home Assistant responds
-    with ``{type: "result", success: False}``. Used as a type marker in
-    ``_classify_exception``'s match dispatch; classification then falls
-    through to ``_classify_by_message`` for pattern matching on the
-    error message.
+    with ``{type: "result", success: False}``.
 
     ``code`` carries HA's structured WebSocket error code (the ``code`` field
     of the response ``error`` object — e.g. ``"unknown_command"``,
@@ -96,9 +118,44 @@ class HomeAssistantCommandError(HomeAssistantError):
     keeps the single-positional-argument constructor backward-compatible.
     """
 
-    def __init__(self, message: str, code: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        *,
+        translation_key: str | None = None,
+        translation_domain: str | None = None,
+        translation_placeholders: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.translation_key = translation_key
+        self.translation_domain = translation_domain
+        self.translation_placeholders = translation_placeholders
+
+    def refusal_fields(self) -> dict[str, Any]:
+        """Fields accompanying the human-readable error on a pooled response."""
+        fields: dict[str, Any] = {"error_code": self.code}
+        if self.translation_key is not None:
+            fields["translation_key"] = self.translation_key
+        if self.translation_domain is not None:
+            fields["translation_domain"] = self.translation_domain
+        if self.translation_placeholders is not None:
+            fields["translation_placeholders"] = self.translation_placeholders
+        return fields
+
+    @classmethod
+    def from_ws_error(cls, error: Any, prefix: str) -> HomeAssistantCommandError:
+        """Preserve the native fields in a WebSocket refusal."""
+        if not isinstance(error, dict):
+            return cls(f"{prefix}: {error}")
+        return cls(
+            f"{prefix}: {error.get('message', error)}",
+            error.get("code"),
+            translation_key=error.get("translation_key"),
+            translation_domain=error.get("translation_domain"),
+            translation_placeholders=error.get("translation_placeholders"),
+        )
 
 
 class HomeAssistantCommandTimeout(HomeAssistantError):

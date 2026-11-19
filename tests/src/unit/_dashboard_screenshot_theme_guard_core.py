@@ -41,6 +41,7 @@ DARK = {"theme": "default", "dark": True}
 # What Puppet's cold-browser render saves: an explicit light default theme.
 CLOBBERED = {"theme": "", "dark": False}
 
+
 @dataclass(frozen=True)
 class Account:
     """A Core user, and the URL and token that sign in as it."""
@@ -122,7 +123,9 @@ def closes_running() -> list[asyncio.Task[Any]]:
 
 
 def serve_puppet(
-    monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, credential: EngineCredential
+    monkeypatch: pytest.MonkeyPatch,
+    supervisor: Supervisor,
+    credential: EngineCredential,
 ) -> None:
     """HA OS: the Supervisor lists one started Puppet app, whose token and
     Home Assistant URL options are ``credential``'s."""

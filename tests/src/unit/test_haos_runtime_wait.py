@@ -40,7 +40,9 @@ async def _wait(
     def run() -> None:
         url = haos.base_url.replace("http://", "ws://") + "/api/websocket"
         with connect(url) as connection:
-            _authenticate_ws_supervisor(connection, token or haos.credentials.access_token)
+            _authenticate_ws_supervisor(
+                connection, token or haos.credentials.access_token
+            )
             deadline = haos.clock.monotonic() + budget
             ids = count(1)
             if corrupt:
@@ -67,11 +69,18 @@ async def _wait(
         (_wait_supervisor_update_done, "/supervisor/info", None, SETTLED),
         (_wait_supervisor_running, "/info", STARTUP, RUNNING),
         (_wait_supervisor_running, "/info", None, RUNNING),
-        (_wait_supervisor_running, "/info", "System is not ready with state: setup", RUNNING),
+        (
+            _wait_supervisor_running,
+            "/info",
+            "System is not ready with state: setup",
+            RUNNING,
+        ),
     ],
     ids=["pending", "update-restart", "startup", "running-restart", "setup-error"],
 )
-async def test_wait_polls_the_correct_endpoint_until_ready(haos: Haos, wait, path, first, last):
+async def test_wait_polls_the_correct_endpoint_until_ready(
+    haos: Haos, wait, path, first, last
+):
     if first is None:
         haos.supervisor.restarting("GET", path)
     elif isinstance(first, str):
@@ -90,7 +99,12 @@ async def test_wait_polls_the_correct_endpoint_until_ready(haos: Haos, wait, pat
     ("wait", "path", "last", "reason"),
     [
         (_wait_supervisor_running, "/info", STARTUP, "last state: 'startup'"),
-        (_wait_supervisor_update_done, "/supervisor/info", None, "last error.*unknown_error"),
+        (
+            _wait_supervisor_update_done,
+            "/supervisor/info",
+            None,
+            "last error.*unknown_error",
+        ),
     ],
 )
 async def test_timeout_preserves_the_reason_and_caps_the_last_sleep(
@@ -113,8 +127,12 @@ async def test_malformed_frame_raises_descriptive_error(haos: Haos) -> None:
         await _wait(haos, _wait_supervisor_update_done, corrupt=True)
 
 
-@pytest.mark.parametrize("wait", [_wait_supervisor_running, _wait_supervisor_update_done])
-async def test_core_refuses_an_unprivileged_user_without_retry(haos: Haos, wait: Wait) -> None:
+@pytest.mark.parametrize(
+    "wait", [_wait_supervisor_running, _wait_supervisor_update_done]
+)
+async def test_core_refuses_an_unprivileged_user_without_retry(
+    haos: Haos, wait: Wait
+) -> None:
     member = await haos.member_credentials()
     with pytest.raises(RuntimeError, match="failed: .*unauthorized"):
         await _wait(haos, wait, token=member.access_token)

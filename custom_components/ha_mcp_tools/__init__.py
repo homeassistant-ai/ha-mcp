@@ -66,6 +66,7 @@ from .file_ops import (
     SERVICE_EDIT_FILE,
     _delete_file_sync,
     _replace_file_sync,
+    file_read_error,
     register_edit_file,
     run_file_job,
     run_locked,
@@ -2873,10 +2874,10 @@ def _build_read_file_handler(
                 + ["custom_components/**/*.py"]
                 + [f"{d}/**" for d in extra_dirs]
             )
-            return {
-                "success": False,
-                "error": f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
-            }
+            return file_read_error(
+                "path_not_allowed",
+                f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
+            )
 
         target_file = config_dir / rel_path
 
@@ -2897,34 +2898,22 @@ def _build_read_file_handler(
                 )
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Permission denied: {rel_path}",
-            }
+            return file_read_error("permission_denied", f"Permission denied: {rel_path}")
         except UnicodeDecodeError:
             _LOGGER.error("Cannot read binary file: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Cannot read binary file: {rel_path}. Only text files are supported.",
-            }
+            return file_read_error(
+                "binary_file",
+                f"Cannot read binary file: {rel_path}. Only text files are supported.",
+            )
         except OSError as err:
             _LOGGER.error("Error reading file %s: %s", rel_path, err)
-            return {
-                "success": False,
-                "error": str(err),
-            }
+            return file_read_error("read_failed", str(err))
 
         err_kind = result.get("_error")
         if err_kind == "not_found":
-            return {
-                "success": False,
-                "error": f"File does not exist: {rel_path}",
-            }
+            return file_read_error(err_kind, f"File does not exist: {rel_path}")
         if err_kind == "not_a_file":
-            return {
-                "success": False,
-                "error": f"Path is not a file: {rel_path}",
-            }
+            return file_read_error(err_kind, f"Path is not a file: {rel_path}")
 
         return await _shape_read_file_response(
             hass,
@@ -3335,9 +3324,9 @@ def _build_read_legacy_backup_handler(
 
         err_kind = result.get("_error")
         if err_kind == "not_found":
-            return {"success": False, "error": f"Backup does not exist: {filename}"}
+            return file_read_error(err_kind, f"Backup does not exist: {filename}")
         if err_kind == "not_a_file":
-            return {"success": False, "error": f"Path is not a file: {filename}"}
+            return file_read_error(err_kind, f"Path is not a file: {filename}")
 
         modified_dt = datetime.fromtimestamp(result["mtime"])
         decoded = _decode_legacy_backup_name(filename)

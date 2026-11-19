@@ -15,7 +15,7 @@ from pytest_homeassistant.typing import ClientSessionGenerator
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.dashboard_screenshot import capture
-from ha_mcp.dashboard_screenshot.provision import EngineTarget
+from ._dashboard_screenshot_common import set_settings
 
 _IMAGE = b"\x89PNG\r\n\x1a\ntheme-check"
 
@@ -44,11 +44,12 @@ async def engine(
 ) -> list[str]:
     """A screenshot engine on loopback that renders every path as ``_IMAGE``.
 
-    Returns one entry per time the capture looked the engine up.
+    Records each render request the engine receives.
     """
     asked: list[str] = []
 
     async def render(request: web.Request) -> web.Response:
+        asked.append(request.path)
         return web.Response(body=_IMAGE, content_type="image/png")
 
     app = web.Application()
@@ -56,11 +57,7 @@ async def engine(
     server = await aiohttp_client(app)
     url = str(server.make_url("")).rstrip("/")
 
-    async def resolve() -> EngineTarget:
-        asked.append("engine")
-        return EngineTarget(url=url)
-
-    monkeypatch.setattr(capture, "resolve_engine", resolve)
+    set_settings(monkeypatch, dashboard_screenshot_engine_url=url)
     return asked
 
 

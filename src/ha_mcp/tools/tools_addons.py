@@ -245,7 +245,7 @@ def _merge_options(base: dict, override: dict) -> dict:
 # collision, while the job-level JobConcurrency.REJECT path raises a bare
 # "Another job is running" for long operations (OS update, data-disk wipe)
 # that must NOT be retried on this schedule.
-_JOB_COLLISION_MARKER = "another job is running for job group"
+_JOB_COLLISION = re.compile(r"Another job is running for job group \S+", re.IGNORECASE)
 _JOB_COLLISION_RETRY_WINDOW = 60.0
 JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
 JOB_COLLISION_RETRY_MAX_DELAY = 5.0
@@ -469,6 +469,8 @@ async def _supervisor_api_call_via_core(
             verb,
         )
 
+    # Core collapses every Supervisor exception to unknown_error. A blank
+    # exception is indistinguishable from a lost write acknowledgement.
     if (
         verb not in {"GET", "HEAD"}
         and result.get("success") is False
@@ -557,9 +559,23 @@ async def _supervisor_api_call_once(
     return _normalize_supervisor_rest_response(response, endpoint, method)
 
 
+def _generic_supervisor_refusal(result: dict[str, Any]) -> bool:
+    """The bridge drops Supervisor's status and error_key; older REST errors lack a key."""
+    if result.get("error_code") == "unknown_error":
+        return True
+    payload = result.get("_response_data")
+    return (
+        result.get("_status_code") == 400
+        and isinstance(payload, dict)
+        and payload.get("result") == "error"
+        and not payload.get("error_key")
+    )
+
+
 def _raise_supervisor_api_failure(
     result: dict[str, Any],
     endpoint: str,
+    method: str,
 ) -> NoReturn:
     """Raise the structured exception represented by a non-retryable result."""
     # Both transports land here, and both carry Supervisor's own text: the
@@ -570,6 +586,21 @@ def _raise_supervisor_api_failure(
     )
     status_code = result.get("_status_code")
     response_data = result.get("_response_data")
+    key = response_data.get("error_key") if isinstance(response_data, dict) else None
+    if (
+        method == "POST" and endpoint == "/store/repositories"
+        and status_code == 409 and key == "store_repository_already_added_error"
+    ):
+        raise_tool_error(create_error_response(ErrorCode.RESOURCE_ALREADY_EXISTS, error_text))
+    if method == "POST" and (options := re.fullmatch(r"/addons/([^/]+)/options", endpoint)):
+        # The bridge strips AppConfigurationInvalidError's key; older Supervisors
+        # report the underlying missing option without the app-specific prefix.
+        reason = error_text.removeprefix("Command failed: ")
+        if (status_code == 400 and key == "app_configuration_invalid_error") or (
+            _generic_supervisor_refusal(result)
+            and reason.startswith((f"App {options[1]} has invalid options: ", "Missing option '"))
+        ):
+            raise_tool_error(create_error_response(ErrorCode.VALIDATION_FAILED, error_text))
     if status_code == 401:
         raise_tool_error(
             create_error_response(
@@ -608,7 +639,7 @@ def _raise_supervisor_api_failure(
         "command failed:"
     ):
         error_text = f"Command failed: {error_text}"
-    raise HomeAssistantCommandError(error_text)
+    raise HomeAssistantCommandError(error_text, code=result.get("error_code"))
 
 
 def _supervisor_result_mapping(
@@ -723,8 +754,12 @@ async def _supervisor_api_call(
             error_text = str(
                 result.get("error", f"Supervisor API call failed: {endpoint}")
             )
-            if _JOB_COLLISION_MARKER not in error_text.lower():
-                _raise_supervisor_api_failure(result, endpoint)
+            # JobGroupExecutionLimitExceeded has no error_key. A specific
+            # refusal (including authentication) always wins over the wording.
+            if not _generic_supervisor_refusal(result) or not _JOB_COLLISION.fullmatch(
+                error_text.removeprefix("Command failed: ")
+            ):
+                _raise_supervisor_api_failure(result, endpoint, method.upper())
 
             # The marker test runs on the raw text; everything below reports
             # it, so bind the size once the classification is settled.
@@ -2699,7 +2734,7 @@ class AddOnTools:
                 timeout=self._CHECK_UPDATES_TIMEOUT,
             )
         except ToolError as error:
-            self._raise_check_updates_error(error)
+            await self._raise_check_updates_error(error)
         after = await self._snapshot_store_or_warn(warnings, "after")
 
         # Only a pair of real readings can be compared, and only a real
@@ -2783,31 +2818,23 @@ class AddOnTools:
             )
             return None
 
-    @staticmethod
-    def _raise_check_updates_error(error: ToolError) -> NoReturn:
-        """Re-raise a failed store reload with guidance for its known causes."""
-        detail = AddOnTools._supervisor_error_text(str(error))
-        # Supervisor's own wording for this refusal (jobs/decorator.py):
-        # "'<job>' blocked from execution, supervisor needs to be updated
-        # first". Matching on "supervisor" + "update" anywhere would relabel
-        # unrelated app-update failures with this guidance.
-        if "needs to be updated first" in detail.lower():
-            # Built outside the list: an implicit concatenation inside a list
-            # literal reads as a missing comma (py/implicit-string-concatenation-in-list).
-            retry_suggestion = (
-                "Update Supervisor first, then retry "
-                "ha_manage_app(action='check_updates')"
-            )
+    async def _raise_check_updates_error(self, error: ToolError) -> NoReturn:
+        """Add current Supervisor update guidance to a failed reload."""
+        if self._structured_error_code(str(error)) != ErrorCode.SERVICE_CALL_FAILED.value:
+            raise error
+        if self._structured_error_outcome(str(error)) == "unknown":
+            raise error
+        try:
+            info = await _supervisor_api_call(self._client, "/supervisor/info")
+        except ToolError:
+            raise error from None
+        if info["result"].get("update_available") is True:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    "Supervisor refused to reload the app (add-on) store "
-                    "because Supervisor itself has a pending update.",
-                    details=detail,
-                    suggestions=[
-                        retry_suggestion,
-                        "Check Supervisor status with ha_get_system_health",
-                    ],
+                    "Store reload failed. Supervisor reports it has a pending update.",
+                    details=self._supervisor_error_text(str(error)),
+                    suggestions=["Update Supervisor, then retry ha_manage_app(action='check_updates')"],
                 )
             )
         raise error
@@ -2847,7 +2874,7 @@ class AddOnTools:
                 self._client, endpoint, method=method, data=data, timeout=timeout
             )
         except ToolError as error:
-            return self._repo_noop_or_raise(key, repository, error)
+            return await self._repo_noop_or_raise(key, repository, error)
         return {
             "success": True,
             "action": key,
@@ -2855,7 +2882,7 @@ class AddOnTools:
             "message": f"Repository {repository} {key} completed.",
         }
 
-    def _repo_noop_or_raise(
+    async def _repo_noop_or_raise(
         self, key: str, repository: str, error: ToolError
     ) -> dict[str, Any]:
         """Reclassify an idempotent no-op failure as success, else raise.
@@ -2866,21 +2893,29 @@ class AddOnTools:
         if self._structured_error_outcome(error_text) == "unknown":
             raise error
         error_code = self._structured_error_code(error_text)
-        noop_codes = {None, ErrorCode.SERVICE_CALL_FAILED.value}
+        if key == "add_repository" and error_code == ErrorCode.RESOURCE_ALREADY_EXISTS.value:
+            return self._repo_noop_result(key, repository, "already registered")
+        noop_codes = {ErrorCode.SERVICE_CALL_FAILED.value}
         if key == "remove_repository":
             noop_codes.add(ErrorCode.RESOURCE_NOT_FOUND.value)
         if error_code not in noop_codes:
             raise error
 
-        noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
-        if noop:
-            logger.info(
-                "Treating %s of repository %r as an idempotent no-op (%s).",
-                key,
-                repository,
-                noop,
-            )
-            return self._repo_noop_result(key, repository, noop)
+        # Core's supervisor/api strips Supervisor's error_key and HTTP status.
+        # Read back the exact repository identity before reporting a no-op.
+        try:
+            store = await _supervisor_api_call(self._client, "/store")
+        except ToolError:
+            store = {}
+        repos = store.get("result", {}).get("repositories")
+        field = "source" if key == "add_repository" else "slug"
+        if isinstance(repos, list) and all(
+            isinstance(row, dict) and isinstance(row.get(field), str) for row in repos
+        ):
+            present = any(row[field] == repository for row in repos)
+            if present == (key == "add_repository"):
+                verb = "already registered" if present else "not registered"
+                return self._repo_noop_result(key, repository, verb)
         if error_code != ErrorCode.SERVICE_CALL_FAILED.value:
             raise error
         self._raise_repo_action_error(key, repository, error_text)
@@ -2928,26 +2963,6 @@ class AddOnTools:
         if isinstance(err, dict):
             return str(err.get("details") or err.get("message") or error_text)
         return error_text
-
-    @staticmethod
-    def _repo_noop_verb(key: str, error_text: str) -> str | None:
-        """Return a status word if a repo-action failure means the desired end
-        state already holds (an idempotent no-op), else None.
-
-        Scoped tightly so an unrelated failure that merely happens to mention
-        "not found" somewhere (a dependent app (add-on), a misrouted 404, a file
-        path) is NOT silently reclassified as success: the not-found phrasing
-        must be about a repository."""
-        text = error_text.lower()
-        if key == "add_repository" and "already in the store" in text:
-            return "already registered"
-        if (
-            key == "remove_repository"
-            and "repositor" in text
-            and ("not found" in text or "does not exist" in text)
-        ):
-            return "not registered"
-        return None
 
     @staticmethod
     def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:

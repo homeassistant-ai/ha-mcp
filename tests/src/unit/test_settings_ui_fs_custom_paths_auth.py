@@ -106,10 +106,8 @@ async def test_a_second_refusal_reaches_the_editor(
         return DEFAULT
 
     async with settings_http(app_server(monkeypatch, core_client)) as http:
-        with patch.object(
-            core_client, "call_service", wraps=core_client.call_service,
-            side_effect=rotate_before_save,
-        ):
+        with patch.object(core_client, "call_service", wraps=core_client.call_service) as calls:
+            calls.side_effect = rotate_before_save
             response = await http.post(PATH, json={"paths": ["pyscript"]})
     assert response.status_code == 400
     assert attempts == 2

@@ -251,7 +251,6 @@ async def test_a_registered_webhook_reports_its_mode(
 async def test_without_a_webhook_registration_no_mode_is_reported(
     hass: HomeAssistant,
     component_ws: MockHAClientWebSocket,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bring-up registers the webhook after the server has started, and a
     failed bring-up leaves the entry loaded; the configured ``none`` would then

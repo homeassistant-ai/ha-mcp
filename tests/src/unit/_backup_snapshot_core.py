@@ -29,12 +29,23 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohasupervisor.models.backups import (
-    Backup, BackupAddon, BackupComplete, BackupContent, BackupJob, BackupList,
-    BackupLocationAttributes, BackupType, Folder,
+    Backup,
+    BackupAddon,
+    BackupComplete,
+    BackupContent,
+    BackupJob,
+    BackupList,
+    BackupLocationAttributes,
+    BackupType,
+    Folder,
 )
 from aiohasupervisor.models.jobs import Job, JobError
 from aiohasupervisor.models.mounts import (
-    CIFSMountResponse, MountsInfo, MountState, MountType, MountUsage,
+    CIFSMountResponse,
+    MountsInfo,
+    MountState,
+    MountType,
+    MountUsage,
 )
 from homeassistant.backup_restore import RESTORE_BACKUP_FILE
 from homeassistant.components import websocket_api
@@ -366,18 +377,24 @@ class Supervisor:
         requested = extra.get("supervisor.backup_request_date")
         date = datetime.fromisoformat(requested) if requested else dt_util.utcnow()
         return BackupComplete(
-            slug=slug, name=name, date=date, type=BackupType.PARTIAL,
+            slug=slug,
+            name=name,
+            date=date,
+            type=BackupType.PARTIAL,
             location_attributes={
                 location: BackupLocationAttributes(protected=protected, size_bytes=1000)
                 for location in locations
             },
-            compressed=True, supervisor_version="2026.11.0",
+            compressed=True,
+            supervisor_version="2026.11.0",
             homeassistant=HA_VERSION if homeassistant else None,
             addons=[
                 BackupAddon(slug=app, name=app, version="1.0.0", size=1.0)
-                for app in apps if app not in self.failed_apps
+                for app in apps
+                if app not in self.failed_apps
             ],
-            repositories=[], folders=[Folder(f) for f in folders if f not in self.failed_folders],
+            repositories=[],
+            folders=[Folder(f) for f in folders if f not in self.failed_folders],
             homeassistant_exclude_database=not database if homeassistant else None,
             extra=extra,
         ).to_dict()
@@ -399,9 +416,16 @@ class Supervisor:
             ),
         ]
         return Job(
-            name="backup_manager_partial_backup", reference=reference, uuid=uuid.UUID(job_id),
-            progress=100 if done else 0, stage=None, done=done, errors=errors or [],
-            created=dt_util.utcnow(), child_jobs=children if done else [], extra=None,
+            name="backup_manager_partial_backup",
+            reference=reference,
+            uuid=uuid.UUID(job_id),
+            progress=100 if done else 0,
+            stage=None,
+            done=done,
+            errors=errors or [],
+            created=dt_util.utcnow(),
+            child_jobs=children if done else [],
+            extra=None,
         ).to_dict()
 
     @staticmethod
@@ -409,15 +433,30 @@ class Supervisor:
         error = JobError(type="BackupError", message="could not be saved", stage=None)
         jobs = [
             Job(
-                name=part, reference=reference, uuid=uuid.uuid4(), progress=100,
-                stage=None, done=True, errors=[error], created=dt_util.utcnow(),
-                child_jobs=[], extra=None,
+                name=part,
+                reference=reference,
+                uuid=uuid.uuid4(),
+                progress=100,
+                stage=None,
+                done=True,
+                errors=[error],
+                created=dt_util.utcnow(),
+                child_jobs=[],
+                extra=None,
             )
             for reference in references
         ]
         return Job(
-            name=name, reference=None, uuid=uuid.uuid4(), progress=100, stage=None,
-            done=True, errors=[], created=dt_util.utcnow(), child_jobs=jobs, extra=None,
+            name=name,
+            reference=None,
+            uuid=uuid.uuid4(),
+            progress=100,
+            stage=None,
+            done=True,
+            errors=[],
+            created=dt_util.utcnow(),
+            child_jobs=jobs,
+            extra=None,
         )
 
     def _mount_info(self) -> dict[str, Any]:
@@ -425,9 +464,14 @@ class Supervisor:
             default_backup_mount=self.default_mount,
             mounts=[
                 CIFSMountResponse(
-                    name=name, usage=MountUsage.BACKUP, type=MountType.CIFS,
-                    server=SUPERVISOR, share=name, read_only=False,
-                    state=MountState.ACTIVE, user_path=None,
+                    name=name,
+                    usage=MountUsage.BACKUP,
+                    type=MountType.CIFS,
+                    server=SUPERVISOR,
+                    share=name,
+                    read_only=False,
+                    state=MountState.ACTIVE,
+                    user_path=None,
                 )
                 for name in self.mounts
             ],
@@ -437,11 +481,16 @@ class Supervisor:
     def _summary(backup: dict[str, Any]) -> Backup:
         detail = BackupComplete.from_dict(backup)
         return Backup(
-            slug=detail.slug, name=detail.name, date=detail.date, type=detail.type,
-            location_attributes=detail.location_attributes, compressed=detail.compressed,
+            slug=detail.slug,
+            name=detail.name,
+            date=detail.date,
+            type=detail.type,
+            location_attributes=detail.location_attributes,
+            compressed=detail.compressed,
             content=BackupContent(
                 homeassistant=detail.homeassistant is not None,
-                addons=[app.slug for app in detail.addons], folders=detail.folders,
+                addons=[app.slug for app in detail.addons],
+                folders=detail.folders,
             ),
         )
 

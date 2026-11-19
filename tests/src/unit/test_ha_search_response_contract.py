@@ -72,15 +72,13 @@ async def test_no_surface_answering_is_a_structured_error(
     _setup_visibility_disabled(tmp_path, monkeypatch)
 
     # A domain listing runs the entity surface only.
+    failure = HomeAssistantConnectionError("States response did not arrive")
+    failure.__cause__ = TimeoutError()
     with (
         patch.object(
             core_client,
             "get_states",
-            AsyncMock(
-                side_effect=HomeAssistantConnectionError(
-                    "Request timeout: states response"
-                )
-            ),
+            AsyncMock(side_effect=failure),
         ),
         pytest.raises(ToolError) as excinfo,
     ):

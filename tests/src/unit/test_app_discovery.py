@@ -29,10 +29,13 @@ def app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, supervisor: Supervisor)
 
 
 async def _announce(
-    supervisor: Supervisor, core_version: str = "2026.10.0", hostname: str = "local-ha-mcp-dev"
+    supervisor: Supervisor,
+    core_version: str = "2026.10.0",
+    hostname: str = "local-ha-mcp-dev",
 ) -> list:
     supervisor.answer(
-        "GET", "/core/info",
+        "GET",
+        "/core/info",
         core_info(core_version, version_latest=core_version, update_available=False),
     )
     supervisor.answer("GET", "/addons/self/info", app_info(hostname=hostname))
@@ -58,9 +61,7 @@ async def test_a_custom_path_with_a_trailing_slash_is_announced_as_served(
 ) -> None:
     app.write_text("/my-custom-path/")
     posts = await _announce(supervisor)
-    assert (
-        posts[0]["config"]["url"] == "http://local-ha-mcp-dev:9583/my-custom-path/"
-    )
+    assert posts[0]["config"]["url"] == "http://local-ha-mcp-dev:9583/my-custom-path/"
 
 
 @pytest.mark.asyncio

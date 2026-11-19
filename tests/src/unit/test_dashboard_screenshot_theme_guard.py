@@ -52,10 +52,10 @@ from ._dashboard_screenshot_theme_guard_core import (
     serve_puppet,
     set_up_frontend,
 )
+from ._tool_errors import error_body
 from ._tools_addons_core import Supervisor
 from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
-from ._tool_errors import error_body
 from ._websocket_client_core import held_auth, short_cleanup
 from ._ws_transport import until
 
@@ -415,7 +415,9 @@ class TestCaptureBracket:
     """
 
     async def test_a_capture_reports_the_flip_and_writes_nothing(
-        self, supervisor: Supervisor, aiohttp_client: Any,
+        self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         engine: Account,
         seen: dict[str, list[Any]],
@@ -438,7 +440,12 @@ class TestCaptureBracket:
         assert "ha_manage_theme" in warnings[0]
 
     async def test_an_engine_that_keeps_the_theme_adds_no_warning(
-        self, supervisor: Supervisor, aiohttp_client: Any, hass: HomeAssistant, engine: Account, monkeypatch: pytest.MonkeyPatch
+        self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
+        hass: HomeAssistant,
+        engine: Account,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         serve_puppet(monkeypatch, supervisor, engine.credential)
         await serve_engine(aiohttp_client, monkeypatch, hass, flips=None)
@@ -451,7 +458,8 @@ class TestCaptureBracket:
         assert await saved_theme(hass, engine) == DARK
 
     async def test_a_sidecar_engine_is_watched_with_ha_mcps_own_credential(
-        self, aiohttp_client: Any,
+        self,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         own: Account,
         core_client: HomeAssistantClient,
@@ -473,7 +481,9 @@ class TestCaptureBracket:
         assert seen[SET] == []
 
     async def test_a_failed_render_still_reports_the_flip(
-        self, supervisor: Supervisor, aiohttp_client: Any,
+        self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         engine: Account,
         seen: dict[str, list[Any]],
@@ -495,7 +505,8 @@ class TestRestoreThroughTheTool:
     """ha_manage_theme's engine actions, with the credential Puppet's options give."""
 
     async def test_the_restore_the_warning_names_puts_the_theme_back(
-        self, supervisor: Supervisor,
+        self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
@@ -518,7 +529,8 @@ class TestRestoreThroughTheTool:
         assert await saved_theme(hass, engine) == DARK
 
     async def test_force_reaches_the_write(
-        self, supervisor: Supervisor,
+        self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
@@ -539,7 +551,8 @@ class TestRestoreThroughTheTool:
         assert await saved_theme(hass, engine) == CLOBBERED
 
     async def test_without_force_a_mismatch_is_refused(
-        self, supervisor: Supervisor,
+        self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
@@ -577,7 +590,8 @@ class TestRestoreThroughTheTool:
         assert seen[GET] == []
 
     async def test_puppets_credential_reads_the_engine_account(
-        self, supervisor: Supervisor,
+        self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,

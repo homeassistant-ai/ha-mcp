@@ -42,9 +42,11 @@ def _puppet_options(*, keep_browser_open: bool) -> dict[str, Any]:
     }
 
 
-def _puppet_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
+def _puppet_info(
+    *, state: str, hostname: str | None = None, version: str = "2.4.9", slug: str = "local_puppet"
+) -> dict[str, Any]:
     return app_info(
-        "local_puppet", name="Puppet", state=AddonState(state), version="2.4.9",
+        slug, name="Puppet", state=AddonState(state), version=version,
         schema=_PUPPET_SCHEMA, options=_puppet_options(keep_browser_open=False),
         hostname=hostname or "",
     )

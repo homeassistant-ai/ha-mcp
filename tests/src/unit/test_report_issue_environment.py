@@ -15,7 +15,6 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -193,9 +192,8 @@ async def _old_tools_renamed_entry(hass: HomeAssistant) -> None:
     await set_up_tools_entry(hass)
     # A component before 0.5.0 registers its services but not the bootstrap.
     hass.services.async_remove(DOMAIN, CALLER_TOKEN_BOOTSTRAP_SERVICE)
-    renamed = MockConfigEntry(domain=DOMAIN, title="My Renamed Entry")
-    renamed.add_to_hass(hass)
-    renamed.mock_state(hass, ConfigEntryState.LOADED)
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    hass.config_entries.async_update_entry(entry, title="My Renamed Entry")
 
 
 @pytest.mark.parametrize(
@@ -263,7 +261,9 @@ async def test_failed_entry_probes_read_unknown(
 
 
 async def test_component_version_and_entry_line_share_one_info_read(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A second ``info`` read could answer for a component updated in
     between, and the version and webhook mode would then disagree."""
@@ -335,7 +335,9 @@ async def test_slow_supervisor_does_not_hold_up_the_report(
 
     async def answers_late(method: str, url: URL, data: Any) -> Any:
         await answer.wait()
-        return AiohttpClientMockResponse(method, url, json={"result": "ok", "data": root_info("running")})
+        return AiohttpClientMockResponse(
+            method, url, json={"result": "ok", "data": root_info("running")}
+        )
 
     supervised.get("http://127.0.0.1/info", side_effect=answers_late)
     monkeypatch.setattr(tools_bug_report, "SUPERVISOR_PROBE_TIMEOUT", 0.05)

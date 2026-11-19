@@ -163,7 +163,9 @@ HACS_API = StoreApi("hacs")
 STORE_APIS = (StoreApi("marketplace"), HACS_API)
 
 
-async def _probe(ws_client: Any, command: str) -> tuple[dict[str, Any] | None, str | None, str]:
+async def _probe(
+    ws_client: Any, command: str
+) -> tuple[dict[str, Any] | None, str | None, str]:
     """Return the store reply, or its refusal code and display message."""
     try:
         reply = await ws_client.send_command(command)

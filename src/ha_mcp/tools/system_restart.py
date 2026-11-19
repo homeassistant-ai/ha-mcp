@@ -9,6 +9,7 @@ import httpx
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
+from ..client.exceptions import http_failure_status
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
@@ -203,20 +204,9 @@ async def restart_home_assistant(
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
-        error_msg = str(e)
-        # Connection errors after restart initiated are expected
-        # (HA closes connections during restart)
-        if restart_initiated and any(
-            pattern in error_msg.lower()
-            for pattern in (
-                "connect",
-                "closed",
-                "504",
-                "502",
-                "503",
-                "gateway",
-                "unavailable",
-            )
+        if restart_initiated and (
+            isinstance(e.__cause__, (httpx.ReadError, httpx.RemoteProtocolError))
+            or http_failure_status(e) in {502, 503, 504}
         ):
             return {
                 "success": True,

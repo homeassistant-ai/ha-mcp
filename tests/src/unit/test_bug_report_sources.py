@@ -338,7 +338,9 @@ class TestReport:
             error_message="Setup failed for 172.17.0.3",
         )
 
-        result = await BugReportTools(core_client).ha_report_issue(report_type="runtime_bug")
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
 
         body = result["issue_body"]
         assert "172.17.0.3" not in body
@@ -365,8 +367,12 @@ class TestReport:
             "arch": "aarch64",
             "python_version": "3.13.7",
         }
-        with patch("homeassistant.helpers.system_info.async_get_system_info", return_value=core_install):
-            result = await BugReportTools(core_client).ha_report_issue(report_type="runtime_bug")
+        with patch(
+            "homeassistant.helpers.system_info.async_get_system_info", return_value=core_install
+        ):
+            result = await BugReportTools(core_client).ha_report_issue(
+                report_type="runtime_bug"
+            )
 
         assert (
             "- **Home Assistant Install:** Home Assistant Core; Linux 6.8.0 "
@@ -394,7 +400,9 @@ class TestReport:
         )
         await _set_up_reporting_core(hass)
 
-        result = await BugReportTools(core_client).ha_report_issue(report_type="runtime_bug")
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
 
         assert "172.17.0.3" not in result["addon_logs"]
         assert "upstream is [IP]" in result["addon_logs"]

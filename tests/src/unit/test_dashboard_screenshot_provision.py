@@ -38,7 +38,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor) -> None:
 
 def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
     return app_info(
-        "local_wpe_screenshot_engine", name="WPE Screenshot Engine",
+        "def_wpe_screenshot_engine", name="WPE Screenshot Engine",
         state=AddonState(state), version="0.3.0", hostname=hostname or "",
         schema=_WPE_SCHEMA, options={
             "home_assistant_url": "http://homeassistant:8123",
@@ -67,13 +67,13 @@ def supervisor_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestWpeSupervisorDiscovery:
     async def test_discovers_verified_app_on_internal_port(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         _serve_supervisor(
             supervisor,
             {
                 "/addons": installed_apps("abc_puppet", "def_wpe_screenshot_engine"),
-                "/addons/abc_puppet/info": _puppet_info(state="stopped"),
+                "/addons/abc_puppet/info": _puppet_info(slug="abc_puppet", state="stopped"),
                 "/addons/def_wpe_screenshot_engine/info": _wpe_info(
                     state="started", hostname="def-wpe"
                 ),
@@ -90,14 +90,14 @@ class TestWpeSupervisorDiscovery:
         assert target.addon_credential is None
 
     async def test_started_wpe_and_puppet_are_ambiguous(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         _serve_supervisor(
             supervisor,
             {
                 "/addons": installed_apps("abc_puppet", "def_wpe_screenshot_engine"),
                 "/addons/abc_puppet/info": _puppet_info(
-                    state="started", hostname="abc-puppet"
+                    slug="abc_puppet", state="started", hostname="abc-puppet"
                 ),
                 "/addons/def_wpe_screenshot_engine/info": _wpe_info(
                     state="started", hostname="def-wpe"
@@ -109,7 +109,7 @@ class TestWpeSupervisorDiscovery:
             await provision.resolve_engine()
 
     async def test_wrong_app_identity_is_rejected(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         invalid_info = _wpe_info(state="started", hostname="wrong-engine")
         invalid_info["name"] = "Unrelated app"
@@ -125,7 +125,7 @@ class TestWpeSupervisorDiscovery:
             await provision.resolve_engine()
 
     async def test_incomplete_app_schema_is_rejected(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         invalid_info = _wpe_info(state="started", hostname="def-wpe")
         invalid_info["schema"] = _WPE_SCHEMA[:-1]
@@ -141,7 +141,7 @@ class TestWpeSupervisorDiscovery:
             await provision.resolve_engine()
 
     async def test_installed_app_must_be_started(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         _serve_supervisor(
             supervisor,
@@ -169,7 +169,7 @@ class TestWpeSupervisorDiscovery:
             {
                 "/addons": installed_apps("def_puppet", "abc_wpe_screenshot_engine"),
                 "/addons/def_puppet/info": _puppet_info(
-                    state="started", hostname="def-puppet"
+                    slug="def_puppet", state="started", hostname="def-puppet"
                 ),
             },
         )
@@ -218,7 +218,7 @@ class TestResolveEngine:
             {
                 "/addons": installed_apps("def_puppet"),
                 "/addons/def_puppet/info": _puppet_info(
-                    state="started", hostname="def-puppet"
+                    slug="def_puppet", state="started", hostname="def-puppet"
                 ),
             },
         )
@@ -245,7 +245,7 @@ class TestResolveEngine:
 
 class TestDiscoverEngineViaSupervisor:
     async def test_not_installed_raises_resource_not_found(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -258,7 +258,7 @@ class TestDiscoverEngineViaSupervisor:
         assert "not installed" in str(exc.value).lower()
 
     async def test_prefers_started_match(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -266,9 +266,9 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("abc_puppet", "def_puppet"),
-                "/addons/abc_puppet/info": _puppet_info(state="stopped"),
+                "/addons/abc_puppet/info": _puppet_info(slug="abc_puppet", state="stopped"),
                 "/addons/def_puppet/info": _puppet_info(
-                    state="started", hostname="def-puppet"
+                    slug="def_puppet", state="started", hostname="def-puppet"
                 ),
             },
         )
@@ -285,7 +285,7 @@ class TestDiscoverEngineViaSupervisor:
         )
 
     async def test_multiple_verified_started_matches_fail_closed(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -294,10 +294,10 @@ class TestDiscoverEngineViaSupervisor:
             {
                 "/addons": installed_apps("abc_puppet", "def_puppet"),
                 "/addons/abc_puppet/info": _puppet_info(
-                    state="started", hostname="abc-puppet"
+                    slug="abc_puppet", state="started", hostname="abc-puppet"
                 ),
                 "/addons/def_puppet/info": _puppet_info(
-                    state="started", hostname="def-puppet"
+                    slug="def_puppet", state="started", hostname="def-puppet"
                 ),
             },
         )
@@ -307,8 +307,8 @@ class TestDiscoverEngineViaSupervisor:
 
         assert "ambiguous" in str(exc_info.value)
 
-    async def test_started_without_hostname_raises(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+    async def test_started_without_hostname_uses_its_ip(
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -316,15 +316,14 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("def_puppet"),
-                "/addons/def_puppet/info": _puppet_info(state="started"),
+                "/addons/def_puppet/info": _puppet_info(slug="def_puppet", state="started"),
             },
         )
-        with pytest.raises(ToolError) as exc:
-            await provision.resolve_engine()
-        assert "hostname" in str(exc.value).lower()
+        target = await provision.resolve_engine()
+        assert target.url == "http://127.0.0.1:10000"
 
     async def test_installed_but_not_started_raises(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         from ha_mcp.dashboard_screenshot import provision
 
@@ -332,7 +331,7 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("def_puppet"),
-                "/addons/def_puppet/info": _puppet_info(state="stopped"),
+                "/addons/def_puppet/info": _puppet_info(slug="def_puppet", state="stopped"),
             },
         )
         with pytest.raises(ToolError) as exc:
@@ -340,7 +339,7 @@ class TestDiscoverEngineViaSupervisor:
         assert "not started" in str(exc.value).lower()
 
     async def test_supervisor_http_error_raises_connection_failed(
-        self, supervisor: Supervisor, monkeypatch: Any, supervisor_mode: None
+        self, supervisor: Supervisor, supervisor_mode: None
     ) -> None:
         import httpx
 

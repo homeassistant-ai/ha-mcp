@@ -24,6 +24,7 @@ from typing import Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..backup_files import file_read_error_code
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -58,10 +59,6 @@ _NO_CRASH_MESSAGE = (
     "Python errors never land here; use source='system' or source='error_log' "
     "for those."
 )
-
-
-def _is_missing_file_error(error: str) -> bool:
-    return "does not exist" in error or "not a file" in error
 
 
 def _no_crash(data: dict[str, Any], total_lines: int) -> dict[str, Any]:
@@ -238,7 +235,7 @@ class FaultLogSourceMixin:
         }
         if not result.get("success", False):
             error = str(result.get("error", ""))
-            if _is_missing_file_error(error):
+            if file_read_error_code(result, FAULT_LOG_PATH) in {"not_found", "not_a_file"}:
                 # HA opens the file at every start, so a missing file means
                 # this config dir has not been started by HA's __main__ (or
                 # someone removed it). Either way: nothing to show.

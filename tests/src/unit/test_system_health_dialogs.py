@@ -107,12 +107,21 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
         monkeypatch,
         {
             ("get", "/resolution/info"): ResolutionInfo(
-                unsupported=[], unhealthy=[UnhealthyReason.DOCKER], issues=[],
-                checks=[], suggestions=[],
+                unsupported=[],
+                unhealthy=[UnhealthyReason.DOCKER],
+                issues=[],
+                checks=[],
+                suggestions=[],
             ).to_dict(),
             ("get", "/core/stats"): HomeAssistantStats(
-                cpu_percent=3.5, memory_usage=0, memory_limit=1024, memory_percent=0,
-                network_rx=0, network_tx=0, blk_read=0, blk_write=0,
+                cpu_percent=3.5,
+                memory_usage=0,
+                memory_limit=1024,
+                memory_percent=0,
+                network_rx=0,
+                network_tx=0,
+                blk_read=0,
+                blk_write=0,
             ).to_dict(),
         },
     )

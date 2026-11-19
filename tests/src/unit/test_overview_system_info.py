@@ -534,7 +534,9 @@ async def test_ha_mcp_update_present_and_survives_projection(
     assert "system_info" in result
     notice = result["ha_mcp_update"]
     assert (notice["current"], notice["latest"], notice["update_available"]) == (
-        "7.8.0", "7.9.0", True
+        "7.8.0",
+        "7.9.0",
+        True,
     )
     assert pypi.asked == ["ha-mcp"]
 

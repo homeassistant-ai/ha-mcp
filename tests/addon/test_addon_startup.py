@@ -91,19 +91,22 @@ async def options_supervisor(aiohttp_client, socket_enabled, monkeypatch):
     async def options(request: web.Request) -> web.Response:
         posts.append((request.headers, await request.json()))
         if response["status"] == 400:
-            return web.json_response({"result": "error", "message": "invalid options"}, status=400)
+            return web.json_response(
+                {"result": "error", "message": "invalid options"}, status=400
+            )
         return web.json_response({"result": "ok", "data": {}})
 
     server = web.Application()
     server.router.add_post("/addons/self/options", options)
     listener = await aiohttp_client(server)
+    port_number = listener.port
     resolve = socket.getaddrinfo
     monkeypatch.setenv("no_proxy", "supervisor,127.0.0.1")
     monkeypatch.setenv("NO_PROXY", "supervisor,127.0.0.1")
 
     def address(host, port, *args, **kwargs):
         if host == "supervisor" and port == 80:
-            host, port = "127.0.0.1", listener.port
+            host, port = "127.0.0.1", port_number
         return resolve(host, port, *args, **kwargs)
 
     monkeypatch.setattr(socket, "getaddrinfo", address)
@@ -112,23 +115,31 @@ async def options_supervisor(aiohttp_client, socket_enabled, monkeypatch):
 
 class TestMaybePersistSecretPath:
     @pytest.mark.parametrize("config", [{}, {"secret_path": "/private_same"}])
-    async def test_skips_a_redundant_or_empty_options_write(self, options_supervisor, config):
+    async def test_skips_a_redundant_or_empty_options_write(
+        self, options_supervisor, config
+    ):
         _, posts, _ = options_supervisor
         addon = load_addon_start()
-        await asyncio.to_thread(addon.maybe_persist_secret_path, config, "/private_same", "token")
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, config, "/private_same", "token"
+        )
         assert posts == []
 
     async def test_persists_the_full_config_and_the_app_token(self, options_supervisor):
         _, posts, _ = options_supervisor
         addon = load_addon_start()
         config = {"verify_ssl": True, "secret_path": "/private_old"}
-        await asyncio.to_thread(addon.maybe_persist_secret_path, config, "/private_new", "test-token")
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, config, "/private_new", "test-token"
+        )
         [(headers, body)] = posts
         assert headers["Authorization"] == "Bearer test-token"
         assert headers["Content-Type"] == "application/json"
         assert body == {"options": {"verify_ssl": True, "secret_path": "/private_new"}}
 
-    async def test_rejected_options_log_the_recovery_path(self, options_supervisor, capfd):
+    async def test_rejected_options_log_the_recovery_path(
+        self, options_supervisor, capfd
+    ):
         _, posts, response = options_supervisor
         response["status"] = 400
         addon = load_addon_start()
@@ -136,7 +147,10 @@ class TestMaybePersistSecretPath:
             await asyncio.to_thread(addon.persist_addon_options, {}, "token")
         assert error.value.code == 400
         await asyncio.to_thread(
-            addon.maybe_persist_secret_path, {"verify_ssl": True}, "/private_new", "token"
+            addon.maybe_persist_secret_path,
+            {"verify_ssl": True},
+            "/private_new",
+            "token",
         )
         assert len(posts) == 2
         err = capfd.readouterr().err
@@ -144,14 +158,19 @@ class TestMaybePersistSecretPath:
         assert "/private_new" in err
         assert "Secret path override" in err
 
-    async def test_connection_failure_propagates_and_startup_logs_it(self, options_supervisor, capfd):
+    async def test_connection_failure_propagates_and_startup_logs_it(
+        self, options_supervisor, capfd
+    ):
         listener, _, _ = options_supervisor
         await listener.close()
         addon = load_addon_start()
         with pytest.raises(urllib.error.URLError):
             await asyncio.to_thread(addon.persist_addon_options, {}, "token")
         await asyncio.to_thread(
-            addon.maybe_persist_secret_path, {"verify_ssl": True}, "/private_new", "token"
+            addon.maybe_persist_secret_path,
+            {"verify_ssl": True},
+            "/private_new",
+            "token",
         )
         err = capfd.readouterr().err
         assert "Failed to persist secret_path" in err

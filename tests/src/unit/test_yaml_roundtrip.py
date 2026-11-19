@@ -418,25 +418,34 @@ class TestSeqIndentDetectionEdges:
         (
             "custom_packages: !include_dir_named packages\n",
             {"packages/nested/mcp.yaml": "template: {}\n"},
-            "template", ["packages/nested/mcp.yaml"],
+            "template",
+            ["packages/nested/mcp.yaml"],
         ),
-        ("homeassistant: {name: Home}\n", {}, "homeassistant.name", ["configuration.yaml"]),
+        (
+            "homeassistant: {name: Home}\n",
+            {},
+            "homeassistant.name",
+            ["configuration.yaml"],
+        ),
         ("sensor: {name: x}\n", {}, "sensor..name", []),
         ("template: {sensor: []}\n", {}, "sensor", []),
         (
             "shell_command: !secret commands\n",
             {"secrets.yaml": "commands: {template: {}}\n"},
-            "template", [],
+            "template",
+            [],
         ),
         (
             "shell_command: !include commands.yaml\n",
             {"commands.yaml": "mcp_secret: value\n"},
-            "shell_command.mcp_secret", [],
+            "shell_command.mcp_secret",
+            [],
         ),
         (
             "included: !include commands.yaml\n",
             {"commands.yaml": "shell_command: {mcp_secret: value}\n"},
-            "shell_command.mcp_secret", ["commands.yaml"],
+            "shell_command.mcp_secret",
+            ["commands.yaml"],
         ),
         (
             "custom_packages: !include_dir_named packages\n",
@@ -444,7 +453,8 @@ class TestSeqIndentDetectionEdges:
                 "packages/nested/mcp.yaml": "shell_command: {mcp_secret: !secret cmd}\n",
                 "secrets.yaml": "cmd: value\n",
             },
-            "shell_command.mcp_secret", ["packages/nested/mcp.yaml"],
+            "shell_command.mcp_secret",
+            ["packages/nested/mcp.yaml"],
         ),
     ],
 )
@@ -455,8 +465,12 @@ def test_discovery_uses_cores_yaml_source_locations(
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    config = load_yaml_config_file(str(tmp_path / "configuration.yaml"), Secrets(tmp_path))
-    assert find_yaml_key_files(config, key) == [str(tmp_path / name) for name in expected]
+    config = load_yaml_config_file(
+        str(tmp_path / "configuration.yaml"), Secrets(tmp_path)
+    )
+    assert find_yaml_key_files(config, key) == [
+        str(tmp_path / name) for name in expected
+    ]
 
 
 def test_discovery_walks_a_list_of_loaded_mappings(tmp_path: Path) -> None:
@@ -469,7 +483,13 @@ def test_discovery_walks_a_list_of_loaded_mappings(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("root", "key"),
-    [({"template": {}}, ""), ("not a mapping", "template"), ({"template": {}}, "template")],
+    [
+        ({"template": {}}, ""),
+        ("not a mapping", "template"),
+        ({"template": {}}, "template"),
+    ],
 )
-def test_discovery_ignores_missing_paths_and_unannotated_inputs(root: Any, key: str) -> None:
+def test_discovery_ignores_missing_paths_and_unannotated_inputs(
+    root: Any, key: str
+) -> None:
     assert find_yaml_key_files(root, key) == []

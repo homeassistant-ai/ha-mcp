@@ -263,7 +263,8 @@ class TestRemoveWait:
         with (
             at_entity_wait(hass, lambda: hass.states.async_set("zone.office", "0")),
             patch.object(
-                tools_zones, "wait_for_entity_removed",
+                tools_zones,
+                "wait_for_entity_removed",
                 partial(tools_zones.wait_for_entity_removed, timeout=0.05),
             ),
         ):

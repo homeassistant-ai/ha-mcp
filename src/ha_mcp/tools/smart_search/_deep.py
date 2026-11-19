@@ -8,7 +8,6 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
-
 from ..component_api import component_supports, get_component_caps
 from ..dashboard_read_errors import no_stored_config
 from ..helpers import exception_to_structured_error, safe_progress

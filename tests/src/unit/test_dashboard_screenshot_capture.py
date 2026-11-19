@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 import pytest
 
@@ -16,125 +16,52 @@ from ._dashboard_screenshot_common import (
     PNG,
     WEBP,
     clear_screenshot_env,
-    set_settings,
 )
+from ._screenshot_engine import Engine, Render
+from ._screenshot_engine import engine as engine
 
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: Any) -> None:
     clear_screenshot_env(monkeypatch)
-    set_settings(monkeypatch, dashboard_screenshot_engine_url="http://engine:10000")
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        status_code: int,
-        content: bytes,
-        text: str = "",
-        content_type: str = "image/png",
-        content_length: int | None = None,
-        chunks: list[bytes] | None = None,
-    ) -> None:
-        self.status_code = status_code
-        self.content = content
-        self.text = text
-        self.headers = {"content-type": content_type}
-        if content_length is not None:
-            self.headers["content-length"] = str(content_length)
-        self._chunks = chunks
-        self.iterated = False
-
-    async def aiter_bytes(self) -> AsyncIterator[bytes]:
-        self.iterated = True
-        chunks = self._chunks if self._chunks is not None else [self.content]
-        for chunk in chunks:
-            yield chunk
-
-
-class _FakeStreamContext:
-    def __init__(self, response: _FakeResponse | Exception) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeResponse:
-        if isinstance(self._response, Exception):
-            raise self._response
-        return self._response
-
-    async def __aexit__(self, *_a: Any) -> None:
-        return None
-
-
-class _FakeAsyncClient:
-    """Minimal async-context httpx.AsyncClient stand-in."""
-
-    last_get: ClassVar[dict[str, Any]] = {}
-    gets: ClassVar[list[dict[str, Any]]] = []
-    next_response: ClassVar[_FakeResponse | Exception | list[_FakeResponse | Exception]]
-
-    def __init__(self, *_a: Any, **_kw: Any) -> None:
-        pass
-
-    async def __aenter__(self) -> _FakeAsyncClient:
-        return self
-
-    async def __aexit__(self, *_a: Any) -> None:
-        return None
-
-    def stream(
-        self, method: str, url: str, params: dict[str, Any] | None = None
-    ) -> _FakeStreamContext:
-        _FakeAsyncClient.last_get = {
-            "url": url,
-            "params": dict(params) if params is not None else None,
-        }
-        _FakeAsyncClient.gets.append(_FakeAsyncClient.last_get)
-        next_response = _FakeAsyncClient.next_response
-        if isinstance(next_response, list):
-            next_response = next_response.pop(0)
-        return _FakeStreamContext(next_response)
 
 
 class TestCapture:
-    async def test_builds_url_and_returns_png(self, monkeypatch: Any) -> None:
+    async def test_builds_url_and_returns_png(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         png = b"\x89PNG\r\n\x1a\nfake"
-        _FakeAsyncClient.next_response = _FakeResponse(200, png)
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, png)
 
         captures = await capture.capture_dashboard_images(
             "lovelace/0", width=640, height=480, zoom=1.5, wait_ms=2000
         )
         assert captures[0].data == png
-        got = _FakeAsyncClient.last_get
-        assert got["url"] == "http://engine:10000/lovelace/0"
+        got = engine.gets[-1]
+        assert got["path"] == "/lovelace/0"
         assert got["params"]["viewport"] == "640x480"
         assert got["params"]["zoom"] == "1.5"
         assert got["params"]["wait"] == "2000"
         assert got["params"]["format"] == "png"
 
-    async def test_full_page_uses_native_auto_height(self, monkeypatch: Any) -> None:
+    async def test_full_page_uses_native_auto_height(self, engine: Engine) -> None:
         """full_page=True uses the content-sized viewport request."""
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, b"\x89PNG\r\n\x1a\nfake")
 
         await capture.capture_dashboard_images(
             "lovelace/0", width=1024, height=480, full_page=True
         )
-        got = _FakeAsyncClient.last_get
+        got = engine.gets[-1]
         assert got["params"]["viewport"] == "1024xauto"
 
     async def test_auto_height_and_full_page_are_true_custom_aliases(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, PNG)
 
         explicit = await capture.capture_dashboard_images(
             "lovelace/0", width=700, height="auto"
@@ -146,7 +73,7 @@ class TestCapture:
             "lovelace/0", width=700, height=1600, full_page=True
         )
 
-        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
+        assert [request["params"]["viewport"] for request in engine.gets] == [
             "700xauto",
             "700xauto",
             "700xauto",
@@ -172,12 +99,11 @@ class TestCapture:
         assert "custom auto-height viewport" in str(exc_info.value)
 
     async def test_preset_full_page_keeps_orientation_support(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, PNG)
 
         result = await capture.capture_dashboard_images(
             "lovelace/0",
@@ -186,7 +112,7 @@ class TestCapture:
             full_page=True,
         )
 
-        assert _FakeAsyncClient.last_get["params"]["viewport"] == "844xauto"
+        assert engine.gets[-1]["params"]["viewport"] == "844xauto"
         assert (result[0].width, result[0].height, result[0].orientation) == (
             844,
             "auto",
@@ -194,51 +120,44 @@ class TestCapture:
         )
 
     async def test_explicit_auto_does_not_use_legacy_full_page_fallback(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             400, b"", content_type="text/plain"
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images("lovelace/0", height="auto")
 
-        assert len(_FakeAsyncClient.gets) == 1
+        assert len(engine.gets) == 1
 
     async def test_declared_oversize_rejected_before_body_read(
-        self, monkeypatch: Any
+        self, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        async def fake_resolve() -> EngineTarget:
-            return EngineTarget(url="http://engine:10000")
-
-        response = _FakeResponse(200, b"12345", content_length=5)
-        monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
+        response = Render(200, b"", content_length=5, hold_body=True)
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
-        _FakeAsyncClient.next_response = response
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = response
 
-        with pytest.raises(ToolError) as exc_info:
-            await capture.capture_dashboard_images("lovelace/0")
+        async with asyncio.timeout(3):
+            with pytest.raises(ToolError) as exc_info:
+                await capture.capture_dashboard_images("lovelace/0")
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
         assert error["limit_kind"] == "image"
-        assert response.iterated is False
+        assert len(engine.gets) == 1
 
-    async def test_chunked_oversize_stops_at_limit(self, monkeypatch: Any) -> None:
+    async def test_chunked_oversize_stops_at_limit(self, engine: Engine, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
-        _FakeAsyncClient.next_response = _FakeResponse(200, b"", chunks=[b"123", b"45"])
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, b"", chunks=[b"123", b"45"])
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0")
@@ -247,15 +166,14 @@ class TestCapture:
         assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
         assert error["received_bytes"] == 5
 
-    async def test_exact_payload_boundary_succeeds(self, monkeypatch: Any) -> None:
+    async def test_exact_payload_boundary_succeeds(self, engine: Engine, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 8)
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, BMP, content_type="image/bmp", content_length=4
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         result = await capture.capture_dashboard_images(
             "lovelace/0", image_format="bmp"
@@ -264,16 +182,15 @@ class TestCapture:
         assert result[0].data == BMP
 
     async def test_batch_limit_identifies_second_capture(
-        self, monkeypatch: Any
+        self, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, BMP, content_type="image/bmp", content_length=4
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
@@ -290,22 +207,20 @@ class TestCapture:
         assert error["preset"] == "desktop"
 
     async def test_partial_batch_retains_success_and_structured_failure(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
-        import httpx
-
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = [
-            _FakeResponse(200, PNG),
-            httpx.ReadTimeout("desktop timed out"),
+        engine.next_response = [
+            Render(200, PNG),
+            None,
         ]
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
 
         result = await capture.capture_dashboard_images(
             "lovelace/0",
             viewport_presets=["mobile", "desktop"],
+            render_timeout_seconds=1,
             partial_failures=failures,
         )
 
@@ -316,22 +231,20 @@ class TestCapture:
         assert failures[0]["preset"] == "desktop"
 
     async def test_partial_batch_continues_after_first_failure(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
-        import httpx
-
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = [
-            httpx.ReadTimeout("mobile timed out"),
-            _FakeResponse(200, PNG),
+        engine.next_response = [
+            None,
+            Render(200, PNG),
         ]
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
 
         result = await capture.capture_dashboard_images(
             "lovelace/0",
             viewport_presets=["mobile", "desktop"],
+            render_timeout_seconds=1,
             partial_failures=failures,
         )
 
@@ -341,23 +254,21 @@ class TestCapture:
         assert failures[0]["preset"] == "mobile"
 
     async def test_all_failed_batch_raises_ordered_aggregate(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
-        import httpx
-
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = [
-            httpx.ReadTimeout("mobile timed out"),
-            httpx.ReadTimeout("desktop timed out"),
+        engine.next_response = [
+            None,
+            None,
         ]
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
                 "lovelace/0",
                 viewport_presets=["mobile", "desktop"],
+                render_timeout_seconds=1,
                 partial_failures=failures,
             )
 
@@ -374,16 +285,15 @@ class TestCapture:
         ]
 
     async def test_batch_cap_returns_prior_capture_as_partial(
-        self, monkeypatch: Any
+        self, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
         monkeypatch.setattr(capture, "MAX_BATCH_PAYLOAD_BYTES", 6)
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, BMP, content_type="image/bmp", content_length=4
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
         failures: list[dict[str, Any]] = []
 
         result = await capture.capture_dashboard_images(
@@ -399,15 +309,13 @@ class TestCapture:
         assert failures[0]["capture_index"] == 1
 
     async def test_batch_presets_forward_deterministic_context(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, JPEG, content_type="image/jpeg"
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         captures = await capture.capture_dashboard_images(
             "wall-panel/home",
@@ -429,11 +337,11 @@ class TestCapture:
         ]
         assert all(item.mime_type == "image/jpeg" for item in captures)
         assert all(item.options.theme == "Gerry Dark" for item in captures)
-        assert [request["params"]["viewport"] for request in _FakeAsyncClient.gets] == [
+        assert [request["params"]["viewport"] for request in engine.gets] == [
             "844x390",
             "1280x800",
         ]
-        for request in _FakeAsyncClient.gets:
+        for request in engine.gets:
             assert request["params"] == {
                 "viewport": request["params"]["viewport"],
                 "zoom": "1.25",
@@ -444,13 +352,12 @@ class TestCapture:
                 "lang": "de",
             }
 
-    async def test_rejects_unexpected_content_type(self, monkeypatch: Any) -> None:
+    async def test_rejects_unexpected_content_type(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, b"not a jpeg", content_type="image/png"
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0", image_format="jpeg")
@@ -466,18 +373,16 @@ class TestCapture:
         ],
     )
     async def test_accepts_matching_image_signatures(
-        self,
-        monkeypatch: Any,
+        self, engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
         body: bytes,
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, body, content_type=mime_type
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         result = await capture.capture_dashboard_images(
             "lovelace/0", image_format=image_format
@@ -495,17 +400,15 @@ class TestCapture:
         ],
     )
     async def test_rejects_mislabeled_non_image_bytes(
-        self,
-        monkeypatch: Any,
+        self, engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(
+        engine.next_response = Render(
             200, b"<html>login</html>", content_type=mime_type
         )
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
@@ -518,14 +421,11 @@ class TestCapture:
         assert error["received_signature_hex"]
 
     async def test_timeout_has_distinct_structured_error(
-        self, monkeypatch: Any
+        self, engine: Engine
     ) -> None:
-        import httpx
-
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = httpx.ReadTimeout("render too slow")
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = None
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
@@ -542,20 +442,18 @@ class TestCapture:
             )
         assert "without duplicate presets" in str(exc_info.value)
 
-    async def test_http_error_raises_toolerror(self, monkeypatch: Any) -> None:
+    async def test_http_error_raises_toolerror(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(502, b"", text="bad gateway")
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(502, b"", text="bad gateway")
 
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images("lovelace/0")
 
-    async def test_empty_body_raises_toolerror(self, monkeypatch: Any) -> None:
+    async def test_empty_body_raises_toolerror(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(200, b"")
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, b"")
 
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images("lovelace/0")
@@ -581,27 +479,24 @@ class TestCapture:
         ],
     )
     async def test_unsafe_dashboard_paths_never_reach_the_engine(
-        self, monkeypatch: Any, path: str
+        self, engine: Engine, path: str
     ) -> None:
         """A path that is not a plain dashboard path is refused before the
         engine is asked for anything."""
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.gets = []
-        _FakeAsyncClient.next_response = _FakeResponse(200, PNG)
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, PNG)
 
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images(path)
-        assert _FakeAsyncClient.gets == []
+        assert engine.gets == []
 
-    async def test_path_segments_are_percent_encoded(self, monkeypatch: Any) -> None:
+    async def test_path_segments_are_percent_encoded(self, engine: Engine) -> None:
         """A valid segment with an encodable char reaches the engine
         percent-encoded (defense-in-depth), not raw."""
         from ha_mcp.dashboard_screenshot import capture
 
-        _FakeAsyncClient.next_response = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
-        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+        engine.next_response = Render(200, b"\x89PNG\r\n\x1a\nfake")
 
         await capture.capture_dashboard_images("my dash/0")
-        assert _FakeAsyncClient.last_get["url"] == "http://engine:10000/my%20dash/0"
+        assert engine.gets[-1]["path"] == "/my%20dash/0"

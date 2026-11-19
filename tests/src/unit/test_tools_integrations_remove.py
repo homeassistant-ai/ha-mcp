@@ -387,7 +387,8 @@ async def test_a_helper_still_present_after_the_wait_is_a_warning(
     with (
         at_entity_wait(hass, lambda: hass.states.async_set(entity_id, "unknown")),
         patch.object(
-            ws_waiters, "wait_for_entity_removed",
+            ws_waiters,
+            "wait_for_entity_removed",
             partial(ws_waiters.wait_for_entity_removed, timeout=0.05),
         ),
     ):

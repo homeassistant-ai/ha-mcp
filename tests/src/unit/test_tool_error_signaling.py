@@ -133,7 +133,7 @@ class TestExceptionToStructuredError:
     def test_no_suggestions_when_none(self) -> None:
         """No hint at all only when neither the caller nor the code has one."""
         result = exception_to_structured_error(
-            Exception("resource not found"),
+            HomeAssistantAPIError("Resource not found", status_code=404),
             raise_error=False,
         )
 
@@ -193,9 +193,9 @@ class TestErrorCodeMapping:
         )
         assert result["error"]["code"] == "TIMEOUT_OPERATION"
 
-    def test_connection_error_in_message_maps_correctly(self) -> None:
+    def test_connection_refusal_maps_to_connection_failed(self) -> None:
         result = exception_to_structured_error(
-            Exception("Connection refused"), raise_error=False
+            ConnectionRefusedError("peer refused the socket"), raise_error=False
         )
         assert result["error"]["code"] == "CONNECTION_FAILED"
 
@@ -337,16 +337,6 @@ class TestSchemaAndAuthClassification:
         except HomeAssistantConnectionError as exc:
             result = exception_to_structured_error(exc, raise_error=False)
         assert result["error"]["code"] == expected
-
-    def test_wrapped_auth_error_is_classified_by_its_own_text(self) -> None:
-        """An expired token stays expired when the wrapper's text differs."""
-        try:
-            raise HomeAssistantConnectionError("no answer") from HomeAssistantAuthError(
-                "Token expired"
-            )
-        except HomeAssistantConnectionError as exc:
-            result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] == "AUTH_EXPIRED"
 
     # Core closes a socket whose token it refused; the client's close reply
     # then re-arms aiohttp's heartbeat timer on that closed server socket.

@@ -31,7 +31,6 @@ from ha_mcp.tools.tools_logs import register_logs_tools
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
-
 from ._supervisor_logs_core import Supervisor
 from ._supervisor_logs_core import core_proxy as core_proxy
 
@@ -97,7 +96,7 @@ async def test_supervised_404_names_the_os_version(
 
     assert any(NOT_EXPOSED in s for s in suggestions)
     assert not any(UNMANAGED in s for s in suggestions)
-    assert any(request.path.startswith('/core/logs') for request in core_proxy.requests)
+    assert any(request.path.startswith("/core/logs") for request in core_proxy.requests)
 
 
 async def test_unsupervised_404_names_the_install_type(

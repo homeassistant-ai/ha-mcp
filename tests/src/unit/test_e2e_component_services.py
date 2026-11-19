@@ -17,8 +17,18 @@ def admin_token(hass_access_token: str, monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.parametrize(
     ("setter", "getter", "field", "values"),
     [
-        (component_services.set_allowed_paths, "get_allowed_paths", "paths", ["pyscript"]),
-        (component_services.set_extra_yaml_keys, "get_extra_yaml_keys", "keys", ["test_key"]),
+        (
+            component_services.set_allowed_paths,
+            "get_allowed_paths",
+            "paths",
+            ["pyscript"],
+        ),
+        (
+            component_services.set_extra_yaml_keys,
+            "get_extra_yaml_keys",
+            "keys",
+            ["test_key"],
+        ),
     ],
 )
 async def test_a_successful_reset_updates_the_component(
@@ -43,9 +53,13 @@ async def test_a_failed_reset_raises(
     if installed:
         await set_up_tools_entry(hass)
     with pytest.raises(AssertionError, match="set_extra_yaml_keys failed"):
-        await component_services.set_extra_yaml_keys(core_client.base_url, "invalid", [])
+        await component_services.set_extra_yaml_keys(
+            core_client.base_url, "invalid", []
+        )
 
 
-async def test_bootstrap_names_the_missing_service(core_client: HomeAssistantClient) -> None:
+async def test_bootstrap_names_the_missing_service(
+    core_client: HomeAssistantClient,
+) -> None:
     with pytest.raises(AssertionError, match="get_caller_token failed"):
         await component_services.bootstrap_caller_token(core_client.base_url)

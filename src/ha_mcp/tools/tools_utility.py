@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.exceptions import http_failure_status
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
@@ -108,10 +109,9 @@ class UtilityTools:
         except ToolError:
             raise
         except Exception as e:
-            error_str = str(e)
             suggestions = ["Check Home Assistant WebSocket connection"]
 
-            if "403" in error_str and "Forbidden" in error_str:
+            if http_failure_status(e) == 403:
                 suggestions = [
                     "The request was blocked (403 Forbidden) - this may be caused by:",
                     "  • Reverse proxy security rules (Apache, Nginx, Traefik)",
@@ -195,7 +195,9 @@ class UtilityTools:
                     suggestions=["Check Home Assistant WebSocket connection"],
                 )
             )
-        if HA_RENDER_TIMEOUT_TEXT in error:
+        if result.get("error_code") == "template_error" and error == (
+            f"{HA_RENDER_TIMEOUT_TEXT} of {float(timeout)}s"
+        ):
             # A second render would only time out again.
             raise_tool_error(
                 create_error_response(

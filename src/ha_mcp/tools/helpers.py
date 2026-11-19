@@ -397,169 +397,73 @@ def _classify_api_status(
 
 def _classify_exception(
     error: Exception,
-    error_str: str,
-    error_msg: str,
     context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Classify exception into structured error response by type, then message."""
-    result: dict[str, Any] | None = None
-
-    # Type-based classification
-    match error:
-        case HomeAssistantConnectionError() if isinstance(
-            error.__cause__, HomeAssistantAuthError
-        ):
-            # send_websocket_message wraps a failure to obtain a client in a
-            # connection error raised from the original, so a token rejected
-            # on (re)connect arrives here wrapped: classify the cause by its
-            # own text.
-            cause = error.__cause__
-            return _classify_exception(cause, str(cause).lower(), error_msg, context)
-        case HomeAssistantConnectionError():
-            # send_websocket_message raises a command timeout as the cause.
-            timeout = isinstance(error.__cause__, HomeAssistantCommandTimeout)
-            result = create_connection_error(
-                error_msg, timeout=timeout or "timeout" in error_str, context=context
-            )
-        case HomeAssistantAdminRequiredError():
-            result = create_error_response(
-                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                error_msg,
-                suggestions=[
-                    "Use a long-lived access token from an administrator's profile",
-                    "Or, on the in-process server, use a token issued in the "
-                    + "integration's forms from the login of a local-only "
-                    + "administrator account",
-                ],
-                context=context,
-            )
-            result["warnings"] = [NON_ADMIN_TOKEN_WARNING]
-        case HomeAssistantAuthError():
-            result = create_auth_error(
-                error_msg, expired="expired" in error_str, context=context
-            )
-        case HomeAssistantAPIError():
-            result = _classify_api_status(error, error_msg, context)
-        case HomeAssistantCommandError():
-            # WebSocket command-failure. The ``error.code`` on Supervisor
-            # calls routed through HA Core's hassio WS bridge is always
-            # ``unknown_error`` (see homeassistant/components/hassio/
-            # websocket_api.py), so discrimination must come from the
-            # message. Fall through to ``_classify_by_message`` which
-            # pattern-matches schema, auth, not-found and timeout cases.
-            result = None
-        case TimeoutError():
-            operation = context.get("operation", "request") if context else "request"
-            timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-            result = create_timeout_error(
-                operation, timeout_seconds, details=error_msg, context=context
-            )
-        case ValueError():
-            result = create_validation_error(error_msg, context=context)
-
-    if result is not None:
-        return result
-
-    # Message-based classification fallback
-    return _classify_by_message(error_str, error_msg, context)
-
-
-def _classify_by_message(
-    error_str: str,
-    error_msg: str,
-    context: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Classify exception by error message patterns."""
-    result: dict[str, Any]
-    # Schema-branch must precede the "not found" / 404 branch (most-specific-first):
-    # a vol.Invalid message phrased like "Command failed: key X not found" would
-    # otherwise misclassify as RESOURCE_NOT_FOUND. The "command failed:" prefix
-    # gates the branch so non-schema WS errors fall through.
-    if "command failed:" in error_str and (
-        any(
-            marker in error_str
-            for marker in (
-                "missing option",
-                "extra keys not allowed",
-                "unknown secret",
-                "unknown type",
-            )
-        )
-        or re.search(
-            r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str
-        )
-    ):
-        # Supervisor schema validation: vol.Invalid message arriving as a
-        # HomeAssistantCommandError via HA Core's hassio WS bridge. The
-        # markers plus the "expected <type>" anchor regex cover the
-        # heterogeneous vol.Invalid vocabulary without relying on an
-        # error code (always unknown_error from the bridge).
-        result = create_validation_error(error_msg, context=context)
-    elif (
-        "not found" in error_str
-        or "404" in error_str
-        or "unknown config specified" in error_str
-    ):
-        # ``unknown config specified`` is HA Core's WS-bridge phrasing for
-        # missing-dashboard 404s (lovelace/config with an unknown url_path).
-        # The string contains neither ``not found`` nor ``404``, so it would
-        # otherwise fall through to the ``command failed:`` SERVICE_CALL_FAILED
-        # fallback below and the agent would lose the not-found signal.
-        entity_id = context.get("entity_id") if context else None
-        if entity_id:
-            result = create_entity_not_found_error(entity_id, details=error_msg)
-        else:
-            result = create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
-            )
-    elif "timeout" in error_str:
-        # Honor caller-supplied context like the type-based TimeoutError
-        # branch does — a hardcoded 30 here misreported calls that run on a
-        # longer budget (e.g. the 60 s HACS refresh/remove round-trips).
-        # WS callers name the call ``command`` rather than ``operation``, so
-        # fall back to it: without that the message reads "Operation
-        # 'operation' timed out" and never names what actually timed out.
-        operation = (
-            (context.get("operation") or context.get("command") or "operation")
-            if context
-            else "operation"
-        )
-        timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-        result = create_timeout_error(
-            operation, timeout_seconds, details=error_msg, context=context
-        )
-    elif "connection" in error_str or "connect" in error_str:
-        result = create_connection_error(error_msg, context=context)
-    elif (
-        any(
-            phrase in error_str
-            for phrase in (
-                "unauthorized",
-                "authentication",
-                "invalid token",
-                "access denied",
-            )
-        )
-        or "401" in error_str
-    ):
-        result = create_auth_error(error_msg, context=context)
-    elif error_str.startswith("command failed:"):
-        # HomeAssistantCommandError fallback: WS ``success=False`` with a
-        # message that doesn't match any specific marker above. This is a
-        # known failure mode (the WS command itself failed), not an
-        # unexpected internal error — route to SERVICE_CALL_FAILED,
-        # mirroring the 4xx fallback in _classify_api_status.
+    """Classify a failure using the transport type or the code Core returned."""
+    message = str(error)
+    if isinstance(error, HomeAssistantConnectionError):
+        cause = error.__cause__
+        if isinstance(cause, HomeAssistantAuthError):
+            return _classify_exception(cause, context)
+        return create_connection_error(message, timeout=error.timed_out, context=context)
+    if isinstance(error, HomeAssistantAdminRequiredError):
         result = create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context
-        )
-    else:
-        result = create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            "An unexpected error occurred",
-            details=error_msg,
+            ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+            message,
+            suggestions=[
+                "Use a long-lived access token from an administrator's profile",
+                "Or, on the in-process server, use a token issued in the "
+                "integration's forms from the login of a local-only administrator account",
+            ],
             context=context,
         )
-    return result
+        result["warnings"] = [NON_ADMIN_TOKEN_WARNING]
+        return result
+    if isinstance(error, HomeAssistantAuthError):
+        return create_auth_error(message, context=context)
+    if isinstance(error, HomeAssistantAPIError):
+        return _classify_api_status(error, message, context)
+    if isinstance(error, HomeAssistantCommandError):
+        code = error.code
+        if code:
+            context = {**(context or {}), "ha_error_code": code}
+        if code in {"invalid_format", "invalid_info", "service_validation_error"}:
+            return create_validation_error(message, context=context)
+        if code in {"not_found", "config_not_found"}:
+            if context and (entity_id := context.get("entity_id")):
+                return {
+                    **context,
+                    **create_entity_not_found_error(entity_id, details=message),
+                }
+            return create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND, message, context=context
+            )
+        if code == "unauthorized":
+            return create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, message, context=context
+            )
+        if code != "timeout":
+            return create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED, message, context=context
+            )
+    elif isinstance(error, ConnectionError):
+        return create_connection_error(message, context=context)
+    elif isinstance(error, ValueError):
+        return create_validation_error(message, context=context)
+    elif not isinstance(error, (TimeoutError, HomeAssistantCommandTimeout)):
+        return create_error_response(
+            ErrorCode.INTERNAL_ERROR,
+            "An unexpected error occurred",
+            details=message,
+            context=context,
+        )
+    timing = context or {}
+    return create_timeout_error(
+        timing.get("operation") or timing.get("command") or "request",
+        timing.get("timeout_seconds", 30),
+        details=message,
+        context=context,
+    )
 
 
 # Environment failures: the classified guidance (token, admin rights, reachability)
@@ -666,10 +570,8 @@ def exception_to_structured_error(
     Raises:
         ToolError: If raise_error=True (default), raises with JSON-serialized error
     """
-    error_str = str(error).lower()
     error_msg = str(error)
-
-    error_response = _classify_exception(error, error_str, error_msg, context)
+    error_response = _classify_exception(error, context)
 
     # Tracebacks are operationally valuable only for genuinely unclassified
     # exceptions (programmer errors, library bugs) — every other branch in

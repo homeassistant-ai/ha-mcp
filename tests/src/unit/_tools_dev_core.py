@@ -118,7 +118,9 @@ class Supervisor:
         self.refusal: str | None = None
 
     async def info(self, request: web.Request) -> web.Response:
-        return web.json_response({"result": "ok", "data": app_info(options=self.options)})
+        return web.json_response(
+            {"result": "ok", "data": app_info(options=self.options)}
+        )
 
     async def save(self, request: web.Request) -> web.Response:
         if self.refusal is not None:

@@ -12,7 +12,6 @@ open fails the plugin's leftover-task check.
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,9 +26,9 @@ from ha_mcp.tools.tools_system import SystemTools
 from ._command_faults import arrival
 from ._component_frames import held
 from ._tools_system_core import answered_after, health_socket_dropped_on
-from ._zha_core import IEEE, set_up_zha, zigbee_network
 from ._update_check_sources import PyPI
 from ._update_check_sources import pypi as pypi
+from ._zha_core import IEEE, set_up_zha, zigbee_network
 
 OPTIONAL_SECTIONS = (
     "repairs",
@@ -100,7 +99,9 @@ async def test_the_servers_own_update_status_is_relayed_when_there_is_one(
     if enabled:
         notice = result["ha_mcp_update"]
         assert (notice["current"], notice["latest"], notice["update_available"]) == (
-            "7.8.0", "7.9.0", True
+            "7.8.0",
+            "7.9.0",
+            True,
         )
         assert pypi.asked == ["ha-mcp"]
     else:

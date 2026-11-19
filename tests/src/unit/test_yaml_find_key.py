@@ -252,11 +252,10 @@ async def test_named_bracketed_file_core_loaded_raises_on_a_parse_error(
     assert error_of(exc)["code"] == "CONFIG_INVALID"
 
 
-async def test_key_core_found_through_a_merged_folder_is_flagged(
+async def test_merged_folder_keys_are_local_to_the_file_that_writes_them(
     hass: HomeAssistant, get_yaml: GetYaml
 ) -> None:
-    """Core credits the package with keys merged in from a folder; reading the
-    package file cannot reach them, and the result must say so."""
+    """A merged key can be read from its own file under its local name."""
     await put(
         hass,
         {
@@ -269,10 +268,9 @@ async def test_key_core_found_through_a_merged_folder_is_flagged(
     out = await get_yaml(yaml_path="shell_command.mcp_secret", file="packages/*.yaml")
 
     assert out["matches"] == []
-    assert any(
-        warning.startswith("packages/merged.yaml is annotated as defining")
-        for warning in out["warnings"]
-    )
+    assert not any("is annotated as defining" in warning for warning in out.get("warnings", []))
+    local = await get_yaml(yaml_path="mcp_secret", file="shell/*.yaml")
+    assert _files(local) == ["shell/commands.yaml"]
 
 
 async def test_failed_lookup_of_a_bracketed_name_reports_it_unsearched(

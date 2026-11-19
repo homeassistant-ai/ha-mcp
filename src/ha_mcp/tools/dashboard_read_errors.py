@@ -51,14 +51,17 @@ def config_not_found(reply: dict[str, Any]) -> bool:
 
 def no_stored_config(reply: dict[str, Any]) -> bool:
     """Only differentiate the two causes once Core reports config_not_found."""
-    return config_not_found(reply) and get_error_message(reply) in NO_STORED_CONFIG_MESSAGES
+    return (
+        config_not_found(reply)
+        and get_error_message(reply) in NO_STORED_CONFIG_MESSAGES
+    )
 
 
 def dashboard_error_code(exc: ToolError) -> str | None:
     """Read Core's code preserved by the tool at the MCP boundary."""
     try:
         payload = json.loads(str(exc))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     code = payload.get("ha_error_code") if isinstance(payload, dict) else None
     return code if isinstance(code, str) else None

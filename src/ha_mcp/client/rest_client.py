@@ -1844,19 +1844,6 @@ class HomeAssistantClient:
             # Home Assistant's own answer (or a proxy's), or a local bug.
             error_str = str(e)
             code = getattr(e, "code", None)
-            if "403" in error_str and "Forbidden" in error_str:
-                logger.error(f"WebSocket 403 error: {error_str}")
-                return {
-                    "success": False,
-                    "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                    "error_code": code,
-                    "suggestions": [
-                        "This may be caused by a reverse proxy or security filter",
-                        "Try simplifying the request (e.g., shorter templates, fewer parameters)",
-                        "If using complex templates, try breaking them into smaller parts",
-                        "Check if your Home Assistant is behind a reverse proxy with security rules",
-                    ],
-                }
             # Name the command in the log line: a bare "Command failed:
             # Unknown command." is undiagnosable from a user's log
             # (issue #1889 took a live reproduction to attribute).
@@ -1867,7 +1854,10 @@ class HomeAssistantClient:
             # Preserve HA's structured error code (e.g. ``not_found``) so callers
             # can distinguish HA's authoritative verdict from a transient failure
             # instead of only seeing the stringified message.
-            return {"success": False, "error": error_str, "error_code": code}
+            fields = (
+                e.refusal_fields() if isinstance(e, HomeAssistantCommandError) else {"error_code": code}
+            )
+            return {"success": False, "error": error_str, **fields}
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
@@ -1911,7 +1901,7 @@ class HomeAssistantClient:
                 "error": str(e).removeprefix(
                     "subscribe_command('render_template') failed: "
                 ),
-                "error_code": e.code,
+                **e.refusal_fields(),
                 "template": template,
             }
         except TimeoutError:

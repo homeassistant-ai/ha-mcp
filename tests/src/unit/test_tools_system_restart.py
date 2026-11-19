@@ -8,7 +8,7 @@ server as the proxy's own error (#612, #1666): ``_gateway`` is that proxy.
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import aiohttp
 import pytest
@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_system import SystemTools
 
 from ._gateway import Gateway
@@ -55,7 +55,7 @@ async def stops(hass: HomeAssistant, core_client: HomeAssistantClient) -> list[b
 
 @pytest.fixture
 def restart_answer_lost(
-    gateway: Gateway, core_client: HomeAssistantClient, status: int
+    gateway: Gateway, core_client: HomeAssistantClient, status: int | None
 ) -> None:
     """The gateway hands the restart to Core, then answers ``status`` itself:
     Home Assistant went down before its answer reached the gateway."""
@@ -70,6 +70,10 @@ def restart_answer_lost(
             ) as answer,
         ):
             assert answer.status == 200
+        if status is None:
+            assert request.transport is not None
+            request.transport.close()
+            return web.Response()
         return web.Response(status=status, text="no reply from upstream")
 
     gateway.routes.append(
@@ -77,7 +81,7 @@ def restart_answer_lost(
     )
 
 
-@pytest.mark.parametrize("status", [502, 503, 504])
+@pytest.mark.parametrize("status", [502, 503, 504, None])
 @pytest.mark.usefixtures("restart_answer_lost")
 async def test_a_gateway_error_after_core_got_the_restart_is_reported_as_restarting(
     stops: list[bool], gateway_client: HomeAssistantClient
@@ -86,23 +90,6 @@ async def test_a_gateway_error_after_core_got_the_restart_is_reported_as_restart
     result = await SystemTools(gateway_client).ha_restart(confirm=True)
 
     assert stops == [True]
-    assert result["success"] is True
-    assert any("Wait 1-5 minutes" in w for w in result["warnings"])
-
-
-@pytest.mark.parametrize(
-    "message", ["Proxy returned: Bad Gateway", "Upstream Service Unavailable"]
-)
-async def test_a_lost_connection_naming_the_gateway_is_reported_as_restarting(
-    core_client: HomeAssistantClient, stops: list[bool], message: str
-) -> None:
-    with patch.object(
-        core_client,
-        "call_service",
-        AsyncMock(side_effect=HomeAssistantConnectionError(message)),
-    ):
-        result = await SystemTools(core_client).ha_restart(confirm=True)
-
     assert result["success"] is True
     assert any("Wait 1-5 minutes" in w for w in result["warnings"])
 

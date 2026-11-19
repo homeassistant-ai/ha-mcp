@@ -28,7 +28,8 @@ class TestMacOSConnectionHints:
 
     def test_hints_appear_on_darwin_for_connection_timeout(self):
         """macOS hints should appear for CONNECTION_TIMEOUT on darwin."""
-        error = HomeAssistantConnectionError("Request timeout: timed out")
+        error = HomeAssistantConnectionError("Request timed out")
+        error.__cause__ = TimeoutError()
         with patch("ha_mcp.tools.helpers.sys") as mock_sys:
             mock_sys.platform = "darwin"
             result = exception_to_structured_error(error, raise_error=False)

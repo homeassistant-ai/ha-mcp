@@ -2213,9 +2213,7 @@ class DashboardConfigTools:
         # except block).
         resolved_url_path[0] = url_path
 
-        # Check if request failed (after potential retry). On this legacy read
-        # (no component, or force_reload) Core's message is the only signal
-        # that the dashboard has no config.
+        # A legacy read distinguishes the two causes of config_not_found.
         error_msg: str | None = None
         if isinstance(response, dict) and not response.get("success", True):
             error = response.get("error", {})
