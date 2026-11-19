@@ -8,7 +8,6 @@ talk to whichever API the instance serves, Marketplace first.
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
-from .. import error_wording
 from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -221,10 +220,17 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
     return HACS_API  # unreachable: raise_tool_error always raises
 
 
+def _directory_owner(err: HomeAssistantCommandError) -> str | None:
+    """The installed record that owns the integration's directory, when the
+    Marketplace refused for that (``integration_owned``)."""
+    if err.translation_key != "integration_owned":
+        return None
+    owner = (err.translation_placeholders or {}).get("owner")
+    return owner if isinstance(owner, str) else None
+
+
 def is_owned_directory_refusal(err: HomeAssistantCommandError) -> bool:
-    """Whether the store refused because another installed record owns the
-    integration's directory."""
-    return error_wording.store_directory_owner(str(err)) is not None
+    return _directory_owner(err) is not None
 
 
 def raise_store_error(
@@ -244,7 +250,7 @@ def raise_store_error(
     owner hint whatever ha-mcp's own records look like.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
-    if owner := error_wording.store_directory_owner(str(err)):
+    if owner := _directory_owner(err):
         owners = {r.lower() for r in installed_records or []}
         if len(owners) > 1 and owner.lower() in owners:
             suggestions = DUPLICATE_RECORD_SUGGESTIONS

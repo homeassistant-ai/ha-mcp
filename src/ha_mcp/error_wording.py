@@ -127,19 +127,6 @@ def supervisor_job_collision(text: str) -> bool:
     return _JOB_COLLISION.fullmatch(text.removeprefix(COMMAND_FAILED)) is not None
 
 
-# --- Marketplace / HACS -------------------------------------------------------
-# ``integration_owned``: "The {domain} directory belongs to {owner}." The owner
-# is matched as ``owner/repo``, never a fragment of some other message.
-_OWNED_DIRECTORY = re.compile(
-    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w-][\w.-]*?)\.?$"
-)
-
-
-def store_directory_owner(text: str) -> str | None:
-    match = _OWNED_DIRECTORY.match(text.strip())
-    return match[1] if match else None
-
-
 # --- ha_mcp_tools component before its file services returned codes ---------
 
 
