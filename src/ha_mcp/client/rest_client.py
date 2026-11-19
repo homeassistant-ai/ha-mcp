@@ -2186,9 +2186,9 @@ class HomeAssistantClient:
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
         the original storage key. Like :meth:`_resolve_script_id`, this returns
         the bare storage key and needs a WebSocket entity registry lookup because
-        the state attributes do not surface it; the parity ends there, since the
-        underlying :meth:`_resolve_scene` additionally carries registry metadata
-        (``registry_hit``/``platform``) that the script resolver has no analogue for.
+        the state attributes do not surface it. Unlike it, :meth:`_resolve_scene`
+        gives a bare storage key precedence, refuses an unregistered ``scene.<id>``
+        when key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.
 
         Thin wrapper over :meth:`_resolve_scene` for callers that only need the
         storage key (e.g. the write path); the read/delete paths use the richer

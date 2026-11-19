@@ -803,7 +803,7 @@ def test_select_scene_ids_mixed_ha_and_integration_splits_correctly() -> None:
         scored,
         homeassistant_scene_uids={"uid-x"},
         registry_failed=False,
-        slug_to_storage_id={},
+        slug_to_storage_id={uid: uid for uid in ("uid-x", "uid-y", "uid-z")},
     )
     assert sids == ["uid-x"]
     assert integration_skipped == 2

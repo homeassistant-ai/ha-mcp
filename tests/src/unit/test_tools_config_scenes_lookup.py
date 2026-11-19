@@ -633,7 +633,7 @@ class TestEntityIdForm:
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> ConfigSceneTools:
-        """``key_a`` is "First" (``scene.first``); no ``scene.key_a`` exists."""
+        """``key_a`` is "First" (``scene.first``); no registered ``scene.key_a``."""
         return await scene_tools(
             hass, core_client, monkeypatch, [scene("key_a", "First")]
         )
@@ -671,3 +671,24 @@ class TestEntityIdForm:
         )
 
         assert {s["id"] for s in await stored_scenes(hass)} == {"key_a", "brand_new"}
+
+    async def test_search_gives_an_unregistered_scene_neither_key_nor_config(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        orphaned_key: ConfigSceneTools,
+    ) -> None:
+        """A scene from ``scene.create`` has no registry entry and no stored
+        config; its slug ``key_a`` is "First"'s storage key."""
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "key_a", "entities": TV_ON}, blocking=True
+        )
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="key_a", search_types=["scene"], limit=10, include_config=True
+        )
+        (match,) = [m for m in result["scenes"] if m["entity_id"] == "scene.key_a"]
+
+        assert match["scene_id"] == "scene.key_a"
+        assert match["config"] is None
+        with pytest.raises(ToolError):
+            await orphaned_key.ha_config_get_scene(scene_id=match["scene_id"])

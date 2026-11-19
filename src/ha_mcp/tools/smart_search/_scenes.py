@@ -166,7 +166,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         scene's ``name``, never re-keying storage). Comparing them directly
         classified every renamed HA scene as integration-managed and skipped
         its fetch, so its config never loaded. ``slug_to_storage_id`` -- built
-        by the registry walk for exactly this mapping -- translates first.
+        by the registry walk for exactly this mapping -- translates first. A
+        slug it does not map belongs to an unregistered scene (``scene.create``,
+        a YAML scene without an id): it has no stored config and is counted as
+        skipped too.
 
         Returns ``(sids_to_fetch, integration_skipped_count)``, in SLUG terms:
         the caller fetches by storage key but keys the result by slug, which
@@ -181,7 +184,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         for _, _, sid, _ in scored:
             if not sid:
                 continue
-            if slug_to_storage_id.get(sid, sid) in homeassistant_scene_uids:
+            if slug_to_storage_id.get(sid) in homeassistant_scene_uids:
                 sids.append(sid)
             else:
                 integration_skipped += 1
@@ -241,9 +244,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         # the 404 classification working AND drops the per-scene registry
         # round-trip the internal re-resolve used to pay.
         #
-        # ONLY when the registry walk succeeded, though: on the failed walk the
-        # map is empty, and a synthesized (sid, registry_hit=False) resolution
-        # would suppress the client's own per-scene resolver — which may work
+        # ONLY when the registry walk succeeded, though, where
+        # ``_select_scene_ids_to_fetch`` passed only slugs the map holds. On the
+        # failed walk the map is empty, and a synthesized resolution would
+        # suppress the client's own per-scene resolver — which may work
         # again by fetch time on a transient list failure, and is the only way
         # a UI-renamed storage scene (storage key != slug) can still resolve.
         # Leaving resolution unset there restores the pre-#2302 per-scene
@@ -252,9 +256,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             None
             if registry_failed
             else SceneResolution(
-                storage_key=slug_to_storage_id.get(sid, sid),
-                registry_hit=sid in slug_to_storage_id,
-                platform=None,
+                storage_key=slug_to_storage_id[sid], registry_hit=True, platform=None
             )
         )
         try:
