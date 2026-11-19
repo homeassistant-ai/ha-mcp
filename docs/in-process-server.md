@@ -230,13 +230,21 @@ To remove the API from every agent's selector entirely, turn off
 
 While a server entry is running, the integration adds an **HA-MCP** panel
 to the Home Assistant sidebar. It opens the server web settings UI (tool
-enable/disable/pin, feature flags, backups, themes) without needing the
-loopback URL - the same experience as the app "Open Web UI" button.
+enable/disable/pin, feature flags, backups, themes) - the same experience
+as the app "Open Web UI" button.
 
 The panel is admin-only. Opening it establishes a short-lived session for
 your Home Assistant login, and every request re-checks that the account is
 still an active administrator. No token or secret ever appears in a URL,
-and the secret path stays on the loopback side of the proxy.
+and the browser never sees the random path the server keeps its settings UI
+under.
+
+The panel is the only way to the settings UI: the server serves it under that
+random path, never under the MCP secret path, so knowing the server's URL is
+not enough to reach its tool approvals: it takes a Home Assistant
+administrator's login. With the **Sidebar settings panel** option turned off,
+Home Assistant shows no way into the settings UI (tools, security policies,
+backups); the server options stay on the entry's Configure screen.
 
 ## Independent from the app
 

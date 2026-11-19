@@ -398,14 +398,19 @@ own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
 is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
 re-validates that the session still maps to an active admin. The server mounts
-that UI on its own loopback path, not under the MCP secret path: the path is
-random, generated in memory each time the server is brought up, and handed only
-to the proxy. Reaching the tool-approval, policy and feature-flag endpoints
-therefore takes a Home Assistant administrator's login, not the server's URL
-(a `ha_auth` client signed in as an administrator holds that login too).
-Code Mode's `api_post` sends the server's own administrator token, so it
-refuses the panel's routes. Neither path is exposed to the browser and no token or secret is placed in a
-URL; the proxy returns 503 whenever the server is not running.
+that UI on a path of its own, not under the MCP secret path: the path is
+random, generated in memory each time the server is brought up, and handed
+only to the proxy. Reaching the settings UI's tool-approval, policy and
+feature-flag endpoints therefore takes a Home Assistant administrator's login,
+not the server's URL (a `ha_auth` client signed in as an administrator holds
+that login too). The server's own HTTP client carries its administrator token
+and refuses every request under `/api/ha_mcp_tools/`, so neither a tool nor
+Code Mode can use that token to open a panel session. The opt-in approval
+channels, an approval PIN on Home Assistant events and `ha_dev_manage_server`
+with `dev_tools_security_policy_access`, do not go through the settings UI;
+the FAQ describes their limits. The proxy never shows the settings path to the
+browser, and the panel puts no token or secret in a URL; the proxy returns 503
+whenever the server is not running.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
@@ -545,7 +550,7 @@ and carries a larger attack surface than the standard LLAT setup.
   gates the tool surface; the in-process server keeps it on a path only its
   sidebar panel knows (see
   [In-process server](#in-process-server-ha_mcp_tools-in-process-server-entry)).
-  The app mounts it twice: under that secret path for direct access, and at
+  The app mounts it twice: under the MCP secret path for direct access, and at
   the bare root for Home Assistant ingress, where the routes admit only the
   Supervisor peer (`172.30.32.2`) and 403 every other caller.
 

@@ -1074,12 +1074,19 @@ slip past a policy that already watches that tool.
 
 A held call waits up to `wait_seconds` for your decision. **You approve or
 deny in the settings UI or through your configured Home Assistant approval
-automation.** With the in-process server, the approval endpoints are
-reachable only through the admin-only sidebar panel, so approving takes a Home
-Assistant administrator's login. Elsewhere they sit under a URL a client can
-know (the MCP secret path, or the stdio settings URL that `ha_get_overview`
-reports), so a client that can send its own HTTP requests to that URL can
-approve its own call.
+automation.** With the in-process server, the settings UI is reachable only
+through the admin-only sidebar panel, so approving there takes a Home
+Assistant administrator's login (which a `ha_auth` client signed in as an
+administrator also holds). Standard HTTP mode without OAuth/OIDC and the app
+serve it under the MCP secret path, so a client that connects with that URL
+and can send its own HTTP requests to it can approve its own call. The stdio
+settings page cannot decide pending calls, but a client that reaches its URL
+(the one `ha_get_overview` reports) can edit the policy there, including
+setting the approval PIN and switching on event decisions, and then decide
+its call through the event channel below. Two opt-in channels
+decide calls outside the settings UI: an approval PIN on Home Assistant
+events, and `ha_dev_manage_server` where developer mode and
+`dev_tools_security_policy_access` are both on (both described below).
 
 How the wait looks depends on the client:
 

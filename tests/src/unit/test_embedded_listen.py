@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import importlib
 import logging
 import os
 import socket
@@ -247,16 +246,17 @@ async def test_readiness_ignores_another_process_on_the_port(
 async def test_mcp_clients_cannot_reach_the_tool_approval_settings(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every MCP client knows the MCP secret path. Settings routes mounted
-    under it let a client approve its own held tool calls and rewrite the
-    policy; only the sidebar panel, behind the admin login, may reach them."""
+    """MCP clients that connect directly know the MCP secret path. Settings
+    routes mounted under it let a client approve its own held tool calls and
+    rewrite the policy; only the sidebar panel, behind the admin login, may
+    reach them."""
     _require_ipv6_loopback()
     # The stub uvicorn listens only on sockets it is handed: the dual-stack bind.
     options = {OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: free_port()}
     manager, _ = await _worker(hass, monkeypatch, options)
     mounted: list[str] = []
     monkeypatch.setattr(
-        importlib.import_module("ha_mcp.settings_ui"),
+        sys.modules["ha_mcp.settings_ui"],
         "register_settings_routes",
         lambda mcp, server, secret_path="", **_: mounted.append(secret_path),
     )

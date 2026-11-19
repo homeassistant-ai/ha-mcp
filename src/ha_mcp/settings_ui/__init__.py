@@ -691,8 +691,9 @@ def register_settings_routes(
     Args:
         mcp: The FastMCP instance to register routes on.
         server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
-        secret_path: The MCP secret path (e.g. ``/private_xxx`` or
-            ``/mcp``). Required for non-add-on HTTP modes; if empty in
+        secret_path: The prefix to mount under: the MCP secret path (e.g.
+            ``/private_xxx`` or ``/mcp``) or a dedicated settings path.
+            Required for non-add-on HTTP modes; if empty in
             non-add-on mode, the function logs a warning and registers
             nothing rather than expose the routes publicly.
         advertise_prefix: When True (default), record the secret-path mount in
@@ -759,9 +760,6 @@ def register_settings_routes(
         _mount("", guard=True)
 
     if secret_prefix:
-        # Mount under the MCP secret path so Docker / standalone clients
-        # need the same secret to reach the UI as they do for the MCP
-        # endpoint.
         _mount(secret_prefix)
         if advertise_prefix and not is_addon and not is_embedded():
             # Record the mount so ha_get_overview can point users at the

@@ -119,7 +119,7 @@ class TestMounts:
         assert await _status(mcp, f"/mcp{TOOLS}") == 200
         assert get_http_settings_prefix() == "/mcp"
 
-    async def test_the_in_process_server_serves_the_secret_path_unadvertised(
+    async def test_the_in_process_server_serves_its_settings_path_unadvertised(
         self, monkeypatch: pytest.MonkeyPatch, mount: Mount
     ) -> None:
         """Home Assistant has its own entry point to the in-process server's page;

@@ -1,6 +1,6 @@
 # Settings UI
 
-The web-based settings page served at **`/mcp/settings`** (under the MCP path prefix, NOT `/settings`). Lets users enable/disable/pin MCP tools, edit server settings, manage backups, configure tool-security policies, and pick accessibility/theme options. Works across all install methods: app (add-on), Docker, standalone.
+The web-based settings page served at **`/mcp/settings`** (under the MCP path prefix, NOT `/settings`). Lets users enable/disable/pin MCP tools, edit server settings, manage backups, configure tool-security policies, and pick accessibility/theme options. Works across all install methods: app (add-on), Docker, standalone. Exceptions: OAuth/OIDC mount it under a dedicated `MCP_SETTINGS_SECRET_PATH`, stdio serves it from the localhost sidecar, and the in-process server (`custom_components/ha_mcp_tools`) mounts it under a random path that only its sidebar panel proxy knows.
 
 ## Design goal: mimic the Home Assistant frontend
 
@@ -23,7 +23,7 @@ Then open **`http://localhost:8086/mcp/settings`**.
 
 Two URL gotchas that cost time:
 
-- **The path is `/mcp/settings`, not `/settings`.** The settings routes live under the MCP path prefix (`MCP_SECRET_PATH`, default `/mcp`). A bare `/settings` returns 404.
+- **The path is `/mcp/settings`, not `/settings`.** The settings routes live under the MCP path prefix (`MCP_SECRET_PATH`, default `/mcp`; for the exceptions see above). A bare `/settings` returns 404.
 - **The port is `8086` by default** (`_get_http_runtime` default; override with `MCP_PORT`).
 
 Any reachable HA instance works for `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`. For a throwaway HA with the seeded test token, run `uv run hamcp-test-env` (see [`tests/README.md`](../../../tests/README.md)). After any edit to `__init__.py`, `settings.html`, `settings_js/*.js`, or `settings.css`, **restart the process** (assets are cached at import — see Gotchas).

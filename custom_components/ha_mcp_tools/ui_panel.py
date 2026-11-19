@@ -1,13 +1,14 @@
 """Admin-only "Open Web UI" access to the in-process server's settings page (#1527).
 
-The in-process ha-mcp server serves its web settings UI on the loopback interface
-at ``http://127.0.0.1:<port><settings_path>/settings`` — unreachable from a browser
-and guarded only by that path, which the server keeps apart from the MCP secret
-path so MCP clients cannot approve their own tool calls. This module gives every
-install type the add-on's "Open Web UI" experience: an admin-only sidebar panel
-("HA-MCP") that opens that settings UI through Home Assistant's own HTTP server,
-so it works over the Nabu Casa remote URL and never exposes the loopback path to
-the browser.
+The in-process ha-mcp server serves its web settings UI at
+``http://127.0.0.1:<port><settings_path>/settings`` (on the LAN too when it is
+bound there), guarded only by that random path, which the server keeps apart
+from the MCP secret path so knowing the MCP URL does not let a client approve
+its own tool calls.
+This module gives every install type the add-on's "Open Web UI" experience: an
+admin-only sidebar panel ("HA-MCP") that opens that settings UI through Home
+Assistant's own HTTP server, so it works over the Nabu Casa remote URL and never
+exposes the settings path to the browser.
 
 The sidebar entry is a built-in ``iframe`` panel — the panel type behind
 "webpage" dashboards — NOT a custom panel. Home Assistant itself renders the
@@ -120,10 +121,10 @@ _VIEWS_REGISTERED_KEY = "ha_mcp_tools_ui_views_registered"
 _SESSIONS_KEY = "ha_mcp_tools_ui_sessions"
 
 # Request headers never forwarded to the loopback server. Hop-by-hop plus the
-# browser's cookie/authorization (the loopback server has no auth on the secret
-# path and must not receive the session cookie or the frontend bearer). The
-# locale cookie is reconstructed separately from the parsed cookie jar so no
-# other browser cookie can cross this trust boundary.
+# browser's cookie/authorization (the loopback server has no auth on the
+# settings path and must not receive the session cookie or the frontend
+# bearer). The locale cookie is reconstructed separately from the parsed cookie
+# jar so no other browser cookie can cross this trust boundary.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -326,7 +327,7 @@ class _ProxyView(HomeAssistantView):
         if not await _session_user_is_admin(hass, request.cookies.get(_COOKIE_NAME)):
             return web.Response(status=401, text="Unauthorized")
 
-        # Defense in depth: never let a crafted path escape the secret-path
+        # Defense in depth: never let a crafted path escape the settings-path
         # prefix on the loopback server (the caller is already an admin, so this
         # only blocks confusing requests, but it keeps the target well-formed).
         if any(segment == ".." for segment in path.split("/")):
@@ -360,7 +361,7 @@ class _ProxyView(HomeAssistantView):
             ) as upstream:
                 return await _relay_response(request, upstream)
         except aiohttp.ClientError as err:
-            # Type only: the error can render the target URL (the secret path).
+            # Type only: the error can render the target URL (the settings path).
             _LOGGER.error(
                 "HA-MCP settings proxy: upstream request failed: %s",
                 type(err).__name__,

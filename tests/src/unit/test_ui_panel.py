@@ -1,7 +1,7 @@
 """Unit tests for the admin-only settings-UI panel + proxy (issue #1527).
 
 The panel gives every install type the add-on's "Open Web UI" experience without
-exposing the loopback secret path: an admin-gated session endpoint mints a
+exposing the settings path: an admin-gated session endpoint mints a
 short-lived HttpOnly cookie, and a cookie-validated proxy forwards to the
 in-process server's settings routes.
 
@@ -395,7 +395,7 @@ class TestProxyForwarding:
         # Passes through unchanged (NOT coerced to JSON like the webhook proxy
         # does for untrusted MCP clients).
         assert resp.content_type == "text/html"
-        # Forwarded to the loopback settings route under the secret path.
+        # Forwarded to the loopback settings route under the settings path.
         assert running_server.seen[0].path_qs == f"{_SETTINGS}/settings"
 
     async def test_relayed_page_is_not_inflated_twice(
@@ -521,7 +521,7 @@ class TestProxyForwarding:
         cookie = running_server.seen[0].headers.get("cookie")
         assert cookie == (f"{_LOCALE_COOKIE}={locale}" if forwarded else None)
 
-    async def test_failed_upstream_maps_to_502_without_the_secret_path(
+    async def test_failed_upstream_maps_to_502_without_the_settings_path(
         self,
         hass: HomeAssistant,
         admin_cookies: dict[str, str],

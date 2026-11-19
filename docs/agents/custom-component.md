@@ -202,8 +202,8 @@ user's.
 The settings panel reverse-proxies the web UI through Home Assistant. Browser
 access uses a short-lived HttpOnly session cookie issued to an authenticated
 administrator. Every request revalidates that the session still maps to an
-active administrator. Never expose the loopback secret path or place a token or
-secret in a URL.
+active administrator. Never expose the settings path the server mounts its UI
+under, or place a token or secret in a URL.
 
 The full threat model and route-ownership rules are in
 [`SECURITY.md`](../../SECURITY.md).
