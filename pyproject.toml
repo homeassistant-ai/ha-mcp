@@ -455,7 +455,7 @@ dev = [
     # Shared SDK for the component's llm_api.py tests; mirrors HA Core's 1.x line.
     "mcp>=1.26.0,<2",
     "mypy>=1.17.0",
-    "openai>=1.0.0",
+    # openai (the UAT agent's client) is pinned with Core's cloud below.
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",
     "pytest-timeout>=2.3.0",
