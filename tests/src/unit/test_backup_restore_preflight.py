@@ -7,6 +7,7 @@ through the Settings page route and the ``ha_manage_backup`` tool.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -43,15 +44,16 @@ async def manager(
     return snapshot_manager
 
 
-def _write_snapshot(manager: bm.BackupManager) -> str:
-    """A valid toggle-helper snapshot, in the shape the manager writes."""
+def _write_snapshot(manager: bm.BackupManager, helper_id: str = "example") -> str:
+    """A valid snapshot of the toggle helper ``helper_id``, in the shape the
+    manager writes."""
     snapshot = {
         "schema_version": bm.SCHEMA_VERSION,
         "domain": _DOMAIN,
-        "entity_id": "example",
+        "entity_id": helper_id,
         "captured": "2026-09-09T00:00:00+00:00",
         "tool": None,
-        "config": _SAVED,
+        "config": dict(_SAVED, id=helper_id),
     }
     (manager.backup_dir / NAME).write_text(yaml.safe_dump(snapshot, sort_keys=False))
     return NAME
@@ -187,14 +189,15 @@ async def test_generic_disabled_restore_confirmation_does_not_promise_safety(
     settings_script: Any,
 ) -> None:
     created = await core_client.send_websocket_message(
-        {"type": "input_boolean/create", "name": "Example"}
+        {"type": "input_boolean/create", "name": f"Example {uuid.uuid4().hex[:8]}"}
     )
     assert created["success"], created
-    name = _write_snapshot(manager)
+    helper_id = created["result"]["id"]
+    name = _write_snapshot(manager, helper_id)
     response = await response_for(monkeypatch, core_client, name)
     assert response.json()["data"]["safety_backup"] is None
     await hass.async_block_till_done()
-    state = hass.states.get("input_boolean.example")
+    state = hass.states.get(f"input_boolean.{helper_id}")
     assert state is not None and state.name == "Saved"
     rendered = run_restore(
         settings_script,
