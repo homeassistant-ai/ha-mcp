@@ -62,22 +62,21 @@ def restart_answer_lost(
     gateway: Gateway,
     core_client: HomeAssistantClient,
     status: int | None,
-    forwarded: bool,
 ) -> None:
-    """The proxy can give the same response before or after Core acts."""
+    """The gateway hands the restart to Core, then loses the answer: it replies
+    ``status`` itself or drops the connection, as when Core stops mid-request."""
 
     async def lose_answer(request: web.Request) -> web.Response:
         gateway.requests.append(f"{request.method} {request.path}")
-        if forwarded:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{core_client.base_url}{request.path}",
-                    headers={"Authorization": request.headers["Authorization"]},
-                    data=await request.read(),
-                ) as answer,
-            ):
-                assert answer.status == 200
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{core_client.base_url}{request.path}",
+                headers={"Authorization": request.headers["Authorization"]},
+                data=await request.read(),
+            ) as answer,
+        ):
+            assert answer.status == 200
         if status is None:
             assert request.transport is not None
             request.transport.close()
@@ -88,22 +87,17 @@ def restart_answer_lost(
 
 
 @pytest.mark.parametrize("status", [502, 503, 504, None])
-@pytest.mark.parametrize("forwarded", [False, True], ids=["not-forwarded", "forwarded"])
 @pytest.mark.usefixtures("restart_answer_lost")
-async def test_an_unacknowledged_restart_is_unknown(
-    stops: list[bool],
-    gateway: Gateway,
-    gateway_client: HomeAssistantClient,
-    forwarded: bool,
+async def test_a_restart_whose_answer_is_lost_is_reported_as_restarting(
+    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient
 ) -> None:
-    body = await rejected_call_body(
-        SystemTools(gateway_client).ha_restart(confirm=True)
-    )
+    """The restart happened: the user is told to wait for it, not that it failed."""
+    result = await SystemTools(gateway_client).ha_restart(confirm=True)
 
-    assert stops == ([True] if forwarded else [])
+    assert stops == [True]
     assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
-    assert body["outcome"] == "unknown"
-    assert "before requesting another restart" in body["error"]["suggestion"]
+    assert result["success"] is True
+    assert any("Wait 1-5 minutes" in w for w in result["warnings"])
 
 
 @pytest.fixture
@@ -128,7 +122,7 @@ async def test_a_lost_websocket_reports_only_what_the_client_knows(
     accept_upgrade: bool,
 ) -> None:
     if accept_upgrade:
-        # The gateway got the frame but never forwarded it to Core.
+        # The gateway closes the socket on the frame, as Core does when it stops.
         gateway.drops.add("call_service")
     else:
         gateway.upgrade_status = 502
@@ -137,19 +131,20 @@ async def test_a_lost_websocket_reports_only_what_the_client_knows(
         "send_websocket_message",
         wraps=gateway_client.send_websocket_message,
     ) as ws:
-        body = await rejected_call_body(
-            SystemTools(gateway_client).ha_restart(confirm=True)
-        )
+        restart = SystemTools(gateway_client).ha_restart(confirm=True)
+        if accept_upgrade:
+            result = await restart
+        else:
+            body = await rejected_call_body(restart)
 
-    assert stops == []
     assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
     assert [call.args[0]["type"] for call in ws.await_args_list] == ["call_service"]
     if accept_upgrade:
-        assert body["outcome"] == "unknown"
-        assert "before requesting another restart" in body["error"]["suggestion"]
+        assert any("Wait 1-5 minutes" in w for w in result["warnings"])
     else:
+        # The socket never opened, so nothing was sent.
+        assert stops == []
         assert body["error"]["code"] == "CONNECTION_FAILED"
-        assert "outcome" not in body
 
 
 @pytest.mark.parametrize(
@@ -185,7 +180,7 @@ async def test_websocket_acknowledgement_waits_for_the_stop_handler(
                 assert (await task)["success"] is True
             else:
                 body = await rejected_call_body(task)
-                assert body["outcome"] == "unknown"
+                assert body["error"]["code"] == "CONNECTION_TIMEOUT"
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

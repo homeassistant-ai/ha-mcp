@@ -24,6 +24,7 @@ from ha_mcp._vendor import websockets
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 
+from .. import error_wording
 from .._version import is_running_in_addon
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -255,7 +256,6 @@ def _merge_options(base: dict, override: dict) -> dict:
 # collision, while the job-level JobConcurrency.REJECT path raises a bare
 # "Another job is running" for long operations (OS update, data-disk wipe)
 # that must NOT be retried on this schedule.
-_JOB_COLLISION = re.compile(r"Another job is running for job group \S+", re.IGNORECASE)
 _JOB_COLLISION_RETRY_WINDOW = 60.0
 JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
 JOB_COLLISION_RETRY_MAX_DELAY = 5.0
@@ -303,7 +303,7 @@ def _supervisor_rest_failure(
             result["_response_data"] = response_data
         return result
 
-    if not error_text.lower().startswith("command failed:"):
+    if not error_wording.has_command_failed_prefix(error_text):
         result["error"] = f"Command failed: {error_text}"
     return result
 
@@ -614,9 +614,7 @@ def _raise_supervisor_api_failure(
         reason = error_text.removeprefix("Command failed: ")
         if (status_code == 400 and key == "app_configuration_invalid_error") or (
             _generic_supervisor_refusal(result)
-            and reason.startswith(
-                (f"App {options[1]} has invalid options: ", "Missing option '")
-            )
+            and error_wording.supervisor_invalid_options(reason, options[1])
         ):
             raise_tool_error(
                 create_error_response(ErrorCode.VALIDATION_FAILED, error_text)
@@ -655,8 +653,8 @@ def _raise_supervisor_api_failure(
                 ],
             )
         )
-    if isinstance(status_code, int) and not error_text.lower().startswith(
-        "command failed:"
+    if isinstance(status_code, int) and not error_wording.has_command_failed_prefix(
+        error_text
     ):
         error_text = f"Command failed: {error_text}"
     raise HomeAssistantCommandError(error_text, code=result.get("error_code"))
@@ -776,9 +774,9 @@ async def _supervisor_api_call(
             )
             # JobGroupExecutionLimitExceeded has no error_key. A specific
             # refusal (including authentication) always wins over the wording.
-            if not _generic_supervisor_refusal(result) or not _JOB_COLLISION.fullmatch(
-                error_text.removeprefix("Command failed: ")
-            ):
+            if not _generic_supervisor_refusal(
+                result
+            ) or not error_wording.supervisor_job_collision(error_text):
                 _raise_supervisor_api_failure(result, endpoint, method.upper())
 
             # The marker test runs on the raw text; everything below reports

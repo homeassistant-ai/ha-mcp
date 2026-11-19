@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import error_wording
 from .client.rest_client import HomeAssistantError
 
 # The component flag that gates read_file's ``keep_line_endings`` field.
@@ -21,15 +22,7 @@ def file_read_error_code(result: dict[str, Any], path: str) -> str | None:
     message = result.get("error")
     if not isinstance(message, str):
         return None
-    # Before read_file returned codes, the service included the requested path.
-    if message.startswith("Path not allowed. Allowed paths: "):
-        return "path_not_allowed"
-    return {
-        f"File does not exist: {path}": "not_found",
-        f"Backup does not exist: {path}": "not_found",
-        f"Path is not a file: {path}": "not_a_file",
-        f"Cannot read binary file: {path}. Only text files are supported.": "binary_file",
-    }.get(message)
+    return error_wording.legacy_file_read_code(message, path)
 
 
 async def _fetch_file(

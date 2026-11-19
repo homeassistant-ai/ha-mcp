@@ -25,18 +25,22 @@ EMBEDDED_RESTART_DELAY_S = 1.0
 RESTART_TASKS: set[asyncio.Task[None]] = set()
 
 
-def _restart_outcome_unknown(error: Exception) -> bool:
-    """Whether Core could have acted before the caller lost its answer."""
+def _reply_lost_after_dispatch(error: Exception) -> bool:
+    """Whether the restart went out and only its answer was lost.
+
+    Core stops while the call is open, so this is what a restart that worked
+    looks like to its caller: a dropped connection, or the proxy's 502/503/504
+    (the Supervisor answers 502 for the app's call on Home Assistant OS).
+    """
     if isinstance(error, HomeAssistantCommandNotSent):
         # Includes failed WebSocket upgrades, even when the proxy returned 5xx.
         return False
     if isinstance(error, HomeAssistantConnectionError):
-        # An HTTP connection or pool acquisition failed before the POST.
-        # A socket lost during send or while awaiting the reply proves neither
-        # delivery nor execution. Core acknowledges WS calls after the service.
-        return not isinstance(
-            error.__cause__,
-            (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout),
+        # A connection or pool acquisition that failed sent nothing, and a
+        # reply that timed out on an open connection is not a restart: Core
+        # closes the connection when it stops.
+        return not error.timed_out and not isinstance(
+            error.__cause__, (httpx.ConnectError, httpx.PoolTimeout)
         )
     return http_failure_status(error) in {502, 503, 504}
 
@@ -49,10 +53,11 @@ def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
         try:
             await client.call_service("homeassistant", "restart", data)
         except Exception as exc:
-            if _restart_outcome_unknown(exc):
+            # No caller left to answer; WARNING is the level HA surfaces.
+            if _reply_lost_after_dispatch(exc):
                 logger.warning(
-                    "Deferred Home Assistant restart outcome is unknown. Check Core's "
-                    "startup time or logs before requesting another restart: %s",
+                    "Deferred Home Assistant restart dispatched; HA closed the "
+                    "connection before replying (expected): %s",
                     exc,
                 )
             else:
@@ -215,19 +220,15 @@ async def restart_home_assistant(
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
-        if awaiting_restart_reply and _restart_outcome_unknown(e):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "No restart acknowledgement reached the client. The outcome is unknown.",
-                    details=str(e),
-                    context={"outcome": "unknown"},
-                    suggestions=[
-                        "Wait for Home Assistant to become available, then check Core's "
-                        "startup time or logs before requesting another restart."
-                    ],
-                )
-            )
+        if awaiting_restart_reply and _reply_lost_after_dispatch(e):
+            return {
+                "success": True,
+                "message": (
+                    "Home Assistant restart initiated. "
+                    "Connection was closed as expected during restart."
+                ),
+                "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
+            }
 
         exception_to_structured_error(e)
         return None  # unreachable: exception_to_structured_error always raises

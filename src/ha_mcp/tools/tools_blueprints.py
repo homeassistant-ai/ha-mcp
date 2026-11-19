@@ -15,6 +15,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from .. import error_wording
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
@@ -548,7 +549,7 @@ class BlueprintTools:
         consumers the caller has to clear first.
         """
         message = error_text(response, "Failed to delete blueprint")
-        if "blueprint in use" not in message.lower():
+        if not error_wording.blueprint_in_use(message):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

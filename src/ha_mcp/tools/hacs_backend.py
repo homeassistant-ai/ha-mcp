@@ -5,10 +5,10 @@ integration and removes the ``hacs/*`` WebSocket commands. The HACS tools
 talk to whichever API the instance serves, Marketplace first.
 """
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
+from .. import error_wording
 from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -98,12 +98,6 @@ DUPLICATE_RECORD_SUGGESTIONS = [
     + ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
     + "start Core, then update the kept record.",
 ]
-# Core's ``integration_owned`` message: "The {domain} directory belongs to
-# {owner}." The store sends no error code for it, so the whole sentence is
-# matched, owner as ``owner/repo``, never a fragment of some other message.
-_OWNED_DIRECTORY = re.compile(
-    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w-][\w.-]*?)\.?$"
-)
 
 
 def _owned_directory_suggestions(owner: str) -> list[str]:
@@ -230,7 +224,7 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
 def is_owned_directory_refusal(err: HomeAssistantCommandError) -> bool:
     """Whether the store refused because another installed record owns the
     integration's directory."""
-    return _OWNED_DIRECTORY.match(str(err).strip()) is not None
+    return error_wording.store_directory_owner(str(err)) is not None
 
 
 def raise_store_error(
@@ -250,13 +244,13 @@ def raise_store_error(
     owner hint whatever ha-mcp's own records look like.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
-    if match := _OWNED_DIRECTORY.match(str(err).strip()):
+    if owner := error_wording.store_directory_owner(str(err)):
         owners = {r.lower() for r in installed_records or []}
-        if len(owners) > 1 and match[1].lower() in owners:
+        if len(owners) > 1 and owner.lower() in owners:
             suggestions = DUPLICATE_RECORD_SUGGESTIONS
             context = {**context, "installed": installed_records}
         else:
-            suggestions = _owned_directory_suggestions(match[1])
+            suggestions = _owned_directory_suggestions(owner)
     if suggestions:
         raise_tool_error(
             create_error_response(

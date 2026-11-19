@@ -35,6 +35,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 
+from .. import error_wording
 from ..client.rest_client import (
     NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
@@ -198,12 +199,11 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
     errors" (which was the prior behaviour and actively misled callers
     when the real cause was a memory cap or a missing module import).
     """
-    exc_text = str(exc)
     exc_type = type(exc).__name__
-    short = exc_text[:200]
+    short = str(exc)[:200]
 
     def _matches(*needles: str) -> bool:
-        return any(needle in exc_type or needle in exc_text for needle in needles)
+        return error_wording.error_mentions(exc, *needles)
 
     if _matches("MemoryError"):
         return (

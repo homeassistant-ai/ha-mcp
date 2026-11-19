@@ -700,7 +700,7 @@ class HomeAssistantClient:
         )
         if not reply.get("success"):
             error = str(reply.get("error", "Service call failed"))
-            if error.removeprefix("Command failed: ") == "Unauthorized":
+            if reply.get("error_code") == "unauthorized":
                 raise HomeAssistantAdminRequiredError(
                     f"Service {domain}.{service} is admin-only in Home Assistant "
                     "and this token's user is not an administrator"

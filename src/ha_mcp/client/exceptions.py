@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from .. import error_wording
 from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
 
 
@@ -88,7 +89,7 @@ class HomeAssistantAPIError(HomeAssistantError):
         400 "Resource not found" on a delete."""
         return self.status_code == 404 or (
             self.status_code == 400
-            and (self.response_data or {}).get("message") == "Resource not found"
+            and error_wording.config_resource_not_found(self.response_data)
         )
 
 

@@ -26,6 +26,19 @@ in its code, its `Field` texts and its tests, and a copy here only duplicates
 them. Add a rule here only when later migrations need it, written as a general
 rule rather than as one tool's behaviour.
 
+## Decide on the code, not the wording
+
+Route an error on its code, HTTP status or exception type, never on its
+wording. Core, the Supervisor and the frontend reword messages between
+releases, and a branch on the wording then stops firing without failing
+anything. Pass the native code and message through to the caller, and add
+suggestions on top of them.
+
+Where the sender gives one code to several causes and nothing else tells them
+apart, the wording test goes in `error_wording.py` (one in `src/ha_mcp`, one in
+the component), beside the source that sends the text. `scripts/error_wording.py`
+fails Fast Checks on a wording test anywhere else and has no list.
+
 ## Choose the authoritative path
 
 The component is part of the native contract, not an exception to it. The

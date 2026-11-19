@@ -16,6 +16,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import ToolResult, tool
 
+from .. import error_wording
 from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -3115,7 +3116,10 @@ class DashboardConfigTools:
                 error_msg = error_msg.get("message", str(error_msg))
             hyphenated = url_path.replace("_", "-")
             suggestions = None
-            if "needs to contain a hyphen" in str(error_msg) and hyphenated != url_path:
+            if (
+                error_wording.url_path_needs_hyphen(str(error_msg))
+                and hyphenated != url_path
+            ):
                 suggestions = [f"Try '{hyphenated}' instead"]
             raise_tool_error(
                 create_error_response(

@@ -397,6 +397,10 @@ jobs:
       if: success() || failure()
       run: uv run python scripts/private_test_access.py
 
+    - name: Check decisions by the wording of an error
+      if: success() || failure()
+      run: uv run python scripts/error_wording.py
+
     - name: Run ast-grep
       if: success() || failure()
       run: uv run ast-grep scan

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any, NamedTuple, NoReturn
 
+from .. import error_wording
 from ..errors import ErrorCode, create_error_response
 from .blueprint_write import error_code, error_text
 from .helpers import raise_tool_error
@@ -44,7 +45,7 @@ def raise_substitute_failure(
     """
     message = error_text(response, "Failed to render the blueprint")
     lowered = message.lower() if error_code(response) == "unknown_error" else ""
-    if "missing input" in lowered:
+    if error_wording.blueprint_missing_input(lowered):
         code = ErrorCode.VALIDATION_FAILED
         suggestions = [
             (
@@ -53,7 +54,7 @@ def raise_substitute_failure(
             ),
             "Pass every required input in the input dict",
         ]
-    elif "failed to load" in lowered or "not found" in lowered:
+    elif error_wording.blueprint_not_loaded(lowered):
         code = ErrorCode.RESOURCE_NOT_FOUND
         suggestions = [
             (

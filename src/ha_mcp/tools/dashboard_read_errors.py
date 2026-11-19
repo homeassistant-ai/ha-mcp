@@ -19,16 +19,10 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from .. import error_wording
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .helpers import extract_tool_error_message, raise_tool_error
 
-UNKNOWN_CONFIG_PREFIX = "Unknown config specified"
-# Bare (nested error shape) and with the "Command failed: " prefix that
-# ``send_websocket_message``'s flat envelope adds. Matched exactly, unlike the
-# unknown-identifier substring, so any other read failure stays a failure.
-NO_STORED_CONFIG_MESSAGES = frozenset(
-    {"No config found.", "Command failed: No config found."}
-)
 CONFIG_NOT_FOUND_CODE = "config_not_found"
 DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
 
@@ -41,7 +35,7 @@ NO_STORED_CONFIG_NOTE = (
 
 def is_unknown_dashboard(error_msg: str) -> bool:
     """Whether Core rejected the identifier itself (the lazy-resolve trigger)."""
-    return UNKNOWN_CONFIG_PREFIX in error_msg
+    return error_wording.dashboard_unknown(error_msg)
 
 
 def config_not_found(reply: dict[str, Any]) -> bool:
@@ -51,9 +45,8 @@ def config_not_found(reply: dict[str, Any]) -> bool:
 
 def no_stored_config(reply: dict[str, Any]) -> bool:
     """Only differentiate the two causes once Core reports config_not_found."""
-    return (
-        config_not_found(reply)
-        and get_error_message(reply) in NO_STORED_CONFIG_MESSAGES
+    return config_not_found(reply) and error_wording.dashboard_has_no_config(
+        get_error_message(reply)
     )
 
 
@@ -74,7 +67,7 @@ def is_no_stored_config_error(exc: ToolError) -> bool:
     message = extract_tool_error_message(exc).removeprefix(
         DASHBOARD_FETCH_FAILED_PREFIX
     )
-    return message in NO_STORED_CONFIG_MESSAGES
+    return error_wording.dashboard_has_no_config(message)
 
 
 def read_failure_code(reply: dict[str, Any]) -> ErrorCode:

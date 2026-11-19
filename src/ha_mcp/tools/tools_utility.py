@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from .. import error_wording
 from ..client.exceptions import http_failure_status
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
@@ -48,10 +49,6 @@ CONDITION_ERROR_SUGGESTIONS = [
     "Verify entity_ids exist using ha_get_state() or ha_search()",
     "See ha_get_skill_guide for native condition examples",
 ]
-
-# Core rejects a render that outlives its ``timeout`` with this message (code
-# ``template_error``, which it also uses for other template failures).
-HA_RENDER_TIMEOUT_TEXT = "Exceeded maximum execution time"
 
 
 def _render_outcome(
@@ -195,9 +192,9 @@ class UtilityTools:
                     suggestions=["Check Home Assistant WebSocket connection"],
                 )
             )
-        if result.get("error_code") == "template_error" and error == (
-            f"{HA_RENDER_TIMEOUT_TEXT} of {float(timeout)}s"
-        ):
+        if result.get(
+            "error_code"
+        ) == "template_error" and error_wording.render_timed_out(error, timeout):
             # A second render would only time out again.
             raise_tool_error(
                 create_error_response(

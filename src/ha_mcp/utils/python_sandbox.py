@@ -11,6 +11,8 @@ import ast
 import json
 from typing import Any
 
+from .. import error_wording
+
 
 class PythonSandboxError(Exception):
     """Base class for sandbox failures.
@@ -491,7 +493,7 @@ def format_sandbox_error(
             f"Expression: {preview}",
         ]
         # Python 3.14 adds ", got N" only for a plain list, tuple or dict.
-        if "unpack (expected 1)" in str(error) or "unpack (expected 1," in str(error):
+        if error_wording.single_target_unpack(error):
             suggestions.insert(
                 0,
                 "A single-target unpack needs exactly one item. If this is a "
@@ -511,7 +513,7 @@ def format_sandbox_error(
         # line-continuation token followed by an unexpected character.
         # Pinpoint the actual mistake so the agent fixes it on the first
         # retry instead of guessing at "syntax".
-        if "line continuation character" in str(error):
+        if error_wording.line_continuation(error):
             suggestions.insert(
                 0,
                 'Remove the leading backslash before quotes — write "foo" '

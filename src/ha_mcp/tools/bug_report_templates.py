@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode
 
+from .. import error_wording
 from .bug_report_redaction import sanitize_log_text
 from .helpers import extract_tool_error_message
 
@@ -865,16 +866,9 @@ def _generate_search_keywords(
         if tool_name:
             keywords.add(tool_name)
 
-        error_msg = last_error_log.get("error_message", "").lower()
-        # Common error patterns
-        if "connection" in error_msg:
-            keywords.add("connection")
-        if "timeout" in error_msg:
-            keywords.add("timeout")
-        if "authentication" in error_msg or "auth" in error_msg:
-            keywords.add("authentication")
-        if "not found" in error_msg:
-            keywords.add("not found")
+        keywords.update(
+            error_wording.search_keywords(last_error_log.get("error_message", ""))
+        )
 
     # Add connection-based keywords
     conn_status = diagnostic_info.get("connection_status", "Unknown")
