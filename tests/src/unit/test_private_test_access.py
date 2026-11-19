@@ -163,8 +163,13 @@ def test_public_targets_and_data_strings_are_allowed(guard, tmp_path, capsys, so
     )
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["prefix + suffix", "'x.' + (prefix + suffix)", "f'{prefix + suffix}.y'"],
+    ids=["direct", "nested-concatenation", "nested-f-string"],
+)
 def test_too_many_alternatives_fail_instead_of_passing_unchecked(
-    guard, tmp_path, capsys
+    guard, tmp_path, capsys, target
 ):
     """The last of 289 combinations is private; none may be dropped unchecked."""
     prefixes = ", ".join(repr(c) for c in "ABCDEFGHIJKLMNOP_")
@@ -172,7 +177,7 @@ def test_too_many_alternatives_fail_instead_of_passing_unchecked(
     source = (
         f"for prefix in ({prefixes}):\n"
         f"    for suffix in ({suffixes}):\n"
-        "        getattr(mod, prefix + suffix)\n"
+        f"        getattr(mod, {target})\n"
     )
 
     status, out = _run(guard, _repo(tmp_path, source), capsys)

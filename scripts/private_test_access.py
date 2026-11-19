@@ -281,7 +281,10 @@ def strings(
     if parts is None:
         return {UNKNOWN}
     alternatives = [sorted(strings(p, chain, seen)) for p in parts]
-    if math.prod(len(a) for a in alternatives) > MAX_ALTERNATIVES:
+    # A part already over the limit makes the whole expression over it.
+    if any(TOO_MANY in a for a in alternatives) or (
+        math.prod(len(a) for a in alternatives) > MAX_ALTERNATIVES
+    ):
         return {TOO_MANY}
     return {"".join(combo) for combo in itertools.product(*alternatives)}
 
