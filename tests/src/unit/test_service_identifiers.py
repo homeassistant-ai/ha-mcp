@@ -1,15 +1,31 @@
 """Service names must be unambiguous before selecting a dispatch route."""
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.tools_service import ServiceTools
 
 from ._tool_errors import error_body
+
+
+@pytest.mark.parametrize("service", ["wake-up", "wake?up"])
+async def test_tool_dispatches_exact_registered_name(
+    hass: HomeAssistant, core_client: HomeAssistantClient, service: str
+) -> None:
+    called: list[str] = []
+
+    async def handle(call: ServiceCall) -> None:
+        called.append(call.service)
+
+    hass.services.async_register("python_script", service, handle)
+    result = await ServiceTools(core_client, None).ha_call_service(
+        "python_script", service, wait=False
+    )
+    assert result["success"] is True
+    assert called == [service]
 
 
 async def test_tool_dispatches_only_the_exact_service_name(
@@ -39,7 +55,8 @@ async def test_tool_dispatches_only_the_exact_service_name(
     ("domain", "service", "parameter"),
     [
         ("light/group", "turn_on", "domain"),
-        ("light", "turn on", "service"),
+        ("light", "turn/on", "service"),
+        ("light", ".", "service"),
         ("Light", "turn_on", "domain"),
         ("light", "turn_on\n", "service"),
     ],
@@ -55,12 +72,16 @@ async def test_tool_rejects_invalid_identifier(
     assert body["parameter"] == parameter
 
 
-async def test_clients_reject_invalid_identifier_before_dispatch(
+async def test_tool_reports_both_invalid_arguments(
+    core_client: HomeAssistantClient,
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await ServiceTools(core_client, None).ha_call_service("light/group", "TURN_ON")
+    assert set(error_body(exc)["parameters"]) == {"domain", "service"}
+
+
+async def test_rest_client_rejects_invalid_path_segment(
     core_client: HomeAssistantClient,
 ) -> None:
     with pytest.raises(ValueError, match="domain"):
-        await core_client.call_service("test.group", "turn_on")
-
-    ws = HomeAssistantWebSocketClient(core_client.base_url, core_client.token)
-    with pytest.raises(ValueError, match="service"):
-        await ws.call_service("test", "turn on")
+        await core_client.call_service("test/group", "turn_on")

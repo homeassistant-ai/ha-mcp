@@ -35,7 +35,6 @@ from .rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from .service_identifiers import validate_service_identifiers
 from .transport_errors import is_ssl_error
 from .websocket_state import WebSocketConnectionState
 
@@ -1189,10 +1188,11 @@ class HomeAssistantWebSocketClient:
             service_data: Service parameters
             target: Service target (entity_id, area_id, etc.)
 
-        Returns the service call response.
+        Returns:
+            Service call response
         """
-        validate_service_identifiers(domain, service)
         kwargs: dict[str, Any] = {"domain": domain, "service": service}
+
         if service_data:
             kwargs["service_data"] = service_data
         if target:

@@ -1,19 +1,31 @@
-"""Validate the two identifiers naming a Home Assistant service."""
+"""Keep a service call's identifiers intact when building its REST path."""
 
-import re
-
-_IDENTIFIER = re.compile(r"[a-z0-9_]+")
+from urllib.parse import quote
 
 
-class InvalidServiceIdentifier(ValueError):
-    def __init__(self, parameter: str) -> None:
-        self.parameter = parameter
-        super().__init__(
-            f"{parameter} must contain only lowercase ASCII letters, digits, or underscores."
-        )
-
-
-def validate_service_identifiers(domain: str, service: str) -> None:
+def service_identifier_errors(
+    domain: str | None, service: str | None, *, require_exact_case: bool
+) -> dict[str, str]:
+    errors = {}
     for parameter, value in (("domain", domain), ("service", service)):
-        if not _IDENTIFIER.fullmatch(value):
-            raise InvalidServiceIdentifier(parameter)
+        if not value:
+            errors[parameter] = "is required"
+        elif (
+            value in {".", ".."}
+            or any(char in "/\\%" for char in value)
+            or not value.isprintable()
+        ):
+            errors[parameter] = "must identify one service path segment"
+        elif require_exact_case and value != value.lower():
+            # Core lowercases aliases; ha_call_service policy rules see the supplied case.
+            errors[parameter] = (
+                "must use the lowercase spelling registered in Home Assistant"
+            )
+    return errors
+
+
+def service_rest_path(domain: str, service: str) -> str:
+    errors = service_identifier_errors(domain, service, require_exact_case=False)
+    if errors:
+        raise ValueError(", ".join(f"{key} {reason}" for key, reason in errors.items()))
+    return f"/services/{quote(domain, safe='')}/{quote(service, safe='')}"

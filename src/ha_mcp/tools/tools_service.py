@@ -21,10 +21,7 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
-from ..client.service_identifiers import (
-    InvalidServiceIdentifier,
-    validate_service_identifiers,
-)
+from ..client.service_identifiers import service_identifier_errors
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
@@ -716,14 +713,6 @@ class ServiceTools(EventCallMixin):
         domain: str | None, service: str | None
     ) -> tuple[str, str]:
         """Require valid service identifiers and enforce component and backup controls."""
-        if not domain or not service:
-            raise_tool_error(
-                create_validation_error(
-                    "domain and service are required for a service call. To send "
-                    "a raw WebSocket command instead, pass ws_command.",
-                    parameter="domain" if not domain else "service",
-                )
-            )
         # Only the dedicated wrappers inject the component's required caller token.
         if is_component_domain(domain):
             raise_tool_error(
@@ -738,10 +727,19 @@ class ServiceTools(EventCallMixin):
                 )
             )
         guard_snapshot_route(domain=domain, service=service)
-        try:
-            validate_service_identifiers(domain, service)
-        except InvalidServiceIdentifier as exc:
-            raise_tool_error(create_validation_error(str(exc), parameter=exc.parameter))
+        errors = service_identifier_errors(domain, service, require_exact_case=True)
+        if errors:
+            message = ", ".join(f"{key} {reason}" for key, reason in errors.items())
+            if not domain or not service:
+                message = f"domain and service are required for a service call ({message}). To send a WebSocket command, pass ws_command."
+            raise_tool_error(
+                create_validation_error(
+                    message,
+                    parameter=next(iter(errors)),
+                    context={"parameters": errors},
+                )
+            )
+        assert domain is not None and service is not None
         return domain, service
 
     @staticmethod

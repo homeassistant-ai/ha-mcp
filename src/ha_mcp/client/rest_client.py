@@ -47,7 +47,7 @@ from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
 from .models import ErrorLogPage
-from .service_identifiers import validate_service_identifiers
+from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
 from .transport_errors import is_ssl_error, redirect_message
 
@@ -611,7 +611,6 @@ class HomeAssistantClient:
             Service response data - list of affected states normally, or dict with
             service response if return_response=True
         """
-        validate_service_identifiers(domain, service)
         logger.debug(
             f"Calling service {domain}.{service} (return_response={return_response})"
         )
@@ -649,7 +648,6 @@ class HomeAssistantClient:
         A 401 means Home Assistant refused before running the service, so the
         WebSocket retry cannot apply it twice.
         """
-        # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
@@ -657,7 +655,7 @@ class HomeAssistantClient:
         try:
             result = await self._request(
                 "POST",
-                f"/services/{domain}/{service}",
+                service_rest_path(domain, service),
                 json=payload,
                 params=params if params else None,
             )
