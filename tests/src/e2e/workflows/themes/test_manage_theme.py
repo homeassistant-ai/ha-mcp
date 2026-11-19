@@ -97,18 +97,18 @@ class TestManageTheme:
                 f"default_theme should have flipped to Test Theme B: {list_after_b}"
             )
 
-            # Set Test Theme B for dark mode; light default should stay untouched.
-            set_b_dark = parse_mcp_result(
+            # Set Test Theme A for dark mode; light default should stay Test Theme B.
+            set_a_dark = parse_mcp_result(
                 await mcp_client.call_tool(
                     "ha_manage_theme",
-                    {"action": "set", "theme_name_dark": "Test Theme B"},
+                    {"action": "set", "theme_name_dark": "Test Theme A"},
                 )
             )
-            assert set_b_dark.get("success") is True, (
-                f"Set Test Theme B dark failed: {set_b_dark}"
+            assert set_a_dark.get("success") is True, (
+                f"Set Test Theme A dark failed: {set_a_dark}"
             )
-            assert set_b_dark["data"]["default_dark_theme"] == "Test Theme B"
-            assert set_b_dark["data"]["default_theme"] == "Test Theme B", (
+            assert set_a_dark["data"]["default_dark_theme"] == "Test Theme A"
+            assert set_a_dark["data"]["default_theme"] == "Test Theme B", (
                 "Setting dark theme with a real name must not change light default"
             )
 
