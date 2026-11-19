@@ -41,9 +41,8 @@ from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_fai
 from .response_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
-    fetch_ha_timezone,
     project_fields,
-    resolve_local_timezone,
+    require_ha_timezone,
 )
 from .statistics_calendar import (
     _CALENDAR_STATISTICS_PERIODS,
@@ -132,36 +131,6 @@ _VALID_STATISTICS_PERIODS = frozenset(
 )
 
 
-async def _get_statistics_timezone(client: Any) -> tzinfo:
-    """Resolve HA's timezone without accepting an unsafe UTC fallback."""
-    timezone_name, fetch_failed = await fetch_ha_timezone(client)
-    if fetch_failed:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                "Could not fetch the Home Assistant timezone required for safe calendar statistics estimation",
-                suggestions=[
-                    "Check the Home Assistant connection, then retry.",
-                    "Use period='hour' or period='5minute', which do not require calendar alignment.",
-                ],
-            )
-        )
-    timezone, resolved_timezone_name = resolve_local_timezone(timezone_name)
-    if resolved_timezone_name != timezone_name:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Home Assistant reports a timezone that could not be resolved for safe calendar statistics estimation",
-                context={"home_assistant_timezone": timezone_name},
-                suggestions=[
-                    "Configure a valid Home Assistant timezone, then retry.",
-                    "Use period='hour' or period='5minute', which do not require calendar alignment.",
-                ],
-            )
-        )
-    return timezone
-
-
 async def _prepare_guardrail_query(
     client: Any,
     *,
@@ -184,7 +153,11 @@ async def _prepare_guardrail_query(
     if source != "statistics" or period not in _CALENDAR_STATISTICS_PERIODS:
         return UTC
     _validate_calendar_statistics_range(start_dt, end_dt, period)
-    return await _get_statistics_timezone(client)
+    return await require_ha_timezone(
+        client,
+        needed_for="calendar statistics estimation needs",
+        workaround="Or use period='hour' or period='5minute', which need no calendar alignment",
+    )
 
 
 class HistoryTools:
@@ -411,11 +384,9 @@ class HistoryTools:
             start_dt, end_dt = _parse_time_range(
                 start_time, end_time, default_hours, now
             )
-            if None in (start_dt.tzinfo, end_dt.tzinfo):  # Core: naive = HA local time
-                tz_name, _ = await fetch_ha_timezone(self._client)
-                tz, _ = resolve_local_timezone(tz_name)
-                start_dt = start_dt.replace(tzinfo=start_dt.tzinfo or tz)
-                end_dt = end_dt.replace(tzinfo=end_dt.tzinfo or tz)
+            start_dt, end_dt = await _read_in_ha_timezone(
+                self._client, start_dt, end_dt
+            )
             query_settings = get_global_settings()
             statistics_timezone = await _prepare_guardrail_query(
                 self._client,
@@ -667,6 +638,33 @@ def _parse_time_range(
     else:
         end_dt = reference_time
 
+    return start_dt, end_dt
+
+
+async def _read_in_ha_timezone(
+    client: Any, start_dt: datetime, end_dt: datetime
+) -> tuple[datetime, datetime]:
+    """Read a time without an offset in Home Assistant's time zone, as Core does."""
+    if None not in (start_dt.tzinfo, end_dt.tzinfo):
+        return start_dt, end_dt
+    try:
+        tz = await require_ha_timezone(
+            client,
+            needed_for="a time without an offset needs",
+            workaround="Or give each time with an offset",
+        )
+    except ToolError:
+        # Two given times without an offset compare by wall clock without the
+        # zone: a reversed range, the caller's own mistake, is named first.
+        if start_dt.tzinfo is None and end_dt.tzinfo is None:
+            _validate_time_range(
+                start_dt.replace(tzinfo=UTC),
+                end_dt.replace(tzinfo=UTC),
+                reject_zero_length=False,
+            )
+        raise
+    start_dt = start_dt.replace(tzinfo=start_dt.tzinfo or tz)
+    end_dt = end_dt.replace(tzinfo=end_dt.tzinfo or tz)
     return start_dt, end_dt
 
 

@@ -15,8 +15,10 @@ from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
+from ..errors import ErrorCode, create_error_response
 from .coercion import parse_string_list_param
 from .component_api import get_component_caps
+from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +338,43 @@ async def fetch_ha_timezone(client: Any) -> tuple[str, bool]:
             exc_info=True,
         )
         return "UTC", True
+
+
+async def require_ha_timezone(
+    client: Any, *, needed_for: str, workaround: str
+) -> _TZInfo:
+    """Home Assistant's time zone, refusing the call when it cannot be fetched
+    or this server has no tzdata entry for it.
+
+    *needed_for* ends the refusal message ("..., which <needed_for>");
+    *workaround* is the suggestion that avoids needing the zone.
+    """
+    ha_timezone, fetch_failed = await fetch_ha_timezone(client)
+    if fetch_failed:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                f"Could not get Home Assistant's time zone, which {needed_for}",
+                suggestions=[
+                    "Check the Home Assistant connection, then retry",
+                    workaround,
+                ],
+            )
+        )
+    local_tz, resolved = resolve_local_timezone(ha_timezone)
+    if resolved != ha_timezone:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Could not resolve Home Assistant's time zone, which {needed_for}",
+                context={"home_assistant_timezone": ha_timezone},
+                suggestions=[
+                    "Set a Home Assistant time zone this server's tzdata knows, then retry",
+                    workaround,
+                ],
+            )
+        )
+    return local_tz
 
 
 def resolve_local_timezone(ha_timezone: str) -> tuple[_TZInfo, str]:
