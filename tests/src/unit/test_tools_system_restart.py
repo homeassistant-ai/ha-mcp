@@ -65,6 +65,7 @@ def restart_answer_lost(
     forwarded: bool,
 ) -> None:
     """The proxy can give the same response before or after Core acts."""
+
     async def lose_answer(request: web.Request) -> web.Response:
         gateway.requests.append(f"{request.method} {request.path}")
         if forwarded:
@@ -90,9 +91,14 @@ def restart_answer_lost(
 @pytest.mark.parametrize("forwarded", [False, True], ids=["not-forwarded", "forwarded"])
 @pytest.mark.usefixtures("restart_answer_lost")
 async def test_an_unacknowledged_restart_is_unknown(
-    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient, forwarded: bool
+    stops: list[bool],
+    gateway: Gateway,
+    gateway_client: HomeAssistantClient,
+    forwarded: bool,
 ) -> None:
-    body = await rejected_call_body(SystemTools(gateway_client).ha_restart(confirm=True))
+    body = await rejected_call_body(
+        SystemTools(gateway_client).ha_restart(confirm=True)
+    )
 
     assert stops == ([True] if forwarded else [])
     assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
@@ -111,10 +117,15 @@ def restart_over_websocket(gateway: Gateway) -> None:
     gateway.routes.append(web.post(RESTART_PATH, refuse_rest))
 
 
-@pytest.mark.parametrize("accept_upgrade", [False, True], ids=["before-send", "after-send"])
+@pytest.mark.parametrize(
+    "accept_upgrade", [False, True], ids=["before-send", "after-send"]
+)
 @pytest.mark.usefixtures("restart_over_websocket")
 async def test_a_lost_websocket_reports_only_what_the_client_knows(
-    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient, accept_upgrade: bool
+    stops: list[bool],
+    gateway: Gateway,
+    gateway_client: HomeAssistantClient,
+    accept_upgrade: bool,
 ) -> None:
     if accept_upgrade:
         # The gateway got the frame but never forwarded it to Core.
@@ -122,9 +133,13 @@ async def test_a_lost_websocket_reports_only_what_the_client_knows(
     else:
         gateway.upgrade_status = 502
     with patch.object(
-        gateway_client, "send_websocket_message", wraps=gateway_client.send_websocket_message
+        gateway_client,
+        "send_websocket_message",
+        wraps=gateway_client.send_websocket_message,
     ) as ws:
-        body = await rejected_call_body(SystemTools(gateway_client).ha_restart(confirm=True))
+        body = await rejected_call_body(
+            SystemTools(gateway_client).ha_restart(confirm=True)
+        )
 
     assert stops == []
     assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
@@ -137,7 +152,9 @@ async def test_a_lost_websocket_reports_only_what_the_client_knows(
         assert "outcome" not in body
 
 
-@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "reply-timeout"])
+@pytest.mark.parametrize(
+    "acknowledged", [True, False], ids=["acknowledged", "reply-timeout"]
+)
 @pytest.mark.usefixtures("restart_over_websocket")
 async def test_websocket_acknowledgement_waits_for_the_stop_handler(
     hass: HomeAssistant,
@@ -155,7 +172,9 @@ async def test_websocket_acknowledgement_waits_for_the_stop_handler(
 
     async_set_stop_handler(hass, stop)
     if not acknowledged:
-        monkeypatch.setattr("ha_mcp.client.websocket_client.DEFAULT_COMMAND_WAIT_TIMEOUT", 2)
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.DEFAULT_COMMAND_WAIT_TIMEOUT", 2
+        )
     task = asyncio.create_task(SystemTools(gateway_client).ha_restart(confirm=True))
     try:
         async with asyncio.timeout(15):

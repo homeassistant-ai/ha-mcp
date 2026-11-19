@@ -35,7 +35,8 @@ def _restart_outcome_unknown(error: Exception) -> bool:
         # A socket lost during send or while awaiting the reply proves neither
         # delivery nor execution. Core acknowledges WS calls after the service.
         return not isinstance(
-            error.__cause__, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+            error.__cause__,
+            (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout),
         )
     return http_failure_status(error) in {502, 503, 504}
 
@@ -51,7 +52,8 @@ def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
             if _restart_outcome_unknown(exc):
                 logger.warning(
                     "Deferred Home Assistant restart outcome is unknown. Check Core's "
-                    "startup time or logs before requesting another restart: %s", exc
+                    "startup time or logs before requesting another restart: %s",
+                    exc,
                 )
             else:
                 logger.warning("Deferred Home Assistant restart failed", exc_info=True)
