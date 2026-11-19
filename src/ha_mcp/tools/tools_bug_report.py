@@ -9,7 +9,6 @@ import asyncio
 import importlib
 import importlib.metadata
 import importlib.util
-import json
 import logging
 import os
 import sys
@@ -312,10 +311,10 @@ def _tool_policy_summary() -> str:
         logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
         # load_policy's message can quote rule contents, so only its kind
         # reaches the report.
-        if isinstance(e.__cause__, (json.JSONDecodeError, UnicodeDecodeError)):
-            return "unreadable (invalid JSON)"
         if isinstance(e.__cause__, ValidationError):
             return "unreadable (schema validation failed)"
+        if isinstance(e.__cause__, ValueError):  # the JSON or its encoding
+            return "unreadable (invalid JSON)"
         return f"unreadable ({type(e).__name__})"
     count = len(policy.rules)
     rules = "1 rule" if count == 1 else f"{count} rules"

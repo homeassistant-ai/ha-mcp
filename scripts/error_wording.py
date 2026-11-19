@@ -238,7 +238,7 @@ class Flow:
                     if keyword.arg and self.is_text(keyword.value):
                         self.program.pass_text(target.name, keyword.arg)
 
-    def decisions(self) -> Iterator[ast.AST]:
+    def decisions(self) -> Iterator[ast.Compare | ast.Call]:
         for node in self.nodes:
             if isinstance(node, ast.Compare):
                 sides = [node.left, *node.comparators]

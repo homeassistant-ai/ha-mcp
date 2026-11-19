@@ -70,9 +70,12 @@ def dashboard_save_in_recovery_mode(message: str) -> bool:
     return message == "Saving not supported in recovery mode"
 
 
-def url_path_needs_hyphen(message: str) -> bool:
-    """lovelace/const.py url_slug: "Url path needs to contain a hyphen (-)"."""
-    return "needs to contain a hyphen" in message
+def hyphenated_url_path(message: str, url_path: str) -> str | None:
+    """lovelace/const.py url_slug: "Url path needs to contain a hyphen (-)".
+    The path with hyphens for its underscores, when that is a different path."""
+    hyphenated = url_path.replace("_", "-")
+    refused = "needs to contain a hyphen" in message
+    return hyphenated if refused and hyphenated != url_path else None
 
 
 # --- Core: automation and script validation (voluptuous text) --------------

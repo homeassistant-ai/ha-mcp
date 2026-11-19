@@ -3114,13 +3114,8 @@ class DashboardConfigTools:
             error_msg = create_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            hyphenated = url_path.replace("_", "-")
-            suggestions = None
-            if (
-                error_wording.url_path_needs_hyphen(str(error_msg))
-                and hyphenated != url_path
-            ):
-                suggestions = [f"Try '{hyphenated}' instead"]
+            hyphenated = error_wording.hyphenated_url_path(str(error_msg), url_path)
+            suggestions = [f"Try '{hyphenated}' instead"] if hyphenated else None
             raise_tool_error(
                 create_error_response(
                     ws_failure_code(create_result),

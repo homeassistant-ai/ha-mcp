@@ -155,6 +155,18 @@ async def test_report_works_when_the_policy_package_cannot_load(
     assert report_line(report, "Tool Policy") == "unreadable (ModuleNotFoundError)"
 
 
+async def test_a_policy_that_fails_its_schema_is_reported_as_that(
+    core_client: HomeAssistantClient,
+) -> None:
+    (get_data_dir() / "tool_policy.json").write_text('{"rules": 5}', encoding="utf-8")
+
+    report = await report_issue(core_client)
+
+    assert report_line(report, "Tool Policy") == (
+        "unreadable (schema validation failed)"
+    )
+
+
 def test_toggles_carry_the_beta_flags_and_count_the_tool_lists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
