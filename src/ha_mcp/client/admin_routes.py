@@ -8,9 +8,18 @@ Not listed: routes that check entity permissions instead (e.g.
 ``GET /api/states/<id>``), the hassio proxy (its 401 is returned, not raised,
 so it is not counted), and admin-only services, which ``call_service`` sends
 over WebSocket for a non-admin token.
+
+It also holds the request hook that keeps this server's administrator token
+off the ha_mcp_tools component's own HTTP views.
 """
 
+import posixpath
 import re
+import urllib.parse
+
+import httpx
+
+from .exceptions import HomeAssistantAPIError
 
 _ANY_METHOD = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 
@@ -41,3 +50,31 @@ def is_admin_only_route(method: str, endpoint: str) -> bool:
         method in methods and pattern.fullmatch(path)
         for methods, pattern in _ADMIN_ONLY_ROUTES
     )
+
+
+def normalized_path(path: str) -> str:
+    """Fold percent-escapes, ``//``, ``.`` and ``..`` so an equivalent spelling
+    cannot slip past (Home Assistant decodes ``%62ackups`` to ``backups`` before
+    routing, and httpx sends neither the query nor a ``#`` fragment as part of
+    the path).
+
+    Leading slashes are stripped first: POSIX normpath keeps exactly two.
+    """
+    decoded = urllib.parse.unquote(re.split("[?#]", path, maxsplit=1)[0])
+    stripped = decoded.strip().lower().lstrip("/")
+    return posixpath.normpath("/" + stripped)
+
+
+async def refuse_component_views(request: httpx.Request) -> None:
+    """httpx request hook: never send to the component's ``/api/ha_mcp_tools/``.
+
+    Its settings panel mints a session for this administrator token, and that
+    session approves held tool calls. The hook sees the final URL, after httpx
+    resolved ``..``, so a tool ID that climbs out of its route is caught too.
+    """
+    path = normalized_path(request.url.raw_path.decode("ascii"))
+    if "/api/ha_mcp_tools/" in f"{path}/":
+        raise HomeAssistantAPIError(
+            "The ha_mcp_tools component's HTTP views are off limits to this "
+            f"server: {request.method} {path} not sent"
+        )

@@ -268,3 +268,20 @@ async def test_mcp_clients_cannot_reach_the_tool_approval_settings(
     mcp_path = entry.data[DATA_SECRET_PATH]
     assert mounted == [manager.settings_path]
     assert manager.settings_path not in ("", mcp_path)
+
+
+async def test_an_mcp_client_cannot_derive_the_approval_settings_path(
+    hass: HomeAssistant,
+) -> None:
+    """The settings mount is guarded only by its path. A path fixed in the
+    source, or built from the MCP secret every client holds, would let any MCP
+    client approve its own held tool calls."""
+    data = {DATA_ADMIN_TOKEN: await issue_admin_token(hass)}
+    entry = add_server_entry(hass, data=data, options={})
+    first = es.EmbeddedServerManager(hass, entry)
+    second = es.EmbeddedServerManager(hass, entry)
+
+    assert first.settings_path != second.settings_path
+    secret = entry.data[DATA_SECRET_PATH].strip("/")
+    assert secret not in first.settings_path
+    assert secret not in second.settings_path

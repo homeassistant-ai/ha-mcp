@@ -39,7 +39,11 @@ from custom_components.ha_mcp_tools.mcp_webhook import (
     async_register_webhook,
     async_unregister_webhook,
 )
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
+from ._code_mode import run_custom_tool
 from ._garbled_upstream import garbled_upstream
 
 # The HTTP surface the boot page, the session endpoint and the proxy share.
@@ -721,3 +725,65 @@ class TestPanelRegistration:
         assert ui_panel.PANEL_URL_PATH not in hass.data[frontend.DATA_PANELS]
         client = await hass_client_no_auth()
         assert (await client.get(_BOOT)).status == 200
+
+
+# ---------------------------------------------------------------------------
+# Code Mode
+# ---------------------------------------------------------------------------
+
+
+class TestCodeModeCannotDriveThePanel:
+    """Code Mode's api_post sends the server's own administrator token, and its
+    HTTP client keeps cookies: a session minted there would let the agent
+    approve its own held tool calls through the proxy."""
+
+    @pytest.mark.parametrize("session", [_SESSION, "/api/ha%5Fmcp_tools/ui/session"])
+    async def test_sandbox_cannot_reach_the_settings_through_the_panel(
+        self,
+        running_server: _SettingsServer,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        session: str,
+    ) -> None:
+        approve = _APP + "api/policy/approve"
+        code = (
+            f"minted = await api_post({session!r}, {{}})\n"
+            f"[minted, await api_post({approve!r}, {{'token': 'held'}})]"
+        )
+
+        minted, approved = await run_custom_tool(core_client, monkeypatch, code)
+
+        assert running_server.seen == []
+        assert "off limits" in minted["error"]
+        assert "off limits" in approved["error"]
+
+
+class TestToolIdsCannotClimbToThePanel:
+    """Tools put IDs into REST paths, and httpx resolves ``..`` before sending: a
+    script ID could climb to the panel, mint a session for the server's
+    administrator token and approve a held tool call through the proxy."""
+
+    async def test_a_script_id_cannot_reach_the_settings_through_the_panel(
+        self, running_server: _SettingsServer, core_client: HomeAssistantClient
+    ) -> None:
+        tools = ConfigScriptTools(core_client)
+        config = {
+            "alias": "x",
+            "sequence": [{"delay": {"seconds": 1}}],
+            "token": "held",
+        }
+        refused = []
+        # One client for both calls: the session cookie of the first would carry
+        # the second through the proxy.
+        for script_id in (
+            "../../../ha_mcp_tools/ui/session",
+            "../../../ha_mcp_tools/ui/app/api/policy/approve",
+        ):
+            try:
+                await tools.ha_config_set_script(script_id=script_id, config=config)
+            except ToolError as exc:
+                refused.append(str(exc))
+
+        assert running_server.seen == []
+        assert len(refused) == 2
+        assert all("off limits" in error for error in refused)

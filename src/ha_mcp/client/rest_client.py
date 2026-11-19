@@ -15,7 +15,7 @@ import httpx
 from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
-from .admin_routes import is_admin_only_route
+from .admin_routes import is_admin_only_route, refuse_component_views
 from .error_log_journald import (
     JournaldPage,
     container_page,
@@ -287,9 +287,9 @@ class HomeAssistantClient:
                 self.base_url,
             )
 
-        # Create HTTP client with authentication headers
         self.httpx_client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api",
+            event_hooks={"request": [refuse_component_views]},
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
@@ -362,8 +362,8 @@ class HomeAssistantClient:
             HomeAssistantAdminRequiredError: Admin-only route refused without
                 being sent (see ``guarded_request``).
             HomeAssistantAuthError: 401 response.
-            HomeAssistantAPIError: Non-2xx response (with status_code and
-                response_data set from JSON body when possible).
+            HomeAssistantAPIError: Non-2xx response (status_code, response_data
+                from JSON), or a component view refused unsent (status_code None).
             HomeAssistantConnectionError: Network, timeout, transport or redirect.
         """
         backoff = 0.5

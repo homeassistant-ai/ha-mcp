@@ -44,7 +44,7 @@ from ..errors import ErrorCode, create_error_response
 from .backup_access import snapshot_route_refusal
 from .helpers import log_tool_usage, raise_tool_error
 from .tool_hints import write_hints
-from .util_helpers import raw_ws_refusal
+from .util_helpers import normalized_path, raw_ws_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -101,16 +101,11 @@ _BLOCKED_TOOLS = frozenset(
 # Validation for save_as names
 _SAVE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
-# Path-prefix denylist for ``_api_post``. Two flavours of entry, kept in
-# one list because the matching logic is identical:
-#   1. Endpoints with no legitimate sandbox use case at all — currently
-#      just ``states/`` (raw state writes can conjure ghost entities and
-#      override real ones in the in-memory state machine).
-#   2. Endpoints whose corresponding wrapping MCP tool performs
-#      validation / lint / hash-locking that raw ``api_post`` would skip
-#      — currently ``config/{automation,script,scene}/config/``.
-# The prefixes are matched after ``_normalize_endpoint`` strips the
-# leading ``api/`` so they are written as plain HA-relative paths.
+# Path-prefix denylist for ``_api_post``, matched against the folded path
+# (``normalized_path``, so a ``%5F`` or ``//`` spelling cannot slip past):
+#   1. No sandbox use: ``states/`` (raw writes conjure ghost entities).
+#   2. A wrapping tool runs checks raw ``api_post`` would skip:
+#      ``config/{automation,script,scene}/config/``.
 _API_POST_BLOCKED_PREFIXES: tuple[tuple[str, str, str], ...] = (
     (
         "states/",
@@ -284,18 +279,15 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
 
 
 def _check_api_post_blocked(normalized: str) -> str | None:
-    """Return a rejection message if ``normalized`` matches the api_post
-    blocklist or a backup control, or ``None`` if the call should proceed.
-
-    ``normalized`` is the path after ``_normalize_endpoint`` stripped any
-    leading ``/`` and ``api/`` prefix, so for example
-    ``"/api/states/sun.sun"`` arrives here as ``"states/sun.sun"``.
-    """
+    """Return why ``normalized`` (``_normalize_endpoint``'s output, e.g.
+    ``states/sun.sun``) is refused: the blocklist, an HA-internal event or a
+    backup control. ``None`` lets the call proceed."""
+    path = normalized_path(normalized).lstrip("/")
     for prefix, what, alternative in _API_POST_BLOCKED_PREFIXES:
-        if normalized.startswith(prefix) or normalized == prefix.rstrip("/"):
+        if f"{path}/".startswith(prefix):
             return f"{what} are blocked from the sandbox; {alternative}."
-    if normalized.startswith("events/"):
-        event_name = normalized[len("events/") :]
+    if path.startswith("events/"):
+        event_name = path[len("events/") :]
         if event_name in _BLOCKED_HA_INTERNAL_EVENTS:
             return (
                 f"Firing HA-internal event {event_name!r} from the sandbox "

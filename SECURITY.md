@@ -403,7 +403,8 @@ random, generated in memory each time the server is brought up, and handed only
 to the proxy. Reaching the tool-approval, policy and feature-flag endpoints
 therefore takes a Home Assistant administrator's login, not the server's URL
 (a `ha_auth` client signed in as an administrator holds that login too).
-Neither path is exposed to the browser and no token or secret is placed in a
+Code Mode's `api_post` sends the server's own administrator token, so it
+refuses the panel's routes. Neither path is exposed to the browser and no token or secret is placed in a
 URL; the proxy returns 503 whenever the server is not running.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)

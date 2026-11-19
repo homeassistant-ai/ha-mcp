@@ -5,11 +5,10 @@ This module provides common helper functions used across multiple tool registrat
 """
 
 import logging
-import posixpath
-import urllib.parse
 from collections.abc import Mapping
 from typing import Any, NamedTuple, cast
 
+from ..client.admin_routes import normalized_path
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -199,17 +198,6 @@ _CREDENTIAL_SUPERVISOR_ENDPOINTS: tuple[str, ...] = (
     "/auth",
     "/os/ssh/authorized_keys",
 )
-
-
-def normalized_path(path: str) -> str:
-    """Fold percent-escapes, ``//``, ``.`` and ``..`` so an equivalent spelling
-    cannot slip past (HTTP clients decode ``%62ackups`` to ``backups``).
-
-    Leading slashes are stripped first: POSIX normpath keeps exactly two.
-    """
-    decoded = urllib.parse.unquote(path.split("?", 1)[0])
-    stripped = decoded.strip().lower().lstrip("/")
-    return posixpath.normpath("/" + stripped)
 
 
 def supervisor_path(endpoint: str) -> str:
