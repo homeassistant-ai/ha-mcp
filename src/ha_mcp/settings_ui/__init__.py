@@ -683,9 +683,10 @@ def register_settings_routes(
     settings UI "is **not** gated by the OAuth token", and its Scope section
     excludes "The web settings UI not being gated by the OAuth/OIDC token".
     OAuth and OIDC modes compensate by passing a *dedicated* secret path here
-    rather than the client-known MCP path (GHSA-mx64-982r-65vg); standard mode
-    and the add-on pass the MCP secret path, which already gates the whole
-    tool surface.
+    rather than the client-known MCP path (GHSA-mx64-982r-65vg), and the
+    in-process server passes a path only its sidebar panel proxy knows;
+    standard mode and the add-on pass the MCP secret path, which already
+    gates the whole tool surface.
 
     Args:
         mcp: The FastMCP instance to register routes on.

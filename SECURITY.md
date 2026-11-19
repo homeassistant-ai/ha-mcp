@@ -397,9 +397,14 @@ sidebar that reverse-proxies the server's web settings UI over Home Assistant's
 own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
 is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
-re-validates that the session still maps to an active admin. The loopback secret
-path is never exposed to the browser and no token or secret is placed in a URL;
-the proxy returns 503 whenever the server is not running.
+re-validates that the session still maps to an active admin. The server mounts
+that UI on its own loopback path, not under the MCP secret path: the path is
+random, generated in memory each time the server is brought up, and handed only
+to the proxy. Reaching the tool-approval, policy and feature-flag endpoints
+therefore takes a Home Assistant administrator's login, not the server's URL
+(a `ha_auth` client signed in as an administrator holds that login too).
+Neither path is exposed to the browser and no token or secret is placed in a
+URL; the proxy returns 503 whenever the server is not running.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
@@ -536,10 +541,12 @@ and carries a larger attack surface than the standard LLAT setup.
   restore or delete
   backups. Set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
   Standard mode instead mounts the UI under the MCP secret path, which already
-  gates the tool surface. The app mounts it twice: under that secret path
-  for direct access, and at the bare root for Home Assistant ingress, where the
-  routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
-  caller.
+  gates the tool surface; the in-process server keeps it on a path only its
+  sidebar panel knows (see
+  [In-process server](#in-process-server-ha_mcp_tools-in-process-server-entry)).
+  The app mounts it twice: under that secret path for direct access, and at
+  the bare root for Home Assistant ingress, where the routes admit only the
+  Supervisor peer (`172.30.32.2`) and 403 every other caller.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.

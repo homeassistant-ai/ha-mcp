@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import importlib
 import logging
 import os
 import socket
@@ -29,6 +30,8 @@ from custom_components.ha_mcp_tools.const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
     DATA_ADMIN_TOKEN,
+    DATA_SECRET_PATH,
+    DOMAIN,
     OPT_BIND_HOST,
     OPT_SERVER_PORT,
 )
@@ -238,3 +241,30 @@ async def test_readiness_ignores_another_process_on_the_port(
         await started.async_start()  # its own server started, and the port answers
         assert started.is_running is True
         await started.async_stop()
+
+
+@pytest.mark.usefixtures("module_cache")
+async def test_mcp_clients_cannot_reach_the_tool_approval_settings(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every MCP client knows the MCP secret path. Settings routes mounted
+    under it let a client approve its own held tool calls and rewrite the
+    policy; only the sidebar panel, behind the admin login, may reach them."""
+    _require_ipv6_loopback()
+    # The stub uvicorn listens only on sockets it is handed: the dual-stack bind.
+    options = {OPT_BIND_HOST: BIND_HOST_ALL, OPT_SERVER_PORT: free_port()}
+    manager, _ = await _worker(hass, monkeypatch, options)
+    mounted: list[str] = []
+    monkeypatch.setattr(
+        importlib.import_module("ha_mcp.settings_ui"),
+        "register_settings_routes",
+        lambda mcp, server, secret_path="", **_: mounted.append(secret_path),
+    )
+
+    await manager.async_start()
+    await manager.async_stop()
+
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    mcp_path = entry.data[DATA_SECRET_PATH]
+    assert mounted == [manager.settings_path]
+    assert manager.settings_path not in ("", mcp_path)

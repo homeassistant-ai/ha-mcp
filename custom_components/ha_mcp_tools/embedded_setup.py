@@ -120,6 +120,7 @@ async def async_bring_up_server(
             entry,
             port=manager.port,
             secret_path=secret_path,
+            settings_path=manager.settings_path,
             auth_mode=auth_mode,
             register_endpoint=webhook_enabled,
             oauth_client_id=oauth_client_id,

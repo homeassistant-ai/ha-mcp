@@ -1074,7 +1074,12 @@ slip past a policy that already watches that tool.
 
 A held call waits up to `wait_seconds` for your decision. **You approve or
 deny in the settings UI or through your configured Home Assistant approval
-automation;** nothing the AI client sends can approve a call.
+automation.** With the in-process server, the approval endpoints are
+reachable only through the admin-only sidebar panel, so approving takes a Home
+Assistant administrator's login. Elsewhere they sit under a URL a client can
+know (the MCP secret path, or the stdio settings URL that `ha_get_overview`
+reports), so a client that can send its own HTTP requests to that URL can
+approve its own call.
 
 How the wait looks depends on the client:
 

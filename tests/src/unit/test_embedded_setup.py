@@ -307,6 +307,8 @@ class TestBringUp:
         assert kwargs["port"] == DEFAULT_SERVER_PORT
         assert kwargs["secret_path"] == "/private_secret"
         assert kwargs["register_endpoint"] is True
+        # The panel proxies to the manager's own settings mount, not the MCP path.
+        assert kwargs["settings_path"] == hass.data[DOMAIN][DATA_MANAGER].settings_path
 
     async def test_an_entry_without_a_signing_key_gets_one_before_registration(
         self, hass: HomeAssistant, collaborators: Collaborators

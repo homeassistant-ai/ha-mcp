@@ -48,6 +48,8 @@ _BOOT = f"{_BASE}/boot"
 _SESSION = f"{_BASE}/session"
 _APP = f"{_BASE}/app/"
 _SECRET = "/private_abc"
+# The in-process server mounts its settings routes apart from the MCP secret path.
+_SETTINGS = "/private_settings"
 _LOCALE_COOKIE = "ha_mcp_locale"
 
 _Responder = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -96,7 +98,7 @@ async def settings_server(
         return await holder[0].handle(request)
 
     app = web.Application()
-    app.router.add_route("*", _SECRET + "/{tail:.*}", handler)
+    app.router.add_route("*", _SETTINGS + "/{tail:.*}", handler)
     server = _SettingsServer(await aiohttp_server(app))
     holder.append(server)
     return server
@@ -131,6 +133,7 @@ async def _forward_to(hass: HomeAssistant, port: int) -> None:
         entry,
         port=port,
         secret_path=_SECRET,
+        settings_path=_SETTINGS,
         auth_mode=WEBHOOK_AUTH_NONE,
         register_endpoint=False,
     )
@@ -389,7 +392,7 @@ class TestProxyForwarding:
         # does for untrusted MCP clients).
         assert resp.content_type == "text/html"
         # Forwarded to the loopback settings route under the secret path.
-        assert running_server.seen[0].path_qs == f"{_SECRET}/settings"
+        assert running_server.seen[0].path_qs == f"{_SETTINGS}/settings"
 
     async def test_relayed_page_is_not_inflated_twice(
         self,
@@ -439,7 +442,7 @@ class TestProxyForwarding:
         )
 
         seen = running_server.seen[0]
-        assert seen.path_qs == f"{_SECRET}/api/settings/backups?name=x"
+        assert seen.path_qs == f"{_SETTINGS}/api/settings/backups?name=x"
         assert "authorization" not in seen.headers
         assert "cookie" not in seen.headers
         assert seen.headers["host"] != "example"
@@ -532,8 +535,8 @@ class TestProxyForwarding:
 
         assert resp.status == 502
         assert "upstream request failed" in caplog.text
-        assert _SECRET not in caplog.text
-        assert _SECRET not in await resp.text()
+        assert _SETTINGS not in caplog.text
+        assert _SETTINGS not in await resp.text()
 
     async def test_unexpected_error_maps_to_500(
         self,

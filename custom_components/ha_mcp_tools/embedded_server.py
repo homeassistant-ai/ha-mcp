@@ -279,6 +279,8 @@ class EmbeddedServerManager:
         # Provisional until async_start reads the manifest pin.
         self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
+        # Settings API approves held tool calls: off the MCP path, panel-only.
+        self.settings_path: str = f"/private_{os.urandom(16).hex()}"
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
         # Home Assistant's own configuration directory, captured here on the
         # event loop: the dependency diagnosis scans custom_components/ from
@@ -1543,10 +1545,8 @@ class EmbeddedServerManager:
                 "Refusing to start."
             )
 
-        # Parity with the CLI HTTP runner: serve the web settings UI under the
-        # same secret path as the MCP endpoint.
         self._note_startup_phase("registering web routes")
-        register_settings_routes(server.mcp, server, secret_path=self._secret_path)
+        register_settings_routes(server.mcp, server, secret_path=self.settings_path)
 
         # Parity with the CLI HTTP runner: answer a browser GET on the MCP path
         # with the friendly landing page (405 + setup guidance) instead of a

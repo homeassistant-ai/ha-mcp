@@ -835,6 +835,7 @@ async def async_register_webhook(
     secret_path: str,
     auth_mode: str,
     register_endpoint: bool = True,
+    settings_path: str = "",
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     oauth_signing_key: str | None = None,
@@ -855,7 +856,9 @@ async def async_register_webhook(
     no public endpoint or ha_auth/legacy surface is created — and any leftover
     endpoint from a crashed unload is cleared, so off means off; only the
     forwarding config is stored, which same-host consumers — the sidebar
-    settings panel proxy — need to reach the loopback server (#1803).
+    settings panel proxy — need to reach the loopback server (#1803). The
+    panel reaches the settings UI under ``settings_path``, a path apart from
+    the MCP one.
 
     Returns True when the caller should surface ``ISSUE_LEGACY_OAUTH_RESTART``:
     the root ``/authorize``/``/token`` views just bound for the first time this
@@ -899,6 +902,7 @@ async def async_register_webhook(
     cfg: dict[str, Any] = {
         "webhook_id": webhook_id,
         "target_url": target_url,
+        "settings_url": f"http://127.0.0.1:{port}{settings_path}",
         "session": session,
         CFG_CIMD_SESSION: cimd_session,
         "auth_mode": auth_mode,

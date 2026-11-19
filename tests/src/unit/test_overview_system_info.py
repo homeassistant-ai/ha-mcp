@@ -466,6 +466,30 @@ async def test_rejected_registration_clears_stale_http_hint(
         settings_ui.reset_http_settings_state()
 
 
+async def test_in_process_server_keeps_its_settings_path_from_the_client(
+    tools: SearchTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The in-process server's settings path is what guards tool approvals;
+    the overview must not hand it to the MCP client."""
+    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    _no_sidecar(monkeypatch)
+    server = build_server(monkeypatch, core_client)
+    settings_ui.reset_http_settings_state()
+    try:
+        settings_ui.register_settings_routes(
+            FastMCP("embedded"), server, secret_path="/private_settings"
+        )
+
+        result = await tools.ha_get_overview()
+
+        assert "/private_settings" not in str(result)
+    finally:
+        settings_ui.reset_http_settings_state()
+
+
 async def test_settings_url_hint_normalizes_trailing_slash(
     tools: SearchTools, monkeypatch: pytest.MonkeyPatch
 ) -> None:

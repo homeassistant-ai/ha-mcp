@@ -1,11 +1,13 @@
 """Admin-only "Open Web UI" access to the in-process server's settings page (#1527).
 
 The in-process ha-mcp server serves its web settings UI on the loopback interface
-at ``http://127.0.0.1:<port><secret_path>/settings`` — unreachable from a browser
-and guarded only by the secret path. This module gives every install type the
-add-on's "Open Web UI" experience: an admin-only sidebar panel ("HA-MCP") that
-opens that settings UI through Home Assistant's own HTTP server, so it works over
-the Nabu Casa remote URL and never exposes the loopback secret path to the browser.
+at ``http://127.0.0.1:<port><settings_path>/settings`` — unreachable from a browser
+and guarded only by that path, which the server keeps apart from the MCP secret
+path so MCP clients cannot approve their own tool calls. This module gives every
+install type the add-on's "Open Web UI" experience: an admin-only sidebar panel
+("HA-MCP") that opens that settings UI through Home Assistant's own HTTP server,
+so it works over the Nabu Casa remote URL and never exposes the loopback path to
+the browser.
 
 The sidebar entry is a built-in ``iframe`` panel — the panel type behind
 "webpage" dashboards — NOT a custom panel. Home Assistant itself renders the
@@ -334,7 +336,7 @@ class _ProxyView(HomeAssistantView):
         if cfg is None:
             return web.Response(status=503, text="The MCP server is not running")
 
-        target = f"{cfg['target_url']}/{path}"
+        target = f"{cfg['settings_url']}/{path}"
         if request.query_string:
             target = f"{target}?{request.query_string}"
         session: aiohttp.ClientSession = cfg["session"]

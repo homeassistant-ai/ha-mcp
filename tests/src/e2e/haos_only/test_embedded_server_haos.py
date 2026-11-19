@@ -47,12 +47,9 @@ import pytest
 import requests
 from haos_runtime import (
     HA_MCP_SERVER_ENTRY_ID,
-    HA_MCP_SERVER_PORT,
-    HA_MCP_SERVER_SECRET_PATH,
     HA_MCP_SERVER_WEBHOOK_ID,
     enable_config_entry,
     read_embedded_staging_status,
-    ssh_exec,
 )
 
 from ..utilities.streamable_http import parse_mcp_response
@@ -402,31 +399,21 @@ class TestEmbeddedSelfRestartOnHaos:
         base_url, _session_id, info = embedded_server
         token = info["token"]
 
-        # From inside the VM: settings routes live under the secret path on the
-        # server's own port, not behind the webhook (MCP traffic only).
-        restart_url = (
-            f"http://127.0.0.1:{HA_MCP_SERVER_PORT}"
-            f"{HA_MCP_SERVER_SECRET_PATH}/api/settings/restart"
-        )
+        # Through the sidebar panel, as the browser does: the settings routes
+        # are off the MCP secret path, so only the panel's proxy reaches them.
+        ui_base = f"{base_url}/api/ha_mcp_tools/ui"
 
         def _press_restart() -> None:
-            result = ssh_exec(
-                [
-                    "curl",
-                    "-s",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code}",
-                    "-X",
-                    "POST",
-                    restart_url,
-                ],
-                timeout=60,
+            panel = requests.Session()
+            minted = panel.post(
+                f"{ui_base}/session",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
             )
-            assert result.stdout.strip().endswith("200"), (
-                f"settings restart endpoint returned {result.stdout!r} "
-                f"(stderr={result.stderr!r})"
+            assert minted.status_code == 200, f"panel session: {minted.text!r}"
+            resp = panel.post(f"{ui_base}/app/api/settings/restart", timeout=60)
+            assert resp.status_code == 200, (
+                f"settings restart endpoint returned {resp.status_code} ({resp.text!r})"
             )
 
         states = _entry_states_while(
