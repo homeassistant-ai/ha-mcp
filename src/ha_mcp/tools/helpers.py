@@ -395,16 +395,55 @@ def _classify_api_status(
     return result
 
 
-def _classify_exception(
-    error: Exception,
-    context: dict[str, Any] | None,
+def create_request_timeout(
+    error: Exception, context: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Classify a failure using the transport type or the code Core returned."""
+    timing = context or {}
+    return create_timeout_error(
+        timing.get("operation") or timing.get("command") or "request",
+        timing.get("timeout_seconds", 30),
+        details=str(error),
+        context=context,
+    )
+
+
+def create_command_error_response(
+    error: HomeAssistantCommandError, context: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Translate a refusal Core sent, preserving native and caller context."""
+    message = str(error)
+    code = error.code
+    if code:
+        context = {**(context or {}), "ha_error_code": code}
+    if code in {"invalid_format", "invalid_info", "service_validation_error"}:
+        return create_validation_error(message, context=context)
+    if code == "timeout":
+        return create_request_timeout(error, context)
+    if (
+        code == "not_found"
+        and error.translation_domain == "homeassistant"
+        and error.translation_key == "service_not_found"
+    ):
+        return create_error_response(ErrorCode.SERVICE_NOT_FOUND, message, context=context)
+    if code in {"not_found", "config_not_found"}:
+        if code == "not_found" and context and (entity_id := context.get("entity_id")):
+            return {**context, **create_entity_not_found_error(entity_id, details=message)}
+        return create_error_response(ErrorCode.RESOURCE_NOT_FOUND, message, context=context)
+    if code == "unauthorized":
+        return create_error_response(
+            ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, message, context=context
+        )
+    return create_error_response(ErrorCode.SERVICE_CALL_FAILED, message, context=context)
+
+
+def create_client_error_response(
+    error: Exception, context: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Build a tool error from the transport type or Home Assistant's response."""
     message = str(error)
     if isinstance(error, HomeAssistantConnectionError):
-        cause = error.__cause__
-        if isinstance(cause, HomeAssistantAuthError):
-            return _classify_exception(cause, context)
+        if isinstance(error.__cause__, HomeAssistantAuthError):
+            return create_client_error_response(error.__cause__, context)
         return create_connection_error(message, timeout=error.timed_out, context=context)
     if isinstance(error, HomeAssistantAdminRequiredError):
         result = create_error_response(
@@ -424,45 +463,15 @@ def _classify_exception(
     if isinstance(error, HomeAssistantAPIError):
         return _classify_api_status(error, message, context)
     if isinstance(error, HomeAssistantCommandError):
-        code = error.code
-        if code:
-            context = {**(context or {}), "ha_error_code": code}
-        if code in {"invalid_format", "invalid_info", "service_validation_error"}:
-            return create_validation_error(message, context=context)
-        if code in {"not_found", "config_not_found"}:
-            if context and (entity_id := context.get("entity_id")):
-                return {
-                    **context,
-                    **create_entity_not_found_error(entity_id, details=message),
-                }
-            return create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND, message, context=context
-            )
-        if code == "unauthorized":
-            return create_error_response(
-                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, message, context=context
-            )
-        if code != "timeout":
-            return create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED, message, context=context
-            )
-    elif isinstance(error, ConnectionError):
+        return create_command_error_response(error, context)
+    if isinstance(error, (TimeoutError, HomeAssistantCommandTimeout)):
+        return create_request_timeout(error, context)
+    if isinstance(error, ConnectionError):
         return create_connection_error(message, context=context)
-    elif isinstance(error, ValueError):
+    if isinstance(error, ValueError):
         return create_validation_error(message, context=context)
-    elif not isinstance(error, (TimeoutError, HomeAssistantCommandTimeout)):
-        return create_error_response(
-            ErrorCode.INTERNAL_ERROR,
-            "An unexpected error occurred",
-            details=message,
-            context=context,
-        )
-    timing = context or {}
-    return create_timeout_error(
-        timing.get("operation") or timing.get("command") or "request",
-        timing.get("timeout_seconds", 30),
-        details=message,
-        context=context,
+    return create_error_response(
+        ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", details=message, context=context
     )
 
 
@@ -571,11 +580,11 @@ def exception_to_structured_error(
         ToolError: If raise_error=True (default), raises with JSON-serialized error
     """
     error_msg = str(error)
-    error_response = _classify_exception(error, context)
+    error_response = create_client_error_response(error, context)
 
     # Tracebacks are operationally valuable only for genuinely unclassified
     # exceptions (programmer errors, library bugs) — every other branch in
-    # _classify_exception produces a structured signal that's sufficient on
+    # create_client_error_response produces a structured signal that's sufficient on
     # its own. Logging the traceback here gives operators line numbers for the
     # bug class where ``str(error)`` is least informative, without
     # re-introducing the duplicate ERROR-log noise that classified failures

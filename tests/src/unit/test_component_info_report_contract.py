@@ -214,6 +214,7 @@ async def test_a_changed_mode_reaches_the_next_report(
     await _registered(hass, server)
     await _report(component_core_client)
     hass.config_entries.async_update_entry(server, options={"webhook_auth": "legacy"})
+    await hass.async_block_till_done()
 
     info = await _report(component_core_client)
 

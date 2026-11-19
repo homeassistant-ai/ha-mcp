@@ -14,7 +14,6 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._tools_addons_core import app_info
 
-
 PNG = b"\x89PNG\r\n\x1a\nunit"
 
 
@@ -43,11 +42,19 @@ def _puppet_options(*, keep_browser_open: bool) -> dict[str, Any]:
 
 
 def _puppet_info(
-    *, state: str, hostname: str | None = None, version: str = "2.4.9", slug: str = "local_puppet"
+    *,
+    state: str,
+    hostname: str | None = None,
+    version: str = "2.4.9",
+    slug: str = "local_puppet",
 ) -> dict[str, Any]:
     return app_info(
-        slug, name="Puppet", state=AddonState(state), version=version,
-        schema=_PUPPET_SCHEMA, options=_puppet_options(keep_browser_open=False),
+        slug,
+        name="Puppet",
+        state=AddonState(state),
+        version=version,
+        schema=_PUPPET_SCHEMA,
+        options=_puppet_options(keep_browser_open=False),
         hostname=hostname or "",
     )
 

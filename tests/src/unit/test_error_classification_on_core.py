@@ -35,6 +35,10 @@ async def test_translated_service_refusal_survives_both_client_paths(
     assert refused.value.translation_key == reply["translation_key"] == "service_not_found"
     assert refused.value.translation_domain == reply["translation_domain"] == "homeassistant"
     assert refused.value.translation_placeholders == reply["translation_placeholders"] == target
+    result = exception_to_structured_error(
+        refused.value, context={"entity_id": "counter.example"}, raise_error=False
+    )
+    assert result["error"]["code"] == "SERVICE_NOT_FOUND"
 
 
 async def test_file_service_identifies_its_own_missing_file(

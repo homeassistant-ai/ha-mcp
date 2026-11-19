@@ -1,5 +1,6 @@
 """Unit tests for announcing the app's server to Core's MCP integration (#2307)."""
 
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -103,7 +104,9 @@ async def test_supervisor_failure_never_raises(
     app, supervisor: Supervisor, caplog: pytest.LogCaptureFixture
 ) -> None:
     supervisor.drop("GET", "/core/info")
-    await app_discovery.announce_mcp_discovery()
+    with caplog.at_level(logging.WARNING, logger=app_discovery.__name__):
+        await app_discovery.announce_mcp_discovery()
+    assert supervisor.requests == [("GET", "/core/info")]
     assert "Could not announce" in caplog.text
 
 

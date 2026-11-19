@@ -235,7 +235,10 @@ class FaultLogSourceMixin:
         }
         if not result.get("success", False):
             error = str(result.get("error", ""))
-            if file_read_error_code(result, FAULT_LOG_PATH) in {"not_found", "not_a_file"}:
+            if file_read_error_code(result, FAULT_LOG_PATH) in {
+                "not_found",
+                "not_a_file",
+            }:
                 # HA opens the file at every start, so a missing file means
                 # this config dir has not been started by HA's __main__ (or
                 # someone removed it). Either way: nothing to show.

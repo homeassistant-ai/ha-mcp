@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Iterator
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -16,7 +18,11 @@ from ha_mcp.utils.operation_manager import OperationStatus, get_operation_manage
 
 
 @pytest.fixture
-def pending() -> Iterator[str]:
+def pending(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    # Freeze only the store's expiry clock. The polling loop has its own
+    # monotonic deadline, and a busy runner must not expire a pending operation.
+    now = time.time()
+    monkeypatch.setattr("ha_mcp.utils.operation_manager.time", SimpleNamespace(time=lambda: now))
     manager = get_operation_manager()
     op = manager.create_operation("light.a", "on", "light", "turn_on", {})
     try:
@@ -56,7 +62,9 @@ async def test_change_during_a_poll(
     manager = get_operation_manager()
     loop = asyncio.get_running_loop()
     if change == "completed":
-        loop.call_later(0.01, manager.update_operation_status, pending, OperationStatus.COMPLETED)
+        loop.call_later(
+            0.01, manager.update_operation_status, pending, OperationStatus.COMPLETED
+        )
         result = await tools.get_device_operation_status(pending, timeout_seconds=2)
         assert result["status"] == "completed"
         return
@@ -65,8 +73,12 @@ async def test_change_during_a_poll(
         expected = ("RESOURCE_NOT_FOUND", "cleaned up")
     else:
         loop.call_later(
-            0.01, manager.update_operation_status, pending,
-            OperationStatus.FAILED, None, "device unreachable",
+            0.01,
+            manager.update_operation_status,
+            pending,
+            OperationStatus.FAILED,
+            None,
+            "device unreachable",
         )
         expected = ("SERVICE_CALL_FAILED", "device unreachable")
     with pytest.raises(ToolError) as raised:
@@ -78,7 +90,9 @@ async def test_change_during_a_poll(
 async def test_fractional_deadline_returns_the_pending_operation(
     tools: DeviceControlTools, pending: str
 ) -> None:
-    with patch("ha_mcp.tools.device_control.asyncio.sleep", wraps=asyncio.sleep) as sleep:
+    with patch(
+        "ha_mcp.tools.device_control.asyncio.sleep", wraps=asyncio.sleep
+    ) as sleep:
         result = await tools.get_device_operation_status(pending, timeout_seconds=0.05)
     assert result["status"] == "pending"
     assert "time_remaining_ms" in result
@@ -86,7 +100,9 @@ async def test_fractional_deadline_returns_the_pending_operation(
     assert all(0 < call.args[0] <= 0.05 for call in sleep.await_args_list)
 
 
-async def test_initial_not_found_raises_resource_not_found(tools: DeviceControlTools) -> None:
+async def test_initial_not_found_raises_resource_not_found(
+    tools: DeviceControlTools,
+) -> None:
     with pytest.raises(ToolError) as raised:
         await tools.get_device_operation_status("missing-op", timeout_seconds=5)
     assert "RESOURCE_NOT_FOUND" in str(raised.value)

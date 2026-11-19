@@ -16,6 +16,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..client.exceptions import HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .component_registries import category_list_reply
@@ -33,6 +34,24 @@ from .helpers import (
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
+
+
+async def _missing_after_update(
+    client: Any, scope: str, category_id: str | None, refusal: dict[str, Any]
+) -> bool:
+    """Core uses invalid_info for an absent ID and for a refused rename."""
+    if category_id is None or refusal.get("error_code") != "invalid_info":
+        return False
+    try:
+        listed = await category_list_reply(client, scope)
+    except (HomeAssistantError, ToolError):
+        # The update already received a refusal. An optional lookup may
+        # refine that answer only if Core supplies the registry.
+        return False
+    categories = listed.get("result") if listed.get("success") else None
+    return isinstance(categories, list) and all(
+        entry["category_id"] != category_id for entry in categories
+    )
 
 
 class CategoryTools:
@@ -269,16 +288,7 @@ class CategoryTools:
                     "message": f"Successfully {action_past} category: {category_data.get('name')}",
                 }
             context = {"name": name, "scope": scope, "category_id": category_id}
-            # Both a rejected rename and an absent ID return invalid_info.
-            # Only a successful registry read can establish the latter.
-            if action == "update" and result.get("error_code") == "invalid_info":
-                listed = await category_list_reply(self._client, scope)
-                categories = listed.get("result") if listed.get("success") else None
-            else:
-                categories = None
-            if isinstance(categories, list) and all(
-                entry["category_id"] != category_id for entry in categories
-            ):
+            if await _missing_after_update(self._client, scope, category_id, result):
                 reason = core_error_message(result.get("error", ""))
                 raise_tool_error(
                     create_error_response(

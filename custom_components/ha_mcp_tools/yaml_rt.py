@@ -310,10 +310,17 @@ def _walk_yaml_mappings(
         # !include and !include_dir_merge_named credit the resulting mapping
         # to the including file, but each written key retains its own origin.
         root_file = _key_file(node, parts[0])
-        if root_file and root_file != parent_file and os.path.basename(root_file) != SECRET_YAML:
+        if (
+            root_file
+            and root_file != parent_file
+            and os.path.basename(root_file) != SECRET_YAML
+        ):
             current = node[parts[0]]
             for part in parts[1:]:
-                if not isinstance(current, dict) or _key_file(current, part) != root_file:
+                if (
+                    not isinstance(current, dict)
+                    or _key_file(current, part) != root_file
+                ):
                     break
                 current = current[part]
             else:
@@ -321,7 +328,11 @@ def _walk_yaml_mappings(
         for key, child in node.items():
             if isinstance(child, (dict, list)):
                 _walk_yaml_mappings(
-                    child, parts, seen, found, getattr(key, "__config_file__", node_file)
+                    child,
+                    parts,
+                    seen,
+                    found,
+                    getattr(key, "__config_file__", node_file),
                 )
 
 

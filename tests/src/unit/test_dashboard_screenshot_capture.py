@@ -124,9 +124,7 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        engine.next_response = Render(
-            400, b"", content_type="text/plain"
-        )
+        engine.next_response = Render(400, b"", content_type="text/plain")
 
         with pytest.raises(ToolError):
             await capture.capture_dashboard_images("lovelace/0", height="auto")
@@ -152,7 +150,9 @@ class TestCapture:
         assert error["limit_kind"] == "image"
         assert len(engine.gets) == 1
 
-    async def test_chunked_oversize_stops_at_limit(self, engine: Engine, monkeypatch: Any) -> None:
+    async def test_chunked_oversize_stops_at_limit(
+        self, engine: Engine, monkeypatch: Any
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
@@ -166,7 +166,9 @@ class TestCapture:
         assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
         assert error["received_bytes"] == 5
 
-    async def test_exact_payload_boundary_succeeds(self, engine: Engine, monkeypatch: Any) -> None:
+    async def test_exact_payload_boundary_succeeds(
+        self, engine: Engine, monkeypatch: Any
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         monkeypatch.setattr(capture, "MAX_IMAGE_PAYLOAD_BYTES", 4)
@@ -313,9 +315,7 @@ class TestCapture:
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        engine.next_response = Render(
-            200, JPEG, content_type="image/jpeg"
-        )
+        engine.next_response = Render(200, JPEG, content_type="image/jpeg")
 
         captures = await capture.capture_dashboard_images(
             "wall-panel/home",
@@ -355,9 +355,7 @@ class TestCapture:
     async def test_rejects_unexpected_content_type(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        engine.next_response = Render(
-            200, b"not a jpeg", content_type="image/png"
-        )
+        engine.next_response = Render(200, b"not a jpeg", content_type="image/png")
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0", image_format="jpeg")
@@ -373,16 +371,15 @@ class TestCapture:
         ],
     )
     async def test_accepts_matching_image_signatures(
-        self, engine: Engine,
+        self,
+        engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
         body: bytes,
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
-        engine.next_response = Render(
-            200, body, content_type=mime_type
-        )
+        engine.next_response = Render(200, body, content_type=mime_type)
 
         result = await capture.capture_dashboard_images(
             "lovelace/0", image_format=image_format
@@ -400,7 +397,8 @@ class TestCapture:
         ],
     )
     async def test_rejects_mislabeled_non_image_bytes(
-        self, engine: Engine,
+        self,
+        engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
     ) -> None:
@@ -420,9 +418,7 @@ class TestCapture:
         assert error["requested_format"] == image_format
         assert error["received_signature_hex"]
 
-    async def test_timeout_has_distinct_structured_error(
-        self, engine: Engine
-    ) -> None:
+    async def test_timeout_has_distinct_structured_error(self, engine: Engine) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = None

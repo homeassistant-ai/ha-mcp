@@ -126,16 +126,20 @@ class HomeAssistantCommandError(HomeAssistantError):
         translation_key: str | None = None,
         translation_domain: str | None = None,
         translation_placeholders: dict[str, Any] | None = None,
+        empty_error_message: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.translation_key = translation_key
         self.translation_domain = translation_domain
         self.translation_placeholders = translation_placeholders
+        self.empty_error_message = empty_error_message
 
     def refusal_fields(self) -> dict[str, Any]:
         """Fields accompanying the human-readable error on a pooled response."""
         fields: dict[str, Any] = {"error_code": self.code}
+        if self.empty_error_message:
+            fields["empty_error_message"] = True
         if self.translation_key is not None:
             fields["translation_key"] = self.translation_key
         if self.translation_domain is not None:
@@ -149,22 +153,22 @@ class HomeAssistantCommandError(HomeAssistantError):
         """Preserve the native fields in a WebSocket refusal."""
         if not isinstance(error, dict):
             return cls(f"{prefix}: {error}")
+        message = error.get("message", error)
         return cls(
-            f"{prefix}: {error.get('message', error)}",
+            f"{prefix}: {message}",
             error.get("code"),
             translation_key=error.get("translation_key"),
             translation_domain=error.get("translation_domain"),
             translation_placeholders=error.get("translation_placeholders"),
+            empty_error_message=isinstance(message, str) and not message.strip(),
         )
 
 
 class HomeAssistantCommandTimeout(HomeAssistantError):
     """WebSocket ``send_command`` timed out waiting for HA's response.
 
-    Sibling of ``HomeAssistantCommandError`` (not a subclass) so existing
-    ``except HomeAssistantCommandError`` sites — including the match
-    dispatch in ``helpers._classify_exception`` — keep their original
-    semantics. Callers that specifically want to handle the WS
+    A missing response is distinct from a command refusal. Callers that
+    specifically want to handle the WS
     round-trip timeout (e.g. short-lived waiter cleanup that should
     swallow a timeout instead of masking the real wait result) catch
     this type directly. Replaces a bare ``Exception("Command timeout")``

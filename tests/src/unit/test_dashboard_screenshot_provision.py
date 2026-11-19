@@ -18,7 +18,6 @@ from ._dashboard_screenshot_common import (
     clear_screenshot_env,
     set_settings,
 )
-
 from ._tools_addons_core import Supervisor, app_info, installed_apps
 from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
@@ -38,9 +37,13 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor) -> None:
 
 def _wpe_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
     return app_info(
-        "def_wpe_screenshot_engine", name="WPE Screenshot Engine",
-        state=AddonState(state), version="0.3.0", hostname=hostname or "",
-        schema=_WPE_SCHEMA, options={
+        "def_wpe_screenshot_engine",
+        name="WPE Screenshot Engine",
+        state=AddonState(state),
+        version="0.3.0",
+        hostname=hostname or "",
+        schema=_WPE_SCHEMA,
+        options={
             "home_assistant_url": "http://homeassistant:8123",
             "home_assistant_token": "wpe-test-token",
             "dashboard_path": "lovelace/energy",
@@ -73,7 +76,9 @@ class TestWpeSupervisorDiscovery:
             supervisor,
             {
                 "/addons": installed_apps("abc_puppet", "def_wpe_screenshot_engine"),
-                "/addons/abc_puppet/info": _puppet_info(slug="abc_puppet", state="stopped"),
+                "/addons/abc_puppet/info": _puppet_info(
+                    slug="abc_puppet", state="stopped"
+                ),
                 "/addons/def_wpe_screenshot_engine/info": _wpe_info(
                     state="started", hostname="def-wpe"
                 ),
@@ -157,7 +162,10 @@ class TestWpeSupervisorDiscovery:
         assert str(exc_info.value).lower().count("start it") == 1
 
     async def test_explicit_url_keeps_puppet_theme_guard_with_wpe_installed(
-        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch, supervisor_mode: None
+        self,
+        supervisor: Supervisor,
+        monkeypatch: pytest.MonkeyPatch,
+        supervisor_mode: None,
     ) -> None:
         monkeypatch.setattr(
             config.get_global_settings(),
@@ -266,7 +274,9 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("abc_puppet", "def_puppet"),
-                "/addons/abc_puppet/info": _puppet_info(slug="abc_puppet", state="stopped"),
+                "/addons/abc_puppet/info": _puppet_info(
+                    slug="abc_puppet", state="stopped"
+                ),
                 "/addons/def_puppet/info": _puppet_info(
                     slug="def_puppet", state="started", hostname="def-puppet"
                 ),
@@ -316,7 +326,9 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("def_puppet"),
-                "/addons/def_puppet/info": _puppet_info(slug="def_puppet", state="started"),
+                "/addons/def_puppet/info": _puppet_info(
+                    slug="def_puppet", state="started"
+                ),
             },
         )
         target = await provision.resolve_engine()
@@ -331,7 +343,9 @@ class TestDiscoverEngineViaSupervisor:
             supervisor,
             {
                 "/addons": installed_apps("def_puppet"),
-                "/addons/def_puppet/info": _puppet_info(slug="def_puppet", state="stopped"),
+                "/addons/def_puppet/info": _puppet_info(
+                    slug="def_puppet", state="stopped"
+                ),
             },
         )
         with pytest.raises(ToolError) as exc:

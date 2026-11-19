@@ -13,10 +13,11 @@ from typing import Any
 
 import pytest
 from aiohasupervisor.models import AddonStage, StoreInfo
-from aiohasupervisor.models.addons import CpuArch, StoreAddon
+from aiohasupervisor.models.addons import CpuArch, Repository, StoreAddon
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
+from ._haos_build_core import supervisor_info
 from ._supervisor_logs_core import route as route
 from ._tool_errors import rejected_call_body
 from ._tools_addons_core import SLUG, Route, app_info, manage, read
@@ -324,6 +325,7 @@ class TestCheckUpdates:
         assert core_route.supervisor.requests == [
             ("GET", "/store"),
             ("POST", "/store/reload"),
+            ("GET", "/supervisor/info"),
         ]
 
     @pytest.mark.parametrize(
@@ -343,6 +345,9 @@ class TestCheckUpdates:
     ) -> None:
         core_route.supervisor.answer("GET", "/store", _store())
         core_route.supervisor.refuse("POST", "/store/reload", message)
+        core_route.supervisor.answer(
+            "GET", "/supervisor/info", supervisor_info(update_available=pending)
+        )
 
         body = await rejected_call_body(
             manage(core_route.client, action="check_updates")
@@ -416,7 +421,13 @@ class TestRepositories:
         self, route: Route
     ) -> None:
         route.supervisor.refuse(
-            "POST", REPOSITORIES, f"Can't add {REPO_URL}, already in the store"
+            "POST", REPOSITORIES, "Repository registration declined"
+        )
+        repository = Repository(
+            slug="abc123", name="Test apps", source=REPO_URL, url=REPO_URL, maintainer="Test"
+        )
+        route.supervisor.answer(
+            "GET", "/store", StoreInfo(repositories=[repository], addons=[]).to_dict()
         )
 
         result = await manage(
@@ -426,16 +437,31 @@ class TestRepositories:
         assert result["success"] is True
         assert "no change needed" in result["message"]
 
+    async def test_direct_repository_conflict_uses_supervisors_error_key(
+        self, app_route: Route
+    ) -> None:
+        app_route.supervisor.reply(
+            "POST", REPOSITORIES, status=409,
+            payload={
+                "result": "error", "error_key": "store_repository_already_added_error",
+                "message": "Repository registration declined",
+            },
+        )
+        result = await manage(app_route.client, action="add_repository", repository=REPO_URL)
+        assert "already registered" in result["message"]
+        assert app_route.supervisor.requests == [("POST", REPOSITORIES)]
+
     async def test_removing_a_repository_not_in_the_store_succeeds(
         self, route: Route
     ) -> None:
         route.supervisor.refuse(
             "DELETE",
             f"{REPOSITORIES}/deadbeef",
-            "Repository deadbeef does not exist in the store",
+            "Repository removal declined",
             404,
         )
 
+        route.supervisor.answer("GET", "/store", _store())
         result = await manage(
             route.client, action="remove_repository", repository="deadbeef"
         )

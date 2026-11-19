@@ -55,6 +55,7 @@ from ..utils.python_sandbox import (
 from .addon_connection_hints import (
     add_supervisor_error_suggestions,
     addon_connection_failure_suggestions,
+    supervisor_error_parts,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
@@ -475,7 +476,7 @@ async def _supervisor_api_call_via_core(
         verb not in {"GET", "HEAD"}
         and result.get("success") is False
         and result.get("error_code") == "unknown_error"
-        and str(result.get("error", "")).strip().casefold() == "command failed:"
+        and result.get("empty_error_message") is True
     ):
         _raise_supervisor_write_outcome_unknown(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -588,19 +589,29 @@ def _raise_supervisor_api_failure(
     response_data = result.get("_response_data")
     key = response_data.get("error_key") if isinstance(response_data, dict) else None
     if (
-        method == "POST" and endpoint == "/store/repositories"
-        and status_code == 409 and key == "store_repository_already_added_error"
+        method == "POST"
+        and endpoint == "/store/repositories"
+        and status_code == 409
+        and key == "store_repository_already_added_error"
     ):
-        raise_tool_error(create_error_response(ErrorCode.RESOURCE_ALREADY_EXISTS, error_text))
-    if method == "POST" and (options := re.fullmatch(r"/addons/([^/]+)/options", endpoint)):
+        raise_tool_error(
+            create_error_response(ErrorCode.RESOURCE_ALREADY_EXISTS, error_text)
+        )
+    if method == "POST" and (
+        options := re.fullmatch(r"/addons/([^/]+)/options", endpoint)
+    ):
         # The bridge strips AppConfigurationInvalidError's key; older Supervisors
         # report the underlying missing option without the app-specific prefix.
         reason = error_text.removeprefix("Command failed: ")
         if (status_code == 400 and key == "app_configuration_invalid_error") or (
             _generic_supervisor_refusal(result)
-            and reason.startswith((f"App {options[1]} has invalid options: ", "Missing option '"))
+            and reason.startswith(
+                (f"App {options[1]} has invalid options: ", "Missing option '")
+            )
         ):
-            raise_tool_error(create_error_response(ErrorCode.VALIDATION_FAILED, error_text))
+            raise_tool_error(
+                create_error_response(ErrorCode.VALIDATION_FAILED, error_text)
+            )
     if status_code == 401:
         raise_tool_error(
             create_error_response(
@@ -2805,7 +2816,7 @@ class AddOnTools:
         try:
             return await self._store_latest_versions()
         except ToolError as error:
-            detail = AddOnTools._supervisor_error_text(str(error))
+            _, _, detail = supervisor_error_parts(error)
             logger.warning(
                 "Could not read the app (add-on) store %s the reload: %s",
                 when,
@@ -2820,9 +2831,8 @@ class AddOnTools:
 
     async def _raise_check_updates_error(self, error: ToolError) -> NoReturn:
         """Add current Supervisor update guidance to a failed reload."""
-        if self._structured_error_code(str(error)) != ErrorCode.SERVICE_CALL_FAILED.value:
-            raise error
-        if self._structured_error_outcome(str(error)) == "unknown":
+        code, outcome, detail = supervisor_error_parts(error)
+        if code != ErrorCode.SERVICE_CALL_FAILED.value or outcome == "unknown":
             raise error
         try:
             info = await _supervisor_api_call(self._client, "/supervisor/info")
@@ -2833,8 +2843,10 @@ class AddOnTools:
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Store reload failed. Supervisor reports it has a pending update.",
-                    details=self._supervisor_error_text(str(error)),
-                    suggestions=["Update Supervisor, then retry ha_manage_app(action='check_updates')"],
+                    details=detail,
+                    suggestions=[
+                        "Update Supervisor, then retry ha_manage_app(action='check_updates')"
+                    ],
                 )
             )
         raise error
@@ -2885,15 +2897,14 @@ class AddOnTools:
     async def _repo_noop_or_raise(
         self, key: str, repository: str, error: ToolError
     ) -> dict[str, Any]:
-        """Reclassify an idempotent no-op failure as success, else raise.
-
-        Logs the reclassification so a failure that gets demoted to a success
-        is never invisible."""
-        error_text = str(error)
-        if self._structured_error_outcome(error_text) == "unknown":
+        """Only report an idempotent no-op after a definite refusal."""
+        error_code, outcome, detail = supervisor_error_parts(error)
+        if outcome == "unknown":
             raise error
-        error_code = self._structured_error_code(error_text)
-        if key == "add_repository" and error_code == ErrorCode.RESOURCE_ALREADY_EXISTS.value:
+        if (
+            key == "add_repository"
+            and error_code == ErrorCode.RESOURCE_ALREADY_EXISTS.value
+        ):
             return self._repo_noop_result(key, repository, "already registered")
         noop_codes = {ErrorCode.SERVICE_CALL_FAILED.value}
         if key == "remove_repository":
@@ -2918,51 +2929,8 @@ class AddOnTools:
                 return self._repo_noop_result(key, repository, verb)
         if error_code != ErrorCode.SERVICE_CALL_FAILED.value:
             raise error
-        self._raise_repo_action_error(key, repository, error_text)
+        self._raise_repo_action_error(key, repository, detail)
         raise AssertionError("unreachable: _raise_repo_action_error always raises")
-
-    @staticmethod
-    def _structured_error_code(error_text: str) -> str | None:
-        """Return the code from a serialized structured ToolError."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return None
-        err = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(err, dict):
-            return None
-        code = err.get("code")
-        return code if isinstance(code, str) else None
-
-    @staticmethod
-    def _structured_error_outcome(error_text: str) -> str | None:
-        """Return the write outcome from a serialized structured ToolError."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        outcome = payload.get("outcome")
-        return outcome if isinstance(outcome, str) else None
-
-    @staticmethod
-    def _supervisor_error_text(error_text: str) -> str:
-        """Extract just the Supervisor-reported error from a serialized failure.
-
-        Structured failures may carry Supervisor text in ``details`` after
-        WebSocket/error normalization or directly in ``message`` for REST and
-        command failures. Return ``details`` first, falling back to ``message``
-        or the raw text, so idempotency matching considers only the real cause
-        rather than other serialized error metadata."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return error_text
-        err = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(err, dict):
-            return str(err.get("details") or err.get("message") or error_text)
-        return error_text
 
     @staticmethod
     def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:

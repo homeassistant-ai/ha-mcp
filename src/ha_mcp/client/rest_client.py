@@ -1855,7 +1855,9 @@ class HomeAssistantClient:
             # can distinguish HA's authoritative verdict from a transient failure
             # instead of only seeing the stringified message.
             fields = (
-                e.refusal_fields() if isinstance(e, HomeAssistantCommandError) else {"error_code": code}
+                e.refusal_fields()
+                if isinstance(e, HomeAssistantCommandError)
+                else {"error_code": code}
             )
             return {"success": False, "error": error_str, **fields}
 

@@ -2898,7 +2898,9 @@ def _build_read_file_handler(
                 )
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
-            return file_read_error("permission_denied", f"Permission denied: {rel_path}")
+            return file_read_error(
+                "permission_denied", f"Permission denied: {rel_path}"
+            )
         except UnicodeDecodeError:
             _LOGGER.error("Cannot read binary file: %s", rel_path)
             return file_read_error(

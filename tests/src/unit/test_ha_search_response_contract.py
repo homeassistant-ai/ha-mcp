@@ -17,16 +17,14 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantClient,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -72,13 +70,11 @@ async def test_no_surface_answering_is_a_structured_error(
     _setup_visibility_disabled(tmp_path, monkeypatch)
 
     # A domain listing runs the entity surface only.
-    failure = HomeAssistantConnectionError("States response did not arrive")
-    failure.__cause__ = TimeoutError()
     with (
         patch.object(
             core_client,
-            "get_states",
-            AsyncMock(side_effect=failure),
+            "guarded_request",
+            AsyncMock(side_effect=httpx.ReadTimeout("States response did not arrive")),
         ),
         pytest.raises(ToolError) as excinfo,
     ):

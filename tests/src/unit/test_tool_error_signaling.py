@@ -130,12 +130,11 @@ class TestExceptionToStructuredError:
 
         assert result["error"]["suggestions"] == suggestions
 
-    def test_no_suggestions_when_none(self) -> None:
+    async def test_no_suggestions_when_none(self, core_client: HomeAssistantClient) -> None:
         """No hint at all only when neither the caller nor the code has one."""
-        result = exception_to_structured_error(
-            HomeAssistantAPIError("Resource not found", status_code=404),
-            raise_error=False,
-        )
+        with pytest.raises(HomeAssistantAPIError) as missing:
+            await core_client.get_entity_state("sensor.missing")
+        result = exception_to_structured_error(missing.value, raise_error=False)
 
         assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "suggestions" not in result["error"]
@@ -275,23 +274,7 @@ def token_revoked_on(hass: HomeAssistant, command: str, token: str) -> Iterator[
 
 
 class TestSchemaAndAuthClassification:
-    """Precedence and type dispatch of the schema and auth branches (#993).
-
-    The per-branch cases of the message classifier are in
-    ``test_helper_classifier.py``.
-    """
-
-    def test_schema_phrase_without_command_prefix_not_validation(self) -> None:
-        """A schema phrase is a validation error only after ``Command failed:``."""
-        exc = Exception("Missing option 'foo' in bar")
-        result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] != "VALIDATION_FAILED"
-
-    def test_authorized_keys_substring_not_auth_error(self) -> None:
-        """``authorized_keys`` contains "auth" but is no auth failure (#993)."""
-        exc = Exception("Command failed: Missing option 'authorized_keys' in ssh")
-        result = exception_to_structured_error(exc, raise_error=False)
-        assert result["error"]["code"] != "AUTH_INVALID_TOKEN"
+    """Authentication and command failures retain their distinct codes."""
 
     def test_command_error_unknown_message_is_service_call_failed(self) -> None:
         """A rejected command is a known failure, not an internal error."""

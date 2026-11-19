@@ -1,8 +1,10 @@
 """Failure guidance for Supervisor calls and the app HTTP and WebSocket proxies."""
 
+import json
 from typing import Any
 
 from .._version import is_running_in_addon
+from .._vendor.fastmcp.exceptions import ToolError
 from ..client.rest_client import HomeAssistantClient
 from ..errors import ErrorCode
 
@@ -10,6 +12,25 @@ _SUPERVISOR_AVAILABILITY_SUGGESTION = (
     "Check Home Assistant connection and Supervisor availability"
 )
 _APP_SUPPORT_SUGGESTION = "Check that this installation supports apps (add-ons)."
+
+
+def supervisor_error_parts(error: ToolError) -> tuple[str | None, str | None, str]:
+    """Read the code, write outcome, and original Supervisor detail from a tool error."""
+    raw = str(error)
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None, None, raw
+    if not isinstance(payload, dict):
+        return None, None, raw
+    details = payload.get("error")
+    if not isinstance(details, dict):
+        return None, payload.get("outcome"), raw
+    return (
+        details.get("code"),
+        payload.get("outcome"),
+        str(details.get("details") or details.get("message") or raw),
+    )
 
 
 def add_supervisor_error_suggestions(error_details: dict[str, Any]) -> None:

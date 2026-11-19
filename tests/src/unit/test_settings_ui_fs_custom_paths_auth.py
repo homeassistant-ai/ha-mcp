@@ -57,9 +57,12 @@ async def refused(
 
 @pytest.mark.parametrize("method", ["get", "post"])
 async def test_the_editor_names_cores_refusal(
-    refused: tuple[HomeAssistantClient, str], monkeypatch: pytest.MonkeyPatch, method: str
+    refused: tuple[HomeAssistantClient, str],
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
 ) -> None:
     client, expected = refused
+    with_env(monkeypatch, HOMEASSISTANT_URL=client.base_url, HOMEASSISTANT_TOKEN=client.token)
     async with settings_http(app_server(monkeypatch, client)) as http:
         if method == "get":
             response = await http.get(PATH)
@@ -96,7 +99,9 @@ async def test_a_second_refusal_reaches_the_editor(
     (entry,) = hass.config_entries.async_entries(DOMAIN)
     attempts = 0
 
-    async def rotate_before_save(domain: str, service: str, *args: Any, **kwargs: Any) -> Any:
+    async def rotate_before_save(
+        domain: str, service: str, *args: Any, **kwargs: Any
+    ) -> Any:
         nonlocal attempts
         if domain == DOMAIN and service == SERVICE_SET_ALLOWED_PATHS:
             attempts += 1
@@ -106,7 +111,9 @@ async def test_a_second_refusal_reaches_the_editor(
         return DEFAULT
 
     async with settings_http(app_server(monkeypatch, core_client)) as http:
-        with patch.object(core_client, "call_service", wraps=core_client.call_service) as calls:
+        with patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as calls:
             calls.side_effect = rotate_before_save
             response = await http.post(PATH, json={"paths": ["pyscript"]})
     assert response.status_code == 400

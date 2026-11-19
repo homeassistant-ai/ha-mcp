@@ -136,19 +136,31 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 # --- wiring: the deferred-mcp chokepoint calls the helper --------------------
 
 
-def test_create_server_disables_guard(monkeypatch):
-    """create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
-    the guard-disable before building the server."""
+async def test_create_server_disables_guard(monkeypatch, core_client, hass_access_token):
+    """The launcher configures the guard before constructing its server."""
+    from ha_mcp.config import reset_global_settings
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    monkeypatch.setenv(HOST_ORIGIN_PROTECTION_ENV, "true")
+    monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url)
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", hass_access_token)
+    reset_global_settings()
     calls: list[str] = []
-    monkeypatch.setattr(
-        "ha_mcp.transport_security.ensure_host_origin_guard_default_off",
-        lambda: calls.append("configure"),
-    )
 
-    def construct(*args, **kwargs):
+    def configure():
+        calls.append("configure")
+        ensure_host_origin_guard_default_off()
+
+    initialize = HomeAssistantSmartMCPServer.__init__
+
+    def construct(server, *args, **kwargs):
         calls.append("construct")
-        return object()
+        initialize(server, *args, **kwargs)
 
-    monkeypatch.setattr("ha_mcp.server.HomeAssistantSmartMCPServer", construct)
-    main_module.create_server()
-    assert calls == ["configure", "construct"]
+    monkeypatch.setattr("ha_mcp.transport_security.ensure_host_origin_guard_default_off", configure)
+    monkeypatch.setattr(HomeAssistantSmartMCPServer, "__init__", construct)
+    server = main_module.create_server()
+    try:
+        assert calls == ["configure", "construct"]
+    finally:
+        await server.close()

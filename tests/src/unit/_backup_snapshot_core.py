@@ -274,8 +274,10 @@ class Supervisor:
                 reference = backup["slug"]
             job = self._job(job_id, done=True, reference=reference)
             self.jobs[job_id] = job
+            # Supervisor sends its event UUID as 32 hex digits.
+            event_data = {**job, "uuid": uuid.UUID(job_id).hex}
             async_dispatcher_send(
-                self._hass, EVENT_SUPERVISOR_EVENT, {"event": "job", "data": job}
+                self._hass, EVENT_SUPERVISOR_EVENT, {"event": "job", "data": event_data}
             )
 
     async def _answer(
@@ -301,10 +303,8 @@ class Supervisor:
             case "delete", ["backups", slug] if slug in self.backups:
                 del self.backups[slug]
                 return self._ok(verb, url, {})
-            case "get", ["jobs", job_id]:
-                job = self.jobs.get(str(uuid.UUID(job_id)))
-                if job is not None:
-                    return self._ok(verb, url, job)
+            case "get", ["jobs", job_id] if job := self.jobs.get(str(uuid.UUID(job_id))):
+                return self._ok(verb, url, job)
         return self._error(verb, url, 404, f"{url.path} does not exist")
 
     def _new_backup(

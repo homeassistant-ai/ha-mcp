@@ -15,6 +15,7 @@ from pytest_homeassistant.typing import ClientSessionGenerator
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.dashboard_screenshot import capture
+
 from ._dashboard_screenshot_common import set_settings
 
 _IMAGE = b"\x89PNG\r\n\x1a\ntheme-check"

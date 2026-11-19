@@ -27,7 +27,9 @@ async def test_missing_dashboard_preserves_native_code_and_context(
     result = exception_to_structured_error(missing.value, context=context, raise_error=False)
 
     assert result["ha_error_code"] == "config_not_found"
-    assert result["error"]["code"] == ("ENTITY_NOT_FOUND" if entity_id else "RESOURCE_NOT_FOUND")
+    assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
+    if entity_id:
+        assert result["entity_id"] == entity_id
     assert "missing-dashboard" in str(result["error"])
 
 

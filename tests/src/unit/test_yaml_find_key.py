@@ -260,17 +260,19 @@ async def test_merged_folder_keys_are_local_to_the_file_that_writes_them(
         hass,
         {
             "configuration.yaml": PACKAGES,
-            "packages/merged.yaml": "shell_command: !include_dir_merge_named ../shell\n",
-            "shell/commands.yaml": "mcp_secret: echo hi\n",
+            "packages/merged.yaml": "shell_command: !include_dir_merge_named ../themes\n",
+            "themes/commands.yaml": "mcp_secret: echo hi\n",
         },
     )
 
     out = await get_yaml(yaml_path="shell_command.mcp_secret", file="packages/*.yaml")
 
     assert out["matches"] == []
-    assert not any("is annotated as defining" in warning for warning in out.get("warnings", []))
-    local = await get_yaml(yaml_path="mcp_secret", file="shell/*.yaml")
-    assert _files(local) == ["shell/commands.yaml"]
+    assert not any(
+        "is annotated as defining" in warning for warning in out.get("warnings", [])
+    )
+    local = await get_yaml(yaml_path="mcp_secret", file="themes/*.yaml")
+    assert _files(local) == ["themes/commands.yaml"]
 
 
 async def test_failed_lookup_of_a_bracketed_name_reports_it_unsearched(

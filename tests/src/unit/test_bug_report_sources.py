@@ -52,6 +52,8 @@ LOOPBACK = ifaddr.Adapter(
     [ifaddr.IP("127.0.0.1", 8, "lo"), ifaddr.IP(("::1", 0, 0), 128, "lo")],
     index=1,
 )
+
+
 async def _set_up_network(hass: HomeAssistant, *adapters: ifaddr.Adapter) -> None:
     """Set up ``network`` with these interfaces.
 
@@ -368,7 +370,8 @@ class TestReport:
             "python_version": "3.13.7",
         }
         with patch(
-            "homeassistant.helpers.system_info.async_get_system_info", return_value=core_install
+            "homeassistant.helpers.system_info.async_get_system_info",
+            return_value=core_install,
         ):
             result = await BugReportTools(core_client).ha_report_issue(
                 report_type="runtime_bug"

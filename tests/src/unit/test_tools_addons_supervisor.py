@@ -125,6 +125,18 @@ class TestSupervisorRefusals:
             {"options": {"ssh": {"sftp": True}}}
         ]
 
+    async def test_direct_options_refusal_uses_supervisors_error_key(self, app_route: Route) -> None:
+        app_route.supervisor.running(options={}, schema=[])
+        app_route.supervisor.reply(
+            "POST", f"/addons/{SLUG}/options", status=400,
+            payload={
+                "result": "error", "error_key": "app_configuration_invalid_error",
+                "message": "Configuration declined",
+            },
+        )
+        body = await rejected_call_body(manage(app_route.client, slug=SLUG, options={"debug": True}))
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+
     @pytest.mark.parametrize(
         ("status", "code", "named"),
         [
@@ -161,10 +173,14 @@ class TestSupervisorRefusals:
 
         body = await rejected_call_body(read(route.client, slug=SLUG))
 
-        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert body["error"]["suggestion"] == (
-            "Check Home Assistant connection and Supervisor availability"
-        )
+        if route.in_app:
+            assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+            assert body["error"]["suggestion"] == (
+                "Check Home Assistant connection and Supervisor availability"
+            )
+        else:
+            # Core's supervisor/api reports only unknown_error for this endpoint.
+            assert body["error"]["code"] == "SERVICE_CALL_FAILED"
 
 
 class TestNoAnswer:

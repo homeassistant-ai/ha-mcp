@@ -1,7 +1,6 @@
 """A screenshot engine serving queued renders over loopback HTTP."""
 
 import asyncio
-import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,7 +31,9 @@ class Engine:
     release: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
-        self.gets.append({"path": request.rel_url.raw_path, "params": dict(request.query)})
+        self.gets.append(
+            {"path": request.rel_url.raw_path, "params": dict(request.query)}
+        )
         reply = self.next_response
         if isinstance(reply, list):
             reply = reply.pop(0)
@@ -69,17 +70,3 @@ async def engine(
         yield engine
     finally:
         engine.release.set()
-
-
-def resolve_puppet_hostname(monkeypatch: pytest.MonkeyPatch, port: int) -> None:
-    """Resolve Supervisor's private app hostname to this test's engine listener."""
-    resolve = socket.getaddrinfo
-
-    def address(host: Any, requested: Any, *args: Any, **kwargs: Any) -> Any:
-        if host in (b"local-puppet", "local-puppet") and int(requested) == 10000:
-            return resolve("127.0.0.1", port, *args, **kwargs)
-        return resolve(host, requested, *args, **kwargs)
-
-    monkeypatch.setenv("NO_PROXY", "local-puppet,127.0.0.1,localhost")
-    monkeypatch.setenv("no_proxy", "local-puppet,127.0.0.1,localhost")
-    monkeypatch.setattr(socket, "getaddrinfo", address)
