@@ -75,11 +75,6 @@ async def client(
 
 
 @pytest.fixture
-def _core_helper_flows() -> None:
-    """The component's loader read is Core's own."""
-
-
-@pytest.fixture
 def custom_helper_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
 ) -> Path:

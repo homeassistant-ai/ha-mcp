@@ -28,6 +28,8 @@ from ._command_faults import arrival
 from ._component_frames import held
 from ._tools_system_core import answered_after, health_socket_dropped_on
 from ._zha_core import IEEE, set_up_zha, zigbee_network
+from ._update_check_sources import PyPI
+from ._update_check_sources import pypi as pypi
 
 OPTIONAL_SECTIONS = (
     "repairs",
@@ -78,25 +80,32 @@ def _code(excinfo: pytest.ExceptionInfo[ToolError]) -> str:
     return code
 
 
-@pytest.mark.parametrize(
-    "update",
-    [{"current": "7.8.0", "latest": "7.9.0", "update_available": True}, None],
-    ids=["available", "not_applicable"],
-)
+@pytest.mark.parametrize("enabled", [True, False])
 async def test_the_servers_own_update_status_is_relayed_when_there_is_one(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
-    update: dict[str, Any] | None,
+    pypi: PyPI,
+    enabled: bool,
 ) -> None:
     await _health(hass)
-    monkeypatch.setattr(
-        update_check, "get_update_field", AsyncMock(return_value=update)
-    )
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
+    if enabled:
+        monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
+    pypi.publish("ha-mcp", "7.9.0")
 
     result = await SystemTools(core_client).ha_get_system_health()
 
-    assert result.get("ha_mcp_update") == update
+    if enabled:
+        notice = result["ha_mcp_update"]
+        assert (notice["current"], notice["latest"], notice["update_available"]) == (
+            "7.8.0", "7.9.0", True
+        )
+        assert pypi.asked == ["ha-mcp"]
+    else:
+        assert "ha_mcp_update" not in result
+        assert not pypi.asked
 
 
 async def test_a_bare_call_returns_the_baseline_and_no_section(

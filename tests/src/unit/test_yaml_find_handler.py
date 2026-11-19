@@ -1,76 +1,53 @@
-"""Unit tests for the component-side YAML key discovery service."""
+"""The YAML discovery service reads Core's on-disk configuration."""
 
-from __future__ import annotations
+from pathlib import Path
 
-import asyncio
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+import pytest
+from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mcp_tools import yaml_find
+from custom_components.ha_mcp_tools.const import DOMAIN
 
-yaml_find.YAML_CONFIG_FILE = "configuration.yaml"
+from ._component_filesystem import put
+from ._file_services import FileService, make_file_service
 
 
-def _hass():
-    async def _executor(func, *args):
-        return func(*args)
+@pytest.fixture
+async def find_files(hass: HomeAssistant) -> FileService:
+    return await make_file_service(hass)
 
-    return SimpleNamespace(
-        config=SimpleNamespace(config_dir="/config"),
-        async_add_executor_job=_executor,
-        services=MagicMock(),
+
+async def test_handler_returns_relative_files(
+    hass: HomeAssistant, find_files: FileService, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    sibling = tmp_path_factory.mktemp("other-source") / "external.yaml"
+    await hass.async_add_executor_job(sibling.write_text, "template: {}\n")
+    await put(
+        hass,
+        {
+            "configuration.yaml": (
+                "inside: !include packages/a.yaml\n"
+                f"outside: !include {sibling.as_posix()}\n"
+            ),
+            "packages/a.yaml": "template: {}\n",
+        },
     )
+    result = await find_files("find_yaml_key", {"yaml_path": "template"})
+    assert result == {"success": True, "files": [str(Path("packages/a.yaml"))]}
 
 
-def _call(yaml_path="template"):
-    return SimpleNamespace(data={"yaml_path": yaml_path})
-
-
-def test_handler_returns_relative_files(monkeypatch):
-    def fake_load(path, secrets):
-        assert path == "/config/configuration.yaml"
-        return {"template": {}}
-
-    monkeypatch.setattr(yaml_find, "load_yaml_config_file", fake_load)
-    monkeypatch.setattr(
-        yaml_find,
-        "find_yaml_key_files",
-        lambda config, path: ["/config/packages/a.yaml", "/outside/b.yaml"],
+async def test_handler_rejects_bad_token(hass: HomeAssistant, find_files: FileService) -> None:
+    result = await hass.services.async_call(
+        DOMAIN, "find_yaml_key", {"yaml_path": "template", "_ha_mcp_token": "invalid"},
+        blocking=True, return_response=True,
     )
-    handler = yaml_find.build_find_yaml_key_handler(
-        _hass(),
-        caller_token_ok=lambda hass, call: True,
-        unauthorized_response=lambda service: {"success": False},
-    )
-
-    result = asyncio.run(handler(_call()))
-
-    assert result == {"success": True, "files": ["packages/a.yaml"]}
+    assert result is not None
+    assert result["success"] is False
+    assert result["error_code"] == "unauthorized"
 
 
-def test_handler_rejects_bad_token():
-    handler = yaml_find.build_find_yaml_key_handler(
-        _hass(),
-        caller_token_ok=lambda hass, call: False,
-        unauthorized_response=lambda service: {"success": False, "service": service},
-    )
-
-    result = asyncio.run(handler(_call()))
-
-    assert result == {"success": False, "service": "find_yaml_key"}
-
-
-def test_handler_reports_config_load_failure(monkeypatch):
-    def fake_load(path, secrets):
-        raise RuntimeError("bad config")
-
-    monkeypatch.setattr(yaml_find, "load_yaml_config_file", fake_load)
-    handler = yaml_find.build_find_yaml_key_handler(
-        _hass(),
-        caller_token_ok=lambda hass, call: True,
-        unauthorized_response=lambda service: {"success": False},
-    )
-
-    result = asyncio.run(handler(_call()))
-
-    assert result == {"success": False, "error": "bad config", "files": []}
+async def test_handler_reports_config_load_failure(hass: HomeAssistant, find_files: FileService) -> None:
+    await put(hass, {"configuration.yaml": "template: !include missing.yaml\n"})
+    result = await find_files("find_yaml_key", {"yaml_path": "template"})
+    assert result["success"] is False
+    assert result["files"] == []
+    assert "missing.yaml" in result["error"]

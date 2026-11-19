@@ -33,6 +33,8 @@ from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools, register_search_tools
 
 from ._real_server import build_server
+from ._update_check_sources import PyPI
+from ._update_check_sources import pypi as pypi
 
 SIDECAR_URL = "http://127.0.0.1:8099/private_abc/settings"
 
@@ -520,23 +522,21 @@ async def test_read_only_keys_present_and_survive_fields_projection(
 
 
 async def test_ha_mcp_update_present_and_survives_projection(
-    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
 ) -> None:
-    notice: update_check.UpdateField = {
-        "current": "7.8.0",
-        "latest": "7.9.0",
-        "update_available": True,
-    }
-
-    async def update_field() -> update_check.UpdateField:
-        return notice
-
-    monkeypatch.setattr(update_check, "get_update_field", update_field)
+    monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
+    pypi.publish("ha-mcp", "7.9.0")
 
     result = await tools.ha_get_overview(fields=["system_info"])
 
     assert "system_info" in result
-    assert result["ha_mcp_update"] == notice
+    notice = result["ha_mcp_update"]
+    assert (notice["current"], notice["latest"], notice["update_available"]) == (
+        "7.8.0", "7.9.0", True
+    )
+    assert pypi.asked == ["ha-mcp"]
 
 
 async def test_ha_mcp_update_absent_when_check_opted_out(tools: SearchTools) -> None:

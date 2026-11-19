@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.device_control import DeviceControlTools
-from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
+from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus, get_operation_manager
 
 
 def _make_operation(
@@ -275,48 +276,41 @@ async def test_failed_mid_poll_raises_service_call_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_registered_status_tool_accepts_fractional_timeout() -> None:
+async def test_registered_status_tool_accepts_fractional_timeout(core_client: HomeAssistantClient) -> None:
     """The MCP boundary preserves a fractional timeout for follow-up calls."""
     from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
-    device_tools = MagicMock()
-    device_tools.get_device_operation_status = AsyncMock(
-        return_value={
-            "success": True,
-            "operation_id": "op-1",
-            "status": "pending",
-        }
-    )
+    manager = get_operation_manager()
+    operation_id = manager.create_operation("light.a", "on", "light", "turn_on", {})
     mcp = FastMCP("test")
-    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tools = DeviceControlTools(client=core_client)
+    register_service_tools(mcp, core_client, device_tools=tools)
     tool = await mcp.get_tool("ha_get_operation_status")
-
-    result = await tool.run({"operation_id": "op-1", "timeout_seconds": 0.5})
-
-    assert result.structured_content["operation_id"] == "op-1"
-    device_tools.get_device_operation_status.assert_awaited_once_with(
-        operation_id="op-1",
-        timeout_seconds=0.5,
-    )
+    assert tool is not None
+    try:
+        with patch.object(tools, "get_device_operation_status", wraps=tools.get_device_operation_status) as status:
+            result = await tool.run({"operation_id": operation_id, "timeout_seconds": 0.05})
+        assert result.structured_content["operation_id"] == operation_id
+        assert result.structured_content["status"] == "pending"
+        status.assert_awaited_once_with(operation_id=operation_id, timeout_seconds=0.05)
+    finally:
+        manager.operations.pop(operation_id, None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf", float("nan")])
 async def test_registered_status_tool_rejects_non_finite_timeout(
-    invalid_timeout: float | str,
+    core_client: HomeAssistantClient, invalid_timeout: float | str,
 ) -> None:
     """The public polling window must always have a finite deadline."""
     from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
-    device_tools = MagicMock()
-    device_tools.get_device_operation_status = AsyncMock()
     mcp = FastMCP("test")
-    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    register_service_tools(mcp, core_client, device_tools=DeviceControlTools(client=core_client))
     tool = await mcp.get_tool("ha_get_operation_status")
 
     with pytest.raises(FastMCPValidationError):
         await tool.run({"operation_id": "op-1", "timeout_seconds": invalid_timeout})
 
-    device_tools.get_device_operation_status.assert_not_awaited()

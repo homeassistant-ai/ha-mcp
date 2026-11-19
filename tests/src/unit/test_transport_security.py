@@ -17,6 +17,7 @@ import os
 import httpx
 import pytest
 
+from ha_mcp import __main__ as main_module
 from ha_mcp._vendor import fastmcp
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.transport_security import (
@@ -138,15 +139,16 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 def test_create_server_disables_guard(monkeypatch):
     """create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
     the guard-disable before building the server."""
-    import ha_mcp.__main__ as main_module
-
-    calls: list[int] = []
+    calls: list[str] = []
     monkeypatch.setattr(
         "ha_mcp.transport_security.ensure_host_origin_guard_default_off",
-        lambda: calls.append(1),
+        lambda: calls.append("configure"),
     )
-    monkeypatch.setattr(
-        "ha_mcp.server.HomeAssistantSmartMCPServer", lambda *a, **kw: object()
-    )
+
+    def construct(*args, **kwargs):
+        calls.append("construct")
+        return object()
+
+    monkeypatch.setattr("ha_mcp.server.HomeAssistantSmartMCPServer", construct)
     main_module.create_server()
-    assert calls == [1]
+    assert calls == ["configure", "construct"]

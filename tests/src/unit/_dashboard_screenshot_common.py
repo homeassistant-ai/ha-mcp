@@ -5,11 +5,15 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import pytest
+from aiohasupervisor.models.addons import AddonState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from ha_mcp import config
 from ha_mcp.client.rest_client import HomeAssistantClient
+
+from ._tools_addons_core import app_info
+
 
 PNG = b"\x89PNG\r\n\x1a\nunit"
 
@@ -39,16 +43,11 @@ def _puppet_options(*, keep_browser_open: bool) -> dict[str, Any]:
 
 
 def _puppet_info(*, state: str, hostname: str | None = None) -> dict[str, Any]:
-    info: dict[str, Any] = {
-        "name": "Puppet",
-        "state": state,
-        "version": "2.4.9",
-        "schema": _PUPPET_SCHEMA,
-        "options": _puppet_options(keep_browser_open=False),
-    }
-    if hostname is not None:
-        info["hostname"] = hostname
-    return info
+    return app_info(
+        "local_puppet", name="Puppet", state=AddonState(state), version="2.4.9",
+        schema=_PUPPET_SCHEMA, options=_puppet_options(keep_browser_open=False),
+        hostname=hostname or "",
+    )
 
 
 def clear_screenshot_env(monkeypatch: Any) -> None:

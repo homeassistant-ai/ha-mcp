@@ -44,6 +44,7 @@ from ._core_setup import add_test_entry
 from ._helper_tool_core import create_item, fresh_name, set_up, stored_item
 from ._receipt_faults import at_entity_wait, lose_state_reads, on_receipt, revoke
 from ._supervisor_core import load_supervisor_api
+from ._tools_addons_core import app_info
 
 REGISTRY_UPDATE = "config/entity_registry/update"
 
@@ -579,10 +580,11 @@ class TestSweepWarningsShape:
             aioclient_mock,
             monkeypatch,
             {
-                ("get", "/addons/test_addon/info"): {
-                    "options": {"log_level": "info"},
-                    "schema": [{"name": "log_level", "required": False, "type": "str"}],
-                },
+                ("get", "/addons/test_addon/info"): app_info(
+                    "test_addon",
+                    options={"log_level": "info"},
+                    schema=[{"name": "log_level", "required": False, "type": "str"}],
+                ),
                 ("post", "/addons/test_addon/options"): {},
             },
         )

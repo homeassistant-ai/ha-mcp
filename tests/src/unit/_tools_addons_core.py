@@ -35,8 +35,10 @@ from aiohasupervisor.models import (
 )
 from aiohasupervisor.models.addons import (
     AddonBootConfig,
+    AddonsList,
     AppArmor,
     CpuArch,
+    InstalledAddon,
     SupervisorRole,
 )
 from aiohttp import WSMsgType, web
@@ -357,6 +359,12 @@ def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
         system_managed_config_entry=None,
     )
     return replace(info, **changes).to_dict()
+
+
+def installed_apps(*slugs: str) -> dict[str, Any]:
+    """Supervisor's installed app list, using the list-view model for each row."""
+    apps = [InstalledAddon.from_dict(app_info(slug)) for slug in slugs]
+    return AddonsList(addons=apps).to_dict()
 
 
 @pytest.fixture

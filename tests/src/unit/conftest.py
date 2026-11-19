@@ -20,7 +20,6 @@ import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -303,26 +302,6 @@ def _restore_fastmcp_host_origin_guard():
         os.environ[env_key] = prev_env
     if has_attr:
         setattr(settings, attr, prev_setting)
-
-
-@pytest.fixture(autouse=True)
-def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the component's Core loader call with Core's built-in helper flows.
-
-    ``helpers_list`` and ``search`` ask ``homeassistant.loader`` for the helper
-    flows in their async pre-steps, which needs a set-up ``hass``. Tests that
-    hand the commands a fake ``hass`` get Core's own ``FLOWS["helper"]``, i.e.
-    no custom helper integrations. It does nothing until the component is
-    loaded. A test that needs custom helper integrations patches the name again.
-    """
-    mod = sys.modules.get("custom_components.ha_mcp_tools.websocket_api.flow_domains")
-    if mod is None:
-        return
-    from ._core_helper_flows import CORE_HELPER_FLOWS
-
-    monkeypatch.setattr(
-        mod, "async_get_config_flows", AsyncMock(return_value=set(CORE_HELPER_FLOWS))
-    )
 
 
 @pytest.fixture

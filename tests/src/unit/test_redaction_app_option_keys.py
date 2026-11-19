@@ -26,6 +26,7 @@ from ha_mcp.tools.tools_addons import get_addon_info, register_addon_tools
 from ._redaction_registry import clean_registry as clean_registry
 from ._redaction_registry import redacted_options
 from ._supervisor_core import load_supervisor_api
+from ._tools_addons_core import app_info
 
 BACKUP_SLUG = "1a2b3c4d_hassio_google_drive_backup"
 BACKUP_PASSWORD = "drive-backup-encryption-pw"
@@ -44,11 +45,7 @@ BACKUP_OPTIONS = {
     "days_between_backups": 3,
     "upload": {"backup_password": "nested-upload-password"},
 }
-BACKUP_INFO: dict[str, Any] = {
-    "slug": BACKUP_SLUG,
-    "options": BACKUP_OPTIONS,
-    "schema": BACKUP_SCHEMA,
-}
+BACKUP_INFO = app_info(BACKUP_SLUG, options=BACKUP_OPTIONS, schema=BACKUP_SCHEMA)
 
 
 def _settings(

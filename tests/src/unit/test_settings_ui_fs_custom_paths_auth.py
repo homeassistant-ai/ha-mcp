@@ -1,103 +1,116 @@
-"""Settings UI custom-paths editor when Home Assistant refuses the call.
-
-Home Assistant refuses a rejected token before the component answers, and a
-non-admin one too because the ha_mcp_tools services are registered admin-only.
-The editor must name that cause rather than report the component as unreachable, and the
-refusal must survive a proxy that replaces the body of a 5xx response.
-"""
+"""The settings editor reports authentication refusals from real Core services."""
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import DEFAULT, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-import ha_mcp.tools.tools_filesystem as tf
-from ha_mcp.client.rest_client import (
-    HomeAssistantAdminRequiredError,
-    HomeAssistantAuthError,
-    HomeAssistantCommandNotSent,
-)
+from custom_components.ha_mcp_tools import SERVICE_SET_ALLOWED_PATHS
+from custom_components.ha_mcp_tools.const import DOMAIN
+from ha_mcp.__main__ import OAuthProxyClient
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import OAUTH_MODE_TOKEN
-from ha_mcp.settings_ui import build_settings_handlers
 
-# The token bootstrap is the first call Home Assistant refuses.
-_ADMIN_REFUSAL = "Service ha_mcp_tools.get_caller_token is admin-only in Home Assistant"
-_REJECTED_TOKEN = "Invalid authentication token"
+from ._component_filesystem import CALLER_TOKEN_STORE
+from ._core_setup import set_up_tools_entry
+from ._receipt_faults import revoke
+from ._settings_ui_app import app_server, settings_http, with_env
+from ._settings_ui_app import settings_world as settings_world
 
-
-def _not_sent_after_rejection() -> HomeAssistantCommandNotSent:
-    """The shape a REST 401 takes once the WebSocket retry is refused as well."""
-    error = HomeAssistantCommandNotSent("WebSocket command was not sent")
-    error.__cause__ = HomeAssistantAuthError(_REJECTED_TOKEN)
-    return error
+PATH = "/api/settings/fs-custom-paths"
 
 
-@pytest.fixture(
-    params=[
-        (HomeAssistantAdminRequiredError(_ADMIN_REFUSAL), _ADMIN_REFUSAL),
-        (HomeAssistantAuthError(_REJECTED_TOKEN), _REJECTED_TOKEN),
-        (_not_sent_after_rejection(), _REJECTED_TOKEN),
-    ],
-    ids=["admin-refusal", "rejected-token", "rejected-on-retry"],
-)
-def refused_with(request, monkeypatch):
-    """Make the component call fail; return the message the editor must show."""
-    error, message = request.param
-    settings = MagicMock(homeassistant_token="a-long-lived-token")
-    monkeypatch.setattr("ha_mcp.config.get_global_settings", lambda: settings)
-    monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
-    monkeypatch.setattr(tf, "call_mcp_tools_service", AsyncMock(side_effect=error))
-    return message
+@pytest.fixture(autouse=True)
+def file_tools(monkeypatch: pytest.MonkeyPatch, settings_world: Any) -> None:
+    with_env(
+        monkeypatch, ENABLE_BETA_FEATURES="true", HAMCP_ENABLE_FILESYSTEM_TOOLS="true"
+    )
 
 
-@pytest.fixture
-def handlers():
-    return build_settings_handlers(server=MagicMock())
+@pytest.fixture(params=["read-only", "invalid", "revoked"])
+async def refused(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    read_only_client: HomeAssistantClient,
+) -> AsyncIterator[tuple[HomeAssistantClient, str]]:
+    await set_up_tools_entry(hass)
+    if request.param == "read-only":
+        yield read_only_client, "admin-only"
+        return
+    if request.param == "revoked":
+        revoke(hass, core_client.token)
+        yield core_client, "token"
+        return
+    invalid = HomeAssistantClient(
+        base_url=core_client.base_url, token="invalid", verify_ssl=False
+    )
+    try:
+        yield invalid, "token"
+    finally:
+        await invalid.close()
 
 
-def _assert_names_the_refusal(reason: str, message: str) -> None:
-    assert reason.startswith(f"{message}. ")
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_the_editor_names_cores_refusal(
+    refused: tuple[HomeAssistantClient, str], monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    client, expected = refused
+    async with settings_http(app_server(monkeypatch, client)) as http:
+        if method == "get":
+            response = await http.get(PATH)
+            assert response.status_code == 200
+            assert response.json()["available"] is False
+            reason = response.json()["reason"]
+        else:
+            response = await http.post(PATH, json={"paths": ["pyscript"]})
+            assert response.status_code == 400
+            reason = response.json()["error"]["message"]
+    assert expected in reason.lower()
     assert "Could not reach" not in reason
 
 
-async def test_get_names_a_refusal_instead_of_an_unreachable_component(
-    handlers, refused_with
-):
-    resp = await handlers["get_fs_custom_paths"](MagicMock())
-    body = json.loads(resp.body)
-    assert body["available"] is False
-    _assert_names_the_refusal(body["reason"], refused_with)
+async def test_oauth_mode_is_not_told_to_fix_the_server_token(
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_env(monkeypatch, HOMEASSISTANT_TOKEN=OAUTH_MODE_TOKEN)
+    # The settings route has no MCP request context for the OAuth client.
+    proxy: Any = OAuthProxyClient(core_client.base_url)
+    async with settings_http(app_server(monkeypatch, proxy)) as http:
+        response = await http.get(PATH)
+    assert response.json()["available"] is False
+    assert "HOMEASSISTANT_TOKEN" not in response.json()["reason"]
 
 
-async def test_save_refusal_reaches_the_page_through_a_proxy(handlers, refused_with):
-    req = MagicMock()
-    req.json = AsyncMock(return_value={"paths": ["pyscript"]})
-    resp = await handlers["save_fs_custom_paths"](req)
-    assert resp.status_code < 500
-    _assert_names_the_refusal(json.loads(resp.body)["error"]["message"], refused_with)
+async def test_a_second_refusal_reaches_the_editor(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    hass_storage: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await set_up_tools_entry(hass)
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    attempts = 0
 
+    async def rotate_before_save(domain: str, service: str, *args: Any, **kwargs: Any) -> Any:
+        nonlocal attempts
+        if domain == DOMAIN and service == SERVICE_SET_ALLOWED_PATHS:
+            attempts += 1
+            assert await hass.config_entries.async_unload(entry.entry_id)
+            hass_storage.pop(CALLER_TOKEN_STORE)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+        return DEFAULT
 
-async def test_oauth_mode_is_not_told_to_fix_the_server_token(handlers, monkeypatch):
-    """The settings routes have no request token there: Home Assistant was not asked."""
-    settings = MagicMock(homeassistant_token=OAUTH_MODE_TOKEN)
-    no_token = HomeAssistantAuthError("No OAuth token in request context")
-    monkeypatch.setattr("ha_mcp.config.get_global_settings", lambda: settings)
-    monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
-    monkeypatch.setattr(tf, "call_mcp_tools_service", AsyncMock(side_effect=no_token))
-    resp = await handlers["get_fs_custom_paths"](MagicMock())
-    assert "HOMEASSISTANT_TOKEN" not in json.loads(resp.body)["reason"]
-
-
-async def test_save_component_rejection_reaches_the_page_through_a_proxy(
-    handlers, monkeypatch
-):
-    rejection = {"service_response": {"success": False, "error": "Bad caller token"}}
-    monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
-    monkeypatch.setattr(tf, "call_mcp_tools_service", AsyncMock(return_value=rejection))
-    req = MagicMock()
-    req.json = AsyncMock(return_value={"paths": ["pyscript"]})
-    resp = await handlers["save_fs_custom_paths"](req)
-    assert resp.status_code < 500
-    assert json.loads(resp.body)["error"]["message"] == "Bad caller token"
+    async with settings_http(app_server(monkeypatch, core_client)) as http:
+        with patch.object(
+            core_client, "call_service", wraps=core_client.call_service,
+            side_effect=rotate_before_save,
+        ):
+            response = await http.post(PATH, json={"paths": ["pyscript"]})
+    assert response.status_code == 400
+    assert attempts == 2
+    assert "caller token" in response.json()["error"]["message"].lower()

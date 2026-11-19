@@ -14,7 +14,6 @@ from typing import Any
 from unittest.mock import PropertyMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.core_config import Config
 from homeassistant.setup import async_setup_component
@@ -38,10 +37,15 @@ from ._core_setup import set_up_tools_entry
 from ._server_entry import add_server_entry, replace_server, set_up
 
 
-def _server(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
+@pytest.fixture(autouse=True)
+def embedded_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    replace_server(monkeypatch)
+
+
+async def _server(hass: HomeAssistant, **options: Any) -> MockConfigEntry:
     """The loaded server entry, with ``options``."""
     entry = add_server_entry(hass, options=options)
-    entry.mock_state(hass, ConfigEntryState.LOADED)
+    assert await set_up(hass, entry)
     return entry
 
 
@@ -90,7 +94,7 @@ async def test_an_updated_component_version_reaches_the_next_report(
 ) -> None:
     """A component update keeps a long-lived server's client, and with it the
     caps snapshot; a later report must show the version now running."""
-    _server(hass)
+    await _server(hass)
     monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
     first = await _report(component_core_client)
     monkeypatch.setattr(system, "COMPONENT_VERSION", "2.2.0")
@@ -112,7 +116,7 @@ async def test_a_failed_fresh_read_keeps_the_snapshot_version_and_the_line(
     """The snapshot still shows the component is installed, and the entry
     status came from ``config_entries/get``; a failing ``info`` takes neither
     out of the report."""
-    await _registered(hass, _server(hass, webhook_auth="ha_auth"))
+    await _registered(hass, await _server(hass, webhook_auth="ha_auth"))
     monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
     await get_component_caps(component_core_client)
     monkeypatch.setattr(system, "COMPONENT_VERSION", "2.2.0")
@@ -143,7 +147,7 @@ async def test_a_downgraded_component_reports_its_running_version(
     """A component downgraded below ``info`` answers ``unknown_command``: the
     stale snapshot is dropped and the version comes from the bootstrap
     service, not from the component that was running before."""
-    _server(hass)
+    await _server(hass)
     await set_up_tools_entry(hass)
     monkeypatch.setattr(system, "COMPONENT_VERSION", "2.1.0")
     await get_component_caps(component_core_client)
@@ -160,7 +164,7 @@ async def test_a_component_reporting_no_version_reads_as_not_detected(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _server(hass)
+    await _server(hass)
     monkeypatch.setattr(system, "COMPONENT_VERSION", "")
 
     with _call_service_spy(component_core_client) as call_service:
@@ -193,7 +197,7 @@ async def test_the_webhook_mode_reaches_the_report(
     line: str,
 ) -> None:
     await set_up_tools_entry(hass)
-    await _registered(hass, _server(hass, **options))
+    await _registered(hass, await _server(hass, **options))
 
     info = await _report(component_core_client)
 
@@ -206,7 +210,7 @@ async def test_a_changed_mode_reaches_the_next_report(
 ) -> None:
     """The mode is an entry option the user can change while a long-lived
     server keeps its client; a later report must not repeat the first answer."""
-    server = _server(hass, webhook_auth="ha_auth")
+    server = await _server(hass, webhook_auth="ha_auth")
     await _registered(hass, server)
     await _report(component_core_client)
     hass.config_entries.async_update_entry(server, options={"webhook_auth": "legacy"})
@@ -221,7 +225,8 @@ async def test_an_install_without_the_component_is_asked_for_info_once(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """The caps probe found no ``info``; the report does not send it again."""
-    _server(hass)
+    await _server(hass)
+    del hass.data["websocket_api"][WS_INFO]
     ws = await get_websocket_client(
         url=core_client.base_url, token=core_client.token, verify_ssl=False
     )
@@ -238,7 +243,7 @@ async def test_an_install_without_the_component_is_asked_for_info_once(
 async def test_a_registered_webhook_reports_its_mode(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
-    await _registered(hass, _server(hass, webhook_auth="none"))
+    await _registered(hass, await _server(hass, webhook_auth="none"))
 
     assert (await ws_result(component_ws, WS_INFO))["webhook_auth"] == "none"
 
@@ -251,7 +256,6 @@ async def test_without_a_webhook_registration_no_mode_is_reported(
     """Bring-up registers the webhook after the server has started, and a
     failed bring-up leaves the entry loaded; the configured ``none`` would then
     read as an open webhook."""
-    replace_server(monkeypatch)
     entry = add_server_entry(hass, options={"webhook_auth": "none"})
     assert await set_up(hass, entry)
 

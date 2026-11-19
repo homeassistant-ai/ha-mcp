@@ -3,7 +3,7 @@
 Core's ``frontend`` keeps each user's saved theme (``frontend/get_user_data``,
 key ``theme``). The screenshot engine signs in as a Core user of its own; a
 Puppet render saves that user's theme as light. The engine and the Supervisor
-are served over ``httpx.MockTransport``: neither of them is Home Assistant.
+listen on local HTTP servers.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
+from aiohttp import web
 from homeassistant.auth.models import User
 from homeassistant.components.frontend.storage import async_user_store
 from homeassistant.components.websocket_api.const import (
@@ -27,8 +27,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.setup import async_setup_component
 
-from ha_mcp.client import supervisor_client
-from ha_mcp.dashboard_screenshot import capture
 from ha_mcp.dashboard_screenshot.theme_guard import (
     THEME_USER_DATA_KEY,
     EngineCredential,
@@ -36,15 +34,12 @@ from ha_mcp.dashboard_screenshot.theme_guard import (
 )
 
 from ._dashboard_screenshot_common import PNG, _puppet_info, set_settings
+from ._tools_addons_core import Supervisor, installed_apps
 
 DARK = {"theme": "default", "dark": True}
 
 # What Puppet's cold-browser render saves: an explicit light default theme.
 CLOBBERED = {"theme": "", "dark": False}
-
-# Taken before a test hands ``httpx.AsyncClient`` over to the engine.
-_ASYNC_CLIENT = httpx.AsyncClient
-
 
 @dataclass(frozen=True)
 class Account:
@@ -126,7 +121,9 @@ def closes_running() -> list[asyncio.Task[Any]]:
     ]
 
 
-def serve_puppet(monkeypatch: pytest.MonkeyPatch, credential: EngineCredential) -> None:
+def serve_puppet(
+    monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, credential: EngineCredential
+) -> None:
     """HA OS: the Supervisor lists one started Puppet app, whose token and
     Home Assistant URL options are ``credential``'s."""
     info = _puppet_info(state="started", hostname="puppet")
@@ -135,26 +132,15 @@ def serve_puppet(monkeypatch: pytest.MonkeyPatch, credential: EngineCredential) 
         "access_token": credential.token,
         "home_assistant_url": credential.url,
     }
-    answers = {
-        "/addons": {"addons": [{"slug": "local_puppet"}]},
-        "/addons/local_puppet/info": info,
-    }
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        data = answers[request.url.path]
-        return httpx.Response(200, json={"result": "ok", "data": data})
-
-    def supervisor(**_: object) -> httpx.AsyncClient:
-        return _ASYNC_CLIENT(
-            base_url="http://supervisor", transport=httpx.MockTransport(answer)
-        )
-
+    supervisor.answer("GET", "/addons", installed_apps("local_puppet"))
+    supervisor.answer("GET", "/addons/local_puppet/info", info)
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+    monkeypatch.setenv("SUPERVISOR_BASE_URL", f"http://{supervisor.url}")
     set_settings(monkeypatch, dashboard_screenshot_engine_url="")
-    monkeypatch.setattr(supervisor_client, "make_supervisor_httpx_client", supervisor)
 
 
-def serve_engine(
+async def serve_engine(
+    aiohttp_client: Any,
     monkeypatch: pytest.MonkeyPatch,
     hass: HomeAssistant,
     flips: Account | None,
@@ -163,14 +149,12 @@ def serve_engine(
     """The engine answers every render with ``status`` and a PNG; each render
     saves ``flips``'s theme as light first, as Puppet does."""
 
-    async def render(request: httpx.Request) -> httpx.Response:
+    async def render(request: web.Request) -> web.Response:
         if flips is not None:
             await save_theme(hass, flips, CLOBBERED)
-        return httpx.Response(
-            status, content=PNG, headers={"content-type": "image/png"}
-        )
+        return web.Response(status=status, body=PNG, content_type="image/png")
 
-    def engine(**kwargs: Any) -> httpx.AsyncClient:
-        return _ASYNC_CLIENT(transport=httpx.MockTransport(render), **kwargs)
-
-    monkeypatch.setattr(capture.httpx, "AsyncClient", engine)
+    app = web.Application()
+    app.router.add_get("/{path:.*}", render)
+    engine = await aiohttp_client(app)
+    set_settings(monkeypatch, dashboard_screenshot_engine_url=str(engine.make_url("/")))

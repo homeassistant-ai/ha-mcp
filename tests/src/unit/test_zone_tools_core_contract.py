@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from contextlib import AbstractContextManager
+from functools import partial
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -32,7 +33,7 @@ from ha_mcp.tools.tools_zones import ZoneTools
 from ._backup_target_identity_core import create_named
 from ._client_spies import sent_messages
 from ._core_setup import with_config_component
-from ._receipt_faults import lose_state_reads, on_receipt
+from ._receipt_faults import at_entity_wait, lose_state_reads, on_receipt
 from ._tool_errors import error_of
 
 WAITS = pytest.mark.parametrize("wait", [True, False], ids=["wait", "no-wait"])
@@ -257,10 +258,14 @@ class TestRemoveWait:
             waiter.assert_not_awaited()
 
     async def test_a_zone_still_present_after_the_wait_is_a_warning(
-        self, office_client: HomeAssistantClient
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
     ) -> None:
-        with patch.object(
-            tools_zones, "wait_for_entity_removed", AsyncMock(return_value=False)
+        with (
+            at_entity_wait(hass, lambda: hass.states.async_set("zone.office", "0")),
+            patch.object(
+                tools_zones, "wait_for_entity_removed",
+                partial(tools_zones.wait_for_entity_removed, timeout=0.05),
+            ),
         ):
             result = await ZoneTools(office_client).ha_remove_zone(zone_id="office")
 

@@ -1,13 +1,16 @@
 """Test Home Assistant add-on startup and logging."""
 
-import email.message
+import asyncio
 import json
 import os
+import socket
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
 import pytest_socket
+from aiohttp import web
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
@@ -79,186 +82,79 @@ class TestSecretPathValidation:
         assert result == "/private_stored"
 
 
-class TestPersistAddonOptions:
-    """Unit tests for persisting addon options to Supervisor (#941)."""
+@pytest.fixture
+async def options_supervisor(aiohttp_client, socket_enabled, monkeypatch):
+    """Answer the app's fixed Supervisor hostname over a local HTTP listener."""
+    posts = []
+    response = {"status": 200}
 
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = load_addon_start()
+    async def options(request: web.Request) -> web.Response:
+        posts.append((request.headers, await request.json()))
+        if response["status"] == 400:
+            return web.json_response({"result": "error", "message": "invalid options"}, status=400)
+        return web.json_response({"result": "ok", "data": {}})
 
-    def test_sends_full_options_dict_as_post(self, monkeypatch):
-        """Sends POST /addons/self/options with body {"options": <full dict>}."""
-        captured: dict = {}
+    server = web.Application()
+    server.router.add_post("/addons/self/options", options)
+    listener = await aiohttp_client(server)
+    resolve = socket.getaddrinfo
+    monkeypatch.setenv("no_proxy", "supervisor,127.0.0.1")
+    monkeypatch.setenv("NO_PROXY", "supervisor,127.0.0.1")
 
-        class FakeResp:
-            def __enter__(self):
-                return self
+    def address(host, port, *args, **kwargs):
+        if host == "supervisor" and port == 80:
+            host, port = "127.0.0.1", listener.port
+        return resolve(host, port, *args, **kwargs)
 
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return b""
-
-        def fake_urlopen(req, timeout=None):
-            captured["url"] = req.full_url
-            captured["method"] = req.get_method()
-            captured["headers"] = dict(req.header_items())
-            captured["body"] = req.data
-            return FakeResp()
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-
-        options = {
-            "verify_ssl": True,
-            "secret_path": "/private_abc12345",
-        }
-        # Returns None on success — helper communicates failure via exceptions.
-        assert self.addon.persist_addon_options(options, "test-token") is None
-        assert captured["url"] == "http://supervisor/addons/self/options"
-        assert captured["method"] == "POST"
-        assert captured["headers"]["Authorization"] == "Bearer test-token"
-        assert captured["headers"]["Content-type"] == "application/json"
-        assert json.loads(captured["body"]) == {"options": options}
-
-    def test_http_error_propagates(self, monkeypatch):
-        """Validation failures from Supervisor propagate to the caller.
-
-        Silent suppression here would hide the exact failure this PR exists
-        to fix: the webhook proxy unable to discover the secret path. Main()
-        must see the exception so it can log an actionable recovery message.
-        """
-        import io
-        import urllib.error
-
-        def fake_urlopen(req, timeout=None):
-            raise urllib.error.HTTPError(
-                req.full_url,
-                400,
-                "Bad Request",
-                hdrs=email.message.Message(),
-                fp=io.BytesIO(b'{"result":"error","message":"invalid options"}'),
-            )
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        with pytest.raises(urllib.error.HTTPError):
-            self.addon.persist_addon_options(
-                {"secret_path": "/private_x"}, "test-token"
-            )
-
-    def test_connection_error_propagates(self, monkeypatch):
-        """Network failures propagate to the caller — no silent swallowing."""
-        import urllib.error
-
-        def fake_urlopen(req, timeout=None):
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        with pytest.raises(urllib.error.URLError):
-            self.addon.persist_addon_options(
-                {"secret_path": "/private_x"}, "test-token"
-            )
+    monkeypatch.setattr(socket, "getaddrinfo", address)
+    return listener, posts, response
 
 
 class TestMaybePersistSecretPath:
-    """Tests for the gate-and-recover wrapper called from main() (#941)."""
+    @pytest.mark.parametrize("config", [{}, {"secret_path": "/private_same"}])
+    async def test_skips_a_redundant_or_empty_options_write(self, options_supervisor, config):
+        _, posts, _ = options_supervisor
+        addon = load_addon_start()
+        await asyncio.to_thread(addon.maybe_persist_secret_path, config, "/private_same", "token")
+        assert posts == []
 
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = load_addon_start()
+    async def test_persists_the_full_config_and_the_app_token(self, options_supervisor):
+        _, posts, _ = options_supervisor
+        addon = load_addon_start()
+        config = {"verify_ssl": True, "secret_path": "/private_old"}
+        await asyncio.to_thread(addon.maybe_persist_secret_path, config, "/private_new", "test-token")
+        [(headers, body)] = posts
+        assert headers["Authorization"] == "Bearer test-token"
+        assert headers["Content-Type"] == "application/json"
+        assert body == {"options": {"verify_ssl": True, "secret_path": "/private_new"}}
 
-    def test_skips_when_config_is_empty(self, monkeypatch):
-        """If /data/options.json was missing/corrupt, don't try to persist.
-
-        The options POST replaces the stored options in full, so a bare
-        `{"secret_path": ...}` would reset every other option the user has set.
-        """
-        calls: list = []
-        monkeypatch.setattr(
-            self.addon,
-            "persist_addon_options",
-            lambda *args, **kwargs: calls.append(args),
+    async def test_rejected_options_log_the_recovery_path(self, options_supervisor, capfd):
+        _, posts, response = options_supervisor
+        response["status"] = 400
+        addon = load_addon_start()
+        with pytest.raises(urllib.error.HTTPError) as error:
+            await asyncio.to_thread(addon.persist_addon_options, {}, "token")
+        assert error.value.code == 400
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, {"verify_ssl": True}, "/private_new", "token"
         )
-        self.addon.maybe_persist_secret_path({}, "/private_new", "test-token")
-        assert calls == []
-
-    def test_skips_when_stored_path_matches(self, monkeypatch):
-        """No-op when Supervisor already has the right value — avoids noise on every restart."""
-        calls: list = []
-        monkeypatch.setattr(
-            self.addon,
-            "persist_addon_options",
-            lambda *args, **kwargs: calls.append(args),
-        )
-        config = {"verify_ssl": True, "secret_path": "/private_same"}
-        self.addon.maybe_persist_secret_path(config, "/private_same", "test-token")
-        assert calls == []
-
-    def test_persists_with_full_config_merged(self, monkeypatch):
-        """When the path changes, POSTs `{**config, "secret_path": new}`."""
-        captured: list = []
-
-        def fake_persist(options, token):
-            captured.append((options, token))
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", fake_persist)
-        config = {
-            "verify_ssl": True,
-            "secret_path": "/private_old",
-        }
-        self.addon.maybe_persist_secret_path(config, "/private_new", "test-token")
-        assert captured == [
-            (
-                {
-                    "verify_ssl": True,
-                    "secret_path": "/private_new",
-                },
-                "test-token",
-            )
-        ]
-
-    def test_catches_http_error_and_logs_actionable_message(self, monkeypatch, capfd):
-        """HTTPError from Supervisor must not escape — the addon must keep starting — but the log line must name the path so the user can recover manually."""
-        import urllib.error
-
-        def raising_persist(options, token):
-            raise urllib.error.HTTPError(
-                "http://supervisor/addons/self/options",
-                400,
-                "Bad Request",
-                hdrs=email.message.Message(),
-                fp=None,
-            )
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
-        # Should not raise.
-        self.addon.maybe_persist_secret_path(
-            {"verify_ssl": True, "secret_path": "/private_old"},
-            "/private_new",
-            "test-token",
-        )
+        assert len(posts) == 2
         err = capfd.readouterr().err
-        assert "Failed to persist secret_path" in err
         assert "HTTP 400" in err
-        assert "/private_new" in err  # user-facing recovery value
-        assert "Secret path override" in err  # points at the config field
+        assert "/private_new" in err
+        assert "Secret path override" in err
 
-    def test_catches_network_error_and_logs(self, monkeypatch, capfd):
-        """URLError / timeout / OSError all caught the same way."""
-        import urllib.error
-
-        def raising_persist(options, token):
-            raise urllib.error.URLError("supervisor unreachable")
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
-        self.addon.maybe_persist_secret_path(
-            {"verify_ssl": True, "secret_path": "/private_old"},
-            "/private_new",
-            "test-token",
+    async def test_connection_failure_propagates_and_startup_logs_it(self, options_supervisor, capfd):
+        listener, _, _ = options_supervisor
+        await listener.close()
+        addon = load_addon_start()
+        with pytest.raises(urllib.error.URLError):
+            await asyncio.to_thread(addon.persist_addon_options, {}, "token")
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, {"verify_ssl": True}, "/private_new", "token"
         )
         err = capfd.readouterr().err
         assert "Failed to persist secret_path" in err
-        assert "supervisor unreachable" in err
         assert "/private_new" in err
 
 

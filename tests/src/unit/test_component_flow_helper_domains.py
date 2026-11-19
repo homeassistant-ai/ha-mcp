@@ -2,7 +2,7 @@
 
 The ``helpers_list`` and ``search`` commands run on a real ``hass`` with the
 component's commands registered; Core's loader answers the helper flow read
-itself (this file switches off the conftest's stand-in for it), a custom helper
+itself, a custom helper
 integration is a real ``manifest.json`` the loader finds, and ``secrets.yaml``
 is a real file in the test's own config directory.
 """
@@ -40,11 +40,6 @@ _CUSTOM = "my_helper"
 _MARKER = "flowdomainoption5521"
 _CORE_MARKER = "coreoverrideoption7713"
 _UNREADABLE_SECRETS = "key: [unclosed\n"
-
-
-@pytest.fixture
-def _core_helper_flows() -> None:
-    """Core's loader answers the component's helper flow read itself."""
 
 
 @pytest.fixture
