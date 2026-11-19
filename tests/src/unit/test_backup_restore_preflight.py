@@ -1,62 +1,66 @@
-"""Known input failures remain distinct from failures after restore dispatch."""
+"""Known input failures remain distinct from failures after restore dispatch.
+
+Snapshots are restored by the server's own manager into a real ``hass``,
+through the Settings page route and the ``ha_manage_backup`` tool.
+"""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from types import SimpleNamespace
+import uuid
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import Settings
 
-from ._backup_restore_helpers import NAME as NAME
-from ._backup_restore_helpers import _backup_settings as _backup_settings
-from ._backup_restore_helpers import _dispatcher as _dispatcher
-from ._backup_restore_helpers import response_for as response_for
-from ._backup_restore_helpers import run_restore as run_restore
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._backup_restore_helpers import NAME, response_for, run_restore
 
-
-@pytest.fixture
-def fetch() -> AsyncMock:
-    """The automation handler's fetch: this repository's own collaborator."""
-    return AsyncMock()
+_DOMAIN = "helper_input_boolean"
+_SAVED = {"id": "example", "name": "Saved"}
 
 
 @pytest.fixture
-def restore() -> AsyncMock:
-    """The automation handler's restore: this repository's own collaborator."""
-    return AsyncMock()
+async def manager(
+    hass: HomeAssistant,
+    snapshot_manager: bm.BackupManager,
+    backup_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> bm.BackupManager:
+    """The server's manager, with auto-backup off and Core's toggle helpers up."""
+    monkeypatch.setattr(backup_settings, "enable_auto_backup", False)
+    assert await async_setup_component(hass, "input_boolean", {})
+    snapshot_manager.backup_dir.mkdir(parents=True, exist_ok=True)
+    return snapshot_manager
 
 
-@pytest.fixture
-def manager(tmp_path: Path, fetch: AsyncMock, restore: AsyncMock) -> bm.BackupManager:
-    settings = SimpleNamespace(
-        enable_auto_backup=False,
-        auto_backup_throttle_minutes=0,
-        auto_backup_retain_per_entity=5,
-        auto_backup_dir=str(tmp_path),
-    )
-    mgr = bm.get_backup_manager(SimpleNamespace(), settings)
-    mgr.register(bm.DomainHandler(domain="automation", fetch=fetch, restore=restore))
-    return mgr
-
-
-def _write_snapshot(manager: bm.BackupManager) -> str:
-    """A valid automation snapshot, in the shape the manager writes."""
+def _write_snapshot(manager: bm.BackupManager, helper_id: str = "example") -> str:
+    """A valid snapshot of the toggle helper ``helper_id``, in the shape the
+    manager writes."""
     snapshot = {
         "schema_version": bm.SCHEMA_VERSION,
-        "domain": "automation",
-        "entity_id": "example",
+        "domain": _DOMAIN,
+        "entity_id": helper_id,
         "captured": "2026-09-09T00:00:00+00:00",
         "tool": None,
-        "config": {"alias": "Saved"},
+        "config": dict(_SAVED, id=helper_id),
     }
     (manager.backup_dir / NAME).write_text(yaml.safe_dump(snapshot, sort_keys=False))
     return NAME
+
+
+def _helpers(hass: HomeAssistant) -> list[str]:
+    return hass.states.async_entity_ids("input_boolean")
 
 
 @pytest.mark.parametrize("consumer", ["settings", "mcp"])
@@ -73,13 +77,21 @@ def _write_snapshot(manager: bm.BackupManager) -> str:
     ],
 )
 async def test_restore_input_failure_reports_no_write(
-    manager, fetch, restore, monkeypatch, consumer, failure, reason, status, code
-):
-    snapshot = {
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    consumer: str,
+    failure: str,
+    reason: str,
+    status: int,
+    code: str,
+) -> None:
+    snapshot: dict[str, Any] = {
         "schema_version": bm.SCHEMA_VERSION,
-        "domain": "automation",
+        "domain": _DOMAIN,
         "entity_id": "example",
-        "config": {"alias": "Saved"},
+        "config": dict(_SAVED, name="secret-marker"),
     }
     if failure in {"domain", "entity_id", "config"}:
         snapshot.pop(failure)
@@ -94,17 +106,14 @@ async def test_restore_input_failure_reports_no_write(
         (manager.backup_dir / NAME).write_text(content)
 
     if consumer == "settings":
-        response = response_for(monkeypatch, manager, NAME)
+        response = await response_for(monkeypatch, core_client, NAME)
         assert response.status_code == status
         payload = response.json()
     else:
-        monkeypatch.setattr(
-            "ha_mcp.tools.backup.get_backup_manager", lambda *args: manager
-        )
-        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
-        monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
         with pytest.raises(ToolError) as caught:
-            await _dispatcher()(scope="edits", action="restore", backup_name=NAME)
+            await manage_backup(
+                core_client, scope="edits", action="restore", backup_name=NAME
+            )
         payload = json.loads(str(caught.value))
 
     assert payload["error"]["code"] == code
@@ -116,14 +125,17 @@ async def test_restore_input_failure_reports_no_write(
         "Use safety_backup" in item for item in payload["error"].get("suggestions", [])
     )
     assert "secret-marker" not in json.dumps(payload)
-    fetch.assert_not_awaited()
-    restore.assert_not_awaited()
+    await hass.async_block_till_done()
+    assert _helpers(hass) == []
 
 
-def test_missing_snapshot_ui_reports_known_no_change(
-    manager, monkeypatch, settings_script
-):
-    response = response_for(monkeypatch, manager, NAME)
+async def test_missing_snapshot_ui_reports_known_no_change(
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    settings_script: Any,
+) -> None:
+    response = await response_for(monkeypatch, core_client, NAME)
     rendered = run_restore(
         settings_script, {"status": response.status_code, "json": response.json()}, NAME
     )
@@ -135,18 +147,29 @@ def test_missing_snapshot_ui_reports_known_no_change(
 @pytest.mark.parametrize(
     "error", [ValueError("late rejection"), FileNotFoundError("late read")]
 )
-def test_post_dispatch_failures_do_not_claim_no_change(
-    manager, restore, monkeypatch, settings_script, error
-):
+async def test_post_dispatch_failures_do_not_claim_no_change(
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    settings_script: Any,
+    error: BaseException,
+) -> None:
     changes: list[str] = []
 
-    async def apply(*args):
+    async def apply(*args: Any) -> None:
         changes.append("applied")
         raise error
 
-    restore.side_effect = apply
+    # The helper restore fails after it was sent.
+    manager.register(
+        bm.DomainHandler(
+            domain=_DOMAIN,
+            fetch=AsyncMock(side_effect=AssertionError("auto-backup is off")),
+            restore=apply,
+        )
+    )
     name = _write_snapshot(manager)
-    response = response_for(monkeypatch, manager, name)
+    response = await response_for(monkeypatch, core_client, name)
     assert changes == ["applied"]
     assert response.json().get("data", {}).get("apply_status") != "not_applied"
     rendered = run_restore(
@@ -159,14 +182,23 @@ def test_post_dispatch_failures_do_not_claim_no_change(
 
 
 async def test_generic_disabled_restore_confirmation_does_not_promise_safety(
-    manager, fetch, restore, monkeypatch, settings_script
-):
-    restore.return_value = {"success": True}
-    name = _write_snapshot(manager)
-    response = response_for(monkeypatch, manager, name)
+    hass: HomeAssistant,
+    manager: bm.BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    settings_script: Any,
+) -> None:
+    created = await core_client.send_websocket_message(
+        {"type": "input_boolean/create", "name": f"Example {uuid.uuid4().hex[:8]}"}
+    )
+    assert created["success"], created
+    helper_id = created["result"]["id"]
+    name = _write_snapshot(manager, helper_id)
+    response = await response_for(monkeypatch, core_client, name)
     assert response.json()["data"]["safety_backup"] is None
-    restore.assert_awaited_once()
-    fetch.assert_not_awaited()
+    await hass.async_block_till_done()
+    state = hass.states.get(f"input_boolean.{helper_id}")
+    assert state is not None and state.name == "Saved"
     rendered = run_restore(
         settings_script,
         {"status": response.status_code, "json": response.json()},

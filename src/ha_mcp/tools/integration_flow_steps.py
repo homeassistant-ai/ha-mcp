@@ -68,6 +68,13 @@ logger = logging.getLogger(__name__)
 # restart empties it; a flow_id it does not hold is looked up in Core's own
 # flow manager through the component (``component_flow.flow_record``).
 opened_flows: dict[str, tuple[str, str | None]] = {}
+
+
+def reset_opened_flows() -> None:
+    """Forget every flow this server opened, as an ha-mcp restart does."""
+    opened_flows.clear()
+
+
 # FlowTarget.kind -> the flow manager holding its flows.
 _FLOW_MANAGERS = {
     "setup": "config",

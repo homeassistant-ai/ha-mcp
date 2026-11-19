@@ -1,84 +1,50 @@
-"""Backup settings, a dispatcher and the restore harness shared by the backup restore tests."""
+"""The Settings page's backup routes and restore harness for the backup tests.
+
+The routes run on the real server for the test's client, so they reach the
+backup manager production reaches: ``get_backup_manager(client, settings)``
+with the configured settings (``_backup_core.backup_settings``).
+"""
 
 from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock
 
+import httpx
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
-from starlette.testclient import TestClient
 
-from ha_mcp.config import Settings
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.settings_ui import build_settings_handlers
 
 from ._js_harness import _assert_clean_init, run_script
+from ._real_server import build_server
 from ._settings_ui_dom import DEFAULT_FETCHES, MIN_DOM
-
-
-def _backup_settings() -> Settings:
-    """Keep tool access independent of the developer's env and dotenv files."""
-    return Settings(
-        _env_file=None,
-        ENABLE_SNAPSHOT_ACTIONS=True,
-        BACKUP_READ_ONLY=False,
-        READ_ONLY_MODE=False,
-    )
-
-
-def _dispatcher() -> Any:
-    """Resolve the raw ``ha_manage_backup`` closure from the ``@tool`` stack.
-
-    Mirrors the addon-tool tests: a fake ``mcp`` captures the decorated
-    function, then ``__wrapped__`` is unwound past ``@log_tool_usage`` so the
-    dispatcher is called directly, bypassing the FastMCP transport.
-    """
-    from ha_mcp.tools.backup import register_backup_tools
-
-    captured: dict[str, Any] = {}
-
-    class _MockMCP:
-        def tool(self, *args: Any, **kwargs: Any) -> Any:
-            def deco(fn: Any) -> Any:
-                captured.setdefault(fn.__name__, fn)
-                return fn
-
-            return deco
-
-    register_backup_tools(_MockMCP(), MagicMock())
-    fn = captured["ha_manage_backup"]
-    while hasattr(fn, "__wrapped__"):
-        fn = fn.__wrapped__
-    return fn
-
-
-def backup_tool(monkeypatch, manager) -> Any:
-    """``ha_manage_backup`` working on ``manager``, under ``_backup_settings``."""
-    monkeypatch.setattr("ha_mcp.tools.backup.get_backup_manager", lambda *args: manager)
-    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", _backup_settings)
-    monkeypatch.setattr("ha_mcp.read_only.get_global_settings", _backup_settings)
-    return _dispatcher()
-
 
 NAME = "helper_template.sensor.example.20260909_000000.yaml"
 
 
-def use_backup_manager(monkeypatch, manager) -> None:
-    """Hand the settings backup routes ``manager``: their server is not built."""
-    monkeypatch.setattr(
-        "ha_mcp.backup_manager.backup_manager_for_server", lambda server: manager
-    )
+def settings_handlers(
+    monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient
+) -> dict[str, Any]:
+    """The Settings page's handlers, on the real server for ``client``."""
+    server = build_server(monkeypatch, client, reread_settings=False)
+    return build_settings_handlers(server)
 
 
-def response_for(monkeypatch, manager, name=NAME):
-    use_backup_manager(monkeypatch, manager)
-    handler = build_settings_handlers(None)["restore_backup"]
+async def response_for(
+    monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient, name: str = NAME
+) -> httpx.Response:
+    """The Settings page's answer to restoring ``name``, over HTTP on the test's
+    loop, where ``client`` talks to Core."""
+    handler = settings_handlers(monkeypatch, client)["restore_backup"]
     app = Starlette(
         routes=[Route("/backups/{name}/restore", handler, methods=["POST"])]
     )
-    with TestClient(app, raise_server_exceptions=False) as client:
-        return client.post(f"/backups/{name}/restore")
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as http:
+        return await http.post(f"/backups/{name}/restore")
 
 
 def run_restore(settings_script, reply, name=NAME):

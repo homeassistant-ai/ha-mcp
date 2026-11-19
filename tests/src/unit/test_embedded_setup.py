@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import ifaddr
+import jwt
 import pytest
 from homeassistant.components import persistent_notification
 from homeassistant.components.persistent_notification import (
@@ -136,14 +137,55 @@ def server_requires_component(
     monkeypatch.setitem(sys.modules, SERVER_MODULE, module)
 
 
-def nabu_casa_url(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:
-    """Answer the cloud integration's remote URL (its requirements are not
-    installed with Core, so the component's own lookup is replaced)."""
+async def log_in_to_nabu_casa(
+    hass: HomeAssistant, hass_storage: dict[str, Any], url: str
+) -> None:
+    """Home Assistant Cloud set up and logged in, with remote access on ``url``.
 
-    def remote_url(hass: HomeAssistant) -> str | None:
-        return url
+    The stored preferences are an install that turned remote access on
+    earlier; the login is the account token Core's cloud tests use. Nothing
+    connects to Nabu Casa's servers.
+    """
+    from homeassistant.components.cloud import const
+    from homeassistant.components.cloud.prefs import (
+        STORAGE_KEY,
+        STORAGE_VERSION,
+        STORAGE_VERSION_MINOR,
+    )
 
-    monkeypatch.setattr(esetup, "cloud_remote_url", remote_url)
+    hass_storage[STORAGE_KEY] = {
+        "version": STORAGE_VERSION,
+        "minor_version": STORAGE_VERSION_MINOR,
+        "key": STORAGE_KEY,
+        "data": {
+            const.PREF_ALEXA_DEFAULT_EXPOSE: [],
+            const.PREF_ALEXA_ENTITY_CONFIGS: {},
+            const.PREF_ALEXA_SETTINGS_VERSION: 4,
+            const.PREF_CLOUD_USER: None,
+            const.PREF_CLOUDHOOKS: {},
+            const.PREF_ENABLE_ALEXA: False,
+            const.PREF_ENABLE_GOOGLE: False,
+            const.PREF_ENABLE_REMOTE: True,
+            const.PREF_ENABLE_CLOUD_ICE_SERVERS: False,
+            const.PREF_GOOGLE_CONNECTED: False,
+            const.PREF_GOOGLE_DEFAULT_EXPOSE: [],
+            const.PREF_GOOGLE_ENTITY_CONFIGS: {},
+            const.PREF_GOOGLE_SETTINGS_VERSION: 4,
+            const.PREF_GOOGLE_LOCAL_WEBHOOK_ID: "google_webhook",
+            const.PREF_INSTANCE_ID: "instance",
+            const.PREF_GOOGLE_SECURE_DEVICES_PIN: None,
+            const.PREF_ONBOARDED_ITEMS: [],
+            const.PREF_ONBOARDING_POSTPONED_UNTIL: None,
+            const.PREF_REMOTE_DOMAIN: url.removeprefix("https://"),
+            const.PREF_REMOTE_ALLOW_REMOTE_ENABLE: True,
+            const.PREF_USERNAME: "user@example.com",
+        },
+    }
+    assert await async_setup_component(hass, "cloud", {"cloud": {}})
+    hass.data[const.DATA_CLOUD].id_token = jwt.encode(
+        {"email": "user@example.com", "custom:sub-exp": "2099-01-01"},
+        "an-unverified-signing-key-of-32-bytes",
+    )
 
 
 async def set_internal_url(hass: HomeAssistant, url: str) -> None:
@@ -416,12 +458,13 @@ class TestConnectUrlSurfaces:
     async def test_neither_log_nor_notification_carries_urls_or_secrets(
         self,
         hass: HomeAssistant,
+        hass_storage: dict[str, Any],
         collaborators: Collaborators,
         caplog: pytest.LogCaptureFixture,
         notices: Notices,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, hass_storage, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = add_server_entry(
             hass,
@@ -545,11 +588,14 @@ class TestBuildConnectUrls:
     """The shared URL resolver behind the Configure screen."""
 
     async def test_cloud_url_external_url_and_local_url_in_that_order(
-        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+        self,
+        hass: HomeAssistant,
+        hass_storage: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A configured external URL leads the list (webhook-proxy app parity),
         ahead of Nabu Casa and the local address."""
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, hass_storage, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = _entry(hass, options={OPT_EXTERNAL_URL: "https://ha.example.com/"})
 
@@ -624,11 +670,14 @@ class TestBuildConnectUrls:
         assert not any("(direct access)" in url for url in urls)
 
     async def test_local_only_lists_the_direct_url_and_no_webhook_url(
-        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+        self,
+        hass: HomeAssistant,
+        hass_storage: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The webhook is never registered, so the external, Nabu Casa and local
         webhook forms are all suppressed while the direct URL stays."""
-        nabu_casa_url(monkeypatch, NABU_URL)
+        await log_in_to_nabu_casa(hass, hass_storage, NABU_URL)
         await set_internal_url(hass, LAN_URL)
         entry = _entry(hass, options={OPT_EXTERNAL_URL: "https://ha.example.com"})
 

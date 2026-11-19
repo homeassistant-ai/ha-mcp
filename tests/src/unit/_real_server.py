@@ -25,13 +25,19 @@ async def _no_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
 
 
 def build_server(
-    monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient
+    monkeypatch: pytest.MonkeyPatch,
+    client: HomeAssistantClient,
+    *,
+    reread_settings: bool = True,
 ) -> server_module.HomeAssistantSmartMCPServer:
     """Build the server from the current environment, without its lifespan.
 
     Settings are re-read, so a test sets its environment first; the caller's
-    ``monkeypatch`` restores it, and the next settings read starts fresh.
+    ``monkeypatch`` restores it, and the next settings read starts fresh. A
+    test that configured the settings object itself passes
+    ``reread_settings=False`` to keep it.
     """
     monkeypatch.setattr(server_module, "server_lifespan", _no_lifespan)
-    reset_global_settings()
+    if reread_settings:
+        reset_global_settings()
     return server_module.HomeAssistantSmartMCPServer(client=client)

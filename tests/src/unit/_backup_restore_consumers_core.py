@@ -27,10 +27,9 @@ from starlette.requests import Request
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.settings_ui import build_settings_handlers
 
 from ._backup_core import HEADER, manage_backup
-from ._backup_restore_helpers import run_restore, use_backup_manager
+from ._backup_restore_helpers import run_restore, settings_handlers
 from ._template_helper_core import create_template_sensor, set_template_state
 
 __all__ = [
@@ -60,14 +59,13 @@ class Reply:
 
 async def settings_route(
     route: str,
-    manager: bm.BackupManager,
+    client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     name: str,
 ) -> Reply:
     """Call the Settings page's ``route`` for the snapshot ``name``."""
-    use_backup_manager(monkeypatch, manager)
     request = Request({"type": "http", "path_params": {"name": name}})
-    response = await build_settings_handlers(None)[route](request)
+    response = await settings_handlers(monkeypatch, client)[route](request)
     return Reply(response.status_code, json.loads(bytes(response.body)))
 
 
@@ -84,27 +82,25 @@ async def _tool_reply(client: HomeAssistantClient, action: str, name: str) -> Re
 
 async def restore_through(
     consumer: str,
-    manager: bm.BackupManager,
     client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     name: str,
 ) -> Reply:
     """Restore ``name`` through ``consumer`` (``settings`` or ``mcp``)."""
     if consumer == "settings":
-        return await settings_route("restore_backup", manager, monkeypatch, name)
+        return await settings_route("restore_backup", client, monkeypatch, name)
     return await _tool_reply(client, "restore", name)
 
 
 async def diff_through(
     consumer: str,
-    manager: bm.BackupManager,
     client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     name: str,
 ) -> Reply:
     """Preview the restore of ``name`` through ``consumer``."""
     if consumer == "settings":
-        return await settings_route("diff_backup", manager, monkeypatch, name)
+        return await settings_route("diff_backup", client, monkeypatch, name)
     return await _tool_reply(client, "diff", name)
 
 

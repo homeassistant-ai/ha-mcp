@@ -2002,7 +2002,7 @@ def backup_manager_for_server(
 ) -> BackupManager | None:
     """Resolve the edit-backup manager shared by settings routes."""
     settings = get_global_settings()
-    client = getattr(server, "client", None) or getattr(server, "_client", None)
+    client = getattr(server, "client", None)
     return get_backup_manager(client, settings) if client is not None else None
 
 
