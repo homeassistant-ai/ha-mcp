@@ -527,7 +527,7 @@ class TestSearchSceneId:
 
         assert match["scene_id"] == "hue-uuid-123"
 
-    async def test_unregistered_scene_falls_back_to_its_slug_with_a_warning(
+    async def test_unregistered_scene_falls_back_to_its_entity_id_with_a_warning(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
@@ -544,9 +544,130 @@ class TestSearchSceneId:
 
         (match,) = await self._search(core_client, "orphaned")
 
-        assert match["scene_id"] == "orphaned_scene"
+        assert match["scene_id"] == "scene.orphaned_scene"
         assert any(
-            "fell back to entity-id slug" in r.message
+            "fell back to its entity_id" in r.message
             for r in caplog.records
             if r.levelno == logging.WARNING
         )
+
+
+class TestStorageKeyPrecedence:
+    """A bare id that is a storage key opens that scene, even when it is also
+    another scene's entity slug."""
+
+    @pytest.fixture
+    async def collided(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> ConfigSceneTools:
+        """``key_a`` is "First" (``scene.first``); ``key_b`` is "Key A", whose
+        entity is ``scene.key_a``."""
+        return await scene_tools(
+            hass,
+            core_client,
+            monkeypatch,
+            [scene("key_a", "First"), scene("key_b", "Key A")],
+        )
+
+    @pytest.mark.parametrize(
+        ("scene_id", "key"),
+        [("key_a", "key_a"), ("scene.key_a", "key_b"), ("first", "key_a")],
+    )
+    async def test_get_opens_the_scene_the_id_names(
+        self, collided: ConfigSceneTools, scene_id: str, key: str
+    ) -> None:
+        result = await collided.ha_config_get_scene(scene_id=scene_id)
+
+        assert result["scene_id"] == key
+        assert result["config"]["id"] == key
+
+    async def test_the_key_search_returns_opens_its_scene(
+        self, core_client: HomeAssistantClient, collided: ConfigSceneTools
+    ) -> None:
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="first", search_types=["scene"], limit=10, include_config=True
+        )
+        (match,) = [m for m in result["scenes"] if m["entity_id"] == "scene.first"]
+
+        opened = await collided.ha_config_get_scene(scene_id=match["scene_id"])
+
+        assert opened["config"]["name"] == "First"
+
+    @pytest.mark.parametrize("hashed", [True, False])
+    async def test_a_write_by_key_edits_that_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, hashed: bool
+    ) -> None:
+        await collided.ha_config_set_scene(
+            scene_id="key_a",
+            config={"name": "First", "entities": TV_ON, "icon": "mdi:one"},
+            config_hash=await config_hash(collided, "key_a") if hashed else None,
+            wait=False,
+        )
+
+        icons = {s["id"]: s.get("icon") for s in await stored_scenes(hass)}
+        assert icons == {"key_a": "mdi:one", "key_b": None}
+
+    async def test_remove_by_key_removes_that_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools
+    ) -> None:
+        result = await collided.ha_config_remove_scene(scene_id="key_a")
+
+        assert [s["id"] for s in await stored_scenes(hass)] == ["key_b"]
+        # The removal is checked on the removed scene's entity, not scene.key_a.
+        assert hass.states.get("scene.first") is None
+        assert hass.states.get("scene.key_a") is not None
+        assert not any("scene.key_a" in w for w in result.get("warnings", []))
+
+
+class TestEntityIdForm:
+    """``scene.<id>`` names an entity: with no such entity it never opens the
+    scene stored under key ``<id>``, whose entity is another one."""
+
+    @pytest.fixture
+    async def orphaned_key(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> ConfigSceneTools:
+        """``key_a`` is "First" (``scene.first``); no ``scene.key_a`` exists."""
+        return await scene_tools(
+            hass, core_client, monkeypatch, [scene("key_a", "First")]
+        )
+
+    @pytest.mark.parametrize("action", ["get", "set", "remove"])
+    async def test_it_does_not_reach_another_scene_by_its_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools, action: str
+    ) -> None:
+        before = await stored_scenes(hass)
+        call = {
+            "get": lambda: orphaned_key.ha_config_get_scene(scene_id="scene.key_a"),
+            "set": lambda: orphaned_key.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"name": "Brand New", "entities": TV_ON},
+                wait=False,
+            ),
+            "remove": lambda: orphaned_key.ha_config_remove_scene(
+                scene_id="scene.key_a", wait=False
+            ),
+        }[action]
+        with pytest.raises(ToolError) as exc:
+            await call()
+
+        assert error_of(exc)["code"].endswith("_NOT_FOUND")
+        assert "pass 'key_a'" in str(exc.value)
+        assert await stored_scenes(hass) == before
+
+    async def test_it_still_creates_a_new_scene(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
+    ) -> None:
+        await orphaned_key.ha_config_set_scene(
+            scene_id="scene.brand_new",
+            config={"name": "Brand New", "entities": TV_ON},
+            wait=False,
+        )
+
+        assert {s["id"] for s in await stored_scenes(hass)} == {"key_a", "brand_new"}

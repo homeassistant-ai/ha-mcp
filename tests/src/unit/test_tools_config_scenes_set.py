@@ -18,6 +18,7 @@ from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import scene_capture
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._tool_errors import error_body
@@ -243,6 +244,27 @@ class TestConfigValidation:
         assert body["scene_id"] == "bad_scene"
         assert any("entities" in s.lower() for s in body["error"]["suggestions"])
 
+    @pytest.mark.parametrize("mode", ["config", "transform"])
+    async def test_a_platform_stanza_is_refused_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools, mode: str
+    ) -> None:
+        """Core's config API stores a body with ``platform`` as a scene platform,
+        not as this scene: ``states: []`` passes and no entity appears."""
+        before = await stored_scenes(hass)
+        stanza = {"platform": "homeassistant", "states": []}
+        if mode == "config":
+            kwargs: dict[str, Any] = {"config": {"name": "Test Scene", **stanza}}
+        else:
+            kwargs = {
+                "python_transform": f"config.update({stanza!r})",
+                "config_hash": await config_hash(tools, "test_scene"),
+            }
+        body = await _rejected(tools, **kwargs)
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert "platform" in body["error"]["message"]
+        assert await stored_scenes(hass) == before
+
 
 class TestConfigWrite:
     async def test_new_scene_is_created_without_a_precheck_read(
@@ -322,6 +344,17 @@ class TestConfigWrite:
         assert "modified" in body["error"]["message"].lower()
         assert body["current_config_hash"] == fresh
         assert body["scene_id"] == "night_light_led_desk_strip"
+        upsert.assert_not_awaited()
+
+    async def test_an_empty_hash_is_checked_not_skipped(
+        self, core_client: HomeAssistantClient, tools: ConfigSceneTools
+    ) -> None:
+        with upserts(core_client) as upsert:
+            body = await _rejected(
+                tools, config={"name": "New", "entities": TV_OFF}, config_hash=""
+            )
+
+        assert "modified" in body["error"]["message"].lower()
         upsert.assert_not_awaited()
 
     async def test_matching_hash_replaces_the_scene(
@@ -685,6 +718,48 @@ class TestCapture:
             "light.desk": {"entity_only": True},
         }
 
+    @pytest.mark.parametrize(
+        ("stored", "captured"),
+        [("light.desk", "LIGHT.DESK"), ("LIGHT.DESK", "light.desk")],
+    )
+    async def test_a_differently_cased_id_recaptures_the_entry_in_place(
+        self, hass: HomeAssistant, tools: ConfigSceneTools, stored: str, captured: str
+    ) -> None:
+        """Core names the light ``light.desk`` whatever the case asked; the
+        capture replaces the stored entry and keeps its metadata instead of
+        adding a second one."""
+        hass.states.async_set("light.desk", "on", {"brightness": 180})
+
+        await tools.ha_config_set_scene(
+            scene_id="movie",
+            config={
+                "name": "Movie",
+                "entities": {stored: {"state": "off", "brightness": 5}},
+                "metadata": {stored: {"entity_only": False}},
+            },
+            capture_entities=[captured],
+            wait=False,
+        )
+
+        movie = next(s for s in await stored_scenes(hass) if s["id"] == "movie")
+        assert movie["entities"] == {"light.desk": {"brightness": 180, "state": "on"}}
+        assert movie["metadata"] == {"light.desk": {"entity_only": False}}
+
+    async def test_an_empty_capture_list_without_config_is_refused_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        before = await stored_scenes(hass)
+        hash_value = await config_hash(tools, "test_scene")
+        body = await _rejected(
+            tools,
+            python_transform="config['icon'] = 'mdi:movie'",
+            config_hash=hash_value,
+            capture_entities=[],
+        )
+
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert await stored_scenes(hass) == before
+
     async def test_capture_into_list_shaped_entities_leads_with_cores_refusal(
         self, hass: HomeAssistant, tools: ConfigSceneTools
     ) -> None:
@@ -773,6 +848,66 @@ class TestCapture:
         assert body["entity_id"] == "input_boolean.tv"
         assert body["action"] == "capture"
         upsert.assert_not_awaited()
+
+
+class TestCaptureThroughTheComponent:
+    """With the component, every state comes from one ``ha_mcp_tools/states``
+    frame and none from a REST read."""
+
+    @pytest.fixture
+    async def tools(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> ConfigSceneTools:
+        hass.states.async_set("light.desk", "on", {"brightness": 180})
+        return await scene_tools(hass, component_core_client, monkeypatch)
+
+    async def test_states_come_from_one_frame(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        tools: ConfigSceneTools,
+    ) -> None:
+        with (
+            patch.object(
+                component_core_client,
+                "get_entity_state",
+                wraps=component_core_client.get_entity_state,
+            ) as rest,
+            patch.object(
+                scene_capture,
+                "fetch_states_via_component",
+                wraps=scene_capture.fetch_states_via_component,
+            ) as frames,
+        ):
+            await tools.ha_config_set_scene(
+                scene_id="movie",
+                config={"name": "Movie"},
+                capture_entities=["LIGHT.DESK", "input_boolean.tv"],
+                wait=False,
+            )
+
+        assert frames.await_count == 1
+        # The scene's own existence check may read scene.movie; no captured id.
+        assert all(c.args[0].startswith("scene.") for c in rest.call_args_list)
+        stored = next(s for s in await stored_scenes(hass) if s["id"] == "movie")
+        assert set(stored["entities"]) == {"light.desk", "input_boolean.tv"}
+        assert stored["entities"]["light.desk"] == {"brightness": 180, "state": "on"}
+
+    async def test_ids_the_component_misses_are_refused_unwritten(
+        self, tools: ConfigSceneTools
+    ) -> None:
+        body = await _rejected(
+            tools,
+            scene_id="movie",
+            config={"name": "Movie"},
+            capture_entities=["light.desk", "light.gone"],
+        )
+
+        assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert body["entity_ids"] == ["light.gone"]
 
 
 class TestCategoryValidation:

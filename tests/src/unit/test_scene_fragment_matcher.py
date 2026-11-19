@@ -62,9 +62,9 @@ REGISTRY_FAILED_FRAGMENT = (
     "Entity-registry fetch failed; integration-platform filter "
     + "unavailable, attempted all scenes (false-positive failures "
     + "expected for integration-managed scenes). The registry is "
-    + "also where a scene's storage key comes from, so the returned "
-    + "`scene_id` values fall back to the entity-id slug and will "
-    + "not resolve for a scene that was renamed in the UI."
+    + "also where a scene's storage key comes from, so a scene whose "
+    + "config could not be read is returned with its entity_id as "
+    + "`scene_id`."
 )
 YAML_STRUCTURAL = (
     "1 scene(s) not scanned (per-id config endpoint returned 404 — these "

@@ -95,7 +95,8 @@ class SceneResolution:
     """Outcome of resolving a scene identifier via the entity registry.
 
     ``registry_hit`` records whether ``config/entity_registry/get`` returned a
-    usable ``unique_id`` - i.e. the entity actually EXISTS. It is the signal that
+    usable ``unique_id`` - i.e. the entity EXISTS (a bare id that won as a storage
+    key carries False, its entity unread). It is the signal that
     separates a genuinely-missing scene from one that exists but is not editable
     through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
     resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
@@ -2109,36 +2110,35 @@ class HomeAssistantClient:
     async def _resolve_scene(self, identifier: str) -> SceneResolution:
         """Resolve a scene identifier to its storage key AND registry metadata.
 
-        Backs :meth:`resolve_scene_id`. Returns the storage key together with
-        ``registry_hit`` (did the entity actually resolve?) and ``platform`` - the
-        two signals a bare storage key throws away. Callers that hit a config-API
-        404 need ``registry_hit`` to tell "entity missing" from "entity exists but
-        has no editable storage config", and ``platform`` to name the owning
-        integration in the resulting error (issue #1971).
+        Backs :meth:`resolve_scene_id`. On a config-API 404, ``registry_hit``
+        tells "entity missing" from "entity exists but has no editable storage
+        config", and ``platform`` names the owning integration (issue #1971).
 
-        Args:
-            identifier: Scene ID (with or without ``scene.`` prefix)
+        A bare id that is a storage key wins over another scene whose entity
+        is ``scene.<id>``; ``scene.<id>`` is refused, not read as key ``<id>``,
+        when the registry has no such entity but that key holds a scene. The
+        config is read only for a bare id whose registry key differs and for an
+        unregistered ``scene.<id>``.
 
-        Returns:
-            A :class:`SceneResolution`. On any lookup failure it falls back to the
-            bare id with ``registry_hit=False`` - a write path must not treat the
-            guessed bare id as a confirmed resolve.
+        ``registry_hit=False`` marks a bare id the registry did not confirm: a
+        guess after a failed lookup, which a write path must not trust, or a
+        storage key the config read confirmed. A connection error, or a
+        non-404 failure of that read, propagates.
         """
         bare_id = identifier.removeprefix("scene.")
         entity_id = f"scene.{bare_id}"
+        registered: SceneResolution | None = None
+        unregistered = False
         try:
             result = await self.send_websocket_message(
                 {"type": "config/entity_registry/get", "entity_id": entity_id}
             )
+            unregistered = result.get("error_code") == "not_found"
             if result.get("success") is not False:
                 entry = result.get("result") or {}
                 unique_id = entry.get("unique_id")
                 if unique_id:
-                    if unique_id != bare_id:
-                        logger.debug(
-                            f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
-                        )
-                    return SceneResolution(
+                    registered = SceneResolution(
                         storage_key=str(unique_id),
                         registry_hit=True,
                         platform=entry.get("platform"),
@@ -2155,7 +2155,29 @@ class HomeAssistantClient:
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
                 exc_info=True,
             )
-        return SceneResolution(storage_key=bare_id, registry_hit=False, platform=None)
+        fallback = SceneResolution(bare_id, registry_hit=False, platform=None)
+        qualified = identifier != bare_id
+        if registered is not None:
+            if qualified or registered.storage_key == bare_id:
+                return registered
+            return fallback if await self._scene_config_exists(bare_id) else registered
+        if qualified and unregistered and await self._scene_config_exists(bare_id):
+            raise HomeAssistantAPIError(
+                f"{identifier} is no registered entity, but storage key '{bare_id}' "
+                f"holds a scene; pass '{bare_id}' for it, another id for a new one",
+                status_code=404,
+            )
+        return fallback
+
+    async def _scene_config_exists(self, storage_key: str) -> bool:
+        """Whether Core's config API holds a scene under ``storage_key``."""
+        try:
+            await self._request("GET", f"config/scene/config/{storage_key}")
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                return False
+            raise
+        return True
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """

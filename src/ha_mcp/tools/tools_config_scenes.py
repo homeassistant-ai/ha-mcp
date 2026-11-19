@@ -146,15 +146,28 @@ def _skip_scene_activation_backup(kwargs: dict[str, Any]) -> bool:
     )
 
 
-def _guard_scene_id(config: dict[str, Any], storage_key: Any, action: str) -> None:
-    """Refuse a config whose ``id`` moves the scene off ``storage_key``.
+def _guard_scene_body(config: dict[str, Any], storage_key: Any, action: str) -> None:
+    """Refuse a config Core would not store as this scene under ``storage_key``.
 
     Core writes the body over the entry at the URL key but keeps the body's
     ``id``, so a different id moves the scene to it: the registry entry under
     the old key is orphaned and the scene reloads as a new entity (#1168).
     Renaming is remove + create. ``id`` is optional and ``None`` means the
     same as leaving it out, but Core refuses ``None``, so it is dropped.
+
+    A ``platform`` key is refused too: Core then stores the body as a scene
+    platform, loading only the scenes its ``states`` lists, not this scene.
     """
+    if "platform" in config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                "config is one scene, not a 'platform' stanza; Core would store "
+                "it as a list of scenes under this key instead of as this scene",
+                suggestions=["Drop 'platform' and 'states'; pass name and entities"],
+                context={"action": action, "scene_id": storage_key},
+            )
+        )
     if "id" in config and config["id"] is None:
         del config["id"]
     if "id" in config and config["id"] != storage_key:
@@ -788,7 +801,7 @@ class ConfigSceneTools:
                     )
                 )
 
-            if capture_entities and config is None:
+            if capture_entities is not None and config is None:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -986,7 +999,7 @@ class ConfigSceneTools:
                 )
             )
 
-        _guard_scene_id(transformed_config, original_id, "python_transform")
+        _guard_scene_body(transformed_config, original_id, "python_transform")
         self._prune_scene_metadata(transformed_config, resolved_id)
 
         # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
@@ -1168,7 +1181,7 @@ class ConfigSceneTools:
         # the entity already exists, pre-checks the config API below
         # before the upsert (issue #1971) so a plain ``set`` on a
         # non-storage scene cannot silently shadow-create a duplicate.
-        if config_hash:
+        if config_hash is not None:
             _, resolved_id = await self._fetch_and_verify_hash(
                 scene_id, config_hash, "set"
             )
@@ -1190,7 +1203,7 @@ class ConfigSceneTools:
                 resolved_id
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
-        _guard_scene_id(config_dict, resolved_id, "set")
+        _guard_scene_body(config_dict, resolved_id, "set")
 
         references = await ref_check(self._client, config_dict, "scene")
         # ``resolved_id`` is already the storage key (from the hash-verify
