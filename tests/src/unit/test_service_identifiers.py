@@ -1,6 +1,8 @@
 """Service names must be unambiguous before selecting a dispatch route."""
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -8,6 +10,29 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools.tools_service import ServiceTools
 
 from ._tool_errors import error_body
+
+
+async def test_tool_dispatches_only_the_exact_service_name(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"test_lamp": {"initial": False}}}
+    )
+    tools = ServiceTools(core_client, None)
+    entity = "input_boolean.test_lamp"
+    with pytest.raises(ToolError):
+        await tools.ha_call_service(
+            "input_boolean", "TURN_ON", entity_id=entity, wait=False
+        )
+    state = hass.states.get(entity)
+    assert state is not None and state.state == "off"
+
+    result = await tools.ha_call_service(
+        "input_boolean", "turn_on", entity_id=entity, wait=False
+    )
+    assert result["success"] is True
+    state = hass.states.get(entity)
+    assert state is not None and state.state == "on"
 
 
 @pytest.mark.parametrize(
