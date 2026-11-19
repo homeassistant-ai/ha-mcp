@@ -21,6 +21,7 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
+from ..client.service_identifiers import service_identifier_errors
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
@@ -711,24 +712,8 @@ class ServiceTools(EventCallMixin):
     def _validate_service_call_params(
         domain: str | None, service: str | None
     ) -> tuple[str, str]:
-        """Validate service-mode params and return the (domain, service) pair.
-
-        Raises a structured ToolError when domain/service are missing (the caller
-        likely wants the ws_command escape hatch), when the domain targets the
-        reserved ha_mcp_tools namespace, or when backup controls block the service.
-        """
-        if not domain or not service:
-            raise_tool_error(
-                create_validation_error(
-                    "domain and service are required for a service call. To send "
-                    "a raw WebSocket command instead, pass ws_command.",
-                    parameter="domain" if not domain else "service",
-                )
-            )
-        # ha_mcp_tools.* services are restricted to the ha-mcp server's dedicated
-        # wrappers (which inject the required caller token); forwarding to that
-        # domain would bypass them. is_component_domain normalises case because
-        # HA core's service registry lowercases the domain on fallback lookup.
+        """Require valid service identifiers and enforce component and backup controls."""
+        # Only the dedicated wrappers inject the component's required caller token.
         if is_component_domain(domain):
             raise_tool_error(
                 create_validation_error(
@@ -742,6 +727,19 @@ class ServiceTools(EventCallMixin):
                 )
             )
         guard_snapshot_route(domain=domain, service=service)
+        errors = service_identifier_errors(domain, service, require_exact_case=True)
+        if errors:
+            message = ", ".join(f"{key} {reason}" for key, reason in errors.items())
+            if not domain or not service:
+                message = f"domain and service are required for a service call ({message}). To send a WebSocket command, pass ws_command."
+            raise_tool_error(
+                create_validation_error(
+                    message,
+                    parameter=next(iter(errors)),
+                    context={"parameters": errors},
+                )
+            )
+        assert domain is not None and service is not None
         return domain, service
 
     @staticmethod

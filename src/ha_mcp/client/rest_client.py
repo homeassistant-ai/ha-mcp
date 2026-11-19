@@ -47,6 +47,7 @@ from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
 from .models import ErrorLogPage
+from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
 from .transport_errors import is_ssl_error, redirect_message
 
@@ -598,15 +599,13 @@ class HomeAssistantClient:
         data: dict[str, Any] | None = None,
         return_response: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """
-        Call Home Assistant service.
+        """Call a Home Assistant service.
 
         Args:
             domain: Service domain (e.g., 'light', 'climate')
             service: Service name (e.g., 'turn_on', 'set_temperature')
             data: Optional service data
-            return_response: If True, returns the service response data (for services
-                           that support SupportsResponse.ONLY or SupportsResponse.OPTIONAL)
+            return_response: Request response data from a service that supports it.
 
         Returns:
             Service response data - list of affected states normally, or dict with
@@ -649,7 +648,6 @@ class HomeAssistantClient:
         A 401 means Home Assistant refused before running the service, so the
         WebSocket retry cannot apply it twice.
         """
-        # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
@@ -657,7 +655,7 @@ class HomeAssistantClient:
         try:
             result = await self._request(
                 "POST",
-                f"/services/{domain}/{service}",
+                service_rest_path(domain, service),
                 json=payload,
                 params=params if params else None,
             )

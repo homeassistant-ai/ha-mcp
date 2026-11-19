@@ -263,6 +263,10 @@ If the original entry has been deleted, restore recreates the helper and reports
 <!-- TOOLS_TABLE_END -->
 </details>
 
+When calling a service with `ha_call_service`, pass its domain and service name
+separately, for example `domain="light"` and `service="turn_on"`. Use the exact
+lowercase names returned by `ha_list_services`, including any hyphens.
+
 Z-Wave configuration values can be read through `ha_manage_radio` with
 `action="get_config_params"` or `action="get_config_param"`, even when their
 configuration entities are disabled or absent. Reads use the Z-Wave JS cache
