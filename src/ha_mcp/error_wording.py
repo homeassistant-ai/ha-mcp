@@ -36,12 +36,6 @@ def blueprint_not_loaded(message: str) -> bool:
     return "failed to load" in lowered or "not found" in lowered
 
 
-def blueprint_in_use(message: str) -> bool:
-    """ws_delete_blueprint catches OSError only; BlueprintInUse ("Blueprint in
-    use") reaches the generic handler."""
-    return "blueprint in use" in message.lower()
-
-
 # --- Core: lovelace/websocket.py and lovelace/dashboard.py -----------------
 # _handle_errors answers ``config_not_found`` both for a url_path it does not
 # know ("Unknown config specified: <url_path>") and for a dashboard with

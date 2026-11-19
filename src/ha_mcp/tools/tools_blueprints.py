@@ -15,13 +15,13 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from .. import error_wording
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .blueprint_sources import resolve_blueprint_source
 from .blueprint_substitute import substitute_blueprint
 from .blueprint_write import (
+    error_code,
     error_text,
     import_blueprint,
     normalize_blueprint_path,
@@ -549,7 +549,9 @@ class BlueprintTools:
         consumers the caller has to clear first.
         """
         message = error_text(response, "Failed to delete blueprint")
-        if not error_wording.blueprint_in_use(message):
+        # ws_delete_blueprint answers a file failure itself (unknown_error);
+        # BlueprintInUse is the one HomeAssistantError the removal raises.
+        if error_code(response) != "home_assistant_error":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
