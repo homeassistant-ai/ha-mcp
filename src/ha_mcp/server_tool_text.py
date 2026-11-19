@@ -274,7 +274,8 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "`python_transform` on an existing scene (requires "
         "`config_hash`). `scene_id` names the scene in both modes. "
         "`activate` activates the scene, with a write or alone. "
-        "`capture_entities` adds entities' current states to `config`.\n\n"
+        "`capture_entities` adds entities' current states to `config`, "
+        "`capture_devices` those of devices' entities.\n\n"
         "For schema details and examples, see "
         "ha_get_skill_guide or your locally installed skills."
     ),

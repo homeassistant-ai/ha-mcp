@@ -563,3 +563,37 @@ class TestSceneLifecycle:
             await safe_call_tool(
                 mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
             )
+
+    @pytest.mark.requires_component_surface
+    async def test_a_captured_device_is_saved_as_the_scene_editor_saves_it(
+        self, mcp_client, cleanup_tracker
+    ):
+        """capture_devices saves the device's light without entity_only, as the
+        editor saves a picked device. The membership rules are pinned in the
+        unit tests; this one sends capture_devices through the MCP schema to
+        the component's device read."""
+        scene_id = f"capture_device_{uuid4().hex[:8]}"
+        cleanup_tracker.track("scene", f"scene.{scene_id}")
+        mcp = MCPAssertions(mcp_client)
+        entity = await mcp.call_tool_success(
+            "ha_get_entity", {"entity_id": "light.bed_light"}
+        )
+        device_id = entity["entity_entry"]["device_id"]
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": {"name": scene_id},
+                    "capture_devices": [device_id],
+                },
+            )
+            stored = await mcp.call_tool_success(
+                "ha_config_get_scene", {"scene_id": scene_id}
+            )
+            assert "light.bed_light" in stored["config"]["entities"]
+            assert "light.bed_light" not in stored["config"].get("metadata", {})
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
+            )

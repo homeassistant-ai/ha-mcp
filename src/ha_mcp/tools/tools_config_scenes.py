@@ -639,7 +639,7 @@ class ConfigSceneTools:
                 description=(
                     "Scene configuration dictionary. Must include 'entities' "
                     "(a dict keyed by entity_id, NOT a list) unless "
-                    "capture_entities supplies them. Optional fields: "
+                    "capture_entities or capture_devices supplies them. Optional fields: "
                     "'name' (defaults to scene_id), 'icon', 'id' (the storage "
                     "key; must equal the scene's), 'metadata' (per-entity "
                     "editor hints, e.g. {'light.x': {'entity_only': true}}). "
@@ -672,6 +672,22 @@ class ConfigSceneTools:
                     "into config's 'entities', as the scene editor captures "
                     "them; a captured state replaces that entity's entry in "
                     "config. Requires config."
+                ),
+                default=None,
+            ),
+        ] = None,
+        capture_devices: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Device IDs captured as the scene editor saves a picked "
+                    "device: each entity of the device that has a state, is not "
+                    "hidden, has no entity category and is outside the domains "
+                    "the editor leaves out (sensors, buttons, scenes, scripts, "
+                    "update, zone, ...), without entity_only unless also in "
+                    "capture_entities. Needs the ha_mcp_tools component. "
+                    "Requires config."
                 ),
                 default=None,
             ),
@@ -743,7 +759,7 @@ class ConfigSceneTools:
         - ``python_transform``: surgical edits to an existing scene
           (add/remove/update a single entity entry).
         - ``config``: creating a new scene, or wholesale replacement; with
-          ``capture_entities``, from the entities' current states.
+          ``capture_entities`` or ``capture_devices``, from current states.
         - ``activate`` (with scene_id, no config): activate any scene,
           e.g. ha_config_set_scene(scene_id="scene.movie_night", activate=True).
 
@@ -801,14 +817,15 @@ class ConfigSceneTools:
                     )
                 )
 
-            if capture_entities is not None and config is None:
+            if (capture_entities, capture_devices) != (None, None) and config is None:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "capture_entities requires config",
+                        "capture_entities or capture_devices requires config",
                         suggestions=[
                             "To recapture a stored scene, pass the config and "
-                            "config_hash from ha_config_get_scene with capture_entities",
+                            "config_hash from ha_config_get_scene with "
+                            "capture_entities or capture_devices",
                         ],
                         context={"action": "set", "scene_id": scene_id},
                     )
@@ -849,6 +866,7 @@ class ConfigSceneTools:
                 wait,
                 MandatoryBPS,
                 activate=activate,
+                capture_devices=capture_devices,
             )
 
         except ToolError as te:
@@ -1136,6 +1154,7 @@ class ConfigSceneTools:
         MandatoryBPS: bool,
         *,
         activate: bool = False,
+        capture_devices: list[str] | None = None,
     ) -> dict[str, Any]:
         """Execute ``ha_config_set_scene``'s full-config replacement mode."""
         config_dict, effective_category = self._validate_scene_config(
@@ -1143,8 +1162,10 @@ class ConfigSceneTools:
             scene_id,
             category,
         )
-        if capture_entities:
-            await capture_scene_states(self._client, config_dict, capture_entities)
+        if capture_entities or capture_devices:
+            await capture_scene_states(
+                self._client, config_dict, capture_entities or [], capture_devices or []
+            )
 
         # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
         # the hash check + upsert commits. Same partial-state hazard as

@@ -22,11 +22,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import load_yaml
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._config_dir_yaml import setup_scenes
+from ._tool_errors import error_body
 
 TV_ON = {"input_boolean.tv": {"state": "on"}}
 HUE_SCENE = "scene.bedroom_sleepy"
@@ -64,6 +66,11 @@ async def stored_scenes(hass: HomeAssistant) -> list[dict[str, Any]]:
     return scenes
 
 
+async def stored_scene(hass: HomeAssistant, scene_id: str) -> dict[str, Any]:
+    """The scene stored under ``scene_id``."""
+    return next(s for s in await stored_scenes(hass) if s["id"] == scene_id)
+
+
 def integration_scene(hass: HomeAssistant) -> str:
     """A scene another integration (``hue``) owns: Core's config API has no
     config for it."""
@@ -85,6 +92,14 @@ async def config_hash(tools: ConfigSceneTools, scene_id: str) -> str:
     current = await tools.ha_config_get_scene(scene_id=scene_id)
     value: str = current["config_hash"]
     return value
+
+
+async def set_refused(tools: ConfigSceneTools, **kwargs: Any) -> dict[str, Any]:
+    """The error body of a refused ``ha_config_set_scene`` on ``test_scene``
+    unless ``kwargs`` names another scene."""
+    with pytest.raises(ToolError) as exc:
+        await tools.ha_config_set_scene(**{"scene_id": "test_scene", **kwargs})
+    return error_body(exc)
 
 
 def sent_of_type(sent: AsyncMock, command: str) -> list[dict[str, Any]]:
