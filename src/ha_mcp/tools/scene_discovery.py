@@ -170,10 +170,13 @@ async def _read_config(client: Any, row: dict[str, Any], query: str) -> None:
     if row["config_status"] == "integration_managed":
         return
     storage_id = row["_storage_id"]
+    if not storage_id:
+        # An unregistered scene has no stored config; its slug may be another
+        # scene's storage key.
+        row.update(config_available=False, config_status="not_in_storage")
+        return
     resolution = SceneResolution(
-        storage_key=storage_id or row["entity_id"].removeprefix("scene."),
-        registry_hit=bool(storage_id),
-        platform=row["platform"],
+        storage_key=storage_id, registry_hit=True, platform=row["platform"]
     )
     try:
         envelope = await client.get_scene_config(

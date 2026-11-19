@@ -692,3 +692,20 @@ class TestEntityIdForm:
         assert match["config"] is None
         with pytest.raises(ToolError):
             await orphaned_key.ha_config_get_scene(scene_id=match["scene_id"])
+
+    @pytest.mark.parametrize("search_in_config", [False, True])
+    async def test_discovery_gives_an_unregistered_scene_neither_key_nor_config(
+        self,
+        hass: HomeAssistant,
+        orphaned_key: ConfigSceneTools,
+        search_in_config: bool,
+    ) -> None:
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "key_a", "entities": TV_ON}, blocking=True
+        )
+        result = await orphaned_key.ha_config_get_scene(
+            query="key_a", search_in_config=search_in_config
+        )
+        (row,) = [r for r in result["scenes"] if r["entity_id"] == "scene.key_a"]
+
+        assert (row["scene_id"], row["config_status"]) == (None, "not_in_storage")
