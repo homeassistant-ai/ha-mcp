@@ -75,11 +75,6 @@
     "custom_components/ha_mcp_tools/oauth_legacy.py::PKCECodeStore.consume_code",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::PKCECodeStore.consume_code"
   ],
-  "3d3400bfc911": [
-    "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestCategorizedCallDispatch._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestDoubleUnwrap._get_proxy_fn"
-  ],
   "3de4cb4258ba": [
     "tests/src/e2e/workflows/embedded/test_embedded_dependency_conflict.py::_docker_available",
     "tests/src/e2e/workflows/embedded/test_embedded_server.py::_docker_available"
@@ -334,10 +329,6 @@
   "f001bc10d799": [
     "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_loopback_host",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_loopback_host"
-  ],
-  "fb4c92e7dc7f": [
-    "tests/src/unit/test_ws_connect_auth_classification.py::manager",
-    "tests/src/unit/test_ws_pool_stale_client_2127.py::manager"
   ],
   "fbca60b1fbf8": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::EnvelopeState",
