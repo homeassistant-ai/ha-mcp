@@ -43,7 +43,7 @@ def _not_in_container(monkeypatch) -> None:
     cases deterministic. Container behavior is exercised against the real
     container signals in ``test_is_running_in_container.py``.
     """
-    monkeypatch.setattr("ha_mcp.__main__._is_running_in_container", lambda: False)
+    monkeypatch.setattr("ha_mcp.__main__.is_running_in_container", lambda: False)
 
 
 @pytest.mark.parametrize(

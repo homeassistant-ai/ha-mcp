@@ -363,7 +363,7 @@ def _remaining_deadline_budget(deadline: float, operation: str) -> float:
     return remaining
 
 
-def _wait_any_port(
+def wait_any_port(
     ports: tuple[int, ...], host: str = "127.0.0.1", timeout: float = 180.0
 ) -> int:
     """Return the first of ``ports`` to accept a connection.
@@ -405,7 +405,7 @@ def wait_http_ok(url: str, timeout: float = 300.0) -> None:
     )
 
 
-def _discover_ha_base_url(timeout: float = 600.0) -> str:
+def discover_ha_base_url(timeout: float = 600.0) -> str:
     """Return the base URL of whichever forwarded port HA answers on.
 
     HA 2026.8 changed the Supervisor-managed default HTTP port from 8123 to
@@ -2554,8 +2554,8 @@ def build(work_dir: Path, output: Path) -> None:
     stage_screenshot_engine_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     try:
-        _wait_any_port((HA_HOST_PORT, HA_ALT_HOST_PORT), timeout=180)
-        base_url = _discover_ha_base_url(timeout=600)
+        wait_any_port((HA_HOST_PORT, HA_ALT_HOST_PORT), timeout=180)
+        base_url = discover_ha_base_url(timeout=600)
         credentials = onboard(base_url)
         _check_core_auth(base_url, credentials.access_token)
         with HAWebSocket(base_url, credentials) as ws:

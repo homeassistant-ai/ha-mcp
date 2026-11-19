@@ -30,8 +30,7 @@ from pytest_homeassistant.typing import WebSocketGenerator
 # socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
 # tree never loads it. Nothing above imports Home Assistant: the plugin patches
 # Core's JSON and time helpers before Core is first imported.
-# ``_core_client`` holds the ``core_client`` fixtures, in a module of its own
-# so the private-access check this file is listed for applies to them.
+# ``_core_client`` holds the native client fixtures shared by the unit tests.
 pytest_plugins = [
     "pytest_homeassistant.plugins",
     "tests.core_stand_in_guard",
@@ -120,7 +119,7 @@ def _unit_test_env(monkeypatch):
       commits and tags. Details: *Git isolation* in ``tests/AGENTS.md``.
 
     The cached ``Settings`` is reset too, since it holds the values read for
-    the previous test. ``monkeypatch`` restores all of it after each test, so
+    the previous test, and so is what an entry point a test ran left behind. ``monkeypatch`` restores all of it after each test, so
     tests from other trees in the same session keep their own environment.
     A test that needs another value sets it with ``monkeypatch``.
     """
@@ -142,6 +141,15 @@ def _unit_test_env(monkeypatch):
     yield
     get_data_dir.cache_clear()
     reset_global_settings()
+    # A test that ran an entry point leaves its server and settings mount behind.
+    # Only the modules loaded now: a test may still have stand-ins in their place.
+    for module, reset in (
+        ("ha_mcp.__main__", "reset_main_runtime"),
+        ("ha_mcp.settings_ui", "reset_http_settings_state"),
+    ):
+        clear = getattr(sys.modules.get(module), reset, None)
+        if clear is not None:
+            clear()
 
 
 @pytest.fixture
@@ -194,15 +202,17 @@ def _no_threads_left_by_the_test(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     threads_before = set(threading.enumerate())
     pools: list[concurrent.futures.ThreadPoolExecutor] = []
 
-    class RecordedPool(concurrent.futures.ThreadPoolExecutor):
-        """Remembers the pool quickjs makes for an engine of its own."""
+    pool_type = concurrent.futures.ThreadPoolExecutor
+    original_init = pool_type.__init__
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            if str(kwargs.get("thread_name_prefix", "")).startswith("quickjs-worker"):
-                pools.append(self)
+    def record_pool(
+        pool: concurrent.futures.ThreadPoolExecutor, *args: Any, **kwargs: Any
+    ) -> None:
+        original_init(pool, *args, **kwargs)
+        if str(kwargs.get("thread_name_prefix", "")).startswith("quickjs-worker"):
+            pools.append(pool)
 
-    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", RecordedPool)
+    monkeypatch.setattr(pool_type, "__init__", record_pool)
     try:
         yield
     finally:
@@ -273,7 +283,7 @@ def _restore_fastmcp_host_origin_guard():
     """Restore fastmcp's Host/Origin guard env var + setting after each test.
 
     ``transport_security.ensure_host_origin_guard_default_off`` runs for real in
-    server-creation paths some unit tests exercise (e.g. via ``_create_server``)
+    server-creation paths some unit tests exercise (e.g. via ``create_server``)
     and writes ``os.environ`` and the fastmcp settings singleton directly, which
     ``monkeypatch`` cannot revert. Snapshot and restore both so those mutations do
     not leak across tests once fastmcp exposes the guard (>= 3.4.3).

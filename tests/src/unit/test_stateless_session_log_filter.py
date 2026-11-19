@@ -11,7 +11,7 @@ class TestStatelessSessionLogFilter:
     def setup_method(self):
         self.log_filter = StatelessSessionLogFilter()
 
-    def _make_record(self, name: str, msg: str) -> logging.LogRecord:
+    def make_record(self, name: str, msg: str) -> logging.LogRecord:
         return logging.LogRecord(
             name=name,
             level=logging.INFO,
@@ -23,21 +23,21 @@ class TestStatelessSessionLogFilter:
         )
 
     def test_suppresses_stateless_termination(self):
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http", "Terminating session: None"
         )
         # Dropped entirely (not just relabelled): filter returns False.
         assert self.log_filter.filter(record) is False
 
     def test_suppresses_printf_style_termination(self):
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http", "Terminating session: %s"
         )
         record.args = (None,)
         assert self.log_filter.filter(record) is False
 
     def test_keeps_real_session_termination(self):
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http", "Terminating session: abc123"
         )
         # A real session id is meaningful — keep it, unchanged.
@@ -45,13 +45,13 @@ class TestStatelessSessionLogFilter:
         assert record.levelno == logging.INFO
 
     def test_keeps_other_loggers(self):
-        record = self._make_record("some.other.logger", "Terminating session: None")
+        record = self.make_record("some.other.logger", "Terminating session: None")
         # Only suppress on the SDK's streamable_http logger.
         assert self.log_filter.filter(record) is True
         assert record.levelno == logging.INFO
 
     def test_keeps_unrelated_messages(self):
-        record = self._make_record("mcp.server.streamable_http", "Processing request")
+        record = self.make_record("mcp.server.streamable_http", "Processing request")
         assert self.log_filter.filter(record) is True
         assert record.levelno == logging.INFO
 
@@ -71,17 +71,17 @@ class TestStatelessSessionLogFilter:
         assert self.log_filter.filter(record) is True
 
     def test_setup_logging_wires_filter_and_suppresses_output(self, monkeypatch):
-        """Integration: ``_setup_logging`` attaches the filter to the SDK logger,
+        """Integration: ``setup_logging`` attaches the filter to the SDK logger,
         so the real ``Terminating session: None`` INFO call (the stateless
         per-request teardown) produces NO log output, while a real-id
         termination still does.
 
         This is the mechanism the HAOS add-on and the Docker HTTP lane both rely
-        on -- both start via ``ha-mcp-web`` -> ``_setup_logging`` -> this
+        on -- both start via ``ha-mcp-web`` -> ``setup_logging`` -> this
         ``addFilter`` call -- so it guards the actual user-visible behaviour, not
         just the filter in isolation.
 
-        ``logging.basicConfig`` is stubbed to a no-op: only ``_setup_logging``'s
+        ``logging.basicConfig`` is stubbed to a no-op: only ``setup_logging``'s
         ``addFilter`` wiring matters here, and its real ``basicConfig(force=True)``
         would tear down and *close* the root logger's handlers -- including
         pytest's capture handlers -- polluting other tests in the same worker.
@@ -97,14 +97,14 @@ class TestStatelessSessionLogFilter:
         saved_fastmcp_filters = fastmcp_logger.filters[:]
         saved_propagate = sdk_logger.propagate
         saved_level = sdk_logger.level
-        # Keep _setup_logging from reconfiguring (and closing the handlers of)
+        # Keep setup_logging from reconfiguring (and closing the handlers of)
         # the root logger; we only exercise its addFilter() wiring here.
         monkeypatch.setattr(ha_main.logging, "basicConfig", lambda *a, **k: None)
         try:
-            ha_main._setup_logging("INFO", force=True)
+            ha_main.setup_logging("INFO", force=True)
             assert any(
                 isinstance(f, StatelessSessionLogFilter) for f in sdk_logger.filters
-            ), "_setup_logging must attach StatelessSessionLogFilter to the SDK logger"
+            ), "setup_logging must attach StatelessSessionLogFilter to the SDK logger"
 
             buf = io.StringIO()
             handler = logging.StreamHandler(buf)

@@ -2,7 +2,7 @@
 
 The launcher gap this branch fixes was SPECIFIC to the add-on: ``start.py``
 calls ``mcp.run()`` directly, so the nudge scheduled from ``__main__``'s
-``_run_with_shutdown`` never ran there, and no CI lane noticed. This test
+``run_with_shutdown`` never ran there, and no CI lane noticed. This test
 closes that lane by proving the real add-on launcher enters the server
 lifespan and starts the nudge.
 

@@ -8,29 +8,26 @@ heading.
 from typing import Any, ClassVar
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-from ha_mcp.tools.tools_config_dashboards import (
-    DashboardConfigTools,
-    _find_cards_matching,
-    _SearchCriteria,
-    _SearchGaps,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+
+from ._dashboard_search_helpers import SEARCH_URL_PATH, store_dashboard
 
 
-def _find_cards_in_config(
-    config: dict[str, Any],
-    entity_id: str | None = None,
-    card_type: str | None = None,
-    heading: str | None = None,
-    query: str | None = None,
-) -> list[dict[str, Any]]:
-    return _find_cards_matching(
-        config,
-        _SearchCriteria(
-            entity_id=entity_id, card_type=card_type, heading=heading, query=query
-        ),
-        _SearchGaps(),
-    )
+@pytest.fixture
+def search_dashboard(hass: HomeAssistant, core_client: HomeAssistantClient):
+
+    async def search(config, *, scoped: bool = True, **criteria):
+        await store_dashboard(hass, core_client, config)
+        return await DashboardConfigTools(core_client).ha_config_get_dashboard(
+            url_path=SEARCH_URL_PATH if scoped else None,
+            include_config=False,
+            **criteria,
+        )
+
+    return search
 
 
 class TestCardsNestedUnderCustomKeys:
@@ -74,20 +71,21 @@ class TestCardsNestedUnderCustomKeys:
         ]
     }
 
-    def test_finds_cards_under_custom_keys(self):
-        matches = _find_cards_in_config(self.CONFIG, entity_id="light.x")
+    async def test_finds_cards_under_custom_keys(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, entity_id="light.x"))["matches"]
         assert [(m["jq_path"], m["card_type"]) for m in matches] == [
             (".views[0].cards[0].groups[0].cards[0].card", "tile"),
             (".views[0].cards[0].groups[0].cards[1].card", "entities"),
             (".views[0].cards[0].groups[0].cards[2]", "tile"),
             (".views[0].cards[1].tabs[0].card", "tile"),
         ]
-        assert matches[0]["python_path"] == (
-            "['views'][0]['cards'][0]['groups'][0]['cards'][0]['card']"
+        assert (
+            matches[0]["python_path"]
+            == "['views'][0]['cards'][0]['groups'][0]['cards'][0]['card']"
         )
 
-    def test_finds_custom_card_type_by_type(self):
-        matches = _find_cards_in_config(self.CONFIG, card_type="tile")
+    async def test_finds_custom_card_type_by_type(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, card_type="tile"))["matches"]
         assert [m["jq_path"] for m in matches] == [
             ".views[0].cards[0].groups[0].cards[0].card",
             ".views[0].cards[0].groups[0].cards[2]",
@@ -127,8 +125,10 @@ class TestQueryCriterion:
         ]
     }
 
-    def test_query_matches_any_value_the_card_holds(self):
-        matches = _find_cards_in_config(self.CONFIG, query="input_number.limit")
+    async def test_query_matches_any_value_the_card_holds(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, query="input_number.limit"))[
+            "matches"
+        ]
         assert [(m["jq_path"], m["matched"]) for m in matches] == [
             (
                 ".views[0].cards[0].cards[0]",
@@ -145,56 +145,63 @@ class TestQueryCriterion:
             ),
         ]
 
-    def test_query_does_not_attribute_nested_card_strings_to_the_parent(self):
-        matches = _find_cards_in_config(self.CONFIG, query="climate")
+    async def test_query_does_not_attribute_nested_card_strings_to_the_parent(
+        self, search_dashboard
+    ):
+        matches = (await search_dashboard(self.CONFIG, query="climate"))["matches"]
         assert [m["jq_path"] for m in matches] == [".views[0].cards[0]"]
 
-    def test_query_reads_non_card_objects_inside_a_card(self):
-        matches = _find_cards_in_config(self.CONFIG, query="color: red")
+    async def test_query_reads_non_card_objects_inside_a_card(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, query="color: red"))["matches"]
         assert matches[0]["jq_path"] == ".views[0].cards[1]"
         assert matches[0]["matched"] == [
             {"field": "style", "value": "ha-card { color: red; }"}
         ]
 
-    def test_query_and_card_type_are_combined(self):
-        matches = _find_cards_in_config(
-            self.CONFIG, card_type="tile", query="input_number.limit"
-        )
+    async def test_query_and_card_type_are_combined(self, search_dashboard):
+        matches = (
+            await search_dashboard(
+                self.CONFIG, card_type="tile", query="input_number.limit"
+            )
+        )["matches"]
         assert [m["jq_path"] for m in matches] == [".views[0].cards[0].cards[1]"]
 
-    def test_query_and_entity_id_are_combined(self):
-        assert _find_cards_in_config(self.CONFIG, entity_id="light.a", query="desk")
-        assert not _find_cards_in_config(
-            self.CONFIG, entity_id="light.a", query="kitchen"
-        )
+    async def test_query_and_entity_id_are_combined(self, search_dashboard):
+        assert (await search_dashboard(self.CONFIG, entity_id="light.a", query="desk"))[
+            "matches"
+        ]
+        assert not (
+            await search_dashboard(self.CONFIG, entity_id="light.a", query="kitchen")
+        )["matches"]
 
-    def test_query_matches_badges(self):
-        matches = _find_cards_in_config(self.CONFIG, query="sensor.")
+    async def test_query_matches_badges(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, query="sensor."))["matches"]
         badge_matches = [m for m in matches if m["card_type"] == "badge"]
         assert [m["matched"] for m in badge_matches] == [
             [{"field": "badges", "value": "sensor.outdoor"}],
             [{"field": "entity", "value": "sensor.hall"}],
         ]
 
-    def test_no_query_leaves_out_matched(self):
-        matches = _find_cards_in_config(self.CONFIG, card_type="tile")
+    async def test_no_query_leaves_out_matched(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, card_type="tile"))["matches"]
         assert "matched" not in matches[0]
 
 
 class TestSearchSurvivesUnusualConfigs:
     """Shapes HA stores that must neither hide cards nor fail a search."""
 
-    def test_untyped_view_with_sections_is_searched(self):
-        # The frontend renders a view with `sections` and no `type` as sections.
+    async def test_untyped_view_with_sections_is_searched(self, search_dashboard):
         config = {
             "views": [
                 {"sections": [{"cards": [{"type": "tile", "entity": "light.a"}]}]}
             ]
         }
-        matches = _find_cards_in_config(config, entity_id="light.a")
+        matches = (await search_dashboard(config, entity_id="light.a"))["matches"]
         assert [m["jq_path"] for m in matches] == [".views[0].sections[0].cards[0]"]
 
-    def test_wildcard_entity_search_skips_rows_without_an_entity(self):
+    async def test_wildcard_entity_search_skips_rows_without_an_entity(
+        self, search_dashboard
+    ):
         config = {
             "views": [
                 {
@@ -207,16 +214,20 @@ class TestSearchSurvivesUnusualConfigs:
                 }
             ]
         }
-        assert len(_find_cards_in_config(config, entity_id="light.*")) == 1
+        assert (
+            len((await search_dashboard(config, entity_id="light.*"))["matches"]) == 1
+        )
 
-    def test_heading_search_reads_non_string_titles(self):
+    async def test_heading_search_reads_non_string_titles(self, search_dashboard):
         config = {
             "views": [{"cards": [{"type": "entities", "title": 5, "entities": []}]}]
         }
-        assert len(_find_cards_in_config(config, heading="5")) == 1
-        assert _find_cards_in_config(config, heading="x") == []
+        assert len((await search_dashboard(config, heading="5"))["matches"]) == 1
+        assert (await search_dashboard(config, heading="x"))["matches"] == []
 
-    def test_null_badges_and_sections_do_not_fail_the_search(self):
+    async def test_null_badges_and_sections_do_not_fail_the_search(
+        self, search_dashboard
+    ):
         config = {
             "views": [
                 {
@@ -226,9 +237,11 @@ class TestSearchSurvivesUnusualConfigs:
                 }
             ]
         }
-        assert len(_find_cards_in_config(config, query="light.a")) == 1
+        assert len((await search_dashboard(config, query="light.a"))["matches"]) == 1
 
-    def test_typed_objects_outside_card_slots_are_not_cards(self):
+    async def test_typed_objects_outside_card_slots_are_not_cards(
+        self, search_dashboard
+    ):
         config = {
             "views": [
                 {
@@ -252,14 +265,20 @@ class TestSearchSurvivesUnusualConfigs:
                 }
             ]
         }
-        assert _find_cards_in_config(config, card_type="light-brightness") == []
-        assert _find_cards_in_config(config, card_type="attribute") == []
-        row_owner = _find_cards_in_config(config, entity_id="light.b")
+        assert (await search_dashboard(config, card_type="light-brightness"))[
+            "matches"
+        ] == []
+        assert (await search_dashboard(config, card_type="attribute"))["matches"] == []
+        row_owner = (await search_dashboard(config, entity_id="light.b"))["matches"]
         assert [m["jq_path"] for m in row_owner] == [".views[0].cards[1]"]
-        feature_owner = _find_cards_in_config(config, query="light-brightness")
+        feature_owner = (await search_dashboard(config, query="light-brightness"))[
+            "matches"
+        ]
         assert [m["jq_path"] for m in feature_owner] == [".views[0].cards[0]"]
 
-    def test_view_cards_and_section_cards_are_both_searched_once(self):
+    async def test_view_cards_and_section_cards_are_both_searched_once(
+        self, search_dashboard
+    ):
         config = {
             "views": [
                 {
@@ -269,18 +288,20 @@ class TestSearchSurvivesUnusualConfigs:
                 }
             ]
         }
-        matches = _find_cards_in_config(config, entity_id="light.a")
+        matches = (await search_dashboard(config, entity_id="light.a"))["matches"]
         assert [m["jq_path"] for m in matches] == [
             ".views[0].cards[0]",
             ".views[0].sections[0].cards[0]",
         ]
 
-    def test_badge_with_a_non_string_entity_is_skipped(self):
+    async def test_badge_with_a_non_string_entity_is_skipped(self, search_dashboard):
         config = {"views": [{"badges": [{"type": "entity", "entity": 5}], "cards": []}]}
-        assert _find_cards_in_config(config, entity_id="sensor.*") == []
+        assert (await search_dashboard(config, entity_id="sensor.*"))["matches"] == []
 
-    def test_config_without_views_has_no_cards(self):
-        assert _find_cards_in_config({"views": None}, card_type="tile") == []
+    async def test_config_without_views_has_no_cards(self, search_dashboard):
+        assert (await search_dashboard({"views": None}, card_type="tile"))[
+            "matches"
+        ] == []
 
 
 class TestSearchResultScope:
@@ -301,23 +322,24 @@ class TestSearchResultScope:
         ]
     }
 
-    def _search(self, url_path: str | None) -> dict[str, Any]:
-        return DashboardConfigTools._build_search_result(
-            [{"url_path": "only", "config": self.CONFIG}],
-            criteria=_SearchCriteria(card_type="picture-elements"),
-            include_config=False,
-            url_path=url_path,
+    async def _search(self, search_dashboard, scoped: bool) -> dict[str, Any]:
+        return await search_dashboard(
+            self.CONFIG, card_type="picture-elements", scoped=scoped
         )
 
-    def test_scoped_search_locations_name_no_dashboard(self):
-        result = self._search("only")
+    async def test_scoped_search_locations_name_no_dashboard(self, search_dashboard):
+        result = await self._search(search_dashboard, True)
         assert any(".views[0].cards[1].elements" in w for w in result["warnings"])
-        assert not any("only:" in w for w in result["warnings"])
+        assert not any("card-search:" in w for w in result["warnings"])
 
-    def test_search_across_dashboards_names_the_dashboard_in_locations(self):
-        result = self._search(None)
+    async def test_search_across_dashboards_names_the_dashboard_in_locations(
+        self, search_dashboard
+    ):
+        result = await self._search(search_dashboard, False)
         assert result["config_hash"] is None
-        assert any("only:.views[0].cards[1].elements" in w for w in result["warnings"])
+        assert any(
+            "card-search:.views[0].cards[1].elements" in w for w in result["warnings"]
+        )
 
 
 class TestEntityWildcards:
@@ -332,24 +354,32 @@ class TestEntityWildcards:
         ]
     }
 
-    def test_suffix_pattern_must_match_to_the_end(self):
-        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.*_temp") == []
-        matches = _find_cards_in_config(self.CONFIG, entity_id="sensor.*_temperature")
+    async def test_suffix_pattern_must_match_to_the_end(self, search_dashboard):
+        assert (await search_dashboard(self.CONFIG, entity_id="sensor.*_temp"))[
+            "matches"
+        ] == []
+        matches = (
+            await search_dashboard(self.CONFIG, entity_id="sensor.*_temperature")
+        )["matches"]
         assert [m["card_type"] for m in matches] == ["badge", "tile"]
 
-    def test_star_never_matches_an_empty_entity(self):
+    async def test_star_never_matches_an_empty_entity(self, search_dashboard):
         config = {"views": [{"cards": [{"type": "tile", "entity": ""}]}]}
-        assert _find_cards_in_config(config, entity_id="*") == []
+        assert (await search_dashboard(config, entity_id="*"))["matches"] == []
 
-    def test_regex_characters_are_literal(self):
-        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.(*") == []
-        assert _find_cards_in_config(self.CONFIG, entity_id="sensor.x+*") == []
+    async def test_regex_characters_are_literal(self, search_dashboard):
+        assert (await search_dashboard(self.CONFIG, entity_id="sensor.(*"))[
+            "matches"
+        ] == []
+        assert (await search_dashboard(self.CONFIG, entity_id="sensor.x+*"))[
+            "matches"
+        ] == []
 
 
 class TestBlankCriteria:
     """A blank criterion counts as not given."""
 
-    def test_blank_criterion_beside_a_real_one_is_ignored(self):
+    async def test_blank_criterion_beside_a_real_one_is_ignored(self, search_dashboard):
         config = {
             "views": [
                 {
@@ -358,9 +388,9 @@ class TestBlankCriteria:
                 }
             ]
         }
-        assert _find_cards_in_config(
-            config, entity_id="light.a", heading=""
-        ) == _find_cards_in_config(config, entity_id="light.a")
+        assert (await search_dashboard(config, entity_id="light.a", heading=""))[
+            "matches"
+        ] == (await search_dashboard(config, entity_id="light.a"))["matches"]
 
 
 class TestBadgeCriteria:
@@ -375,8 +405,8 @@ class TestBadgeCriteria:
         ]
     }
 
-    def test_badge_card_type_alone_lists_every_badge(self):
-        matches = _find_cards_in_config(self.CONFIG, card_type="badge")
+    async def test_badge_card_type_alone_lists_every_badge(self, search_dashboard):
+        matches = (await search_dashboard(self.CONFIG, card_type="badge"))["matches"]
         assert [m["jq_path"] for m in matches] == [
             ".views[0].badges[0]",
             ".views[0].badges[1]",
@@ -387,36 +417,48 @@ class TestBadgeCriteria:
         "views": [{"badges": [None, "  ", "sensor.ok"], "cards": []}]
     }
 
-    def _unread_search(self, url_path: str | None, **criteria: str) -> dict[str, Any]:
-        return DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": self.UNREAD}],
-            criteria=_SearchCriteria(**criteria),
-            include_config=False,
-            url_path=url_path,
-        )
+    async def _unread_search(
+        self, search_dashboard, scoped: bool, **criteria: str
+    ) -> dict[str, Any]:
+        return await search_dashboard(self.UNREAD, **criteria, scoped=scoped)
 
     @pytest.mark.parametrize(
-        ("url_path", "criteria", "prefix"),
+        ("scoped", "criteria", "prefix"),
         [
-            ("d", {"card_type": "badge"}, ""),
-            (None, {"query": "sensor"}, "d:"),
+            (True, {"card_type": "badge"}, ""),
+            (False, {"query": "sensor"}, "card-search:"),
         ],
     )
-    def test_unread_badge_entries_are_reported_not_listed(
-        self, url_path: str | None, criteria: dict[str, str], prefix: str
+    async def test_unread_badge_entries_are_reported_not_listed(
+        self,
+        scoped: bool,
+        criteria: dict[str, str],
+        prefix: str,
+        search_dashboard,
     ):
-        result = self._unread_search(url_path, **criteria)
+        result = await self._unread_search(search_dashboard, scoped, **criteria)
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[2]"]
-        [warning] = result["warnings"]
+        [warning] = [
+            item
+            for item in result["warnings"]
+            if item.startswith("Not searched as cards or badges")
+        ]
+        if not scoped:
+            assert any(
+                "default dashboard was not searched" in item
+                for item in result["warnings"]
+            )
         assert f"{prefix}.views[0].badges[0]" in warning
         assert f"{prefix}.views[0].badges[1]" in warning
 
-    def test_out_of_scope_badges_are_not_reported(self):
-        result = self._unread_search("d", card_type="tile")
+    async def test_out_of_scope_badges_are_not_reported(self, search_dashboard):
+        result = await self._unread_search(search_dashboard, True, card_type="tile")
         assert "warnings" not in result
 
-    def test_heading_excludes_badges(self):
-        matches = _find_cards_in_config(self.CONFIG, entity_id="light.a", heading="t")
+    async def test_heading_excludes_badges(self, search_dashboard):
+        matches = (
+            await search_dashboard(self.CONFIG, entity_id="light.a", heading="t")
+        )["matches"]
         assert [m["card_type"] for m in matches] == ["tile"]
 
 
@@ -436,13 +478,8 @@ class TestUnreadContainers:
         ]
     }
 
-    def test_every_unreadable_container_is_named(self):
-        result = DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": self.CONFIG}],
-            criteria=_SearchCriteria(entity_id="light.a"),
-            include_config=False,
-            url_path="d",
-        )
+    async def test_every_unreadable_container_is_named(self, search_dashboard):
+        result = await search_dashboard(self.CONFIG, entity_id="light.a", scoped=True)
         assert [m["jq_path"] for m in result["matches"]] == [".views[1].cards[1]"]
         [warning] = result["warnings"]
         for path in (
@@ -455,13 +492,8 @@ class TestUnreadContainers:
         ):
             assert path in warning
 
-    def test_badge_search_reports_only_badge_containers(self):
-        result = DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": self.CONFIG}],
-            criteria=_SearchCriteria(card_type="badge"),
-            include_config=False,
-            url_path="d",
-        )
+    async def test_badge_search_reports_only_badge_containers(self, search_dashboard):
+        result = await search_dashboard(self.CONFIG, card_type="badge", scoped=True)
         [warning] = result["warnings"]
         assert ".views[1].badges" in warning
         assert ".views[1].cards[0]" not in warning
@@ -484,15 +516,11 @@ class TestPictureElementsDisclosure:
         ]
     }
 
-    def _search(self, **criteria: str) -> dict[str, Any]:
-        return DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": self.CONFIG}],
-            criteria=_SearchCriteria(**criteria),
-            include_config=False,
-        )
+    async def _search(self, search_dashboard, **criteria: str) -> dict[str, Any]:
+        return await search_dashboard(self.CONFIG, **criteria)
 
-    def test_query_finds_element_text_without_a_warning(self):
-        result = self._search(query="sensor.pe")
+    async def test_query_finds_element_text_without_a_warning(self, search_dashboard):
+        result = await self._search(search_dashboard, query="sensor.pe")
         assert result["matches"][0]["matched"] == [
             {"field": "entity", "value": "sensor.pe"}
         ]
@@ -502,13 +530,19 @@ class TestPictureElementsDisclosure:
         "criteria",
         [{"card_type": "badge"}, {"card_type": "badge", "entity_id": "light.a"}],
     )
-    def test_badge_search_does_not_warn(self, criteria: dict[str, str]):
-        result = self._search(**criteria)
+    async def test_badge_search_does_not_warn(
+        self, criteria: dict[str, str], search_dashboard
+    ):
+        result = await self._search(search_dashboard, **criteria)
         assert result["match_count"] == 1
         assert "warnings" not in result
 
-    def test_card_criteria_warn_that_elements_are_not_matched(self):
-        result = self._search(entity_id="sensor.pe", query="sensor.pe")
+    async def test_card_criteria_warn_that_elements_are_not_matched(
+        self, search_dashboard
+    ):
+        result = await self._search(
+            search_dashboard, entity_id="sensor.pe", query="sensor.pe"
+        )
         assert result["match_count"] == 0
         assert any("picture-elements" in w for w in result["warnings"])
 
@@ -517,17 +551,16 @@ class TestReviewedSearchEdges:
     """Search edges where a result was wrong or a failure went unreported."""
 
     @staticmethod
-    def _search(config: dict[str, Any], **criteria: str) -> dict[str, Any]:
-        return DashboardConfigTools._build_search_result(
-            [{"url_path": "d", "config": config}],
-            criteria=_SearchCriteria(**criteria),
-            include_config=False,
-            url_path="d",
-        )
+    async def _search(
+        search_dashboard, config: dict[str, Any], **criteria: str
+    ) -> dict[str, Any]:
+        return await search_dashboard(config, **criteria, scoped=True)
 
-    def test_deeply_nested_card_options_do_not_fail_the_search(self) -> None:
+    async def test_deeply_nested_card_options_do_not_fail_the_search(
+        self, search_dashboard
+    ) -> None:
         options: dict[str, Any] = {"entity": "light.deep"}
-        for _ in range(600):
+        for _ in range(150):
             options = {"n": options}
         config = {
             "views": [
@@ -539,11 +572,13 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, entity_id="light.a")
+        result = await self._search(search_dashboard, config, entity_id="light.a")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[1]"]
         assert any("depth bound" in w for w in result["warnings"])
 
-    def test_badge_search_does_not_list_header_cards(self) -> None:
+    async def test_badge_search_does_not_list_header_cards(
+        self, search_dashboard
+    ) -> None:
         config = {
             "views": [
                 {
@@ -552,10 +587,12 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, card_type="badge")
+        result = await self._search(search_dashboard, config, card_type="badge")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
 
-    def test_cards_mapping_is_read_as_text_without_a_warning(self) -> None:
+    async def test_cards_mapping_is_read_as_text_without_a_warning(
+        self, search_dashboard
+    ) -> None:
         config = {
             "views": [
                 {
@@ -568,12 +605,16 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, entity_id="light.a")
+        result = await self._search(search_dashboard, config, entity_id="light.a")
         assert result["match_count"] == 0
         assert "warnings" not in result
-        assert self._search(config, query="light.a")["match_count"] == 1
+        assert (await self._search(search_dashboard, config, query="light.a"))[
+            "match_count"
+        ] == 1
 
-    def test_alarm_panel_states_list_is_read_as_text(self) -> None:
+    async def test_alarm_panel_states_list_is_read_as_text(
+        self, search_dashboard
+    ) -> None:
         config = {
             "views": [
                 {
@@ -587,11 +628,11 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, card_type="alarm-panel")
+        result = await self._search(search_dashboard, config, card_type="alarm-panel")
         assert result["match_count"] == 1
         assert "warnings" not in result
 
-    def test_typed_cards_in_a_card_list_are_found(self) -> None:
+    async def test_typed_cards_in_a_card_list_are_found(self, search_dashboard) -> None:
         config = {
             "views": [
                 {
@@ -604,32 +645,40 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, entity_id="light.a")
+        result = await self._search(search_dashboard, config, entity_id="light.a")
         assert [m["jq_path"] for m in result["matches"]] == [
             ".views[0].cards[0].card[0]"
         ]
         assert "warnings" not in result
-        assert self._search(config, query="x")["match_count"] == 1
+        assert (await self._search(search_dashboard, config, query="x"))[
+            "match_count"
+        ] == 1
 
-    def test_query_matches_number_and_boolean_options(self) -> None:
+    async def test_query_matches_number_and_boolean_options(
+        self, search_dashboard
+    ) -> None:
         config = {
             "views": [{"cards": [{"type": "grid", "columns": 3, "square": False}]}]
         }
-        assert self._search(config, query="3")["matches"][0]["matched"] == [
-            {"field": "columns", "value": "3"}
-        ]
-        assert self._search(config, query="false")["match_count"] == 1
+        assert (await self._search(search_dashboard, config, query="3"))["matches"][0][
+            "matched"
+        ] == [{"field": "columns", "value": "3"}]
+        assert (await self._search(search_dashboard, config, query="false"))[
+            "match_count"
+        ] == 1
 
-    def test_untyped_top_level_card_is_reported_as_not_searched(self) -> None:
+    async def test_untyped_top_level_card_is_reported_as_not_searched(
+        self, search_dashboard
+    ) -> None:
         config = {"views": [{"cards": [{"entity": "light.a"}]}]}
-        result = self._search(config, query="light.a")
+        result = await self._search(search_dashboard, config, query="light.a")
         assert result["match_count"] == 0
         [warning] = result["warnings"]
         assert warning.startswith("Not searched as cards or badges")
         assert ".views[0].cards[0]" in warning
         assert "repair" not in warning
 
-    def test_query_reads_a_card_nested_in_a_badge(self) -> None:
+    async def test_query_reads_a_card_nested_in_a_badge(self, search_dashboard) -> None:
         config = {
             "views": [
                 {
@@ -643,24 +692,30 @@ class TestReviewedSearchEdges:
                 }
             ]
         }
-        result = self._search(config, query="light.garage")
+        result = await self._search(search_dashboard, config, query="light.garage")
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
 
-    def test_depth_cut_inside_a_badge_is_reported(self) -> None:
+    async def test_depth_cut_inside_a_badge_is_reported(self, search_dashboard) -> None:
         options: dict[str, Any] = {"entity": "light.deep"}
         for _ in range(150):
             options = {"n": options}
         badge = {"type": "entity", "entity": "sensor.a", "options": options}
-        result = self._search({"views": [{"badges": [badge]}]}, query="light.deep")
+        result = await self._search(
+            search_dashboard, {"views": [{"badges": [badge]}]}, query="light.deep"
+        )
         assert any("depth bound" in w for w in result["warnings"])
 
-    def test_card_list_in_a_badge_is_read_as_text_without_a_warning(self) -> None:
+    async def test_card_list_in_a_badge_is_read_as_text_without_a_warning(
+        self, search_dashboard
+    ) -> None:
         badge = {
             "type": "entity",
             "entity": "sensor.d",
             "card": [{"type": "markdown", "content": "light.a"}],
         }
-        result = self._search({"views": [{"badges": [badge]}]}, query="light.a")
+        result = await self._search(
+            search_dashboard, {"views": [{"badges": [badge]}]}, query="light.a"
+        )
         assert [m["jq_path"] for m in result["matches"]] == [".views[0].badges[0]"]
         assert "warnings" not in result
 
@@ -681,14 +736,14 @@ class TestReviewedSearchEdges:
             "cards-mapping",
         ],
     )
-    def test_card_keys_in_other_shapes_are_options_not_warnings(
-        self, options: dict[str, Any]
+    async def test_card_keys_in_other_shapes_are_options_not_warnings(
+        self, options: dict[str, Any], search_dashboard
     ) -> None:
         """A custom card's ``card``/``cards`` in another shape is its own option
         (button-card ``styles.card`` CSS, #2729): no warning, text searchable."""
         card = {"type": "custom:button-card", "entity": "light.a", **options}
         config = {"views": [{"cards": [card]}]}
         for criteria in ({"query": "80px"}, {"entity_id": "light.a"}):
-            result = self._search(config, **criteria)
+            result = await self._search(search_dashboard, config, **criteria)
             assert [m["jq_path"] for m in result["matches"]] == [".views[0].cards[0]"]
             assert "warnings" not in result

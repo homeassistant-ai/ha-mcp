@@ -5,10 +5,8 @@ Covers five layers:
 1. ``LiteDocstringsTransform`` itself — empty-mapping no-op, mapped
    replacement, unmapped passthrough, on both ``list_tools`` and
    ``get_tool`` paths.
-2. ``HomeAssistantSmartMCPServer._apply_lite_docstrings`` — the gate,
-   the WARNING log, the import-error fallback, and the
-   ``add_transform`` failure path. Uses the ``MagicMock`` stub pattern
-   from ``test_categorized_search.TestApplySearchKeywordEnrichment``.
+2. Real server construction and catalog results — the gate, warning log
+   and transform-installation failure path.
 3. The ``_LITE_DOCSTRINGS`` mapping invariant — every lite description
    names the anchor that reaches its own declared destination, so the LLM
    still has a path to detailed guidance from inside the trimmed text.
@@ -28,14 +26,18 @@ import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.server_tool_text import LITE_DOCSTRING_DESTINATIONS, LITE_DOCSTRINGS
 from ha_mcp.transforms import LiteDocstringsTransform
 from ha_mcp.utils import skill_loader
+
+from ._server_factory import make_server
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -196,82 +198,53 @@ class TestGetTool:
 
 
 class TestApplyLiteDocstrings:
-    """Tests for the server-side ``_apply_lite_docstrings`` wiring."""
-
-    def _make_server_stub(self, *, enable_lite_docstrings: bool) -> MagicMock:
-        """Minimal stub exposing only the attributes the method touches."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = MagicMock()
-        stub._LITE_DOCSTRINGS = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
-        stub.settings = MagicMock(enable_lite_docstrings=enable_lite_docstrings)
-        stub.mcp = MagicMock()
-        return stub
-
-    def test_noop_when_flag_disabled(self) -> None:
-        """When the flag is off, no transform is installed and no log."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = self._make_server_stub(enable_lite_docstrings=False)
-        HomeAssistantSmartMCPServer._apply_lite_docstrings(stub)
-
-        stub.mcp.add_transform.assert_not_called()
-
-    def test_installs_transform_when_flag_enabled(self) -> None:
-        """When on, install a LiteDocstringsTransform with the real mapping."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = self._make_server_stub(enable_lite_docstrings=True)
-        HomeAssistantSmartMCPServer._apply_lite_docstrings(stub)
-
-        stub.mcp.add_transform.assert_called_once()
-        installed = stub.mcp.add_transform.call_args.args[0]
-        assert isinstance(installed, LiteDocstringsTransform)
-        assert installed._replacements is HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
+    @pytest.mark.parametrize("enabled", [False, True])
+    async def test_catalog_uses_lite_descriptions_only_when_enabled(
+        self, core_client: HomeAssistantClient, monkeypatch, enabled
+    ) -> None:
+        server = make_server(
+            core_client,
+            monkeypatch,
+            enabled_tool_modules="tools_config_automations",
+            enable_lite_docstrings=enabled,
+        )
+        tool = await server.mcp.get_tool("ha_config_get_automation")
+        assert tool is not None
+        assert tool.description.startswith(LITE_DOCSTRINGS[tool.name]) is enabled
 
     def test_lite_descriptions_carry_no_format_tokens(self) -> None:
-        """Lite values are static strings.
-
-        A ``{name}`` token copied from an f-string full description would
-        reach the LLM verbatim.
-        """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = self._make_server_stub(enable_lite_docstrings=True)
-        HomeAssistantSmartMCPServer._apply_lite_docstrings(stub)
-
-        installed = stub.mcp.add_transform.call_args.args[0]
-        offenders = [
+        assert not [
             name
-            for name, lite in installed._replacements.items()
-            if _PLACEHOLDER_RE.search(lite)
+            for name, text in LITE_DOCSTRINGS.items()
+            if _PLACEHOLDER_RE.search(text)
         ]
-        assert not offenders, f"Format tokens in: {offenders}"
 
-    def test_logs_warning_when_enabled(self, caplog) -> None:
-        """The trade-off WARNING must be emitted so env-var users see it."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        stub = self._make_server_stub(enable_lite_docstrings=True)
+    def test_logs_warning_when_enabled(
+        self, core_client: HomeAssistantClient, monkeypatch, caplog
+    ) -> None:
         with caplog.at_level("WARNING"):
-            HomeAssistantSmartMCPServer._apply_lite_docstrings(stub)
-
+            make_server(core_client, monkeypatch, enable_lite_docstrings=True)
         assert any(
             "ENABLE_LITE_DOCSTRINGS=true" in rec.message
             and "may degrade LLM performance" in rec.message
             for rec in caplog.records
         )
 
-    def test_transform_failure_logs_second_warning(self, caplog) -> None:
-        """If add_transform fails, the user must know full descs remain."""
-        from ha_mcp.server import HomeAssistantSmartMCPServer
+    def test_transform_failure_logs_second_warning(
+        self, core_client: HomeAssistantClient, monkeypatch, caplog
+    ) -> None:
+        from ha_mcp.http_transport import HttpTransportFastMCP
 
-        stub = self._make_server_stub(enable_lite_docstrings=True)
-        stub.mcp.add_transform.side_effect = RuntimeError("boom")
+        original = HttpTransportFastMCP.add_transform
 
+        def add_transform(server, transform):
+            if isinstance(transform, LiteDocstringsTransform):
+                raise RuntimeError("boom")
+            return original(server, transform)
+
+        monkeypatch.setattr(HttpTransportFastMCP, "add_transform", add_transform)
         with caplog.at_level("WARNING"):
-            HomeAssistantSmartMCPServer._apply_lite_docstrings(stub)
-
+            make_server(core_client, monkeypatch, enable_lite_docstrings=True)
         assert any(
             "failed to install" in rec.message
             and "full tool descriptions remain in effect" in rec.message
@@ -316,11 +289,9 @@ class TestLiteDocstringsMappingInvariants:
           arm is kept so a tool the skill pack does not cover has an
           honest option other than a dead pointer.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         offenders: list[str] = []
-        for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
-            dest = HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS[name]
+        for name, lite in LITE_DOCSTRINGS.items():
+            dest = LITE_DOCSTRING_DESTINATIONS[name]
             if dest == _SELF_CONTAINED:
                 if "ha_get_skill_guide" in lite or _REFERENCE_FILE_RE.search(lite):
                     offenders.append(
@@ -352,8 +323,6 @@ class TestLiteDocstringsMappingInvariants:
         Verb list mirrors `.gemini/styleguide.md` > MCP Tool Docstrings.
         ``Create`` covers ``Create or update`` on consolidated set_* tools.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         accepted = {
             "Get",
             "List",
@@ -371,7 +340,7 @@ class TestLiteDocstringsMappingInvariants:
         # leading verb.
         punctuation = ",.;:"
         offenders: list[tuple[str, str]] = []
-        for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
+        for name, lite in LITE_DOCSTRINGS.items():
             first_word = lite.split(maxsplit=1)[0].rstrip(punctuation)
             if first_word not in accepted:
                 offenders.append((name, first_word))
@@ -399,16 +368,14 @@ class TestLiteDocstringsKeysAndDestinations:
         returns the tool untouched on a miss — no log, no error. So a
         typo'd or renamed key means that tool quietly keeps its full
         description while the toggle reports success. Nothing else checks
-        this: ``TestApplyLiteDocstrings`` stubs ``mcp`` with a MagicMock,
-        so real tool names never enter those tests at any layer.
+        this for every mapping entry: the server wiring tests exercise selected
+        catalog entries.
 
         Resolves against the AST-extracted catalog rather than a live
         server, so it needs no HA instance.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         real = {t["name"] for t in extract_tools.extract_tools()}
-        unknown = sorted(set(HomeAssistantSmartMCPServer._LITE_DOCSTRINGS) - real)
+        unknown = sorted(set(LITE_DOCSTRINGS) - real)
 
         assert not unknown, (
             "_LITE_DOCSTRINGS keys matching no registered tool (these "
@@ -422,10 +389,8 @@ class TestLiteDocstringsKeysAndDestinations:
         this, adding an entry to ``_LITE_DOCSTRINGS`` and forgetting the
         destination would skip the resolution check rather than fail it.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        lite = set(HomeAssistantSmartMCPServer._LITE_DOCSTRINGS)
-        declared = set(HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS)
+        lite = set(LITE_DOCSTRINGS)
+        declared = set(LITE_DOCSTRING_DESTINATIONS)
 
         assert lite == declared, (
             "_LITE_DOCSTRINGS and _LITE_DOCSTRING_DESTINATIONS disagree.\n"
@@ -443,15 +408,13 @@ class TestLiteDocstringsKeysAndDestinations:
         skip the extra call"), because a compliant agent that does follow
         the pointer also comes back with nothing.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         skills_dir = _require_vendored_skills()
         failures: list[str] = []
 
         for (
             tool,
             dest,
-        ) in HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS.items():
+        ) in LITE_DOCSTRING_DESTINATIONS.items():
             if dest.startswith(_TOOL_RESPONSE_PREFIX):
                 field = dest[len(_TOOL_RESPONSE_PREFIX) :]
                 if not _tool_response_has_field(tool, field):
@@ -491,15 +454,13 @@ class TestLiteDocstringsKeysAndDestinations:
         destination names the same one, so a future edit that changes one
         without the other fails here.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         pattern = re.compile(r"references/[\w.-]+\.md")
         mismatches: list[str] = []
-        for tool, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
+        for tool, lite in LITE_DOCSTRINGS.items():
             named = set(pattern.findall(lite))
             if not named:
                 continue
-            dest = HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS[tool]
+            dest = LITE_DOCSTRING_DESTINATIONS[tool]
             if named != {dest}:
                 mismatches.append(
                     f"{tool}: text names {sorted(named)}, map says {dest!r}"
@@ -535,10 +496,8 @@ class TestBackupLiteDescriptionSize:
         assert not _PLACEHOLDER_RE.search(self._full_description())
 
     def test_backup_lite_description_stays_substantially_smaller(self) -> None:
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
         full = self._full_description()
-        lite = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS["ha_manage_backup"]
+        lite = LITE_DOCSTRINGS["ha_manage_backup"]
         assert len(lite) < 0.45 * len(full), (
             f"lite is {len(lite)} chars against a "
             f"full {len(full)} ({100 * len(lite) / len(full):.0f}%) — the "
@@ -575,9 +534,7 @@ class TestBackupLiteDescriptionSize:
         other guard in this file passed with these sentences deleted, which
         is exactly the regression the review caught twice.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        lite = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS["ha_manage_backup"]
+        lite = LITE_DOCSTRINGS["ha_manage_backup"]
         assert marker in lite, (
             f"{marker!r} dropped from the ha_manage_backup lite description; "
             "it has no fallback in the skill pack or the input schema"
@@ -609,9 +566,7 @@ class TestDocumentedToolLists:
         boundaries in JSON, so ``ha_search`` is not satisfied by
         ``ha_search_tools``.
         """
-        from ha_mcp.server import HomeAssistantSmartMCPServer
-
-        mapped = sorted(HomeAssistantSmartMCPServer._LITE_DOCSTRINGS)
+        mapped = sorted(LITE_DOCSTRINGS)
         beta = (REPO_ROOT / "docs" / "beta.md").read_text(encoding="utf-8")
 
         # Region 1: the beta-tools table row (the env-var string is unique to
@@ -724,9 +679,7 @@ def _tool_response_has_field(tool_name: str, field: str) -> bool:
     "tool_name", ["ha_config_get_dashboard", "ha_config_set_dashboard"]
 )
 def test_lite_dashboard_descriptions_expose_patch(tool_name):
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    description = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS[tool_name]
+    description = LITE_DOCSTRINGS[tool_name]
     assert "patch" in description
     assert "config_hash" in description
     assert "python_transform" in description

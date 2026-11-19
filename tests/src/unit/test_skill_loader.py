@@ -31,14 +31,14 @@ def fake_skills_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_skills_dir_at_returns_none_when_missing(tmp_path: Path) -> None:
-    """_skills_dir_at returns None when the directory doesn't exist."""
-    assert skill_loader._skills_dir_at(tmp_path / "does-not-exist") is None
-
-
-def test_skills_dir_at_returns_path_when_present(fake_skills_dir: Path) -> None:
-    """_skills_dir_at returns the directory when it exists."""
-    assert skill_loader._skills_dir_at(fake_skills_dir) == fake_skills_dir
+@pytest.mark.parametrize("exists", [False, True])
+def test_bundled_skills_directory_discovery(tmp_path: Path, monkeypatch, exists):
+    module = tmp_path / "ha_mcp" / "utils" / "skill_loader.py"
+    skills = tmp_path / "ha_mcp" / "resources" / "skills-vendor" / "skills"
+    if exists:
+        skills.mkdir(parents=True)
+    monkeypatch.setattr(skill_loader, "__file__", str(module))
+    assert skill_loader.get_skills_dir() == (skills if exists else None)
 
 
 def test_resolve_skill_files_happy_path(fake_skills_dir: Path) -> None:

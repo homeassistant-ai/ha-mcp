@@ -910,6 +910,12 @@ class _HiddenSetCache:
 _hidden_cache = _HiddenSetCache()
 
 
+def reset_hidden_set_cache() -> None:
+    """Discard process-scoped visibility state between isolated server lifetimes."""
+    global _hidden_cache
+    _hidden_cache = _HiddenSetCache()
+
+
 async def _active_matcher(client: Any) -> _HiddenMatcher | None:
     """The shared matcher while enforce mode is active; ``None`` otherwise or on error.
 

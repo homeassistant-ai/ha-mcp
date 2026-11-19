@@ -99,7 +99,7 @@ async def test_serve_cleans_up_when_server_fails(
         nonlocal cleaned
         cleaned = True
 
-    monkeypatch.setattr("ha_mcp.__main__._cleanup_resources", fake_cleanup)
+    monkeypatch.setattr("ha_mcp.__main__.cleanup_resources", fake_cleanup)
 
     async def failing_server(**kwargs: Any) -> None:
         raise ValueError("boom")

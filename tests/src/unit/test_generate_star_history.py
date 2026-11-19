@@ -5,9 +5,9 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime
-from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -117,19 +117,26 @@ def test_render_starts_on_january_2026_and_smooths_monotonically() -> None:
     assert " C " in svg
 
 
-def test_monotone_tangents_do_not_overshoot_flat_growth() -> None:
-    coordinates = [(0.0, 10.0), (1.0, 10.0), (2.0, 8.0), (3.0, 5.0)]
-    tangents = generator._monotone_tangents(coordinates)
-
-    assert tangents[0] == 0
-    assert tangents[1] == 0
-    for index, ((x, y), (next_x, next_y)) in enumerate(pairwise(coordinates)):
-        width = next_x - x
-        control_y = y + tangents[index] * width / 3
-        next_control_y = next_y - tangents[index + 1] * width / 3
-        low, high = sorted((y, next_y))
+def test_chart_curve_does_not_overshoot_flat_growth() -> None:
+    svg = ET.fromstring(generator.render_svg(_history(), "light"))
+    curves = [
+        node.attrib["d"]
+        for node in svg.iter("{http://www.w3.org/2000/svg}path")
+        if node.attrib.get("fill") == "none" and " C " in node.attrib.get("d", "")
+    ]
+    [curve] = curves
+    segments = curve.split(" C ")
+    previous_y = float(segments[0].split()[-1])
+    flat_segments = 0
+    for segment in segments[1:]:
+        values = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", segment)]
+        _x1, control_y, _x2, next_control_y, _x, next_y = values
+        low, high = sorted((previous_y, next_y))
         assert low <= control_y <= high
         assert low <= next_control_y <= high
+        flat_segments += previous_y == next_y
+        previous_y = next_y
+    assert flat_segments > 0
 
 
 def test_repository_must_use_owner_repo_format() -> None:

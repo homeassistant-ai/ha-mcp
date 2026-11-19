@@ -22,7 +22,7 @@ from typing import IO, Any
 
 import pytest
 
-from ha_mcp.__main__ import main, main_web
+from ha_mcp.__main__ import main, main_web, reset_main_runtime
 from ha_mcp._vendor.fastmcp import FastMCP
 
 from ._stdio_sidecar_core import data_dir as data_dir
@@ -87,12 +87,10 @@ class EntryPoints:
     def install(self, server: InProcessServer) -> None:
         patch = self.monkeypatch
         patch.setattr(server.mcp, "run_async", server.run_async)
-        patch.setattr("ha_mcp.__main__._server", server)
-        patch.setattr("ha_mcp.__main__._setup_logging", lambda *a, **kw: None)
+        reset_main_runtime()
+        patch.setattr("ha_mcp.__main__.create_server", lambda: server)
+        patch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
         # Process-wide state a run leaves behind, put back after the test.
-        patch.setattr("ha_mcp.__main__._shutdown_event", None)
-        patch.setattr("ha_mcp.__main__._shutdown_in_progress", False)
-        patch.setattr("ha_mcp.__main__._force_exit_on_shutdown", False)
         access_log = logging.getLogger("uvicorn.access")
         patch.setattr(access_log, "filters", list(access_log.filters))
 
@@ -101,7 +99,7 @@ class EntryPoints:
         self.install(server)
         self.monkeypatch.setattr(sys, "argv", ["ha-mcp", *args])
         self.monkeypatch.setattr(sys, "stdin", self.stdin)
-        self.monkeypatch.setattr("ha_mcp.__main__._force_exit", self.force_exit)
+        self.monkeypatch.setattr("ha_mcp.__main__.force_exit", self.force_exit)
         with signal_handlers_restored():
             main()
 
@@ -128,6 +126,7 @@ def entry_points(
             yield EntryPoints(monkeypatch, stdin)
         finally:
             os.close(write_fd)
+            reset_main_runtime()
 
 
 class StartedThreads:

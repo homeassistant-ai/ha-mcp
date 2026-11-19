@@ -6,7 +6,7 @@ before routing. ha-mcp is reached through operator-chosen proxies/tunnels and
 LAN IPs on arbitrary hosts, so it defaults that guard off. These tests pin the
 helper's contract and -- on fastmcp versions that actually have the guard --
 prove both that the guard is real (Host and Origin paths) and that the default
-neutralises it, plus that ``_create_server`` wires the call in.
+neutralises it, plus that ``create_server`` wires the call in.
 
 Global-state cleanup (env var + settings singleton) is handled by the autouse
 ``_restore_fastmcp_host_origin_guard`` fixture in ``conftest.py``.
@@ -136,7 +136,7 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 
 
 def test_create_server_disables_guard(monkeypatch):
-    """_create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
+    """create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
     the guard-disable before building the server."""
     import ha_mcp.__main__ as main_module
 
@@ -148,5 +148,5 @@ def test_create_server_disables_guard(monkeypatch):
     monkeypatch.setattr(
         "ha_mcp.server.HomeAssistantSmartMCPServer", lambda *a, **kw: object()
     )
-    main_module._create_server()
+    main_module.create_server()
     assert calls == [1]

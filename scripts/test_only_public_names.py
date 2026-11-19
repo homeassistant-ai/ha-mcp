@@ -61,6 +61,9 @@ WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 EXEMPT = frozenset(
     {
         "src/ha_mcp/config.py:reset_embedded_connection",
+        "src/ha_mcp/__main__.py:reset_main_runtime",
+        "src/ha_mcp/settings_ui/__init__.py:reset_http_settings_state",
+        "src/ha_mcp/visibility/enforcement.py:reset_hidden_set_cache",
         "src/ha_mcp/redaction.py:clear_known_secret_values",
         "src/ha_mcp/policy/value_sources.py:clear_value_source_cache",
         "custom_components/ha_mcp_tools/llm_api.py:reset_schema_converter",

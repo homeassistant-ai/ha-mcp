@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from ha_mcp import stdio_settings_sidecar as sidecar
-from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.settings_ui import load_tool_metadata_cache
 
 from ._stdio_sidecar_core import (
@@ -222,17 +221,6 @@ class TestPrepareHook:
         assert prepared == []
 
 
-def _server_tools() -> FastMCP:
-    mcp = FastMCP("test")
-
-    @mcp.tool
-    def ha_probe_tool() -> str:
-        """A tool of the in-process server."""
-        return "ok"
-
-    return mcp
-
-
 class TestStdioStartupDumpsTheToolList:
     """The stdio entry point dumps the tool list the child's Tools tab reads."""
 
@@ -244,9 +232,9 @@ class TestStdioStartupDumpsTheToolList:
     ) -> None:
         """The serving sidecar is about to be replaced; its successor must read
         a list from THIS parent, or an old version's tools resurface (#2131)."""
-        run_stdio_main(monkeypatch, _server_tools())
+        run_stdio_main(monkeypatch)
 
-        assert "ha_probe_tool" in {tool["name"] for tool in load_tool_metadata_cache()}
+        assert "ha_get_state" in {tool["name"] for tool in load_tool_metadata_cache()}
         assert len(old_sidecar.requests) == 1
         assert len(spawned.spawns) == 1
 
@@ -256,7 +244,7 @@ class TestStdioStartupDumpsTheToolList:
         """The sidecar re-reads the shared file per request, so a loser's dump
         would replace the winner's list with its own environment's."""
         with another_parent_spawning(data_dir):
-            run_stdio_main(monkeypatch, _server_tools())
+            run_stdio_main(monkeypatch)
 
         assert load_tool_metadata_cache() == []
 
@@ -268,7 +256,7 @@ class TestStdioStartupDumpsTheToolList:
     ) -> None:
         monkeypatch.setenv(DISABLE_ENV, "1")
 
-        run_stdio_main(monkeypatch, _server_tools())
+        run_stdio_main(monkeypatch)
 
         assert load_tool_metadata_cache() == []
         assert len(old_sidecar.requests) == 1

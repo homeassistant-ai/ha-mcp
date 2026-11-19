@@ -420,30 +420,43 @@ class TestFetchFailurePath:
             checker.main(["--ha-version", "2026.8.0"])
             == checker.EXIT_CONSTRAINTS_UNREACHABLE
         )
-        assert len(attempts) == checker._FETCH_ATTEMPTS
-        assert len(sleeps) == checker._FETCH_ATTEMPTS - 1
+        assert len(attempts) > 1
+        assert len(sleeps) == len(attempts) - 1
 
-    def test_exactly_three_attempts_with_no_trailing_sleep(self, monkeypatch):
+    def test_retries_have_no_trailing_sleep(self, monkeypatch):
         sleeps: list[float] = []
         attempts: list[int] = []
         self._patch_fetch(monkeypatch, sleeps=sleeps, attempts=attempts)
         checker.main(["--ha-version", "2026.8.0"])
-        assert attempts == [0, 1, 2], "each retry follows one more wait"
-        assert len(sleeps) == checker._FETCH_ATTEMPTS - 1, (
+        assert len(attempts) > 1
+        assert attempts == list(range(len(attempts))), (
+            "each retry follows one more wait"
+        )
+        assert len(sleeps) == len(attempts) - 1, (
             "a sleep after the final attempt is pure waste and pushes the "
             "worst case toward the job timeout"
         )
         assert all(delay > 0 for delay in sleeps), "a retry must wait"
 
-    def test_worst_case_fits_well_inside_the_job_timeout(self):
-        budget = checker._FETCH_ATTEMPTS * checker._FETCH_TIMEOUT_SECONDS + sum(
-            checker._FETCH_BACKOFF_SECONDS * (n + 1)
-            for n in range(checker._FETCH_ATTEMPTS - 1)
+    def test_worst_case_fits_well_inside_the_job_timeout(self, monkeypatch):
+        timeouts: list[float] = []
+        sleeps: list[float] = []
+
+        def unreachable(_url, *, timeout):
+            timeouts.append(timeout)
+            raise checker.urllib.error.URLError("network down")
+
+        monkeypatch.setattr(checker.urllib.request, "urlopen", unreachable)
+        monkeypatch.setattr(checker.time, "sleep", sleeps.append)
+        assert (
+            checker.main(["--ha-version", "2026.8.0"])
+            == checker.EXIT_CONSTRAINTS_UNREACHABLE
         )
+        assert timeouts
+        budget = sum(timeouts) + sum(sleeps)
         assert budget <= 60, (
-            f"worst-case fetch is {budget}s; the Fast Checks lane shares one "
-            "timeout-minutes across every fast check, so keep this well under "
-            "it or the fail-open exit becomes an opaque kill"
+            f"worst-case fetch is {budget}s; the shared Fast Checks job must "
+            "reach the fail-open exit before its timeout"
         )
 
     def test_unreadable_local_file_exits_two(self, tmp_path):

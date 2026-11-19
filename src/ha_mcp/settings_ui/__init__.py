@@ -597,6 +597,13 @@ def is_http_settings_mounted() -> bool:
     return _http_settings_mounted
 
 
+def reset_http_settings_state() -> None:
+    """Forget process-local route advertisement between isolated server starts."""
+    global _http_settings_prefix, _http_settings_mounted
+    _http_settings_prefix = None
+    _http_settings_mounted = False
+
+
 # Every settings route except the add-on-only root mount is defined once in
 # this table. register_settings_routes mounts it under each active prefix: at
 # root in add-on mode (so HA ingress can proxy localhost:9583/), and under the

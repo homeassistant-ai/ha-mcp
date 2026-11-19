@@ -275,13 +275,11 @@ fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
 which is why the third rule exists.
 
-Test files written before a check were listed with it. No ast-grep rule has a
-list any more, and neither have the `sys.modules` guard and the mypy check
-below, so every test complies with them: a violating file fails the
-`ast-grep scan` or the mypy run in Fast Checks. Only the `SLF001` lists
-remain. `src/unit/test_core_reply_rules.py` keeps them exact (a listed file
-that no longer violates fails it, as does a violating file that is not
-listed).
+Every grandfather list is empty: the ast-grep rules, `sys.modules` guard,
+`SLF001` configurations and mypy check apply to every test. Violations fail
+Fast Checks. `src/unit/test_core_reply_rules.py` also keeps the empty
+private-access lists exact, so adding an unnecessary exemption fails too. The
+lists and the ratchet below stay so that no file can be put back on one.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
@@ -292,8 +290,8 @@ older files. The script also fails a rule that is removed (unless the script
 names it as retired and its list is empty), renamed or made to scan fewer
 files.
 
-A listed file is exempt for what it already holds, and an edit to it could add
-a faked test. A listed file the pull request changes is therefore converted:
+A file on a list would be exempt for what it already holds, and an edit to it
+could add a faked test, so a listed file a pull request changes is converted:
 the same script fails when it is still on any list.
 
 Production code has no public name that only the tests use
@@ -302,8 +300,7 @@ a test lets it skip the entry point a user reaches. Call the tool, the command
 or the script's `main`, and make the name private or delete it. The script
 names the few that reset module state between tests.
 
-Two more checks run on these trees; `SLF001` has its lists under the same
-rules, and mypy has none:
+Private access and typing checks also cover both complete trees:
 
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
   member access. Setting a private attribute on a Core object forces a state
@@ -311,11 +308,10 @@ rules, and mypy has none:
   user reaches: go through the public command or tool. Importing the name
   (`from module import _name`, or any name from a private module such as
   `ha_mcp._internal`) skips the entry point the same way and SLF001 does not
-  see it, so `src/unit/test_core_reply_rules.py` also fails a file that is on none of these lists and
-  still imports one. The vendored packages' import path (`ha_mcp._vendor`) and
+  see it, so `src/unit/test_core_reply_rules.py` also refuses those imports.
+  The vendored packages' import path (`ha_mcp._vendor`) and
   the test trees' own helper modules are exempt; a private name inside a
-  vendored package is not. A file still on a
-  list loses its private imports when it is converted.
+  vendored package is not.
 - mypy checks both trees against Core's real types
   (`uv run mypy tests/src/unit/ tests/addon/`). A `None` or a placeholder
   assigned where Core declares a type is an error wherever mypy knows the
