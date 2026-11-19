@@ -67,9 +67,11 @@ def _command_error_response(
 ) -> dict[str, Any]:
     """Translate a refusal Core sent, preserving native and caller context."""
     message = str(error)
-    code = error.code
+    native = error.refusal_fields()
+    code = native.pop("error_code")
     if code:
-        context = {**(context or {}), "ha_error_code": code}
+        native["ha_error_code"] = code
+    context = {**(context or {}), **native}
     if code in {"invalid_format", "invalid_info", "service_validation_error"}:
         return create_validation_error(message, context=context)
     if code == "timeout":

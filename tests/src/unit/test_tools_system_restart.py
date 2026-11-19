@@ -7,6 +7,7 @@ Behind a reverse proxy, Home Assistant going down mid-request reaches the
 server as the proxy's own error (#612, #1666): ``_gateway`` is that proxy.
 """
 
+import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,6 +26,9 @@ from ha_mcp.tools.tools_system import SystemTools
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
+from ._tool_errors import rejected_call_body
+
+RESTART_PATH = "/api/services/homeassistant/restart"
 
 
 @pytest.fixture(autouse=True)
@@ -55,43 +59,118 @@ async def stops(hass: HomeAssistant, core_client: HomeAssistantClient) -> list[b
 
 @pytest.fixture
 def restart_answer_lost(
-    gateway: Gateway, core_client: HomeAssistantClient, status: int | None
+    gateway: Gateway,
+    core_client: HomeAssistantClient,
+    status: int | None,
+    forwarded: bool,
 ) -> None:
-    """The gateway hands the restart to Core, then answers ``status`` itself:
-    Home Assistant went down before its answer reached the gateway."""
-
-    async def relay_then_fail(request: web.Request) -> web.Response:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.post(
-                f"{core_client.base_url}{request.path}",
-                headers={"Authorization": request.headers["Authorization"]},
-                data=await request.read(),
-            ) as answer,
-        ):
-            assert answer.status == 200
+    """The proxy can give the same response before or after Core acts."""
+    async def lose_answer(request: web.Request) -> web.Response:
+        gateway.requests.append(f"{request.method} {request.path}")
+        if forwarded:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{core_client.base_url}{request.path}",
+                    headers={"Authorization": request.headers["Authorization"]},
+                    data=await request.read(),
+                ) as answer,
+            ):
+                assert answer.status == 200
         if status is None:
             assert request.transport is not None
             request.transport.close()
             return web.Response()
         return web.Response(status=status, text="no reply from upstream")
 
-    gateway.routes.append(
-        web.post("/api/services/homeassistant/restart", relay_then_fail)
-    )
+    gateway.routes.append(web.post(RESTART_PATH, lose_answer))
 
 
 @pytest.mark.parametrize("status", [502, 503, 504, None])
+@pytest.mark.parametrize("forwarded", [False, True], ids=["not-forwarded", "forwarded"])
 @pytest.mark.usefixtures("restart_answer_lost")
-async def test_a_gateway_error_after_core_got_the_restart_is_reported_as_restarting(
-    stops: list[bool], gateway_client: HomeAssistantClient
+async def test_an_unacknowledged_restart_is_unknown(
+    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient, forwarded: bool
 ) -> None:
-    """The restart happened: the user is told to wait for it, not that it failed."""
-    result = await SystemTools(gateway_client).ha_restart(confirm=True)
+    body = await rejected_call_body(SystemTools(gateway_client).ha_restart(confirm=True))
 
+    assert stops == ([True] if forwarded else [])
+    assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
+    assert body["outcome"] == "unknown"
+    assert "before requesting another restart" in body["error"]["suggestion"]
+
+
+@pytest.fixture
+def restart_over_websocket(gateway: Gateway) -> None:
+    """An explicit REST 401 routes the service call through the client's WS path."""
+
+    async def refuse_rest(request: web.Request) -> web.Response:
+        gateway.requests.append(f"{request.method} {request.path}")
+        return web.Response(status=401)
+
+    gateway.routes.append(web.post(RESTART_PATH, refuse_rest))
+
+
+@pytest.mark.parametrize("accept_upgrade", [False, True], ids=["before-send", "after-send"])
+@pytest.mark.usefixtures("restart_over_websocket")
+async def test_a_lost_websocket_reports_only_what_the_client_knows(
+    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient, accept_upgrade: bool
+) -> None:
+    if accept_upgrade:
+        # The gateway got the frame but never forwarded it to Core.
+        gateway.drops.add("call_service")
+    else:
+        gateway.upgrade_status = 502
+    with patch.object(
+        gateway_client, "send_websocket_message", wraps=gateway_client.send_websocket_message
+    ) as ws:
+        body = await rejected_call_body(SystemTools(gateway_client).ha_restart(confirm=True))
+
+    assert stops == []
+    assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
+    assert [call.args[0]["type"] for call in ws.await_args_list] == ["call_service"]
+    if accept_upgrade:
+        assert body["outcome"] == "unknown"
+        assert "before requesting another restart" in body["error"]["suggestion"]
+    else:
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+        assert "outcome" not in body
+
+
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "reply-timeout"])
+@pytest.mark.usefixtures("restart_over_websocket")
+async def test_websocket_acknowledgement_waits_for_the_stop_handler(
+    hass: HomeAssistant,
+    gateway_client: HomeAssistantClient,
+    stops: list[bool],
+    monkeypatch: pytest.MonkeyPatch,
+    acknowledged: bool,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def stop(_hass: HomeAssistant, restart: bool) -> None:
+        stops.append(restart)
+        entered.set()
+        await release.wait()
+
+    async_set_stop_handler(hass, stop)
+    if not acknowledged:
+        monkeypatch.setattr("ha_mcp.client.websocket_client.DEFAULT_COMMAND_WAIT_TIMEOUT", 2)
+    task = asyncio.create_task(SystemTools(gateway_client).ha_restart(confirm=True))
+    try:
+        async with asyncio.timeout(15):
+            await entered.wait()
+            if acknowledged:
+                assert not task.done()
+                release.set()
+                assert (await task)["success"] is True
+            else:
+                body = await rejected_call_body(task)
+                assert body["outcome"] == "unknown"
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
     assert stops == [True]
-    assert result["success"] is True
-    assert any("Wait 1-5 minutes" in w for w in result["warnings"])
 
 
 async def test_a_gateway_error_before_the_restart_was_sent_fails(

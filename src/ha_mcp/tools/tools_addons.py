@@ -68,6 +68,15 @@ from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
 
+# Supervisor's StoreManager maps both official repository URLs to "core".
+_CORE_REPOSITORY_SOURCES = frozenset(
+    {
+        "core",
+        "https://github.com/home-assistant/apps",
+        "https://github.com/home-assistant/addons",
+    }
+)
+
 # Maximum response size to return from app (add-on) API calls (50 KB)
 _MAX_RESPONSE_SIZE = 50 * 1024
 
@@ -2923,7 +2932,12 @@ class AddOnTools:
         if isinstance(repos, list) and all(
             isinstance(row, dict) and isinstance(row.get(field), str) for row in repos
         ):
-            present = any(row[field] == repository for row in repos)
+            identities = (
+                _CORE_REPOSITORY_SOURCES
+                if field == "source" and repository in _CORE_REPOSITORY_SOURCES
+                else {repository}
+            )
+            present = any(row[field] in identities for row in repos)
             if present == (key == "add_repository"):
                 verb = "already registered" if present else "not registered"
                 return self._repo_noop_result(key, repository, verb)

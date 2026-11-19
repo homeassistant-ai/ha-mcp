@@ -28,6 +28,7 @@ from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
 
 REPO_URL = "https://github.com/example/home-assistant-apps"
+CORE_APPS_URL = "https://github.com/home-assistant/apps"
 REPOSITORIES = "/store/repositories"
 
 
@@ -417,17 +418,26 @@ class TestRepositories:
         assert (body["outcome"], body["method"]) == ("unknown", "POST")
         assert body["endpoint"] == REPOSITORIES
 
+    @pytest.mark.parametrize(
+        ("requested", "source", "slug"),
+        [
+            (REPO_URL, REPO_URL, "abc123"),
+            ("https://github.com/home-assistant/addons", "core", "core"),
+            (CORE_APPS_URL, "core", "core"),
+            ("core", "core", "core"),
+        ],
+    )
     async def test_adding_a_repository_already_in_the_store_succeeds(
-        self, route: Route
+        self, route: Route, requested: str, source: str, slug: str
     ) -> None:
         route.supervisor.refuse(
             "POST", REPOSITORIES, "Repository registration declined"
         )
         repository = Repository(
-            slug="abc123",
+            slug=slug,
             name="Test apps",
-            source=REPO_URL,
-            url=REPO_URL,
+            source=source,
+            url=CORE_APPS_URL if source == "core" else source,
             maintainer="Test",
         )
         route.supervisor.answer(
@@ -435,9 +445,10 @@ class TestRepositories:
         )
 
         result = await manage(
-            route.client, action="add_repository", repository=REPO_URL
+            route.client, action="add_repository", repository=requested
         )
 
+        assert result["repository"] == requested
         assert result["success"] is True
         assert "no change needed" in result["message"]
 

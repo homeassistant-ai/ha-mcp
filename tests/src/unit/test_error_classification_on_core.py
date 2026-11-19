@@ -1,7 +1,8 @@
 """Classify answers from Core and the File & YAML Tools service by their codes."""
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
 from ha_mcp.tools.helpers import exception_to_structured_error
@@ -49,6 +50,33 @@ async def test_translated_service_refusal_survives_both_client_paths(
         refused.value, context={"entity_id": "counter.example"}, raise_error=False
     )
     assert result["error"]["code"] == "SERVICE_NOT_FOUND"
+
+
+async def test_blank_translated_service_refusal_survives_tool_error_conversion(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> None:
+    @callback
+    def refuse(call: ServiceCall) -> None:
+        raise HomeAssistantError(
+            "",
+            translation_domain=call.domain,
+            translation_key="operation_refused",
+            translation_placeholders={"service": call.service},
+        )
+
+    hass.services.async_register("test", "refuse", refuse)
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("call_service", domain="test", service="refuse")
+
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert result["ha_error_code"] == "home_assistant_error"
+    assert result["translation_domain"] == "test"
+    assert result["translation_key"] == "operation_refused"
+    assert result["translation_placeholders"] == {"service": "refuse"}
+    assert result["empty_error_message"] is True
 
 
 async def test_file_service_identifies_its_own_missing_file(

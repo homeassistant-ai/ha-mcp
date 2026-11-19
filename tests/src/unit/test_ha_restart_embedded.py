@@ -127,7 +127,7 @@ async def test_embedded_lost_reply_logs_one_line(
 
     (record,) = _restart_records(caplog)
     assert record.levelno == logging.WARNING
-    assert "dispatched" in record.getMessage()
+    assert "restart outcome is unknown" in record.getMessage()
     assert record.exc_info is None
 
 

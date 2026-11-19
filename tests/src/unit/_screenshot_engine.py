@@ -65,6 +65,8 @@ async def engine(
     app.router.add_get("/{path:.*}", engine.handle)
     client = await aiohttp_client(app)
     engine.url = str(client.make_url("")).rstrip("/")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "127.0.0.1,localhost", prepend=",")
     set_settings(monkeypatch, dashboard_screenshot_engine_url=engine.url)
     try:
         yield engine

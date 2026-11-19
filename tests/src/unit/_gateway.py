@@ -28,6 +28,8 @@ class Gateway:
         self.outages: list[int] = []
         # 200 bodies the gateway answers itself, such as its login page.
         self.pages: list[bytes] = []
+        # An unavailable WebSocket upstream can fail before any frame is sent.
+        self.upgrade_status: int | None = None
         # WebSocket command types the gateway drops the socket on.
         self.drops: set[str] = set()
         # "METHOD /path" of every REST request that reached the gateway.
@@ -67,7 +69,9 @@ class Gateway:
                 content_type=answer.content_type,
             )
 
-    async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
+    async def _websocket(self, request: web.Request) -> web.StreamResponse:
+        if self.upgrade_status is not None:
+            return web.Response(status=self.upgrade_status)
         caller = web.WebSocketResponse()
         await caller.prepare(request)
         async with self._session.ws_connect(f"{self._core_url}/api/websocket") as core:

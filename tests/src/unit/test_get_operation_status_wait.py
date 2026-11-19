@@ -13,14 +13,14 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import device_control
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import OperationStatus, get_operation_manager
 
 
 @pytest.fixture
 def pending(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    # Freeze only the store's expiry clock. The polling loop has its own
-    # monotonic deadline, and a busy runner must not expire a pending operation.
+    # A busy runner must not expire an operation during the test.
     now = time.time()
     monkeypatch.setattr(
         "ha_mcp.utils.operation_manager.time", SimpleNamespace(time=lambda: now)
@@ -31,6 +31,24 @@ def pending(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         yield op
     finally:
         manager.operations.pop(op, None)
+
+
+@pytest.fixture(autouse=True)
+def poll_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Advance the tool's monotonic clock on sleep and let scheduled updates run."""
+    now = 0.0
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        assert delay > 0
+        delays.append(delay)
+        now += delay
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(device_control, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(device_control, "asyncio", SimpleNamespace(sleep=sleep))
+    return delays
 
 
 @pytest.fixture
@@ -64,18 +82,17 @@ async def test_change_during_a_poll(
     manager = get_operation_manager()
     loop = asyncio.get_running_loop()
     if change == "completed":
-        loop.call_later(
-            0.01, manager.update_operation_status, pending, OperationStatus.COMPLETED
+        loop.call_soon(
+            manager.update_operation_status, pending, OperationStatus.COMPLETED
         )
         result = await tools.get_device_operation_status(pending, timeout_seconds=2)
         assert result["status"] == "completed"
         return
     if change == "cleaned":
-        loop.call_later(0.01, manager.operations.pop, pending)
+        loop.call_soon(manager.operations.pop, pending)
         expected = ("RESOURCE_NOT_FOUND", "cleaned up")
     else:
-        loop.call_later(
-            0.01,
+        loop.call_soon(
             manager.update_operation_status,
             pending,
             OperationStatus.FAILED,
@@ -90,16 +107,12 @@ async def test_change_during_a_poll(
 
 
 async def test_fractional_deadline_returns_the_pending_operation(
-    tools: DeviceControlTools, pending: str
+    tools: DeviceControlTools, pending: str, poll_sleeps: list[float]
 ) -> None:
-    with patch(
-        "ha_mcp.tools.device_control.asyncio.sleep", wraps=asyncio.sleep
-    ) as sleep:
-        result = await tools.get_device_operation_status(pending, timeout_seconds=0.05)
+    result = await tools.get_device_operation_status(pending, timeout_seconds=0.05)
     assert result["status"] == "pending"
     assert "time_remaining_ms" in result
-    assert sleep.await_count >= 1
-    assert all(0 < call.args[0] <= 0.05 for call in sleep.await_args_list)
+    assert sum(poll_sleeps) == pytest.approx(0.05)
 
 
 async def test_initial_not_found_raises_resource_not_found(
