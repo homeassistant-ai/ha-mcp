@@ -47,6 +47,7 @@ from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
 from .models import ErrorLogPage
+from .service_identifiers import validate_service_identifiers
 from .supervisor_client import make_supervisor_httpx_client
 from .transport_errors import is_ssl_error, redirect_message
 
@@ -598,20 +599,19 @@ class HomeAssistantClient:
         data: dict[str, Any] | None = None,
         return_response: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """
-        Call Home Assistant service.
+        """Call a Home Assistant service.
 
         Args:
             domain: Service domain (e.g., 'light', 'climate')
             service: Service name (e.g., 'turn_on', 'set_temperature')
             data: Optional service data
-            return_response: If True, returns the service response data (for services
-                           that support SupportsResponse.ONLY or SupportsResponse.OPTIONAL)
+            return_response: Request response data from a service that supports it.
 
         Returns:
             Service response data - list of affected states normally, or dict with
             service response if return_response=True
         """
+        validate_service_identifiers(domain, service)
         logger.debug(
             f"Calling service {domain}.{service} (return_response={return_response})"
         )

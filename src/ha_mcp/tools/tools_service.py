@@ -21,6 +21,10 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
+from ..client.service_identifiers import (
+    InvalidServiceIdentifier,
+    validate_service_identifiers,
+)
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
@@ -711,12 +715,7 @@ class ServiceTools(EventCallMixin):
     def _validate_service_call_params(
         domain: str | None, service: str | None
     ) -> tuple[str, str]:
-        """Validate service-mode params and return the (domain, service) pair.
-
-        Raises a structured ToolError when domain/service are missing (the caller
-        likely wants the ws_command escape hatch), when the domain targets the
-        reserved ha_mcp_tools namespace, or when backup controls block the service.
-        """
+        """Require valid service identifiers and enforce component and backup controls."""
         if not domain or not service:
             raise_tool_error(
                 create_validation_error(
@@ -725,10 +724,7 @@ class ServiceTools(EventCallMixin):
                     parameter="domain" if not domain else "service",
                 )
             )
-        # ha_mcp_tools.* services are restricted to the ha-mcp server's dedicated
-        # wrappers (which inject the required caller token); forwarding to that
-        # domain would bypass them. is_component_domain normalises case because
-        # HA core's service registry lowercases the domain on fallback lookup.
+        # Only the dedicated wrappers inject the component's required caller token.
         if is_component_domain(domain):
             raise_tool_error(
                 create_validation_error(
@@ -742,6 +738,10 @@ class ServiceTools(EventCallMixin):
                 )
             )
         guard_snapshot_route(domain=domain, service=service)
+        try:
+            validate_service_identifiers(domain, service)
+        except InvalidServiceIdentifier as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter=exc.parameter))
         return domain, service
 
     @staticmethod
