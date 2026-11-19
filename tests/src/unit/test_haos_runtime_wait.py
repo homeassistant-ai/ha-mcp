@@ -134,7 +134,7 @@ async def test_core_refuses_an_unprivileged_user_without_retry(
     haos: Haos, wait: Wait
 ) -> None:
     member = await haos.member_credentials()
-    with pytest.raises(RuntimeError, match="failed: .*unauthorized"):
+    with pytest.raises(RuntimeError, match=r"failed: .*unauthorized"):
         await _wait(haos, wait, token=member.access_token)
     assert haos.clock.sleeps == []
 

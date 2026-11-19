@@ -416,7 +416,11 @@ class TestBusyJobGroup:
             "POST",
             STOP,
             status=400,
-            payload={"result": "error", "error_key": "app_not_running_error", "message": COLLISION},
+            payload={
+                "result": "error",
+                "error_key": "app_not_running_error",
+                "message": COLLISION,
+            },
         )
         app_route.supervisor.answer("POST", STOP, {})
 

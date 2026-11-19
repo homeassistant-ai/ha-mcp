@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import httpx
+
 from .client.exceptions import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
@@ -116,7 +118,7 @@ def create_client_error_response(
             suggestions=[
                 "Use a long-lived access token from an administrator's profile",
                 "Or, on the in-process server, use a token issued in the "
-                "integration's forms from the login of a local-only administrator account",
+                + "integration's forms from the login of a local-only administrator account",
             ],
             context=context,
         )
@@ -130,7 +132,7 @@ def create_client_error_response(
         return _command_error_response(error, context)
     if isinstance(error, (TimeoutError, HomeAssistantCommandTimeout)):
         return _request_timeout(error, context)
-    if isinstance(error, ConnectionError):
+    if isinstance(error, (ConnectionError, httpx.NetworkError)):
         return create_connection_error(message, context=context)
     if isinstance(error, ValueError):
         return create_validation_error(message, context=context)

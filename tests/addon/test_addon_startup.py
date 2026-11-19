@@ -6,7 +6,9 @@ import os
 import socket
 import subprocess
 import urllib.error
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_socket
@@ -113,6 +115,14 @@ async def options_supervisor(aiohttp_client, socket_enabled, monkeypatch):
     return listener, posts, response
 
 
+@pytest.fixture
+def addon_stderr(monkeypatch):
+    """Capture startup errors even while pytest streams the HTTP server's access log."""
+    stream = StringIO()
+    monkeypatch.setattr(load_addon_start(), "sys", SimpleNamespace(stderr=stream))
+    return stream
+
+
 class TestMaybePersistSecretPath:
     @pytest.mark.parametrize("config", [{}, {"secret_path": "/private_same"}])
     async def test_skips_a_redundant_or_empty_options_write(
@@ -138,7 +148,7 @@ class TestMaybePersistSecretPath:
         assert body == {"options": {"verify_ssl": True, "secret_path": "/private_new"}}
 
     async def test_rejected_options_log_the_recovery_path(
-        self, options_supervisor, capfd
+        self, options_supervisor, addon_stderr
     ):
         _, posts, response = options_supervisor
         response["status"] = 400
@@ -153,13 +163,13 @@ class TestMaybePersistSecretPath:
             "token",
         )
         assert len(posts) == 2
-        err = capfd.readouterr().err
+        err = addon_stderr.getvalue()
         assert "HTTP 400" in err
         assert "/private_new" in err
         assert "Secret path override" in err
 
     async def test_connection_failure_propagates_and_startup_logs_it(
-        self, options_supervisor, capfd
+        self, options_supervisor, addon_stderr
     ):
         listener, _, _ = options_supervisor
         await listener.close()
@@ -172,7 +182,7 @@ class TestMaybePersistSecretPath:
             "/private_new",
             "token",
         )
-        err = capfd.readouterr().err
+        err = addon_stderr.getvalue()
         assert "Failed to persist secret_path" in err
         assert "/private_new" in err
 
