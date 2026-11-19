@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import error_wording
 from .client.rest_client import HomeAssistantError
+from .error_wording import legacy_file_read_code
 
 # The component flag that gates read_file's ``keep_line_endings`` field.
 LINE_ENDINGS_CAPABILITY = "read_file_line_endings"
@@ -22,7 +22,7 @@ def file_read_error_code(result: dict[str, Any], path: str) -> str | None:
     message = result.get("error")
     if not isinstance(message, str):
         return None
-    return error_wording.legacy_file_read_code(message, path)
+    return legacy_file_read_code(message, path)
 
 
 async def _fetch_file(

@@ -89,6 +89,19 @@ def invalid_platform_key(text: str) -> re.Match[str] | None:
     return _INVALID_KEY.search(text)
 
 
+# --- Core: websocket_api/commands.py handle_call_service ---------------------
+
+
+def service_call_unauthorized(code: str | None, message: str) -> bool:
+    """Core refuses the call itself with ``unauthorized``; an Unauthorized the
+    service raises is a HomeAssistantError, sent as ``home_assistant_error``
+    with the exception's text."""
+    return code == "unauthorized" or (
+        code == "home_assistant_error"
+        and message.removeprefix(COMMAND_FAILED) == "Unauthorized"
+    )
+
+
 # --- Core: websocket_api/commands.py handle_render_template -----------------
 RENDER_TIMEOUT_TEXT = "Exceeded maximum execution time"
 

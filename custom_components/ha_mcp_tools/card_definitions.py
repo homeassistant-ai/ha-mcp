@@ -20,9 +20,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import error_wording
 from .card_runtime import async_ensure_runtime
 from .custom_cards import CustomCards, async_get_custom_cards, custom_load_status
+from .error_wording import export_needed, missing_reference
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -483,13 +483,13 @@ class CardDefinitions:
             # A form may leave a name inert; a validator must not, or it
             # would flag valid configs.
             inert_ok = op == "schema"
-            needed = error_wording.export_needed(error)
+            needed = export_needed(error)
             if needed:
                 self._resolve_export(
                     needed.group(1), needed.group(2), bindings, depth, inert_ok
                 )
                 continue
-            missing = error_wording.missing_reference(error)
+            missing = missing_reference(error)
             if not missing:
                 raise ValueError(error)
             name = missing.group(1)

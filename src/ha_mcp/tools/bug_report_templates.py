@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlencode
 
-from .. import error_wording
+from ..error_wording import search_keywords
 from .bug_report_redaction import sanitize_log_text
 from .helpers import extract_tool_error_message
 
@@ -866,9 +866,7 @@ def _generate_search_keywords(
         if tool_name:
             keywords.add(tool_name)
 
-        keywords.update(
-            error_wording.search_keywords(last_error_log.get("error_message", ""))
-        )
+        keywords.update(search_keywords(last_error_log.get("error_message", "")))
 
     # Add connection-based keywords
     conn_status = diagnostic_info.get("connection_status", "Unknown")

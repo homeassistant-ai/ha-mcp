@@ -16,7 +16,6 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import ToolResult, tool
 
-from .. import error_wording
 from ..client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -43,6 +42,7 @@ from ..dashboard_screenshot.paths import (
     match_dashboard_view,
     resolve_dashboard_view,
 )
+from ..error_wording import hyphenated_url_path
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
@@ -3114,7 +3114,7 @@ class DashboardConfigTools:
             error_msg = create_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            hyphenated = error_wording.hyphenated_url_path(str(error_msg), url_path)
+            hyphenated = hyphenated_url_path(str(error_msg), url_path)
             suggestions = [f"Try '{hyphenated}' instead"] if hyphenated else None
             raise_tool_error(
                 create_error_response(

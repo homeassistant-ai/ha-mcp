@@ -222,6 +222,22 @@ def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
     return None
 
 
+def _imports_only_submodules(path: Path, node: ast.ImportFrom) -> bool:
+    """Whether this is ``from . import sibling``: it binds modules, and a module
+    holds no name to pull in. Reading the package initializer for it walks the
+    whole package again from every module that imports this way."""
+    if node.module is not None or node.level == 0:
+        return False
+    base = path.parent
+    for _ in range(node.level - 1):
+        base = base.parent
+    return all(
+        (base / f"{alias.name}.py").is_file()
+        or (base / alias.name / "__init__.py").is_file()
+        for alias in node.names
+    )
+
+
 def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
     """Pull imported constants and helpers into ``scope``.
 
@@ -231,6 +247,8 @@ def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
     hit_cycle = False
     for node in tree.body:
         if not isinstance(node, ast.ImportFrom):
+            continue
+        if _imports_only_submodules(path, node):
             continue
         source = _import_source(path, node)
         if source is None:

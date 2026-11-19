@@ -15,6 +15,7 @@ import httpx
 from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
+from ..error_wording import service_call_unauthorized
 from .admin_routes import is_admin_only_route
 from .error_log_journald import (
     JournaldPage,
@@ -700,7 +701,7 @@ class HomeAssistantClient:
         )
         if not reply.get("success"):
             error = str(reply.get("error", "Service call failed"))
-            if reply.get("error_code") == "unauthorized":
+            if service_call_unauthorized(reply.get("error_code"), error):
                 raise HomeAssistantAdminRequiredError(
                     f"Service {domain}.{service} is admin-only in Home Assistant "
                     "and this token's user is not an administrator"

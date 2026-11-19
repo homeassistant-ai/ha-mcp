@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .. import error_wording
+from ..error_wording import unknown_entity
 
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
@@ -55,7 +55,7 @@ def _is_unknown_entity_error(exc: Exception) -> bool:
     as not-exposed; the audit guardrail (junk id → not-exposed default) still
     matches because that raise carries the ``Unknown entity`` message.
     """
-    return error_wording.unknown_entity(exc)
+    return unknown_entity(exc)
 
 
 def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:

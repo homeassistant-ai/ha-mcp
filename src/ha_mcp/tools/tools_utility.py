@@ -13,10 +13,10 @@ from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from .. import error_wording
 from ..client.exceptions import http_failure_status
 from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
 from ..client.websocket_client import get_websocket_client
+from ..error_wording import render_timed_out
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
@@ -192,9 +192,9 @@ class UtilityTools:
                     suggestions=["Check Home Assistant WebSocket connection"],
                 )
             )
-        if result.get(
-            "error_code"
-        ) == "template_error" and error_wording.render_timed_out(error, timeout):
+        if result.get("error_code") == "template_error" and render_timed_out(
+            error, timeout
+        ):
             # A second render would only time out again.
             raise_tool_error(
                 create_error_response(

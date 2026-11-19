@@ -35,12 +35,12 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 
-from .. import error_wording
 from ..client.rest_client import (
     NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
 )
 from ..config import get_global_settings
+from ..error_wording import error_mentions
 from ..errors import ErrorCode, create_error_response
 from .backup_access import snapshot_route_refusal
 from .helpers import log_tool_usage, raise_tool_error
@@ -203,7 +203,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
     short = str(exc)[:200]
 
     def _matches(*needles: str) -> bool:
-        return error_wording.error_mentions(exc, *needles)
+        return error_mentions(exc, *needles)
 
     if _matches("MemoryError"):
         return (

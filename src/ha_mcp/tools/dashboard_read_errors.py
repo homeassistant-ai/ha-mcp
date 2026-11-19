@@ -19,7 +19,7 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from .. import error_wording
+from ..error_wording import dashboard_has_no_config, dashboard_unknown
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .helpers import extract_tool_error_message, raise_tool_error
 
@@ -35,7 +35,7 @@ NO_STORED_CONFIG_NOTE = (
 
 def is_unknown_dashboard(error_msg: str) -> bool:
     """Whether Core rejected the identifier itself (the lazy-resolve trigger)."""
-    return error_wording.dashboard_unknown(error_msg)
+    return dashboard_unknown(error_msg)
 
 
 def config_not_found(reply: dict[str, Any]) -> bool:
@@ -45,9 +45,7 @@ def config_not_found(reply: dict[str, Any]) -> bool:
 
 def no_stored_config(reply: dict[str, Any]) -> bool:
     """Only differentiate the two causes once Core reports config_not_found."""
-    return config_not_found(reply) and error_wording.dashboard_has_no_config(
-        get_error_message(reply)
-    )
+    return config_not_found(reply) and dashboard_has_no_config(get_error_message(reply))
 
 
 def dashboard_error_code(exc: ToolError) -> str | None:
@@ -67,7 +65,7 @@ def is_no_stored_config_error(exc: ToolError) -> bool:
     message = extract_tool_error_message(exc).removeprefix(
         DASHBOARD_FETCH_FAILED_PREFIX
     )
-    return error_wording.dashboard_has_no_config(message)
+    return dashboard_has_no_config(message)
 
 
 def read_failure_code(reply: dict[str, Any]) -> ErrorCode:

@@ -4,8 +4,8 @@ from typing import Any
 
 import httpx
 
-from .. import error_wording
 from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
+from ..error_wording import config_resource_not_found
 
 
 class HomeAssistantError(Exception):
@@ -88,8 +88,7 @@ class HomeAssistantAPIError(HomeAssistantError):
         """Whether Core's config API says the id does not exist: 404 on a read,
         400 "Resource not found" on a delete."""
         return self.status_code == 404 or (
-            self.status_code == 400
-            and error_wording.config_resource_not_found(self.response_data)
+            self.status_code == 400 and config_resource_not_found(self.response_data)
         )
 
 

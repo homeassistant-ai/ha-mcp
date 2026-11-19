@@ -17,9 +17,13 @@ from typing import Any, Literal, NoReturn, cast
 
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
-from .. import error_wording
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantError
 from ..client.websocket_client import get_websocket_client
+from ..error_wording import (
+    invalid_platform_key,
+    unexpected_condition_value,
+    variables_not_a_mapping,
+)
 from ..errors import ErrorCode, create_error_response
 from .component_automation import automation_describe
 from .helpers import raise_tool_error
@@ -140,14 +144,12 @@ def _platform_condition(config: dict[str, Any]) -> bool:
 def text_suggestions(core_text: str, config: dict[str, Any]) -> list[str]:
     """Targeted hints for Core rejections agents commonly cause."""
     suggestions = []
-    if error_wording.variables_not_a_mapping(core_text):
+    if variables_not_a_mapping(core_text):
         suggestions.append(
             "variables must be a dict mapping names to values, "
             'e.g. {"variables": {"my_var": 42}}'
         )
-    if error_wording.unexpected_condition_value(core_text) and _platform_condition(
-        config
-    ):
+    if unexpected_condition_value(core_text) and _platform_condition(config):
         suggestions.append(
             "A condition uses 'platform' (trigger syntax); conditions use "
             "'condition', e.g. {'condition': 'state', ...}."
@@ -167,7 +169,7 @@ async def raise_core_rejection(
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
     suggestions = text_suggestions(core_text, config)
-    match = error_wording.invalid_platform_key(core_text)
+    match = invalid_platform_key(core_text)
     if match:
         kind = cast(Literal["trigger", "condition"], match.group(1))
         key = match.group(2)
