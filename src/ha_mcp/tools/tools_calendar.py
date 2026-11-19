@@ -42,6 +42,22 @@ _FIND_CALENDARS_HINT = (
     "calendar entities"
 )
 
+# Core's calendar view answers a refused read with a bare status.
+_READ_REFUSAL_HINTS: dict[int | None, list[str]] = {
+    400: [
+        "Home Assistant answers 400 when '{entity_id}' is not a calendar entity "
+        "it has loaded, when start or end is not an ISO 8601 datetime, or when "
+        "start is after end (this error's start and end are the bounds sent, "
+        "defaults included)",
+        _FIND_CALENDARS_HINT,
+    ],
+    500: [
+        "Home Assistant answers 500 when one of start and end has a UTC offset "
+        "and the other has none, or when the calendar's integration fails to "
+        "read its events",
+    ],
+}
+
 # What to do about a calendar write Core refuses, by Core's error code.
 _REFUSAL_HINTS = {
     "not_found": _FIND_CALENDARS_HINT,
@@ -287,17 +303,14 @@ class CalendarTools:
         except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
-            suggestions = [_FIND_CALENDARS_HINT]
-            if isinstance(error, HomeAssistantAPIError) and error.status_code == 400:
-                suggestions.insert(
-                    0,
-                    f"Home Assistant answers 400 when '{entity_id}' is not a "
-                    "calendar entity it has loaded, when start or end is not an "
-                    "ISO 8601 datetime, or when start is after end",
-                )
-
+            status = (
+                error.status_code if isinstance(error, HomeAssistantAPIError) else None
+            )
+            hints = _READ_REFUSAL_HINTS.get(status)
             exception_to_structured_error(
-                error, context={"entity_id": entity_id}, suggestions=suggestions
+                error,
+                context={"entity_id": entity_id, **_set_fields(start=start, end=end)},
+                suggestions=hints and [h.format(entity_id=entity_id) for h in hints],
             )
             return None  # unreachable: exception_to_structured_error always raises
 
@@ -398,7 +411,7 @@ class CalendarTools:
         uid: Annotated[
             str | None,
             Field(
-                description="UID of an existing event to update.",
+                description="UID of an existing event to update; omit to create one.",
                 default=None,
             ),
         ] = None,

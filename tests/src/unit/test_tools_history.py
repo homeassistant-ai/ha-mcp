@@ -536,9 +536,10 @@ async def test_a_reversed_range_without_offsets_is_named_when_ha_timezone_is_unr
 
 
 async def test_a_reversed_range_without_offsets_is_read_in_ha_timezone(
-    core_client: HomeAssistantClient,
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """With the zone at hand, the range is checked as Core reads it."""
+    await hass.config.async_set_time_zone("America/Los_Angeles")
     response = await _refusal(
         core_client,
         entity_ids="sensor.test",
@@ -563,7 +564,8 @@ async def test_a_time_without_an_offset_is_refused_when_ha_timezone_is_unreachab
 ) -> None:
     """Core reads such a time in Home Assistant's time zone; reading it in UTC
     instead would query with that bound moved by the zone's offset. Beside a
-    time with an offset, even a day apart, the order is not known without it."""
+    time with an offset the tool does not order them without the zone, even
+    days apart: it refuses."""
     _no_answer(core_client, monkeypatch)
 
     response = await _refusal(

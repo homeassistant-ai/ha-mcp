@@ -22,9 +22,10 @@ from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import calendar_config_dir, local_calendar, write_event
+from ._error_log_core import expired_token_client
 from ._ha_timezone import unresolvable_zone
 from ._module_clock import set_module_clock
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 # Core's config directory is this test's ``tmp_path``.
 hass_config_dir = calendar_config_dir
@@ -38,6 +39,8 @@ async def test_the_default_window_is_the_next_seven_days(
 ) -> None:
     """The window runs from now to seven days later: an event an hour away
     and one an hour before the window closes are both in it."""
+    # No runner's own zone, so a window counted on the server's clock misses.
+    await hass.config.async_set_time_zone("Pacific/Kiritimati")
     now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)
     await local_calendar(hass, "Test")
@@ -185,7 +188,45 @@ async def test_a_default_bound_needs_the_time_zone(
             "calendar.test", **bounds
         )
 
-    assert error_of(exc_info)["code"] == code
+    error = error_of(exc_info)
+    assert error["code"] == code
+    assert "Home Assistant's time zone" in error["message"]
+
+
+async def test_a_rejected_token_is_not_reported_as_a_lost_connection(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The zone is read first; when Core refuses the token there, the refusal
+    carries that code instead of pointing at the connection."""
+    await local_calendar(hass, "Test")
+
+    async with expired_token_client(core_client) as stale:
+        with pytest.raises(ToolError) as exc_info:
+            await CalendarTools(stale).ha_config_get_calendar_events("calendar.test")
+
+    error = error_of(exc_info)
+    assert error["code"] == "AUTH_INVALID_TOKEN"
+    assert "Home Assistant's time zone" in error["message"]
+
+
+async def test_a_read_with_both_bounds_needs_no_time_zone(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What the refusal advises: with both bounds given the zone is not read."""
+    await local_calendar(hass, "Test")
+    monkeypatch.setattr(
+        core_client,
+        "get_config",
+        AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
+    )
+
+    listed = await CalendarTools(core_client).ha_config_get_calendar_events(
+        "calendar.test", start="2026-06-12T08:00:00", end="2026-06-13T08:00:00"
+    )
+
+    assert listed["events"] == []
 
 
 @pytest.mark.parametrize(
@@ -268,3 +309,44 @@ async def test_a_read_core_refuses_names_what_its_bare_400_can_mean(
 
     hint = error_of(exc_info)["suggestions"][0]
     assert "'calendar.missing' is not a calendar entity" in hint
+
+
+async def test_a_refused_read_shows_the_bounds_it_sent(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller gave only an end in the past: the start Core refused as
+    later than it is the default, which the error has to show."""
+    set_module_clock(
+        monkeypatch, tools_calendar, dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
+    )
+    await local_calendar(hass, "Test")
+
+    with pytest.raises(ToolError) as exc_info:
+        await CalendarTools(core_client).ha_config_get_calendar_events(
+            "calendar.test", end="2020-01-01T00:00:00"
+        )
+
+    body = error_body(exc_info)
+    assert body["end"] == "2020-01-01T00:00:00"
+    assert body["start"].startswith("2026-06-12T")
+    assert "bounds sent" in body["error"]["suggestions"][0]
+
+
+async def test_a_read_core_cannot_compare_gets_the_hint_for_its_500(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core answers a bare 500 for one bound with an offset and one without;
+    the calendar exists, so the hint is about the bounds, not the search."""
+    await local_calendar(hass, "Test")
+
+    with pytest.raises(ToolError) as exc_info:
+        await CalendarTools(core_client).ha_config_get_calendar_events(
+            "calendar.test",
+            start="2026-06-12T08:00:00+00:00",
+            end="2026-06-13T08:00:00",
+        )
+
+    [hint] = error_of(exc_info)["suggestions"]
+    assert "UTC offset" in hint
