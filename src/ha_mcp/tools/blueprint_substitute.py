@@ -14,7 +14,7 @@ import logging
 from typing import Any, NamedTuple, NoReturn
 
 from ..errors import ErrorCode, create_error_response
-from .blueprint_write import error_text
+from .blueprint_write import error_code, error_text
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def raise_substitute_failure(
     ``MissingInput`` and ``FailedToLoad`` carry their own prefixes.
     """
     message = error_text(response, "Failed to render the blueprint")
-    lowered = message.lower()
+    lowered = message.lower() if error_code(response) == "unknown_error" else ""
     if "missing input" in lowered:
         code = ErrorCode.VALIDATION_FAILED
         suggestions = [

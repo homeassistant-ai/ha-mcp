@@ -163,34 +163,30 @@ HACS_API = StoreApi("hacs")
 STORE_APIS = (StoreApi("marketplace"), HACS_API)
 
 
-async def _probe(ws_client: Any, command: str) -> tuple[dict[str, Any] | None, str]:
-    """``(result, "")`` on success, else ``(None, error code or message)``."""
+async def _probe(ws_client: Any, command: str) -> tuple[dict[str, Any] | None, str | None, str]:
+    """Return the store reply, or its refusal code and display message."""
     try:
         reply = await ws_client.send_command(command)
     except HomeAssistantCommandError as err:
-        return None, err.code or str(err)
+        return None, err.code, str(err)
     if reply.get("success") is False:
         error = reply.get("error")
         if isinstance(error, dict):
-            return None, error.get("code") or error.get("message") or ""
-        return None, str(error)
-    return reply.get("result") or {}, ""
-
-
-def _is_unknown(code: str) -> bool:
-    return code == "unknown_command" or "unknown command" in code.lower()
+            return None, error.get("code"), str(error.get("message") or error)
+        return None, reply.get("error_code"), str(error)
+    return reply.get("result") or {}, None, ""
 
 
 async def detect_store_api(ws_client: Any) -> StoreApi:
     """Return the store API that answers, or raise COMPONENT_NOT_INSTALLED."""
-    result, code = await _probe(ws_client, "marketplace/info")
+    result, code, reason = await _probe(ws_client, "marketplace/info")
     if result is not None:
         return StoreApi("marketplace", result)
-    if not _is_unknown(code):
+    if code != "unknown_command":
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"The Marketplace is not available ({code}).",
+                f"The Marketplace is not available ({reason}).",
                 suggestions=[
                     "Check Settings > Devices & services > Marketplace and the "
                     "Home Assistant log for why it failed to load",
@@ -198,14 +194,14 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
             )
         )
 
-    result, code = await _probe(ws_client, "hacs/info")
+    result, code, reason = await _probe(ws_client, "hacs/info")
     if result is not None:
         return StoreApi("hacs", result)
-    if not _is_unknown(code):
+    if code != "unknown_command":
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"HACS is installed but not responding: {code}",
+                f"HACS is installed but not responding: {reason}",
                 suggestions=[
                     "Restart Home Assistant",
                     "Check Home Assistant logs for HACS errors",

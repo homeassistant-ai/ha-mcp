@@ -19,7 +19,7 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .helpers import extract_tool_error_message, raise_tool_error
 
 UNKNOWN_CONFIG_PREFIX = "Unknown config specified"
@@ -44,16 +44,29 @@ def is_unknown_dashboard(error_msg: str) -> bool:
     return UNKNOWN_CONFIG_PREFIX in error_msg
 
 
+def config_not_found(reply: dict[str, Any]) -> bool:
+    """Read the native code from a flattened or raw Core reply."""
+    return (reply.get("error_code") or get_error_code(reply)) == CONFIG_NOT_FOUND_CODE
+
+
+def no_stored_config(reply: dict[str, Any]) -> bool:
+    """Only differentiate the two causes once Core reports config_not_found."""
+    return config_not_found(reply) and get_error_message(reply) in NO_STORED_CONFIG_MESSAGES
+
+
+def dashboard_error_code(exc: ToolError) -> str | None:
+    """Read Core's code preserved by the tool at the MCP boundary."""
+    try:
+        payload = json.loads(str(exc))
+    except (ValueError, TypeError):
+        return None
+    code = payload.get("ha_error_code") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def is_no_stored_config_error(exc: ToolError) -> bool:
     """Whether ``_get_dashboard_config_internal``'s ToolError means no config."""
-    try:
-        error_data = json.loads(str(exc))
-    except json.JSONDecodeError, TypeError:
-        return False
-    if (
-        not isinstance(error_data, dict)
-        or error_data.get("ha_error_code") != CONFIG_NOT_FOUND_CODE
-    ):
+    if dashboard_error_code(exc) != CONFIG_NOT_FOUND_CODE:
         return False
     message = extract_tool_error_message(exc).removeprefix(
         DASHBOARD_FETCH_FAILED_PREFIX
@@ -61,10 +74,10 @@ def is_no_stored_config_error(exc: ToolError) -> bool:
     return message in NO_STORED_CONFIG_MESSAGES
 
 
-def read_failure_code(error_msg: str) -> ErrorCode:
+def read_failure_code(reply: dict[str, Any]) -> ErrorCode:
     """RESOURCE_NOT_FOUND when Core names the identifier unknown (call after the
     lazy resolve); otherwise SERVICE_CALL_FAILED."""
-    if is_unknown_dashboard(error_msg):
+    if config_not_found(reply) and is_unknown_dashboard(get_error_message(reply) or ""):
         return ErrorCode.RESOURCE_NOT_FOUND
     return ErrorCode.SERVICE_CALL_FAILED
 

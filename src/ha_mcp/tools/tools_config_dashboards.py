@@ -83,10 +83,11 @@ from .dashboard_list_checks import (
 from .dashboard_read_errors import (
     DASHBOARD_FETCH_FAILED_PREFIX,
     DASHBOARD_LIST_SUGGESTION,
-    NO_STORED_CONFIG_MESSAGES,
     NO_STORED_CONFIG_NOTE,
+    config_not_found,
     is_no_stored_config_error,
     is_unknown_dashboard,
+    no_stored_config,
     raise_registry_read_error,
     raise_unresolved_delete,
     read_failure_code,
@@ -1152,7 +1153,7 @@ async def _lazy_resolve_and_retry(
 
     err = response.get("error", {})
     err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-    if not is_unknown_dashboard(err_msg):
+    if not config_not_found(response) or not is_unknown_dashboard(err_msg):
         return url_path, response
 
     try:
@@ -1857,7 +1858,7 @@ class DashboardConfigTools:
             error_msg = response.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            if str(error_msg) in NO_STORED_CONFIG_MESSAGES:
+            if no_stored_config(response):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_FAILED,
@@ -1871,7 +1872,7 @@ class DashboardConfigTools:
                 )
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(str(error_msg)),
+                    read_failure_code(response),
                     f"Failed to get dashboard: {error_msg}",
                     suggestions=[
                         "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
@@ -2221,11 +2222,11 @@ class DashboardConfigTools:
             error_msg = str(
                 error.get("message", error) if isinstance(error, dict) else error
             )
-        stored_config = error_msg not in NO_STORED_CONFIG_MESSAGES
+        stored_config = not (isinstance(response, dict) and no_stored_config(response))
         if error_msg is not None and stored_config:
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(error_msg),
+                    read_failure_code(response),
                     error_msg,
                     suggestions=[
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards",

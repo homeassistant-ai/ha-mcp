@@ -457,8 +457,7 @@ async def test_category_create_without_a_name_reports_cores_refusal(
 
 
 async def test_label_remove_of_an_unknown_id_is_not_found(labels: LabelTools) -> None:
-    """Core answers an unknown id with the generic ``invalid_info`` code, so its
-    exact text is what makes the refusal a not-found."""
+    """Core identifies the missing label with invalid_info on delete."""
     error = await rejected_call_body(labels.ha_config_remove_label(label_id="missing"))
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"

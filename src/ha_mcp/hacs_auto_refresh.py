@@ -142,7 +142,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
             # A store that is not installed answers as an unknown command; any
             # other failure (the Marketplace still loading included) is real:
             # let the retry loop see it.
-            if err.code == "unknown_command" or "unknown command" in str(err).lower():
+            if err.code == "unknown_command":
                 continue
             raise
         break

@@ -269,11 +269,17 @@ class CategoryTools:
                     "message": f"Successfully {action_past} category: {category_data.get('name')}",
                 }
             context = {"name": name, "scope": scope, "category_id": category_id}
-            # Core answers an unknown id with the generic ``invalid_info`` code, so
-            # its exact message is what tells it apart from a refused name (which
-            # quotes the caller's name and could contain any text).
-            reason = core_error_message(result.get("error", ""))
-            if reason == "Category ID doesn't exist":
+            # Both a rejected rename and an absent ID return invalid_info.
+            # Only a successful registry read can establish the latter.
+            if action == "update" and result.get("error_code") == "invalid_info":
+                listed = await category_list_reply(self._client, scope)
+                categories = listed.get("result") if listed.get("success") else None
+            else:
+                categories = None
+            if isinstance(categories, list) and all(
+                entry["category_id"] != category_id for entry in categories
+            ):
+                reason = core_error_message(result.get("error", ""))
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
@@ -388,11 +394,8 @@ class CategoryTools:
                     "message": f"Successfully deleted category: {category_id}",
                 }
             context = {"category_id": category_id, "scope": scope}
-            # Same exact-text test as the set tool: ``invalid_info`` is generic.
-            if (
-                core_error_message(result.get("error", ""))
-                == "Category ID doesn't exist"
-            ):
+            # Core uses invalid_info only for a missing ID on delete.
+            if result.get("error_code") == "invalid_info":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
