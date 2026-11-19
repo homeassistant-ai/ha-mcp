@@ -145,8 +145,8 @@ async def _async_server_summary(
     # Lazy import, the embedded chain's convention (embedded_entry.py): only a
     # server-entry install needs the embedded server module.
     from .embedded_server import (
-        _async_paired_server_requirement,
-        _installed_ha_mcp_version,
+        async_paired_server_requirement,
+        installed_ha_mcp_version,
     )
 
     options = entry.options
@@ -154,11 +154,11 @@ async def _async_server_summary(
     # Same test as EmbeddedServerManager: the default spec is no override.
     override = pip_spec if pip_spec != DEFAULT_PIP_SPEC else ""
     # The effective spec, as EmbeddedServerManager._resolve_pip_spec resolves it.
-    spec = override or await _async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
+    spec = override or await async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
     return {
         # Blocking dist-info read; the spec's distribution first, as bring-up.
         "installed_server_version": await hass.async_add_executor_job(
-            _installed_ha_mcp_version, version_dist(spec)
+            installed_ha_mcp_version, version_dist(spec)
         ),
         "package_override_set": bool(override),
         "access_enabled": access_enabled(entry),

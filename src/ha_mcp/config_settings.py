@@ -725,7 +725,7 @@ class Settings(BaseSettings):
 
     # Backup directory override. Empty ("") resolves at runtime to a
     # deployment-mode default: ``/data/ha_mcp_backups`` in the add-on,
-    # otherwise ``<data dir>/backups`` (see ``backup_manager._resolve_default_dir``).
+    # otherwise ``<data dir>/backups`` (see ``backup_manager.resolve_default_dir``).
     auto_backup_dir: Annotated[str, Setting(surface="backup")] = Field(
         "", alias="HAMCP_BACKUP_DIR"
     )

@@ -41,7 +41,7 @@ CAPABILITY = "config_references"
 _KINDS = ("automation", "script", "scene")
 
 
-def _core() -> SimpleNamespace | str:
+def core_parts() -> SimpleNamespace | str:
     """Core's parts this bridge uses, or the names of those this Core lacks."""
     try:
         from homeassistant import const
@@ -431,7 +431,7 @@ async def _targeted(hass: HomeAssistant, core: SimpleNamespace) -> dict[str, set
 async def async_config_references(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    core = _core()
+    core = core_parts()
     if isinstance(core, str):
         _LOGGER.warning("%s: this Home Assistant lacks %s", WS_CONFIG_REFERENCES, core)
         return _unavailable(

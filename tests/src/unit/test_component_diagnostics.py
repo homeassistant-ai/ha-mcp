@@ -9,13 +9,18 @@ Core's issue registry, so the handler reads the shape bring-up actually writes.
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
+import shutil
+from collections.abc import Callable
 from datetime import timedelta
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any, Literal, get_args, get_type_hints
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant import loader
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.registry import SAVE_DELAY_LONG
@@ -24,6 +29,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 from pytest_homeassistant.typing import ClientSessionGenerator
 
+import custom_components
 import custom_components.ha_mcp_tools.embedded_server as eserver
 import custom_components.ha_mcp_tools.embedded_setup as esetup
 from custom_components.ha_mcp_tools.const import (
@@ -62,6 +68,7 @@ from custom_components.ha_mcp_tools.embedded_server import (
 
 # Bound before the autouse ``server`` fixture replaces the module attribute.
 from custom_components.ha_mcp_tools.embedded_setup import async_bring_up_server
+from custom_components.ha_mcp_tools.server_pin import server_dist
 
 from ._server_entry import add_server_entry, replace_server, set_up
 
@@ -139,26 +146,44 @@ async def _setup_server_entry(
 
 @pytest.fixture(autouse=True)
 def installed_version_calls(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Spy on the installed-version read; records the distribution read first."""
     calls: list[Any] = []
+    real = eserver.installed_ha_mcp_version
 
-    def _version(preferred_dist: Any = None) -> str:
+    def _version(preferred_dist: str | None = None) -> str | None:
         calls.append(preferred_dist)
-        return "8.7.0"
+        return real(preferred_dist)
 
-    monkeypatch.setattr(eserver, "_installed_ha_mcp_version", _version)
+    monkeypatch.setattr(eserver, "installed_ha_mcp_version", _version)
     return calls
 
 
-@pytest.fixture(autouse=True)
-def paired_spec(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
-    """The manifest pin the effective spec falls back to; set ``[0]``."""
-    pin: list[str | None] = ["ha-mcp==8.7.0"]
+@pytest.fixture
+def manifest_pin(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str | None], None]:
+    """Have Core's loader find the component with ``pin`` as its server pin.
 
-    async def _paired(hass: HomeAssistant) -> str | None:
-        return pin[0]
+    The loader reads the manifest of the first ``custom_components`` path
+    holding the domain, so a copy there replaces the server pin (None: no pin).
+    """
 
-    monkeypatch.setattr(eserver, "_async_paired_server_requirement", _paired)
-    return pin
+    def _pin(pin: str | None) -> None:
+        component = Path(eserver.__file__).parent
+        copy = tmp_path / "custom_components" / DOMAIN
+        shutil.copytree(component, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        manifest = json.loads((copy / "manifest.json").read_text())
+        manifest["requirements"] = [
+            *(r for r in manifest["requirements"] if server_dist(r) is None),
+            *([pin] if pin else []),
+        ]
+        (copy / "manifest.json").write_text(json.dumps(manifest))
+        paths = [str(copy.parent), *custom_components.__path__]
+        monkeypatch.setattr(custom_components, "__path__", paths)
+        # Core's enable_custom_integrations: the loader scans the paths again.
+        hass.data.pop(loader.DATA_CUSTOM_COMPONENTS, None)
+
+    return _pin
 
 
 async def _fail_bring_up(
@@ -509,7 +534,7 @@ async def test_server_summary_reports_configured_options(
     result = await _download(hass, hass_client, entry)
 
     assert result["data"]["server"] == {
-        "installed_server_version": "8.7.0",
+        "installed_server_version": importlib.metadata.version(DIST_NAME_STABLE),
         "package_override_set": True,
         "access_enabled": False,
         "running": False,
@@ -536,7 +561,7 @@ async def test_installed_version_reads_the_installing_distribution_first(
     hass: HomeAssistant,
     hass_client: ClientSessionGenerator,
     installed_version_calls: list[Any],
-    paired_spec: list[str | None],
+    manifest_pin: Callable[[str | None], None],
     pin: str | None,
     pip_spec: str,
     first: str,
@@ -545,7 +570,7 @@ async def test_installed_version_reads_the_installing_distribution_first(
     installs goes first, so metadata another one left behind cannot mask it.
     The default spec is no override; without a manifest pin ``ha-mcp`` is read
     first."""
-    paired_spec[0] = pin
+    manifest_pin(pin)
     entry = await _setup_server_entry(hass, {OPT_PIP_SPEC: pip_spec})
 
     await _download(hass, hass_client, entry)

@@ -64,11 +64,13 @@ def settings_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
     for _field, env_name, _type in (*FEATURE_FLAG_FIELDS, *BACKUP_OVERRIDE_FIELDS):
         monkeypatch.delenv(env_name, raising=False)
     # Process-wide records of the last registration, put back after the test.
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
+    from ha_mcp.settings_ui import reset_http_settings_state
+
+    reset_http_settings_state()
     get_data_dir.cache_clear()
     reset_global_settings()
     yield tmp_path
+    reset_http_settings_state()
     get_data_dir.cache_clear()
     reset_global_settings()
 

@@ -143,7 +143,7 @@ def nabu_casa_url(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:
     def remote_url(hass: HomeAssistant) -> str | None:
         return url
 
-    monkeypatch.setattr(esetup, "_cloud_remote_url", remote_url)
+    monkeypatch.setattr(esetup, "cloud_remote_url", remote_url)
 
 
 async def set_internal_url(hass: HomeAssistant, url: str) -> None:

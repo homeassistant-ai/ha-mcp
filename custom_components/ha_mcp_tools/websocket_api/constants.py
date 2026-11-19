@@ -273,7 +273,7 @@ CALL_SERVICE_MAX_TIMEOUT = 60.0
 # Delay before ``server_entry_update``'s deferred ``async_update_entry`` fires, so
 # the WS ``{scheduled: True}`` response flushes to the calling (embedded) server
 # BEFORE the resulting entry reload tears that server's thread down. Mirrors the
-# server side's ``tools_dev._SELF_ACTION_FLUSH_DELAY_S`` (its legacy options-flow
+# server side's ``tools_dev.SELF_ACTION_FLUSH_DELAY_S`` (its legacy options-flow
 # self-restart uses the same headroom for the ingress/webhook hop).
 SERVER_ENTRY_UPDATE_FLUSH_DELAY_S = 1.0
 
@@ -326,7 +326,7 @@ FLOW_HELPER_DOMAINS = frozenset(FLOWS["helper"])
 # ``<type>/list`` handler sends. ``person/list`` also sends the YAML persons
 # and ``tag/list`` adds registry names, so those two are left OUT of
 # ``covered_types`` and the server lists them with ``person/list`` /
-# ``tag/list``. See :func:`_do_helpers_list`.
+# ``tag/list``. See :func:`do_helpers_list`.
 HELPERS_LIST_COLLECTION_DOMAINS = COLLECTION_HELPER_DOMAINS | frozenset({"zone"})
 
 # Every ``EntityComponent`` self-registers here (core's

@@ -14,8 +14,8 @@ import asyncio
 import copy
 import socket
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
@@ -194,11 +194,12 @@ async def serve(
         await asyncio.wait_for(task, timeout=60)
 
 
-def unused_port() -> int:
-    """A loopback port nothing listens on: a refused connection, for real."""
+@contextmanager
+def refused_port() -> Iterator[int]:
+    """Reserve a non-listening port so parallel tests cannot reuse it."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        yield int(sock.getsockname()[1])
 
 
 async def register(

@@ -312,7 +312,7 @@ async def test_configs_the_graph_confirmed_are_read_after_every_other_one(
         },
     )
     monkeypatch.setattr(
-        "ha_mcp.tools.smart_search._fetch.INDIVIDUAL_FETCH_BATCH_SIZE", 1
+        "ha_mcp.tools.smart_search.fetch.INDIVIDUAL_FETCH_BATCH_SIZE", 1
     )
 
     response = await deep_search(
@@ -589,7 +589,7 @@ async def test_graph_confirmed_scripts_are_read_last(
         {STORED_SCRIPTS: {"flagged": script_sequence(), "templated": templated}},
     )
     monkeypatch.setattr(
-        "ha_mcp.tools.smart_search._fetch.INDIVIDUAL_FETCH_BATCH_SIZE", 1
+        "ha_mcp.tools.smart_search.fetch.INDIVIDUAL_FETCH_BATCH_SIZE", 1
     )
 
     response = await deep_search(
@@ -704,7 +704,7 @@ async def test_suppression_lifts_once_its_window_expires(
     assert graph_frames(sent) == 2
 
     # The window has now run out.
-    monkeypatch.setattr("ha_mcp.tools.smart_search._graph._UNSUPPORTED_TTL_S", 0)
+    monkeypatch.setattr("ha_mcp.tools.smart_search.graph.UNSUPPORTED_TTL_S", 0)
     await deep_search(core_client, search_types=["automation"])
 
     assert graph_frames(sent) == 3

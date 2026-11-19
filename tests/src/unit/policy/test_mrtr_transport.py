@@ -1,16 +1,14 @@
 """Verify approval continuations survive MCP serialization and proxy dispatch."""
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.client.elicitation import ElicitResult
-from ha_mcp._vendor.fastmcp.server.middleware import MiddlewareContext
 from ha_mcp._vendor.mcp import MCPError
 from ha_mcp._vendor.mcp_types import ElicitResult as MCPElicitResult
 from ha_mcp._vendor.mcp_types import InputRequiredResult
-from ha_mcp.policy.approval_queue import ApprovalQueue, PendingApproval
+from ha_mcp.policy import mrtr
+from ha_mcp.policy.approval_queue import ApprovalQueue
 from ha_mcp.policy.middleware import PolicyMiddleware
 from ha_mcp.policy.model import Policy, Rule
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
@@ -36,8 +34,9 @@ def server(monkeypatch: pytest.MonkeyPatch) -> ApprovalServer:
     middleware = PolicyMiddleware(
         policy_provider=lambda: Policy(rules=[Rule(tool_name="ha_test_write")]),
         queue=queue,
+        wait_seconds=2,
     )
-    monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
+    monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0)
     mcp.add_middleware(middleware)
     return mcp, queue, executed, middleware
 
@@ -113,24 +112,23 @@ async def test_wire_continuation_is_bound_and_single_use(
 
 @pytest.mark.anyio
 async def test_sdk_automatically_resumes_pending_approval(
-    server: ApprovalServer, monkeypatch: pytest.MonkeyPatch
+    server: ApprovalServer,
 ) -> None:
-    mcp, queue, executed, middleware = server
-    waits = []
+    mcp, queue, executed, _ = server
+    prompts = []
 
-    async def decide_on_resume(
-        ctx: MiddlewareContext, pending: PendingApproval, wait: float
-    ) -> None:
-        waits.append(pending.token)
-        if len(waits) == 2:
-            queue.approve(pending.token)
+    async def approve_pending(*_args: object) -> ElicitResult:
+        pending = queue.list_pending()
+        assert len(pending) == 1
+        assert executed == []
+        prompts.append(pending[0].token)
+        queue.approve(pending[0].token)
+        return ElicitResult(action="accept", content={"decided": True})
 
-    monkeypatch.setattr(middleware, "_wait_for_decision", decide_on_resume)
-    async with Client(mcp, elicitation_handler=accept) as client:
+    async with Client(mcp, elicitation_handler=approve_pending) as client:
         result = await client.call_tool("ha_test_write", {"value": "approved"})
     assert not result.is_error
-    assert len(waits) == 2
-    assert waits[0] == waits[1]
+    assert len(prompts) == 1
     assert executed == ["approved"]
 
 

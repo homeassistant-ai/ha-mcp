@@ -286,7 +286,7 @@ def _dedup_hosts(primary: str | None, extra: list[str] | None) -> list[str]:
     return ordered
 
 
-def _cloud_remote_url(hass: HomeAssistant) -> str | None:
+def cloud_remote_url(hass: HomeAssistant) -> str | None:
     """The Nabu Casa remote URL, when the cloud integration is set up + logged in."""
     try:
         from homeassistant.components.cloud import (
@@ -355,7 +355,7 @@ def build_connect_urls(
         # external URL leads the list (any reverse proxy, not just Nabu Casa).
         urls.append(f"{external}/api/webhook/{webhook_id}")
 
-    if webhook_id and (cloud_base := _cloud_remote_url(hass)):
+    if webhook_id and (cloud_base := cloud_remote_url(hass)):
         urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
 
     local_base, local_host = _resolve_local_url(hass)

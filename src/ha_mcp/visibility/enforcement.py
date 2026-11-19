@@ -101,7 +101,7 @@ _config_load_warning_emitted: ContextVar[bool | None] = ContextVar(
 # does not re-fetch the registry each time; a config edit invalidates it sooner
 # (the cache is keyed on the hide dimensions), so the ~30s window only applies to
 # registry-side staleness (an area/label membership change in HA).
-_CACHE_TTL_SECONDS = 30.0
+CACHE_TTL_SECONDS = 30.0
 
 # Tools whose output cannot be text-scanned for a hidden entity_id.
 _SCREENSHOT_TOOL = "ha_get_dashboard_screenshot"
@@ -903,7 +903,7 @@ class _HiddenSetCache:
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
             self._matcher = matcher
             self._key = key
-            self._expiry = now + _CACHE_TTL_SECONDS
+            self._expiry = now + CACHE_TTL_SECONDS
             return matcher
 
 

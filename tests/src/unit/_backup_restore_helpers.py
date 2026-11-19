@@ -67,7 +67,7 @@ NAME = "helper_template.sensor.example.20260909_000000.yaml"
 def use_backup_manager(monkeypatch, manager) -> None:
     """Hand the settings backup routes ``manager``: their server is not built."""
     monkeypatch.setattr(
-        "ha_mcp.settings_ui._handlers_backups._backup_mgr", lambda server: manager
+        "ha_mcp.backup_manager.backup_manager_for_server", lambda server: manager
     )
 
 

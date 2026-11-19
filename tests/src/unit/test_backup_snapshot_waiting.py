@@ -303,8 +303,8 @@ class TestBusyOrSlow:
         supervisor = await backup_install.supervisor()
         await backup_install.configure(password=PASSWORD)
         supervisor.hold = True
-        monkeypatch.setattr(backup_snapshot, "_BACKUP_MAX_WAIT_S", 0.05)
-        monkeypatch.setattr(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01)
+        monkeypatch.setattr(backup_snapshot, "BACKUP_MAX_WAIT_S", 0.05)
+        monkeypatch.setattr(backup_snapshot, "BACKUP_PROGRESS_INTERVAL_S", 0.01)
 
         with pytest.raises(ToolError) as exc_info:
             await create_backup(core_client)
@@ -356,7 +356,7 @@ class TestBusyOrSlow:
         await backup_install.configure(password=PASSWORD)
         target = supervisor.add_backup("old")
         supervisor.hold = True
-        monkeypatch.setattr(backup_snapshot, "_BACKUP_PROGRESS_INTERVAL_S", 0.01)
+        monkeypatch.setattr(backup_snapshot, "BACKUP_PROGRESS_INTERVAL_S", 0.01)
 
         def finish_after_three(reports: int) -> None:
             if reports == 3:

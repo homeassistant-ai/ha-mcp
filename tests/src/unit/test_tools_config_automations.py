@@ -320,7 +320,7 @@ class TestFullConfigSetAutomationIdKey:
         warning that no entity was seen, not a missing automation_id."""
         await stop_loading_automations(hass)
         # The client stops looking for the entity at once.
-        monkeypatch.setattr(core_client, "_POLL_BUDGET_S", 0.0)
+        monkeypatch.setattr(core_client, "POLL_BUDGET_S", 0.0)
 
         result = await _set(tools, config=_config(alias="Never Loaded"))
 
@@ -340,7 +340,7 @@ class TestFullConfigSetAutomationIdKey:
     ) -> None:
         """A recovered entity must clear the creation poll's soft-failure state."""
         await stop_loading_automations(hass)
-        monkeypatch.setattr(core_client, "_POLL_BUDGET_S", 0.0)
+        monkeypatch.setattr(core_client, "POLL_BUDGET_S", 0.0)
 
         with loaded_at_second_entity_wait(hass):
             result = await tools.ha_config_set_automation(

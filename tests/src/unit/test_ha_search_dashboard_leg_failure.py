@@ -45,7 +45,7 @@ def _fail_component_search(monkeypatch: pytest.MonkeyPatch) -> None:
         raise HomeAssistantError("boom")
 
     monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api.search._search_config_surface",
+        "custom_components.ha_mcp_tools.websocket_api.search.search_config_surface",
         _boom,
     )
 

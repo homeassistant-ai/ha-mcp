@@ -17,7 +17,6 @@ from typing import Any
 import attr
 import pytest
 from homeassistant.components import websocket_api
-from homeassistant.components.config import config_entries as config_entries_ws
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
@@ -209,14 +208,12 @@ async def test_refused_config_entries_read_fails_the_call(
     ``config_entries/get`` fails the call."""
     _device(hass, "hue", identifiers={("hue", "0xAABB")})
 
-    async def refuse(*_args: Any, **_kwargs: Any) -> Any:
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
         raise HomeAssistantError("entries unavailable")
 
-    monkeypatch.setattr(
-        config_entries_ws, "_async_matching_config_entries_json_fragments", refuse
-    )
-
-    error = await rejected_call_body(tools.ha_get_device(integration="hue"))
+    with monkeypatch.context() as refusing:
+        refusing.setattr(hass.config_entries, "async_entries", refuse)
+        error = await rejected_call_body(tools.ha_get_device(integration="hue"))
 
     assert error["error"]["message"] == (
         "Failed to read config entries: entries unavailable"

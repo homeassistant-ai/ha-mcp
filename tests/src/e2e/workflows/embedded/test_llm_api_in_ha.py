@@ -84,7 +84,7 @@ def test_llm_api_schemas_survive_core_reemission_container(
 
     The session backend of this lane IS the in-process server, so the probe
     talks to the same server the rest of the suite drives — through the
-    component's own ``_mcp_session``, with Home Assistant's own interpreter,
+    component's own ``mcp_session``, with Home Assistant's own interpreter,
     converter and probatio.
     """
     info = ha_container_with_fresh_config

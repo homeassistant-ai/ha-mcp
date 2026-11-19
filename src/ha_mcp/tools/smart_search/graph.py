@@ -121,7 +121,7 @@ class GraphResult:
 # short leash rather than send_command's 30s default.
 _GRAPH_TIMEOUT_S = 5.0
 
-_UNSUPPORTED_TTL_S = 300.0
+UNSUPPORTED_TTL_S = 300.0
 # Suppression needs the rejection twice. HA registers the ``search`` command
 # during setup and accepts WebSocket clients BEFORE every integration has
 # loaded, so a single ``unknown_command`` is as likely to mean "HA is still
@@ -131,12 +131,7 @@ _UNSUPPORTED_STRIKES_REQUIRED = 2
 
 
 def _monotonic() -> float:
-    """Monotonic clock read, isolated so tests can advance it deterministically.
-
-    Mirrors ``component_api._monotonic``. The seam matters because ``_graph.time``
-    IS the stdlib ``time`` module, so patching ``monotonic`` through it would
-    replace the clock for every module in the process, not just this one.
-    """
+    """Monotonic clock read for the unsupported-graph TTL."""
     return time.monotonic()
 
 
@@ -181,12 +176,12 @@ def _unsupported_recently(client: Any) -> bool:
     since = state.since if state else None
     if since is None:
         return False
-    if (_monotonic() - since) < _UNSUPPORTED_TTL_S:
+    if (_monotonic() - since) < UNSUPPORTED_TTL_S:
         logger.warning(
             "Skipping Home Assistant's reference graph: this instance rejected "
             "search/related as an unknown command. Results come from the "
             "configuration-body scan alone. Retrying in at most %.0fs.",
-            _UNSUPPORTED_TTL_S - (_monotonic() - since),
+            UNSUPPORTED_TTL_S - (_monotonic() - since),
         )
         return True
     _UNSUPPORTED.pop(client, None)
@@ -330,7 +325,7 @@ async def fetch_related_buckets(client: Any, entity_id: str) -> GraphResult | No
                     "`search` integration appears not to be loaded. Pausing "
                     "reference-graph lookups for %.0fs.",
                     strikes,
-                    _UNSUPPORTED_TTL_S,
+                    UNSUPPORTED_TTL_S,
                 )
             else:
                 logger.debug(

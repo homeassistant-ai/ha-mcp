@@ -312,6 +312,12 @@ Private access and typing checks also cover both complete trees:
   The vendored packages' import path (`ha_mcp._vendor`) and
   the test trees' own helper modules are exempt; a private name inside a
   vendored package is not.
+- `scripts/private_test_access.py` refuses a private name passed as a string:
+  to `getattr`/`setattr`/`hasattr`/`delattr`, a `patch` or `monkeypatch`
+  target, `import_module`, or a `vars(x)`/`x.__dict__` key. It follows
+  constants, concatenation, f-strings, loops, `parametrize` values and the
+  arguments a local helper receives; a name only known at runtime is left to
+  review. It has no list.
 - mypy checks both trees against Core's real types
   (`uv run mypy tests/src/unit/ tests/addon/`). A `None` or a placeholder
   assigned where Core declares a type is an error wherever mypy knows the

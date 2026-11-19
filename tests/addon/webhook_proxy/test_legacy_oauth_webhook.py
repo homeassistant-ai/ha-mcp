@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 
@@ -108,12 +110,13 @@ async def test_refresh_token_is_not_accepted_as_a_webhook_bearer(
     assert upstream.requests == []
 
 
-def _refused_target() -> str:
-    """A target URL on a loopback port nothing listens on."""
+@contextmanager
+def _refused_target() -> Iterator[str]:
+    """Keep the target port reserved without accepting connections."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    return f"http://127.0.0.1:{port}/private_zctpwlX7ZkIAr7oqdfLPxw"
+        yield f"http://127.0.0.1:{port}/private_zctpwlX7ZkIAr7oqdfLPxw"
 
 
 async def test_upstream_down_502_does_not_suggest_restarting_home_assistant(
@@ -126,14 +129,15 @@ async def test_upstream_down_502_does_not_suggest_restarting_home_assistant(
     """#1694: the restart hint is for stale OAuth registrations only; a restart
     does not bring a stopped MCP server back, so the 502 must not send the user
     off restarting Home Assistant."""
-    write_proxy_config(
-        fs_root, variant, {"target_url": _refused_target(), "webhook_id": WEBHOOK_ID}
-    )
-    entry = await set_up_proxy(hass, variant)
-    client = await hass_client_no_auth()
+    with _refused_target() as target_url:
+        write_proxy_config(
+            fs_root, variant, {"target_url": target_url, "webhook_id": WEBHOOK_ID}
+        )
+        entry = await set_up_proxy(hass, variant)
+        client = await hass_client_no_auth()
 
-    response = await post_webhook(client, None)
+        response = await post_webhook(client, None)
 
-    assert response.status == 502
-    assert "restart Home Assistant" not in await response.text()
-    assert await hass.config_entries.async_unload(entry.entry_id)
+        assert response.status == 502
+        assert "restart Home Assistant" not in await response.text()
+        assert await hass.config_entries.async_unload(entry.entry_id)

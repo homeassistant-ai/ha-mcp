@@ -41,7 +41,7 @@ from ._tool_errors import rejected_call_body
 @pytest.fixture(autouse=True)
 def _immediate_registry_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core answers at once; the retry backoff only adds time."""
-    monkeypatch.setattr("ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0)
+    monkeypatch.setattr("ha_mcp.tools.tools_integrations.REGISTRY_RETRY_BASE_DELAY", 0)
 
 
 @pytest.fixture

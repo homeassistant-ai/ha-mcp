@@ -446,7 +446,7 @@ class TestDashboardSplitPartialSemantics:
 
         with patch.object(
             SmartSearchTools,
-            "_search_dashboards_surface",
+            "search_dashboards_surface",
             AsyncMock(side_effect=RuntimeError("dashboards backend exploded")),
         ):
             resp = await _search(client, search_types=_MIXED)

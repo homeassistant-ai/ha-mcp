@@ -415,7 +415,7 @@ class TestEmbeddedServerEndToEnd:
         KeyError on the REAL component code + container interpreter (#1891/#1985).
 
         The reaching-ready ``embedded_ha`` fixture already proves the happy path
-        (bring-up runs ``_installed_ha_mcp_version`` → ``_safe_invalidate_caches``
+        (bring-up runs ``installed_ha_mcp_version`` → ``_safe_invalidate_caches``
         without crashing). This drives the FAILURE path: a ``python3`` process in
         the same container injects the exact KeyError and asserts the helper
         prunes the stale entry and the retry completes. Reverting the fix makes
@@ -481,7 +481,7 @@ class TestEmbeddedServerEndToEnd:
         returns it, plus the per-tool exposure stamps the component filters
         on. The transport is NOT the same: this drives the webhook relay URL
         and lets the SDK build its own default httpx client, whereas
-        ``_mcp_session`` targets the loopback URL with a dedicated client
+        ``mcp_session`` targets the loopback URL with a dedicated client
         (explicit generous timeout, ``verify=False``, ``trust_env=False``).
 
         Schema conversion is deliberately NOT asserted here. Converting in

@@ -75,7 +75,7 @@ async def test_failed_initialization_retries_after_cooldown(
         card_index.runtime.assert_awaited_once()
 
     card_index.frontend.readable()
-    monkeypatch.setattr(cd, "_BUILD_RETRY_SECONDS", 0)
+    monkeypatch.setattr(cd, "BUILD_RETRY_SECONDS", 0)
     first, second = await asyncio.gather(
         cd.async_get_definitions(hass), cd.async_get_definitions(hass)
     )
@@ -243,7 +243,7 @@ def test_source_growth_after_stat_is_bounded_before_runtime_creation(
     to the size limit; one that stays within it loads."""
     path = tmp_path / "growing-card.js"
     path.write_bytes(b";")
-    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", 64)
+    monkeypatch.setattr(cc, "MAX_SOURCE_BYTES", 64)
     measured = Path.stat
 
     def stat_then_grow(self: Path, **kwargs: Any) -> os.stat_result:

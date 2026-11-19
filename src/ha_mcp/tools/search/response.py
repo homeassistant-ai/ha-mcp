@@ -347,7 +347,7 @@ def _compute_eligibility(
     return registry_eligible, body_eligible, body_skipped_by_intent_gate
 
 
-async def _prefetch_shared_search_snapshots(
+async def prefetch_shared_search_snapshots(
     client: Any,
     *,
     registry_eligible: bool,

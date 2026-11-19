@@ -354,7 +354,7 @@ async def test_a_stuck_index_build_cannot_hold_a_saved_write(
     config = _views({"type": "tyle"})
     card_index.frontend.hold()
     with monkeypatch.context() as short_budget:
-        short_budget.setattr(cd, "_CARD_WORK_SECONDS", 0.05)
+        short_budget.setattr(cd, "CARD_WORK_SECONDS", 0.05)
 
         warnings = await asyncio.wait_for(cd.async_card_warnings(hass, config), 2)
 
@@ -405,7 +405,7 @@ async def test_describe_while_the_index_builds_says_retry(
     is told the index is building, not that the command timed out."""
     card_index.frontend.hold()
     with monkeypatch.context() as short_budget:
-        short_budget.setattr(cd, "_CARD_WORK_SECONDS", 0.05)
+        short_budget.setattr(cd, "CARD_WORK_SECONDS", 0.05)
         with pytest.raises(ToolError) as err:
             await describe_mod.describe_card_response(component_core_client, "tile")
     assert "still indexing" in str(err.value)
@@ -448,7 +448,7 @@ async def test_describe_timeout_reaches_the_caller_as_a_timeout(
     """With the index loaded, a describe that outlasts its budget is a timeout
     to retry, not an unavailable index."""
     assert await cd.async_get_definitions(hass, timeout=10) is not None
-    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CARD_WORK_SECONDS", 0.05)
 
     with pytest.raises(ToolError) as err:
         await describe_mod.describe_card_response(component_core_client, None)
@@ -462,7 +462,7 @@ async def test_a_slow_custom_refresh_still_lists_the_builtin_cards(
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
 
     result = await describe_mod.describe_card_response(component_core_client, None)
 
@@ -644,8 +644,8 @@ def test_deleted_resource_files_are_evicted(
 def test_capacity_skipped_resources_retry_without_file_changes(
     tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", _PER_CARD)
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _PER_CARD)  # room for one card
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD)  # room for one card
     files = [card_file(tmp_path / f"{tag}.js", tag) for tag in ("a-card", "b-card")]
 
     custom_cards.refresh(files)
@@ -662,8 +662,8 @@ def test_bundle_admission_reserves_room_for_later_heap_growth(
 ) -> None:
     """Each card is admitted at its full heap allowance, not at what it uses
     now, so two cards using little still leave no room for a third."""
-    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", _PER_CARD)
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _PER_CARD * 5 // 2)
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD * 5 // 2)
     tags = ("a-card", "b-card", "c-card")
 
     custom_cards.refresh([card_file(tmp_path / f"{tag}.js", tag) for tag in tags])
@@ -706,7 +706,7 @@ def test_oversized_card_files_are_not_run(
     small = card_file(tmp_path / "small-card.js", "small-card")
     big = card_file(tmp_path / "huge-card.js", "huge-card")
     big.write_text(big.read_text(encoding="utf-8") + "// padding\n", encoding="utf-8")
-    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", small.stat().st_size)
+    monkeypatch.setattr(cc, "MAX_SOURCE_BYTES", small.stat().st_size)
 
     custom_cards.refresh([small, big])
 

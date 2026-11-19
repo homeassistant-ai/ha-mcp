@@ -50,8 +50,8 @@ _REF_ERROR_RE = re.compile(r"ReferenceError: ([\w$]+) is not defined")
 _I18N = "ui.panel.lovelace.editor.card."
 _MAX_WARNINGS = 20
 # Leave room for save/readback and transport within the 30-second command wait.
-_CARD_WORK_SECONDS = 20.0
-_CUSTOM_WAIT_SECONDS = 5.0
+CARD_WORK_SECONDS = 20.0
+CUSTOM_WAIT_SECONDS = 5.0
 _Queued = list[tuple[str, str, dict[str, Any]]]
 # Keys a card ignores but an installed plugin reads (card-mod); the editor
 # rejects them only because it cannot show them.
@@ -697,7 +697,7 @@ def _custom_warnings(
     found: list[str] = []
     inconclusive: dict[tuple[str, str], tuple[str, int]] = {}
     unchecked = 0
-    deadline = time.monotonic() + _CUSTOM_WAIT_SECONDS
+    deadline = time.monotonic() + CUSTOM_WAIT_SECONDS
     for index, (path, card_type, card) in enumerate(customs):
         if time.monotonic() >= deadline:
             unchecked = len(customs) - index
@@ -885,7 +885,15 @@ def _cards(
 _definitions: CardDefinitions | None = None
 _build_task: asyncio.Task[CardDefinitions | None] | None = None
 _build_failed_at: float | None = None
-_BUILD_RETRY_SECONDS = 600
+BUILD_RETRY_SECONDS = 600
+
+
+def reset_card_definitions_state() -> None:
+    """Clear the process cache between isolated component lifecycles."""
+    global _definitions, _build_task, _build_failed_at
+    _definitions = None
+    _build_task = None
+    _build_failed_at = None
 
 
 def _build() -> CardDefinitions | None:
@@ -910,7 +918,7 @@ async def async_get_definitions(
         task is not None
         and task.done()
         and _build_failed_at is not None
-        and time.monotonic() - _build_failed_at >= _BUILD_RETRY_SECONDS
+        and time.monotonic() - _build_failed_at >= BUILD_RETRY_SECONDS
     ):
         task = None
     if task is None:
@@ -936,7 +944,7 @@ async def async_get_definitions(
 async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> list[str]:
     """Advisory warnings for a saved dashboard; never fails the write."""
     try:
-        async with asyncio.timeout(_CARD_WORK_SECONDS):
+        async with asyncio.timeout(CARD_WORK_SECONDS):
             definitions = await async_get_definitions(hass, timeout=15)
             if definitions is None:
                 return []
@@ -945,7 +953,7 @@ async def async_card_warnings(hass: HomeAssistant, config: dict[str, Any]) -> li
                 for _, card in _cards(config)
             )
             custom = (
-                await async_get_custom_cards(hass, timeout=_CUSTOM_WAIT_SECONDS)
+                await async_get_custom_cards(hass, timeout=CUSTOM_WAIT_SECONDS)
                 if uses_custom
                 else None
             )

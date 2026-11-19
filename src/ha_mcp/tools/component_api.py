@@ -102,7 +102,7 @@ _NEGATIVE_CACHE_TTL_S = 300.0
 _TRANSIENT_NEGATIVE_CACHE_TTL_S = 30.0
 
 
-def _monotonic() -> float:
+def monotonic() -> float:
     """Monotonic clock read, isolated so tests can advance it deterministically."""
     return time.monotonic()
 
@@ -269,7 +269,7 @@ def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
         if _probed_connection_current(client):
             return True, cached
         return False, None
-    now = _monotonic()
+    now = monotonic()
     stored_at = _NEGATIVE_CACHE_TS.get(client)
     if stored_at is not None and (now - stored_at) < _NEGATIVE_CACHE_TTL_S:
         return True, cached
@@ -294,7 +294,7 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
-        _NEGATIVE_CACHE_TS[client] = _monotonic()
+        _NEGATIVE_CACHE_TS[client] = monotonic()
     else:
         _NEGATIVE_CACHE_TS.pop(client, None)
 
@@ -332,7 +332,7 @@ def _store_transient_negative(client: Any, caps: ComponentCaps | None = None) ->
     """
     _CAPS_CACHE[client] = caps
     _NEGATIVE_CACHE_TS.pop(client, None)
-    _TRANSIENT_NEGATIVE_TS[client] = _monotonic()
+    _TRANSIENT_NEGATIVE_TS[client] = monotonic()
 
 
 def _parse_caps(response: Any) -> ComponentCaps | None:

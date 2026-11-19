@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 # REST or WebSocket, so a flow this server opened is recorded here. An ha-mcp
 # restart empties it; a flow_id it does not hold is looked up in Core's own
 # flow manager through the component (``component_flow.flow_record``).
-_opened_flows: dict[str, tuple[str, str | None]] = {}
+opened_flows: dict[str, tuple[str, str | None]] = {}
 # FlowTarget.kind -> the flow manager holding its flows.
 _FLOW_MANAGERS = {
     "setup": "config",
@@ -174,18 +174,18 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
     """Refuse a flow that was not opened for the call's kind and anchor, so a
     flow_id cannot carry one call's checks over to another flow. A flow this
     server does not hold (it restarted) is the one Core's record says it is."""
-    if _opened_flows.get(flow_id) == target.anchor:
+    if opened_flows.get(flow_id) == target.anchor:
         return
     record = None
-    if flow_id not in _opened_flows:
+    if flow_id not in opened_flows:
         record = await flow_record(client, _FLOW_MANAGERS[target.kind], flow_id)
         if record is not None:
             if not record.get("found"):
                 _raise_flow_not_open(target, flow_id)
             if _record_anchor(target.kind, record) == target.anchor:
-                _opened_flows[flow_id] = target.anchor
+                opened_flows[flow_id] = target.anchor
                 return
-    unreadable = record is None and flow_id not in _opened_flows
+    unreadable = record is None and flow_id not in opened_flows
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -516,7 +516,7 @@ async def abort_open_flow(
         _refuse("abort=True needs the flow_id to end", flow_id=None)
     await _require_opened(client, target, flow_id)
     aborted = await abort_step_flow(client, target, flow_id)
-    _opened_flows.pop(flow_id, None)
+    opened_flows.pop(flow_id, None)
     return aborted
 
 
@@ -560,7 +560,7 @@ async def advance_flow(
     if flow_id is None:
         step = await start()
         flow_id = _require_flow_id(step, target)
-        _opened_flows[flow_id] = target.anchor
+        opened_flows[flow_id] = target.anchor
     else:
         if menu_choice is not None and answers:
             _refuse(
@@ -591,7 +591,7 @@ async def advance_flow(
         )
         step = await settle(client, target, flow_id, answer)
     if step.get("type") not in ("form", "menu"):
-        _opened_flows.pop(flow_id, None)
+        opened_flows.pop(flow_id, None)
     return flow_id, step, unsent
 
 

@@ -1424,7 +1424,7 @@ class HomeAssistantClient:
     # cadence-measurement instrumentation also retired with the loop;
     # the WS waiter logs `time.monotonic()` elapsed via its own debug
     # line at ``ws_waiters._ws_wait_for_condition``.
-    _POLL_BUDGET_S: float = 6.0
+    POLL_BUDGET_S: float = 6.0
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Discover the entity_id assigned to a newly created automation.
@@ -1442,7 +1442,7 @@ class HomeAssistantClient:
 
         try:
             entity_id = await wait_for_automation_entity_by_unique_id(
-                self, unique_id, timeout=self._POLL_BUDGET_S
+                self, unique_id, timeout=self.POLL_BUDGET_S
             )
         except HomeAssistantError as e:
             # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.

@@ -345,7 +345,7 @@ def opened_flows(
     from ha_mcp.tools import integration_flow_steps
 
     flows: dict[str, tuple[str, str | None]] = {}
-    monkeypatch.setattr(integration_flow_steps, "_opened_flows", flows)
+    monkeypatch.setattr(integration_flow_steps, "opened_flows", flows)
     return flows
 
 

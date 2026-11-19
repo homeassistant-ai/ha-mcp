@@ -336,7 +336,7 @@ async def test_slow_supervisor_does_not_hold_up_the_report(
         return AiohttpClientMockResponse(method, url, json={"result": "ok", "data": {}})
 
     supervised.get("http://127.0.0.1/info", side_effect=answers_late)
-    monkeypatch.setattr(tools_bug_report, "_SUPERVISOR_PROBE_TIMEOUT", 0.05)
+    monkeypatch.setattr(tools_bug_report, "SUPERVISOR_PROBE_TIMEOUT", 0.05)
     try:
         report = await report_issue(core_client)
     finally:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -83,7 +84,6 @@ def test_all_quickjs_context_operations_use_the_creating_thread(
     # Removing the resource disposes its runtime.
     custom.refresh([])
     (engine,) = engines
-    assert not hasattr(engine, "_context")
     with pytest.raises(RuntimeError, match="shutdown"):
         engine("check", None)
     assert len(set(calls)) == 1
@@ -141,7 +141,17 @@ def test_only_requested_editors_are_prepared_and_cached(
         custom.refresh([])
 
 
+@pytest.fixture
+def isolated_custom_cards_state() -> Iterator[None]:
+    cc.reset_custom_cards_state()
+    try:
+        yield
+    finally:
+        cc.reset_custom_cards_state()
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("isolated_custom_cards_state")
 async def test_linkedom_download_stops_before_buffering_an_oversized_response(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
@@ -169,8 +179,6 @@ async def test_linkedom_download_stops_before_buffering_an_oversized_response(
     app.router.add_get("/linkedom.tgz", linkedom)
     server = await aiohttp_client(app)
     monkeypatch.setattr(cc, "LINKEDOM_URL", str(server.make_url("/linkedom.tgz")))
-    for name in ("_custom", "_refresh_task", "_dom_failed_at", "_resource_error"):
-        monkeypatch.setattr(cc, name, None)
     transform = MagicMock(return_value="oversized content was accepted")
     monkeypatch.setattr(cc, "dom_script", transform)
     assert await async_setup_component(hass, "lovelace", {})

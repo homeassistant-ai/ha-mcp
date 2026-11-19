@@ -168,13 +168,13 @@ async def api_less_client(
 @pytest.fixture
 def events_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only an event wakes a WebSocket waiter: its REST backstop never fires."""
-    monkeypatch.setattr(ws_waiters, "_POLLING_BACKSTOP_INTERVAL", 3600.0)
+    monkeypatch.setattr(ws_waiters, "POLLING_BACKSTOP_INTERVAL", 3600.0)
 
 
 @pytest.fixture
 def fast_backstop(monkeypatch: pytest.MonkeyPatch) -> None:
     """A WebSocket waiter samples REST every ``POLL_S`` with no event."""
-    monkeypatch.setattr(ws_waiters, "_POLLING_BACKSTOP_INTERVAL", POLL_S)
+    monkeypatch.setattr(ws_waiters, "POLLING_BACKSTOP_INTERVAL", POLL_S)
 
 
 # --- REST polling, when Core serves no WebSocket ---------------------------
