@@ -484,33 +484,6 @@ def merge_visibility_warnings(
     return response
 
 
-# Legacy calendar writes flatten the WebSocket refusal before handling it.
-WS_CONNECTION_SIGNATURES = (
-    "failed to connect",
-    "timed out",
-    "timeout",
-    "connection closed",
-    # reset_connection: "WebSocket connection to Home Assistant closed while
-    # waiting for a response" — "connection closed" is not adjacent there.
-    "closed while waiting",
-    # listener close reason: "connection dropped without a close frame".
-    "connection dropped",
-    "disconnected",
-    "not connected",
-    "not authenticated",
-)
-
-
-def is_connection_error_message(error_msg: Any) -> bool:
-    """Recognize legacy calendar transport wording.
-
-    Accepts any payload shape: HA error frames can carry a dict (or None)
-    in the error slot, so the value is stringified before matching.
-    """
-    lowered = str(error_msg).lower()
-    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
-
-
 async def list_visible_registry_ids(
     client: Any, domain: str, *, bare: bool = False
 ) -> list[str]:
