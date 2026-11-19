@@ -3,8 +3,8 @@
 import json
 from typing import Any
 
-from .._version import is_running_in_addon
 from .._vendor.fastmcp.exceptions import ToolError
+from .._version import is_running_in_addon
 from ..client.rest_client import HomeAssistantClient
 from ..errors import ErrorCode
 

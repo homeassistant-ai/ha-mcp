@@ -130,7 +130,9 @@ class TestExceptionToStructuredError:
 
         assert result["error"]["suggestions"] == suggestions
 
-    async def test_no_suggestions_when_none(self, core_client: HomeAssistantClient) -> None:
+    async def test_no_suggestions_when_none(
+        self, core_client: HomeAssistantClient
+    ) -> None:
         """No hint at all only when neither the caller nor the code has one."""
         with pytest.raises(HomeAssistantAPIError) as missing:
             await core_client.get_entity_state("sensor.missing")

@@ -424,7 +424,11 @@ class TestRepositories:
             "POST", REPOSITORIES, "Repository registration declined"
         )
         repository = Repository(
-            slug="abc123", name="Test apps", source=REPO_URL, url=REPO_URL, maintainer="Test"
+            slug="abc123",
+            name="Test apps",
+            source=REPO_URL,
+            url=REPO_URL,
+            maintainer="Test",
         )
         route.supervisor.answer(
             "GET", "/store", StoreInfo(repositories=[repository], addons=[]).to_dict()
@@ -441,13 +445,18 @@ class TestRepositories:
         self, app_route: Route
     ) -> None:
         app_route.supervisor.reply(
-            "POST", REPOSITORIES, status=409,
+            "POST",
+            REPOSITORIES,
+            status=409,
             payload={
-                "result": "error", "error_key": "store_repository_already_added_error",
+                "result": "error",
+                "error_key": "store_repository_already_added_error",
                 "message": "Repository registration declined",
             },
         )
-        result = await manage(app_route.client, action="add_repository", repository=REPO_URL)
+        result = await manage(
+            app_route.client, action="add_repository", repository=REPO_URL
+        )
         assert "already registered" in result["message"]
         assert app_route.supervisor.requests == [("POST", REPOSITORIES)]
 

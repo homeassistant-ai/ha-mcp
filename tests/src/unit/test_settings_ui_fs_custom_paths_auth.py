@@ -62,7 +62,9 @@ async def test_the_editor_names_cores_refusal(
     method: str,
 ) -> None:
     client, expected = refused
-    with_env(monkeypatch, HOMEASSISTANT_URL=client.base_url, HOMEASSISTANT_TOKEN=client.token)
+    with_env(
+        monkeypatch, HOMEASSISTANT_URL=client.base_url, HOMEASSISTANT_TOKEN=client.token
+    )
     async with settings_http(app_server(monkeypatch, client)) as http:
         if method == "get":
             response = await http.get(PATH)

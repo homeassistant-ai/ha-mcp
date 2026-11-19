@@ -561,7 +561,7 @@ async def _supervisor_api_call_once(
 
 
 def _generic_supervisor_refusal(result: dict[str, Any]) -> bool:
-    """The bridge drops Supervisor's status and error_key; older REST errors lack a key."""
+    """Return whether Supervisor gave no native error key or Core discarded it."""
     if result.get("error_code") == "unknown_error":
         return True
     payload = result.get("_response_data")

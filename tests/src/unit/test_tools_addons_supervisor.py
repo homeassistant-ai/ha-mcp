@@ -125,16 +125,23 @@ class TestSupervisorRefusals:
             {"options": {"ssh": {"sftp": True}}}
         ]
 
-    async def test_direct_options_refusal_uses_supervisors_error_key(self, app_route: Route) -> None:
+    async def test_direct_options_refusal_uses_supervisors_error_key(
+        self, app_route: Route
+    ) -> None:
         app_route.supervisor.running(options={}, schema=[])
         app_route.supervisor.reply(
-            "POST", f"/addons/{SLUG}/options", status=400,
+            "POST",
+            f"/addons/{SLUG}/options",
+            status=400,
             payload={
-                "result": "error", "error_key": "app_configuration_invalid_error",
+                "result": "error",
+                "error_key": "app_configuration_invalid_error",
                 "message": "Configuration declined",
             },
         )
-        body = await rejected_call_body(manage(app_route.client, slug=SLUG, options={"debug": True}))
+        body = await rejected_call_body(
+            manage(app_route.client, slug=SLUG, options={"debug": True})
+        )
         assert body["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.parametrize(
@@ -401,6 +408,21 @@ class TestBusyJobGroup:
         await rejected_call_body(manage(core_route.client, slug=SLUG, action="stop"))
 
         assert core_route.supervisor.requests == [("POST", STOP)]
+
+    async def test_a_specific_rest_refusal_prevents_a_job_retry(
+        self, app_route: Route, quick_retry: None
+    ) -> None:
+        app_route.supervisor.reply(
+            "POST",
+            STOP,
+            status=400,
+            payload={"result": "error", "error_key": "app_not_running_error", "message": COLLISION},
+        )
+        app_route.supervisor.answer("POST", STOP, {})
+
+        await rejected_call_body(manage(app_route.client, slug=SLUG, action="stop"))
+
+        assert app_route.supervisor.requests == [("POST", STOP)]
 
     async def test_a_real_error_after_a_collision_raises_at_once(
         self, core_route: Route, quick_retry: None

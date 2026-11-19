@@ -44,7 +44,7 @@ async def _missing_after_update(
         return False
     try:
         listed = await category_list_reply(client, scope)
-    except (HomeAssistantError, ToolError):
+    except HomeAssistantError, ToolError:
         # The update already received a refusal. An optional lookup may
         # refine that answer only if Core supplies the registry.
         return False

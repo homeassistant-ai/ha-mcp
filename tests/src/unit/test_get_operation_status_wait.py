@@ -22,7 +22,9 @@ def pending(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     # Freeze only the store's expiry clock. The polling loop has its own
     # monotonic deadline, and a busy runner must not expire a pending operation.
     now = time.time()
-    monkeypatch.setattr("ha_mcp.utils.operation_manager.time", SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr(
+        "ha_mcp.utils.operation_manager.time", SimpleNamespace(time=lambda: now)
+    )
     manager = get_operation_manager()
     op = manager.create_operation("light.a", "on", "light", "turn_on", {})
     try:

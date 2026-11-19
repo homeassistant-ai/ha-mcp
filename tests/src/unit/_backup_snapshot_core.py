@@ -303,7 +303,9 @@ class Supervisor:
             case "delete", ["backups", slug] if slug in self.backups:
                 del self.backups[slug]
                 return self._ok(verb, url, {})
-            case "get", ["jobs", job_id] if job := self.jobs.get(str(uuid.UUID(job_id))):
+            case "get", ["jobs", job_id] if job := self.jobs.get(
+                str(uuid.UUID(job_id))
+            ):
                 return self._ok(verb, url, job)
         return self._error(verb, url, 404, f"{url.path} does not exist")
 

@@ -24,7 +24,9 @@ async def test_missing_dashboard_preserves_native_code_and_context(
         await ws.send_command("lovelace/config", url_path="missing-dashboard")
 
     context = {"entity_id": entity_id} if entity_id else None
-    result = exception_to_structured_error(missing.value, context=context, raise_error=False)
+    result = exception_to_structured_error(
+        missing.value, context=context, raise_error=False
+    )
 
     assert result["ha_error_code"] == "config_not_found"
     assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -59,7 +61,9 @@ def test_unclassified_exception_keeps_its_own_traceback(
 ) -> None:
     problem = RuntimeError("connection details not found")
     with caplog.at_level(logging.ERROR, logger="ha_mcp.tools.helpers"):
-        result: dict[str, Any] = exception_to_structured_error(problem, raise_error=False)
+        result: dict[str, Any] = exception_to_structured_error(
+            problem, raise_error=False
+        )
 
     assert result["error"]["code"] == "INTERNAL_ERROR"
     records = [r for r in caplog.records if r.exc_info]

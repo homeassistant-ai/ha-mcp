@@ -32,9 +32,19 @@ async def test_translated_service_refusal_survives_both_client_paths(
         await ws.send_command("call_service", **target)
     reply = await core_client.send_websocket_message({"type": "call_service", **target})
 
-    assert refused.value.translation_key == reply["translation_key"] == "service_not_found"
-    assert refused.value.translation_domain == reply["translation_domain"] == "homeassistant"
-    assert refused.value.translation_placeholders == reply["translation_placeholders"] == target
+    assert (
+        refused.value.translation_key == reply["translation_key"] == "service_not_found"
+    )
+    assert (
+        refused.value.translation_domain
+        == reply["translation_domain"]
+        == "homeassistant"
+    )
+    assert (
+        refused.value.translation_placeholders
+        == reply["translation_placeholders"]
+        == target
+    )
     result = exception_to_structured_error(
         refused.value, context={"entity_id": "counter.example"}, raise_error=False
     )
